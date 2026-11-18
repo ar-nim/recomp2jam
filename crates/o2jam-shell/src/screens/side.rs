@@ -62,6 +62,17 @@ pub const PAYMENT_BIND_FILE: &str = "State_Payment.bnd";
 pub const PAYMENT2_BLOCK: &str = "STATE_PAYMENT2";
 /// Gift-view layout (12 rects).
 pub const PAYMENT2_BIND_FILE: &str = "State_Payment2.bnd";
+/// Cash Charge dialog block mounted over the billing host
+/// (`ControlList_Interface.txt:1688`, `Dialog_ChargeCash.bnd`).
+pub const CASH_CHARGE_DIALOG_BLOCK: &str = "DIALOG_CHARGECASH";
+/// Item Shop charge plate (`IDC_BUTTON_SSHOP_CHARGEMONEY`, 0x14200004):
+/// `State_ItemShop.bnd` rect 4 `(56,340)-(147,364)` covers the
+/// qualified b8 click at `(92,355)`.
+pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
+/// Web client control inside the Cash Charge dialog
+/// (`IDC_IMAGE_CHARGECASH_WEB`, 0x83500002); its parent-relative
+/// `.bnd` rect stages the exe-pinned client area.
+pub const CASH_CHARGE_WEB_CODE: u32 = 0x8350_0002;
 /// Tutorial backdrop in `Playing1.opi` (stub `0x00` block, so no
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
@@ -535,6 +546,9 @@ pub enum ShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// Item Shop charge plate: opens the Cash Charge web view
+    /// (b8 input log, plate at `(92,355)`).
+    OpenCashCharge,
     /// Bag pager stepped back over the owned panel.
     BagPrev,
     /// Bag pager stepped forward over the owned panel.
@@ -588,6 +602,7 @@ fn shop_scroll_origin(placements: &[ScenePlacement]) -> Option<Rect> {
 /// Action behind one hit control code (`None` for unnamed controls).
 fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
+        SHOP_CHARGE_MONEY_CODE => Some(ShopAction::OpenCashCharge),
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
@@ -6707,6 +6722,30 @@ mod side_tests {
             payment_view_caption(&labels[1]),
             "STATE_PAYMENT2 billing/gift/gift_input.aspx"
         );
+    }
+
+    #[test]
+    fn itemshop_charge_plate_at_b8_click_opens_cash_charge() {
+        // The b8 drive clicks the charge plate at (92,355); the
+        // plate's parsed State_ItemShop.bnd rect contains that point
+        // and its control code maps to the Cash Charge view.
+        let plate = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_CHARGEMONEY".to_owned(),
+            code: SHOP_CHARGE_MONEY_CODE,
+            sprite: Some("Shop_Btn_MCashCharge.ojs".to_owned()),
+            rect: Rect {
+                x: 56,
+                y: 340,
+                w: 91,
+                h: 24,
+            },
+        };
+        assert_eq!(
+            shop_action_at(std::slice::from_ref(&plate), 92, 355),
+            Some(ShopAction::OpenCashCharge)
+        );
+        assert_eq!(shop_action_at(std::slice::from_ref(&plate), 92, 339), None);
     }
 
     #[test]

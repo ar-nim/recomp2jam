@@ -15,8 +15,8 @@ use o2jam_shell::avatar::{AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::paint::ROOM_HOVER_SPRITE;
 use o2jam_shell::screens::side::SideScreen;
 use o2jam_shell::staging::{
-    read_install_archives, stage_dialog, stage_room_hover_overlay, stage_state, state_of_screen,
-    state_of_side, Dialog, StageContext, State,
+    read_install_archives, stage_cash_charge, stage_dialog, stage_room_hover_overlay, stage_state,
+    state_of_screen, state_of_side, Dialog, StageContext, State,
 };
 use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -339,6 +339,15 @@ pub(crate) fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
         return false;
     };
     game.load_side_scene(placements, figures);
+    if side == SideScreen::Payment {
+        let installed = read_install_archives(&install_root());
+        if let Some(interface) = installed.interface {
+            let art = stage_cash_charge(&interface, StageContext::default());
+            if art.dialog.has_figures() {
+                game.load_cash_charge_art(art);
+            }
+        }
+    }
     true
 }
 

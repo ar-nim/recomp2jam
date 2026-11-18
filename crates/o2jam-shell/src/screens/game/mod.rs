@@ -31,8 +31,8 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
-    list_row_hit, paint_avi_scene, paint_channel_chat, paint_dialog_scene, paint_lanking_board,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
+    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
     paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
@@ -42,10 +42,10 @@ use super::paint::{
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
-    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -712,6 +712,9 @@ pub struct ScreenGame {
     /// pinned frame-0 guide bodies. Mounted into the side slots when
     /// FIRSTSTEP opens the tutorial, like the Payment sheet.
     tutorial_art: Option<SceneArt>,
+    /// Staged Cash Charge view: Item Shop host board plus the
+    /// `Dialog_ChargeCash.bnd` frame, client rect, and close control.
+    cash_charge_art: Option<CashChargeArt>,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1031,6 +1034,7 @@ impl ScreenGame {
             password_art: None,
             payment_art: None,
             tutorial_art: None,
+            cash_charge_art: None,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -1751,6 +1755,7 @@ impl ScreenGame {
         self.payment_art.is_some()
     }
 
+<<<<<<< HEAD
     /// Stage the Playing-archive Tutorial bodies through the shared
     /// declaration: the live boot path parks them here, and
     /// [`Self::visit_side`] mounts them when FIRSTSTEP opens the
@@ -1771,6 +1776,23 @@ impl ScreenGame {
     #[must_use]
     pub const fn tutorial_art_staged(&self) -> bool {
         self.tutorial_art.is_some()
+=======
+    /// Stage the Cash Charge view with its Item Shop host board
+    /// (the qualified b8 charge-plate capture). Staging never moves
+    /// the flow; the plate click opens the view on its own.
+    pub fn load_cash_charge_art(&mut self, art: CashChargeArt) -> &mut Self {
+        self.cash_charge_art = Some(art);
+        self
+    }
+
+    /// True while the staged dialog carries paint-able Cash Charge
+    /// chrome (the live-boot gate asserts this before the plate opens).
+    #[must_use]
+    pub fn cash_charge_art_staged(&self) -> bool {
+        self.cash_charge_art
+            .as_ref()
+            .is_some_and(|art| art.dialog.has_figures())
+>>>>>>> 905ef9c (fix(shell): paint exe-pinned Cash Charge chrome at b8 rect)
     }
 
     /// Stage one exe-literal Playing sheet beside the Playing scene:
@@ -5097,9 +5119,22 @@ impl ScreenGame {
             return;
         }
         if side == SideScreen::Payment {
-            if let Some(art) = self.payment_art.clone() {
-                self.side_placements = art.placements;
-                self.side_figures = art.figures;
+            // The Cash Charge view sits on the Item Shop board in
+            // the exe capture; only the plain billing stand-in uses
+            // the Payment state sheets when the dialog is unstaged.
+            let mounted = self
+                .cash_charge_art
+                .as_ref()
+                .filter(|art| art.dialog.has_figures())
+                .map(|art| (art.host.placements.clone(), art.host.figures.clone()))
+                .or_else(|| {
+                    self.payment_art
+                        .as_ref()
+                        .map(|art| (art.placements.clone(), art.figures.clone()))
+                });
+            if let Some((placements, figures)) = mounted {
+                self.side_placements = placements;
+                self.side_figures = figures;
             }
             return;
         }
@@ -5426,6 +5461,13 @@ impl ScreenGame {
         };
         let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
         match action {
+            ShopAction::OpenCashCharge => {
+                // The charge plate leaves the shop board and opens
+                // the Cash Charge view from the same lobby (b8).
+                if self.leave_side() {
+                    self.visit_side(SideScreen::Payment);
+                }
+            }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => self.record_shop_gift_noop(action),
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
@@ -5730,11 +5772,15 @@ impl ScreenGame {
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
-        // The billing views complete no web call, so the
-        // Payment overlay inks the unwired notice over the
-        // staged art (miss path paints nothing); every other
-        // side screen paints art alone.
+        // The exe's Cash Charge frame paints over its staged host
+        // board; the billing views complete no web call, so the
+        // unwired notice inks inside the staged web client rect
+        // (largest staged rect on the unstaged stand-in). Every
+        // other side screen paints art alone.
         if self.side == Some(SideScreen::Payment) {
+            if let Some(art) = self.cash_charge_art.as_ref() {
+                paint_cash_charge_frame(frame, &art.dialog);
+            }
             paint_payment_notice(frame, &self.side_placements, &payment_side_notice());
         }
         // The lanking overlay inks rows, ranks, and the picked

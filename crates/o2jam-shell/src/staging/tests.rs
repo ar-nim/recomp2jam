@@ -3,6 +3,7 @@ use crate::avatar::{
     is_playing_backdrop_sprite, playing_backdrop_sprite, playing_member_frame,
     PLAYING_BACKDROP_CODE,
 };
+use crate::screens::side::CASH_CHARGE_WEB_CODE;
 
 #[test]
 fn states_key_by_their_block_names() {
@@ -1032,6 +1033,54 @@ fn side_view_maps_bound_sides_to_states() {
     );
 }
 
+/// The b8 capture pins the Cash Charge frame at
+/// `(171,3)-(648,595)`; its `.bnd` gives the client and close rects
+/// dialog-relative, and the frame origin resolves both to native
+/// pixels. Install data is local-only: CI skips cleanly.
+#[test]
+fn cash_charge_sheet_stages_the_b8_frame_client_and_close() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let art = stage_cash_charge(&interface, StageContext::default());
+    assert!(art.host.has_figures(), "Item Shop host board staged");
+    let placed = |code: u32| {
+        art.dialog
+            .placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .cloned()
+            .unwrap_or_else(|| panic!("Cash Charge control {code:#x} missing"))
+    };
+    let frame = placed(0x8310_0001);
+    assert_eq!(
+        frame.rect,
+        Rect {
+            x: 171,
+            y: 3,
+            w: 477,
+            h: 592
+        }
+    );
+    let web = placed(CASH_CHARGE_WEB_CODE);
+    assert_eq!(
+        web.rect,
+        Rect {
+            x: 190,
+            y: 58,
+            w: 440,
+            h: 506
+        }
+    );
+    let close = placed(0x8320_0003);
+    assert_eq!(close.rect, frame.rect, "close anchor starts at the frame");
+    assert_eq!(close.role, PlacementRole::Clone);
+    assert!(art.dialog.figures.contains_key("Dialog_ChargeCash.ojs"));
+    assert!(art.dialog.figures.contains_key("ChargeCash_Btn_Close.ojs"));
+}
+
 #[test]
 fn install_loader_reads_archives_from_given_root() {
     let root = test_scratch_root("reads");
@@ -1095,7 +1144,7 @@ fn scrollbar_params_never_warn() {
 }
 #[test]
 fn dialog_rows_name_host_state_and_block() {
-    assert_eq!(DIALOG_TABLE.len(), 9);
+    assert_eq!(DIALOG_TABLE.len(), 10);
     for row in DIALOG_TABLE {
         assert_eq!(row.block, row.dialog.block_name());
         assert_eq!(row.host, row.dialog.host());
@@ -1115,6 +1164,7 @@ fn dialogs_key_by_their_block_names() {
     assert_eq!(Dialog::PlanetQuit.block_name(), "DIALOG_QUESTION1");
     assert_eq!(Dialog::CreateRoom.block_name(), "DIALOG_CREATEROOM");
     assert_eq!(Dialog::InputPassword.block_name(), "DIALOG_INPUTPASSWORD");
+    assert_eq!(Dialog::ChargeCash.block_name(), "DIALOG_CHARGECASH");
 }
 
 #[test]

@@ -45,13 +45,14 @@ use super::side::{
     planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
     shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState,
     PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE,
-    MYROOM_SLOT_FIRST_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
+    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
+    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
     SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
@@ -86,6 +87,17 @@ pub struct SceneArt {
     pub placements: Vec<ScenePlacement>,
     /// Decoded sprite bodies by archive entry name.
     pub figures: HashMap<String, AvatarFigure>,
+}
+
+/// Cash Charge view: the Item Shop board behind the modal plus the
+/// staged dialog art (frame, web client, close). Kept separate so the
+/// board paints first and the chrome paints over it.
+#[derive(Debug, Clone, Default)]
+pub struct CashChargeArt {
+    /// Item Shop board mounted behind the window (b8 host board).
+    pub host: SceneArt,
+    /// `Dialog_ChargeCash.bnd` frame, client rect, and close control.
+    pub dialog: SceneArt,
 }
 
 impl SceneArt {
@@ -1237,16 +1249,30 @@ pub fn paint_lanking_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Lanking);
 }
 
-/// Billing-unwired notice over the Payment side screen: the notice
-/// inks the largest staged placement rect (geometry rides staged
-/// `.bnd` rects, never literals), so the billing stall reads
-/// instead of painting art alone. No staged rect paints nothing.
+/// Cash Charge chrome over the staged host board: the dialog's
+/// staged `.bnd` placements and their sprite anchors place the frame
+/// and the X close; no staged dialog art paints nothing (ADR-0003).
+pub fn paint_cash_charge_frame(frame: &mut Frame<'_>, dialog: &SceneArt) {
+    dialog.paint_overlay(frame);
+}
+
+/// Billing-unwired notice over the Payment side screen: when the
+/// Cash Charge dialog is staged the notice inks its staged web client
+/// rect; otherwise it uses the largest staged rect (the seam walk's
+/// stand-in). Geometry always rides staged `.bnd` rects, never
+/// literals. No staged rect paints nothing.
 pub fn paint_payment_notice(frame: &mut Frame<'_>, placements: &[ScenePlacement], notice: &str) {
-    let Some(rect) = placements
+    let rect = placements
         .iter()
+        .find(|placed| placed.code == CASH_CHARGE_WEB_CODE)
         .map(|placed| placed.rect)
-        .max_by_key(|rect| rect.w.saturating_mul(rect.h))
-    else {
+        .or_else(|| {
+            placements
+                .iter()
+                .map(|placed| placed.rect)
+                .max_by_key(|rect| rect.w.saturating_mul(rect.h))
+        });
+    let Some(rect) = rect else {
         return;
     };
     paint_text_into_rect(frame, rect, notice, CP949_INK);

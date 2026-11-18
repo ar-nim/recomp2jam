@@ -18,11 +18,12 @@ use crate::avatar::{
     PLAYING_BACKDROP_CODE,
 };
 use crate::screen::Screen;
-use crate::screens::paint::ROOM_HOVER_SPRITE;
+use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
-    PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
-    INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
+    PlanetOptionTab, SideScreen, CASH_CHARGE_DIALOG_BLOCK, CHANNEL_INFO_DIALOG_BLOCK,
+    CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK,
+    SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
+    TUTORIAL_INSTRUCTION_SPRITE,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -303,6 +304,9 @@ pub enum Dialog {
     /// Room password sheet (`DIALOG_INPUTPASSWORD`) over Room: declared
     /// and tested only, no caller stages it yet.
     InputPassword,
+    /// Cash Charge web window (`DIALOG_CHARGECASH`) over the Item Shop
+    /// host board (b8 capture, issue #362).
+    ChargeCash,
 }
 
 impl Dialog {
@@ -319,6 +323,7 @@ impl Dialog {
             Dialog::Information => INFORMATION_DIALOG_BLOCK,
             Dialog::CreateRoom => CREATE_ROOM_DIALOG_BLOCK,
             Dialog::InputPassword => PASSWORD_DIALOG_BLOCK,
+            Dialog::ChargeCash => CASH_CHARGE_DIALOG_BLOCK,
         }
     }
 
@@ -338,7 +343,8 @@ impl Dialog {
             | Dialog::PlanetQuit
             | Dialog::Information
             | Dialog::CreateRoom
-            | Dialog::InputPassword => &[],
+            | Dialog::InputPassword
+            | Dialog::ChargeCash => &[],
         }
     }
 
@@ -354,6 +360,7 @@ impl Dialog {
             | Dialog::PlanetQuit
             | Dialog::Information => State::Planet,
             Dialog::CreateRoom | Dialog::InputPassword => State::Room,
+            Dialog::ChargeCash => State::Payment,
         }
     }
 
@@ -431,6 +438,11 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
         dialog: Dialog::InputPassword,
         host: State::Room,
         block: PASSWORD_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::ChargeCash,
+        host: State::Payment,
+        block: CASH_CHARGE_DIALOG_BLOCK,
     },
 ];
 
@@ -687,6 +699,84 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
         ctx,
         dialog.hidden_sprites(),
     )
+}
+
+/// Native ordinals of the three `Dialog_ChargeCash.bnd` rects, paired
+/// by `(code & 0xFFF) - 1` (exe pairing, docs/file-formats/opi.md).
+const CASH_CHARGE_FRAME_ORDINAL: u32 = 1;
+const CASH_CHARGE_WEB_ORDINAL: u32 = 2;
+const CASH_CHARGE_CLOSE_ORDINAL: u32 = 3;
+
+/// One placement's `.bnd` record ordinal.
+fn control_ordinal(placed: &ScenePlacement) -> u32 {
+    placed.code & 0xFFF
+}
+
+/// Find one staged Cash Charge control by its `.bnd` ordinal.
+fn cash_charge_control(placements: &[ScenePlacement], ordinal: u32) -> Option<&ScenePlacement> {
+    placements
+        .iter()
+        .find(|placed| control_ordinal(placed) == ordinal)
+}
+
+/// Offset a parent-relative `.bnd` rect by the staged frame origin.
+fn at_parent_origin(rect: Rect, frame: Rect) -> Rect {
+    Rect {
+        x: rect.x + frame.x,
+        y: rect.y + frame.y,
+        ..rect
+    }
+}
+
+/// Stage the Cash Charge view: the Item Shop host board plus the
+/// dialog sheet. The dialog's child rects and sprite anchors are
+/// parent-relative in the 7.55 sheet, so the web client rect shifts
+/// by the parsed frame origin and the close body paints from that
+/// origin plus its own parsed anchor (no literal coordinates).
+#[must_use]
+pub fn stage_cash_charge(archive: &[u8], ctx: StageContext) -> CashChargeArt {
+    let host = stage_state(archive, State::Shop, ctx)
+        .art
+        .unwrap_or_default();
+    let dialog = stage_dialog(archive, Dialog::ChargeCash, ctx)
+        .art
+        .unwrap_or_default();
+    CashChargeArt {
+        host: SceneArt {
+            placements: host.placements,
+            figures: host.figures,
+        },
+        dialog: stage_cash_charge_dialog(dialog),
+    }
+}
+
+/// Put the parsed dialog placements in paint order and resolve the
+/// parent offset. A missing frame stages nothing (ADR-0003).
+fn stage_cash_charge_dialog(bind: StagedArt) -> SceneArt {
+    let Some(frame) = cash_charge_control(&bind.placements, CASH_CHARGE_FRAME_ORDINAL) else {
+        return SceneArt::default();
+    };
+    let origin = frame.rect;
+    let mut placements = vec![frame.clone()];
+    if let Some(web) = cash_charge_control(&bind.placements, CASH_CHARGE_WEB_ORDINAL) {
+        placements.push(ScenePlacement {
+            rect: at_parent_origin(web.rect, origin),
+            ..web.clone()
+        });
+    }
+    if let Some(close) = cash_charge_control(&bind.placements, CASH_CHARGE_CLOSE_ORDINAL) {
+        // A clone paints at its rect plus the sprite anchor; the
+        // close body's anchor is already dialog-relative.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Clone,
+            rect: origin,
+            ..close.clone()
+        });
+    }
+    SceneArt {
+        placements,
+        figures: bind.figures,
+    }
 }
 
 /// Stage one by-name sheet from archive bytes through its row: parse

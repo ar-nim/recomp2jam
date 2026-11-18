@@ -23,8 +23,9 @@ use o2jam_shell::avatar::PlayingArtMode;
 use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE, ROOM_HOVER_SPRITE};
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
-    read_install_archives, stage_byname_sheet, stage_dialog, stage_room_hover_overlay, stage_state,
-    Dialog, StageContext, StagingArchive, State, BYNAME_TABLE,
+    read_install_archives, stage_byname_sheet, stage_cash_charge, stage_dialog,
+    stage_room_hover_overlay, stage_state, Dialog, StageContext, StagingArchive, State,
+    BYNAME_TABLE,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -83,6 +84,7 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_channel_dialog(game, archive);
     stage_planet_dialogs(game, archive);
     stage_payment_sheets(game, archive);
+    stage_cash_charge_sheet(game, archive);
 }
 
 /// Stage the planet-board modal sheets: all three options tabs
@@ -169,6 +171,17 @@ fn stage_payment_sheets(game: &mut ScreenGame, archive: &[u8]) {
         return;
     }
     game.load_payment_scene(placements, figures);
+}
+
+/// Stage the Cash Charge view through the same declaration: the
+/// Item Shop host board plus `Dialog_ChargeCash.bnd` chrome. The
+/// live boot never visits a side screen, so without this arm the
+/// charge plate would open a frame-less view.
+fn stage_cash_charge_sheet(game: &mut ScreenGame, archive: &[u8]) {
+    let art = stage_cash_charge(archive, StageContext::default());
+    if art.dialog.has_figures() {
+        game.load_cash_charge_art(art);
+    }
 }
 
 /// Stage the channel dialog art through the declaration: the bound

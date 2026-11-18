@@ -410,6 +410,78 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
+    /// Ticket #362: the exe's Cash Charge window opens from the Item
+    /// Shop charge plate at native (92,355) and shows a web client at
+    /// `(190,58)-(630,564)` with RGB `(25,24,25)` in the qualified
+    /// b8 capture (manifest `f9d4a695...`, image `27fd5435...`).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play (`--window --online`)
+    ///     -> setup_online -> assemble_online_session
+    ///     -> live_boot_gate::live_boot_itemshop_charge_plate_paints_cash_charge_chrome
+    ///     -> ScreenGame::visit_side(Shop) -> ScreenGame::click_shop(92,355)
+    ///     -> shop_action_at(SHOP_CHARGE_MONEY_CODE) -> visit_side(Payment)
+    ///     -> mount_staged_side_art -> paint_side -> paint_cash_charge_frame
+    #[test]
+    fn live_boot_itemshop_charge_plate_paints_cash_charge_chrome() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(
+                game.enter_screen(lobby),
+                "gate reaches the shop lobby through {lobby:?}"
+            );
+        }
+        assert!(
+            game.cash_charge_art_staged(),
+            "live boot stages the Cash Charge frame and close"
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(92, 355);
+        assert_eq!(
+            game.side(),
+            Some(SideScreen::Payment),
+            "Item Shop charge plate opens the Cash Charge view"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint(&mut RenderFrame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        // The b8 capture reads RGB (25,24,25) in the client area;
+        // the exe's RGB555 body decodes to (24,24,24) here, one step
+        // per captured channel. Both pin the same black web client.
+        let client = buf[300 * 800 + 400];
+        let channels = [(client >> 16) as u8, (client >> 8) as u8, client as u8];
+        for (painted, captured) in channels.into_iter().zip([25, 24, 25]) {
+            assert!(
+                painted.abs_diff(captured) <= 1,
+                "exe-pinned web client colour at the Cash Charge rect: {channels:?}"
+            );
+        }
+        assert_ne!(
+            buf[300 * 800 + 180],
+            client,
+            "staged frame chrome borders the web client"
+        );
+        assert!(
+            game.take_shop_buy().is_none(),
+            "charge plate queues no purchase send"
+        );
+        server.join().unwrap();
+    }
+
     /// Ticket #191 reopen: the shop board must not be empty on the
     /// DEFAULT live boot (no --gateway-id/--channel-id, no
     /// --avatar-opa). The seam guard

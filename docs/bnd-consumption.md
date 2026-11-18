@@ -58,7 +58,7 @@ a live path, so each lands in A. Nothing is tests-only.
 | Dialog_ChangeNickName.bnd | E | none — §Gaps | — |
 | Dialog_ChangeTitle.bnd | E | none — §Gaps | — |
 | Dialog_ChannelInfo.bnd | A | `staging.rs:361` (`Dialog::ChannelInfo` row) + `live_art.rs:150` (`stage_channel_dialog`) | staged live; painter mounts figures at anchors (`paint.rs:200`) |
-| Dialog_ChargeCash.bnd | E | none — §Gaps | — |
+| Dialog_ChargeCash.bnd | A | `staging.rs` (`Dialog::ChargeCash` row in `DIALOG_TABLE`) + `live_art.rs` (`stage_cash_charge_sheet`) + `shots.rs` (`stage_side_art`) | b8 pin `EV-B8-CASH-FRAME` (`docs/parity/payment.md`): frame `(171,3)-(648,595)`, parent-relative web `(19,55)-(459,561)`, close `(400,2)-(448,38)`; issue #362 |
 | Dialog_Conference.bnd | E | none — §Gaps | — |
 | Dialog_CreateRoom.bnd | A | `staging.rs:386` (`Dialog::CreateRoom` row) + `live_art.rs:109` (`stage_room_dialogs`) | modal owns Room input live (`game.rs:1662`) |
 | Dialog_EmotionHelp.bnd | E | none — §Gaps | — |
@@ -114,11 +114,11 @@ a live path, so each lands in A. Nothing is tests-only.
 
 ## Counts
 
-- A consumed-live: **23** (19 Interface + 4 Playing)
+- A consumed-live: **24** (20 Interface + 4 Playing)
 - B tests-only: **0**
 - C unreferenced, known-dead legacy: **7**
 - D exe-dead per ADR-0012: **3**
-- E GAP: **19** (19 Interface + 0 Playing)
+- E GAP: **18** (18 Interface + 0 Playing)
 - Total: **52** ✓
 
 (#165 leaves the counts unchanged: Payment stays A — its live-boot
@@ -130,7 +130,7 @@ path; paint wiring rides a later ticket.)
 ## Gaps (§E, verbatim)
 
 `Dialog_ChangeNickName.bnd`, `Dialog_ChangeTitle.bnd`,
-`Dialog_ChargeCash.bnd`, `Dialog_Conference.bnd`,
+`Dialog_Conference.bnd`,
 `Dialog_EmotionHelp.bnd`, `Dialog_Event.bnd`, `Dialog_GiftView.bnd`,
 `Dialog_Information.bnd`, `Dialog_Messenger_FriendADD.bnd`,
 `Dialog_Messenger_Information.bnd`, `Dialog_Messenger_Main.bnd`,
