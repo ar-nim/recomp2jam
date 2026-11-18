@@ -156,6 +156,7 @@ impl E2eWalker {
         // session stages the same rows); without this the loading gate
         // paints the MusicLoading.ojs placeholder instead of the OJN art.
         crate::stage_installed_song_catalog(&mut game);
+        crate::shots::stage_avatar_figures(&mut game);
         game.set_battle_teams(walk_battle_teams());
         game.set_battle_self_team(Some(0));
         game.stage_scripted_ranks(WALK_RANK_GLOBAL, WALK_RANK_STORED, WALK_RANK_PACKET);
@@ -467,7 +468,7 @@ fn waiting_duo() -> JoinedRoom {
                 team: 1,
                 ready: true,
                 music_state: 0,
-                equipment: [0; 17],
+                equipment: crate::shots::capture_kit_equipment(),
                 music_ids: Vec::new(),
                 cash_point: 0,
                 free_pass: 0,
@@ -681,6 +682,31 @@ mod tests {
         }
         assert_ne!(report.result_hash, 0, "result hash must observe the walk");
         assert_eq!(report.final_screen, "room");
+    }
+
+    #[test]
+    fn e2e_seeds_item_figures_for_the_waiting_seats_and_room_plate() {
+        // Live caller chain: recomp2jam e2e -> write_e2e_evidence ->
+        // E2eWalker::seeded -> shots::stage_avatar_figures ->
+        // ScreenGame::set_avatar_source + load_room_avatar (#336).
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !install_root().join("O2Jam/Image/avatar.opa").exists() {
+            println!("skip: install-root avatar.opa absent");
+            return;
+        }
+        let walker = E2eWalker::seeded(None).expect("seeded walker");
+        assert!(
+            walker.game.waiting_avatar(0).is_some_and(|f| !f.is_empty()),
+            "self seat wears the pinned kit"
+        );
+        assert!(
+            walker.game.waiting_avatar(1).is_some_and(|f| !f.is_empty()),
+            "peer seat wears the wire kit"
+        );
+        assert!(
+            walker.game.room_avatar().is_some_and(|f| !f.is_empty()),
+            "room peer plate wears the same kit"
+        );
     }
 
     #[test]

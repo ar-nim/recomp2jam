@@ -4665,6 +4665,21 @@ impl ScreenGame {
             .and_then(|slot| slot.as_ref())
     }
 
+    /// Room-panel figure when no per-seat figure covers the self seat.
+    #[must_use]
+    pub fn room_avatar(&self) -> Option<&AvatarFigure> {
+        self.room_avatar.as_ref()
+    }
+
+    /// Whether any worn figure is available to a Waiting seat: the
+    /// fetched-character seats or the lobby figure that stands in for
+    /// seat 0. The item-composed figures replace the baked cover plate
+    /// in the 7.55 capture (issue #336).
+    #[must_use]
+    fn has_staged_waiting_figure(&self) -> bool {
+        self.waiting_figures.iter().any(Option::is_some) || self.room_avatar.is_some()
+    }
+
     /// Stack one worn figure per occupied waiting seat from the
     /// `avatar.opa` archive plus the item table, through the shared
     /// [`load_worn_figure`] path (no fork: the same stacker the
@@ -6022,7 +6037,14 @@ impl ScreenGame {
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
-                paint_waiting_scene(frame, room, art, &captions, self.waiting_confirm_armed());
+                paint_waiting_scene(
+                    frame,
+                    room,
+                    art,
+                    &captions,
+                    self.waiting_confirm_armed(),
+                    self.has_staged_waiting_figure(),
+                );
                 paint_waiting_seat_avatars(
                     frame,
                     &art.placements,

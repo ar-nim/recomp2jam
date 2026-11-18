@@ -3708,12 +3708,16 @@ pub struct WaitingLevel {
 /// `confirm_armed` is the local player's ready/start request standing:
 /// the role-owned confirm body then paints its armed record instead of
 /// its rest record (see [`paint_waiting_confirm_face`]).
+/// `worn_figures_staged` suppresses the baked sketch of
+/// `Wait_Cover_Avatar.ojs`; the 7.55 capture shows item-composed
+/// figures instead of that placeholder (issue #336).
 pub fn paint_waiting_scene(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     art: &SceneArt,
     captions: &WaitingCaptions<'_>,
     confirm_armed: bool,
+    worn_figures_staged: bool,
 ) {
     let seats = staged_seats(room);
     // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
@@ -3723,6 +3727,7 @@ pub fn paint_waiting_scene(
         waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
+            && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
     });
     // The confirm face keeps the backdrop's stacking slot: it painted in
     // the backdrop pass before it selected its own record.
@@ -7284,6 +7289,7 @@ mod paint_tests {
             art,
             &WaitingCaptions::default(),
             false,
+            false,
         );
         buf[10 * 800 + 10]
     }
@@ -7377,6 +7383,7 @@ mod paint_tests {
             art,
             &WaitingCaptions::default(),
             confirm_armed,
+            false,
         );
         buf[10 * 800 + 10]
     }
@@ -8415,6 +8422,7 @@ mod paint_tests {
             &room,
             &art,
             &WaitingCaptions::default(),
+            false,
             false,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
@@ -11372,6 +11380,7 @@ mod paint_tests {
             &art,
             &WaitingCaptions::default(),
             false,
+            false,
         );
         let red = pack_xrgb(255, 0, 0);
         // Empty seat 2 keeps its staged art pixel: no live line.
@@ -12166,6 +12175,49 @@ mod paint_tests {
         );
         assert_eq!(buf[53 * 800 + 312], calm);
         assert!(!buf.contains(&scrim_color()));
+    }
+
+    #[test]
+    fn staged_worn_figures_hide_the_baked_cover_sketch() {
+        // Live caller chain: recomp2jam e2e -> E2eWalker::walk ->
+        // ScreenGame::paint_at -> ScreenGame::paint_waiting ->
+        // paint_waiting_scene -> backdrop cover filter (#336).
+        // The 7.55 shot has no sketch on an empty seat; once item
+        // figures are staged the placeholder plate must stand down.
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR3".to_owned(),
+            code: 0x1650_003F,
+            sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
+            rect: Rect {
+                x: 130,
+                y: 290,
+                w: 141,
+                h: 175,
+            },
+        }];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([("Wait_Cover_Avatar.ojs".to_owned(), red_figure())]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            true,
+        );
+        assert_eq!(
+            buf[290 * 800 + 130],
+            0,
+            "staged figures leave no baked cover sketch"
+        );
     }
 
     #[test]
@@ -12974,6 +13026,7 @@ mod paint_tests {
             &art,
             &WaitingCaptions::default(),
             false,
+            false,
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
@@ -13031,6 +13084,7 @@ mod paint_tests {
                 &room,
                 &art,
                 &WaitingCaptions::default(),
+                false,
                 false,
             );
             buf

@@ -78,7 +78,18 @@ The local Memoryer rig (`~/memoryer-local`, SQLite `O2JAM.db`) held
 type-5 → slot `0xb` rule above, so `Equip12` is the face column).
 The 2001 reply therefore carried a one-item kit, and the head-only
 room-panel render was CORRECT for that data (ticket #171 round 2;
-the stacker stacks what the reply carries). Fixture: the tester2 row
+the stacker stacks what the reply carries). **Contradiction recorded
+(#336):** the qualified 2026-11-17 Wine waiting capture
+(`c3-waiting-qualified/artifacts/screenshots/waiting.png`, SHA-256
+`f394dcaa…1393162`) shows a full pale body under that same face-only
+kit. Its wire tap `wire/room-stage.log` 2001 reply carries only item
+35 in slot 11 (body offset `0x5D`, inside the 17-`i32` table starting
+at `0x31`); the visible body decodes to item 30's
+`01M13T0000001.ojs` anchor `(133,110)` (34×89, 12 idle frames).
+For that capture path the exe paints the default body beneath worn
+face art, so the shell's #336 e2e fixture stacks ids `[30,35]`.
+This does not retroactively change the #171 stacker finding; the
+exe capture is the behavior oracle and both readings stay visible. Fixture: the tester2 row
 now also wears the full-body kit ids 16 (hair), 30 (base body
 `몸통`), 376 (top), 383 (bottom), 389 (shoes) at `Equip1..Equip5`
 (column placement of kit ids is fixture freedom — the server copies

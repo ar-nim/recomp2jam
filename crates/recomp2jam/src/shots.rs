@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
-use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
+use o2jam_net::{ChannelState, GameMode, Gender, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::side::SideScreen;
@@ -19,7 +19,7 @@ use o2jam_shell::staging::{
 };
 use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, PlaySkin, Screen, ScreenGame};
 
-use crate::connect::stack_worn_figure;
+use crate::connect::{read_avatar_source, stack_worn_figure};
 use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
 
 /// Screenshot width in pixels.
@@ -222,9 +222,24 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// Worn-figure archive under `install-root` (avatar item art + table).
 const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 /// Equipment the playing shot wears, verified to resolve against 7.55
-/// `avatar.opa` (`Itemdata_Korea.dat` rows: male hair 16, face 30,
+/// `avatar.opa` (`Itemdata_Korea.dat` rows: male hair 16, body 30,
 /// torso+arms outfit 376, pants 383, shoes 389).
 const PLAYING_EQUIPMENT: [i32; 5] = [16, 30, 376, 383, 389];
+
+/// The #329 Wine capture's 2001 reply equips only face item 35; the exe
+/// still paints the default male body (item 30) beneath it. Both bodies
+/// are idle-variant `avatar.opa` sprites (`docs/equip.md`, issue #336).
+const CAPTURE_KIT_EQUIPMENT: [i32; 2] = [30, 35];
+
+/// One 17-slot equipment table matching that capture: body first, face
+/// in its pinned `Equip12` column.
+#[must_use]
+pub(crate) fn capture_kit_equipment() -> [i32; 17] {
+    let mut equipment = [0; 17];
+    equipment[0] = CAPTURE_KIT_EQUIPMENT[0];
+    equipment[11] = CAPTURE_KIT_EQUIPMENT[1];
+    equipment
+}
 /// Player caption staged for the playing shot.
 const PLAYING_PLAYER: (u32, &str) = (43, "TESTER");
 /// Volume readout staged for the playing shot: the reference photo's
@@ -461,6 +476,37 @@ pub(crate) fn stage_real_art(game: &mut ScreenGame) {
         stage_playing_archive(game, playing);
         crate::live_art::stage_result_life_font(game, playing);
     }
+}
+
+/// Stage the walked accounts' worn kit into the Room peer plate and every
+/// occupied Waiting seat (#336). The item bodies come from the installed
+/// `avatar.opa`; the equipment ids are synthetic fixture data pinned in
+/// `docs/equip.md`. No archive means no figure — the old cover-plate
+/// fallback stays untouched in CI and on a fresh worktree.
+pub(crate) fn stage_avatar_figures(game: &mut ScreenGame) {
+    let source = install_root()
+        .join(AVATAR_ARCHIVE)
+        .to_string_lossy()
+        .into_owned();
+    let Ok((archive, table)) = read_avatar_source(&source) else {
+        return;
+    };
+    let Ok(figure) = stack_worn_figure(&archive, &CAPTURE_KIT_EQUIPMENT, true) else {
+        return;
+    };
+    if figure.is_empty() {
+        return;
+    }
+    let hero = o2jam_net::CharacterInfo {
+        gender: Gender::Male,
+        equipment: capture_kit_equipment(),
+        ..o2jam_net::CharacterInfo::default()
+    };
+    game.set_myroom_character(hero);
+    game.load_room_avatar(figure.clone());
+    game.load_avatar(figure);
+    // The source restages the self seat and every later peer join.
+    game.set_avatar_source(archive, table);
 }
 
 /// Live 1003 wire mirror (2026-11-13 CLI probe against local Memoryer
@@ -1554,7 +1600,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_equipment_stacks_a_worn_figure() {
+    fn playing_kit_stacks_a_worn_figure() {
         let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
             println!("skip: missing {AVATAR_ARCHIVE}");
             return;
@@ -1564,6 +1610,19 @@ mod tests {
         assert!(!figure.is_empty());
         let (w, h) = figure.extent();
         assert!(w > 0 && h > 0, "figure extent {w}x{h} paints nothing");
+    }
+
+    #[test]
+    fn capture_kit_stacks_the_default_body_beneath_the_face() {
+        // The 07D1 tap in the #329 Wine run carries only item 35; the
+        // capture's full figure is item 30 beneath it (EV-336-A/B/C).
+        let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
+            println!("skip: missing {AVATAR_ARCHIVE}");
+            return;
+        };
+        let figure = stack_worn_figure(&archive, &capture_kit_equipment(), true)
+            .expect("capture kit stacks against 7.55 avatar.opa");
+        assert_eq!(figure.len(), 24, "12 body frames + 12 face frames");
     }
 
     #[test]
