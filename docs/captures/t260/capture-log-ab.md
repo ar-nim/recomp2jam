@@ -129,5 +129,13 @@ on the other side of an event line because live Xvfb paint cadence differs
 (`diff -u` exit 1). No event or judged line changed order, and no line was
 lost; the frame gate itself moved unchanged into `CaptureAdapter`.
 
+Both legs are reproducible with `~/scratch/p260-ab/run-leg.sh OUT DISPLAY
+TRACE BINARY`; it boots the guest with `rig-run.sh run`, starts a host room,
+replays the trace with `--attach-rig --sound`, and stops only its own PIDs.
 Raw logs, frames and audio stay under `~/scratch/p260-ab/`; no capture bytes
 enter the repository.
+
+Final gates at `d62c683`: `cargo fmt --check` exit 0,
+`cargo clippy --workspace --all-targets -- -D warnings` exit 0,
+`cargo test --workspace` exit 0 with `install-root` present (2673 tests) and
+with it hidden (2673 tests).
