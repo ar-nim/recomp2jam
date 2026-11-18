@@ -12,9 +12,9 @@
 //! Frames stay in memory unless an evidence directory is given: the
 //! tests assert on the trace alone, while
 //! [`write_e2e_evidence`] writes one PNG per step plus `trace.json`
-//! for the smoke log (`docs/smoke/e2e-walk.md`). Seeds are synthetic
-//! only — no archives are read, so the walk runs with `install-root`
-//! present and hidden.
+//! for the smoke log (`docs/smoke/e2e-walk.md`). Inputs are synthetic
+//! seeds; the install's archives and song catalog stage underneath
+//! when present, and the flat fallbacks stay when it is hidden.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -152,6 +152,10 @@ impl E2eWalker {
         game.set_joined_room(waiting_duo());
         game.load_chart_holds(walk_chart());
         crate::shots::stage_real_art(&mut game);
+        // The song pick resolves its cover from the catalog (the live
+        // session stages the same rows); without this the loading gate
+        // paints the MusicLoading.ojs placeholder instead of the OJN art.
+        crate::stage_installed_song_catalog(&mut game);
         game.set_battle_teams(walk_battle_teams());
         game.set_battle_self_team(Some(0));
         game.stage_scripted_ranks(WALK_RANK_GLOBAL, WALK_RANK_STORED, WALK_RANK_PACKET);
@@ -733,5 +737,59 @@ mod tests {
         };
         assert!(opened < closed, "options must open before it closes");
         assert_eq!(report.steps[closed].screen, "planet");
+    }
+
+    /// Live caller chain from boot:
+    ///   E2eWalker::seeded -> stage_installed_song_catalog ->
+    ///   pick_host_song -> ScreenGame::set_selected_music ->
+    ///   resolve_song_cover -> stage_loading_cover ->
+    ///   paint_loading_scene_with_status -> paint_loading_cover.
+    /// The paint seam is separately pinned in `paint.rs`; this guard
+    /// pins the real OJN bytes reaching the loading frame's pixels.
+    /// Install data is local-only: absent files skip cleanly in CI.
+    #[test]
+    fn song_pick_paints_the_installed_ojn_cover_on_the_loading_gate() {
+        let catalog_path = install_root().join("O2Jam/Image/OJNList.dat");
+        let chart_path = install_root().join("O2Jam/Music/o2ma757.ojn");
+        if !catalog_path.is_file() || !chart_path.is_file() {
+            println!("skip: missing install catalog or chart");
+            return;
+        }
+        let Ok(chart_bytes) = std::fs::read(&chart_path) else {
+            println!("skip: unreadable {}", chart_path.display());
+            return;
+        };
+        let Ok(cover) = o2jam_file::ojn_cover_jpeg(&chart_bytes)
+            .and_then(|stream| o2jam_file::decode_ojn_cover(&stream))
+        else {
+            println!("skip: undecodable OJN cover");
+            return;
+        };
+
+        let mut e2e = E2eWalker::seeded(None).expect("seeded walker");
+        assert!(
+            !e2e.game.select_songs().is_empty(),
+            "boot must stage the installed song catalog"
+        );
+        e2e.dismiss_splash().expect("splash dismisses");
+        e2e.enter_channel().expect("board enters channel");
+        e2e.enter_room_lobby().expect("channel enters room");
+        e2e.enter_waiting_room().expect("room enters waiting");
+        e2e.pick_host_song().expect("song pick commits");
+        assert!(
+            e2e.game.has_loading_cover(),
+            "song pick must stage the walked OJN cover"
+        );
+        arm_walk_gate(&mut e2e.game).expect("gate arms");
+        e2e.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(e2e.game.screen(), Screen::Loading, "gate enters Loading");
+
+        let frame = paint_walk_frame(&mut e2e.game, E2E_MENU_PAINT_MS);
+        for channel in 0..3 {
+            assert!(
+                frame[channel].abs_diff(cover.pixels[channel]) <= 8,
+                "loading pixel channel {channel} must carry the decoded cover"
+            );
+        }
     }
 }

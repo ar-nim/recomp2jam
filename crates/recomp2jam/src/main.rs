@@ -1442,17 +1442,17 @@ fn catalog_labels(bytes: &[u8]) -> Vec<o2jam_file::OjnMidTagEntry> {
 /// lobby lists so the staged rows render for hand verification.
 fn stage_offline_windowed(game: &mut o2jam_shell::ScreenGame) {
     live_art::stage_live_scenes(game);
-    stage_offline_music_boards(game);
+    stage_installed_song_catalog(game);
     seed_offline_lobby(game);
 }
 
 /// Stage the installed song catalog (`OJNList.dat`) into a windowed
-/// offline game: the select-music dialog plus the lanking and
-/// music-shop boards ride the same parse (see
+/// game: the select-music dialog, the lanking/music-shop boards, and
+/// the loading gate's album-cover path ride the same parse (see
 /// [`o2jam_shell::ScreenGame::set_song_catalog`]). A missing or
-/// unparsable catalog keeps every board row-less; no fallback rows
-/// are invented.
-fn stage_offline_music_boards(game: &mut o2jam_shell::ScreenGame) {
+/// unparsable catalog keeps every board row-less and the loading
+/// overlay on its planet fallback; no fallback rows are invented.
+fn stage_installed_song_catalog(game: &mut o2jam_shell::ScreenGame) {
     // The offline walk stages the same local availability the online
     // boot stages (§1); `None` without game data.
     game.set_installed_music(o2jam_shell::music_install::scan_installed_music());
@@ -2764,7 +2764,7 @@ mod offline_music_board_tests {
     fn offline_boot_stages_music_shop_and_lanking_boards() {
         // Live caller chain:
         //   main.rs::run_play (offline windowed arm) ->
-        //   stage_offline_windowed -> stage_offline_music_boards ->
+        //   stage_offline_windowed -> stage_installed_song_catalog ->
         //   ScreenGame::set_song_catalog ->
         //   MusicShopState::set_catalog + LankingState::set_catalog
         // Archives absent -> skip cleanly (CI has no game data).
