@@ -102,6 +102,24 @@ use winit::keyboard::KeyCode;
 /// never reaches the armed phase before both.
 pub const LOADING_GATE_PHASES: usize = 4;
 
+/// The one press-kind word returned by [`ScreenGame::press_kind_at`].
+/// It names the staged control under a point, never its wire outcome:
+/// the session press module decides networked vs local and owns the
+/// single echo (#258). No new geometry lives here; each variant is
+/// resolved by the game's own private hit tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PressKind {
+    /// An active channel row's enter face (mouse entry target).
+    ChannelEnter(ChannelState),
+    /// A listed room row: number to join, title for the resident
+    /// heuristic (the joined snapshot carries no wire room id).
+    RoomRow { number: i32, title: String },
+    /// The staged role-owned Waiting START/READY face.
+    WaitingConfirm,
+    /// No staged control owns this point.
+    Local,
+}
+
 /// Stage the Playing backdrop defaults to before a room names one:
 /// the exe's room entry replaces a zero stage with a real one (the
 /// waiting-room picker's value, store `0x4aacea`, `docs/stage-bga.md`),
@@ -2899,14 +2917,34 @@ impl ScreenGame {
         self.channel_scene.highlighted()
     }
 
+    /// The one press-kind word for the session gate. Staged rect
+    /// readers stay private here (ADR-0003/0013): the game owns the
+    /// hit tests, the session owns what the hit means for the wire.
+    /// Replaces four separate public queries (#258).
+    #[must_use]
+    pub fn press_kind_at(&self, x: i32, y: i32) -> PressKind {
+        match self.flow.current() {
+            Screen::Channel => self
+                .channel_enter_at(x, y)
+                .map_or(PressKind::Local, PressKind::ChannelEnter),
+            Screen::Room => self
+                .room_entry_at(x, y)
+                .map_or(PressKind::Local, |(number, title)| PressKind::RoomRow {
+                    number,
+                    title,
+                }),
+            Screen::Waiting if self.waiting_confirm_hit(x, y) => PressKind::WaitingConfirm,
+            _ => PressKind::Local,
+        }
+    }
+
     /// Channel row whose enter face covers (`x`, `y`) (the mouse
     /// entry target; `None` off the Channel screen, on the X/scroll
     /// chrome, on a row body, or while a slash draft owns the click).
     /// Mirrors [`Self::click_channel_row`]'s enter arm so the session
     /// bridge can exchange the login before forwarding the press
     /// (ticket #30).
-    #[must_use]
-    pub fn channel_enter_at(&self, x: i32, y: i32) -> Option<ChannelState> {
+    fn channel_enter_at(&self, x: i32, y: i32) -> Option<ChannelState> {
         if self.flow.current() != Screen::Channel {
             return None;
         }
@@ -3105,24 +3143,14 @@ impl ScreenGame {
             .filter(|index| *index < self.rooms.len())
     }
 
-    /// Room number under a click (`None` while no listed room covers
-    /// the point). The session bridge joins it before advancing, so a
-    /// click sends what Confirm sends.
-    #[must_use]
-    pub fn room_number_at(&self, x: i32, y: i32) -> Option<i32> {
-        self.room_index_at(x, y)
-            .and_then(|index| self.rooms.get(index))
-            .map(|room| room.number)
-    }
-
-    /// Room title under a native click, if any row covers the point.
-    /// The resident-room check matches on title: the joined snapshot
-    /// this client holds carries no wire id (ticket #231).
-    #[must_use]
-    pub fn room_title_at(&self, x: i32, y: i32) -> Option<&str> {
-        self.room_index_at(x, y)
-            .and_then(|index| self.rooms.get(index))
-            .map(|room| room.title.as_str())
+    /// Room entry under a click: number and title from one hit test
+    /// (the number to join, the title for the resident heuristic —
+    /// the joined snapshot carries no wire room id, ticket #231).
+    /// The session press module is the only caller; both queries
+    /// used to be separate public gates over the same row.
+    fn room_entry_at(&self, x: i32, y: i32) -> Option<(i32, String)> {
+        let room = self.rooms.get(self.room_index_at(x, y)?)?;
+        Some((room.number, room.title.clone()))
     }
 
     /// Staged room-panel click: file-order panel index covering
@@ -3381,7 +3409,7 @@ impl ScreenGame {
     /// fallback geometry names these buttons). The session bridge runs
     /// its networked Confirm gate on a hit instead of the local one.
     #[must_use]
-    pub fn waiting_confirm_hit(&self, x: i32, y: i32) -> bool {
+    fn waiting_confirm_hit(&self, x: i32, y: i32) -> bool {
         let Some(art) = self.scene_art(Screen::Waiting) else {
             return false;
         };
@@ -14007,14 +14035,14 @@ mod game_tests {
     }
 
     #[test]
-    fn room_number_at_names_clicked_rows() {
+    fn room_entry_at_names_clicked_rows() {
         // Band fallback needs no staged art: native bands resolve the
         // row whose number the session bridge joins before advancing.
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
-        assert_eq!(game.room_number_at(400, 154), Some(3));
-        assert_eq!(game.room_number_at(400, 162), Some(7));
-        assert_eq!(game.room_number_at(400, 100), None);
+        assert_eq!(game.room_entry_at(400, 154), Some((3, "Jam".to_owned())));
+        assert_eq!(game.room_entry_at(400, 162), Some((7, "Locked".to_owned())));
+        assert_eq!(game.room_entry_at(400, 100), None);
     }
 
     #[test]
@@ -14051,8 +14079,8 @@ mod game_tests {
             free_slot(),
         ]);
         walk_to_lobby(&mut game, Screen::Room);
-        assert_eq!(game.room_number_at(38, 94), None);
-        assert_eq!(game.room_number_at(400, 154), None);
+        assert_eq!(game.room_entry_at(38, 94), None);
+        assert_eq!(game.room_entry_at(400, 154), None);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
             &mut Frame {

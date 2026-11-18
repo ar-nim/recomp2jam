@@ -169,12 +169,14 @@ use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGam
 
 use crate::connect::net_context;
 mod attempt;
+mod press;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
     load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
     LOADING_GATE_STEPS,
 };
+use press::{EntryEcho, PressDisposition};
 mod result_records;
 
 use result_records::ResultMemberRecord;
@@ -291,18 +293,6 @@ struct PendingRoomJoin {
     password: String,
 }
 
-/// Where a pending entry resolves its screen advance (ticket #172):
-/// the poll replays the originating input into the game, so the
-/// highlight and the advance match the old synchronous path exactly.
-#[derive(Debug, Clone, Copy)]
-enum EntryOrigin {
-    /// Keyboard Confirm: the advance replays Confirm into the game.
-    Confirm,
-    /// Face/row press at (`x`, `y`): the advance replays that press
-    /// into the game (`click_at`), like the swallowed edge would have.
-    Press { x: i32, y: i32 },
-}
-
 /// Pending interactive channel login (ticket #172): the 1004 send
 /// plus the 1005 answer and the 2001 identity fetch resolve on the
 /// per-frame poll, never on the Confirm/press path — a silent server
@@ -317,7 +307,7 @@ struct ChannelLoginAttempt {
     /// synchronous entry).
     channel_id: i16,
     /// Input the advance replays on success.
-    origin: EntryOrigin,
+    origin: EntryEcho,
     /// `true` once the 1004 send went out (the poll retries it).
     login_sent: bool,
     /// `true` once the 2001 fetch went out (the poll retries it).
@@ -379,7 +369,7 @@ struct RoomJoinAttempt {
     /// Room password (empty for open rows).
     password: String,
     /// Input the advance replays on success.
-    origin: EntryOrigin,
+    origin: EntryEcho,
     /// `true` once the 3002 send went out (the poll retries it).
     request_sent: bool,
     /// When the silent server stops getting the benefit of the doubt.
@@ -473,18 +463,15 @@ pub struct OnlineSession {
     /// boot auto-login, cleared on leave or timeout). A swallowed face
     /// press naming this channel skips the wire round trip.
     resident_channel: Option<ChannelState>,
-    /// Coordinates of the resident-channel face press that was replayed
-    /// locally, so only its matching release is swallowed.
-    resident_press: Option<(i32, i32)>,
+    /// Matching release of the one resident echo currently outstanding
+    /// (channel face or room row); no second gate owns this pair.
+    resident_echo: Option<press::PressEcho>,
     /// Title of the room the session currently occupies (set on a
     /// resolved join or boot create-and-join, cleared on leave or
     /// timeout). A swallowed row press naming this room replays
     /// locally instead of re-sending a join the server ignores
     /// (duplicate join of an occupied room; ticket #231).
     resident_room: Option<String>,
-    /// Coordinates of the resident-room row press that was replayed
-    /// locally, so only its matching release is swallowed.
-    resident_room_press: Option<(i32, i32)>,
     /// Live room join (`None` while no Confirm/press join is in
     /// flight; the per-frame [`Self::poll_room_join`] owns it).
     join_attempt: Option<RoomJoinAttempt>,
@@ -565,9 +552,8 @@ impl OnlineSession {
             pending_song: None,
             login_attempt: None,
             resident_channel: None,
-            resident_press: None,
+            resident_echo: None,
             resident_room: None,
-            resident_room_press: None,
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
@@ -1456,7 +1442,7 @@ impl OnlineSession {
     /// nothing, keeping Channel. Room rows are not refetched here
     /// (OPEN: the list-only boot stages none, so the Room lobby still
     /// lists the boot snapshot).
-    fn begin_channel_login(&mut self, channel: ChannelState, origin: EntryOrigin) {
+    fn begin_channel_login(&mut self, channel: ChannelState, origin: EntryEcho) {
         let (Ok(gateway_id), Ok(channel_id)) = (
             i16::try_from(channel.gateway_id),
             i16::try_from(channel.channel_id),
@@ -1497,7 +1483,7 @@ impl OnlineSession {
         };
         if Instant::now() > attempt.deadline {
             self.clear_resident_channel();
-            self.resident_press = None;
+            self.clear_channel_echo();
             tracing::warn!(
                 gateway_id = attempt.gateway_id,
                 channel_id = attempt.channel_id,
@@ -1593,14 +1579,9 @@ impl OnlineSession {
     /// through [`crate::stage_online_identity`], then the advance
     /// replays the originating input — the old synchronous Confirm
     /// shape, deferred to the poll.
-    fn resolve_channel_login(&mut self, hero: CharacterInfo, origin: EntryOrigin) {
+    fn resolve_channel_login(&mut self, hero: CharacterInfo, origin: EntryEcho) {
         crate::stage_online_identity(&mut self.game, Some(&hero));
-        match origin {
-            EntryOrigin::Confirm => self.game.menu_key(MenuKey::Confirm, true),
-            EntryOrigin::Press { x, y } => {
-                self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
-            }
-        }
+        self.echo_entry(origin);
     }
 
     /// Whether the boot already logged into this row. Both entry
@@ -1619,14 +1600,14 @@ impl OnlineSession {
     /// stays.
     fn confirm_channel(&mut self) {
         let Some(channel) = self.game.highlighted_channel() else {
-            self.game.menu_key(MenuKey::Confirm, true);
+            self.echo_entry(EntryEcho::Confirm);
             return;
         };
         if self.is_resident_channel(&channel) {
-            self.game.menu_key(MenuKey::Confirm, true);
+            self.echo_entry(EntryEcho::Confirm);
             return;
         }
-        self.begin_channel_login(channel, EntryOrigin::Confirm);
+        self.begin_channel_login(channel, EntryEcho::Confirm);
     }
 
     /// Stage a Room Confirm join attempt (ticket #172): no socket
@@ -1635,7 +1616,7 @@ impl OnlineSession {
     /// sends `JoinWaiting` (3002, the `connect --join-room` request
     /// shape) and stages the 3003 answer's room through
     /// [`ScreenGame::set_joined_room`].
-    fn begin_room_join(&mut self, origin: EntryOrigin) {
+    fn begin_room_join(&mut self, origin: EntryEcho) {
         let Some(pending) = self.pending_room.clone() else {
             return;
         };
@@ -1736,18 +1717,13 @@ impl OnlineSession {
     /// [`ScreenGame::set_joined_room`], then the advance replays the
     /// originating input — the old synchronous Confirm shape,
     /// deferred to the poll.
-    fn resolve_room_join(&mut self, room: JoinedRoom, origin: EntryOrigin) {
+    fn resolve_room_join(&mut self, room: JoinedRoom, origin: EntryEcho) {
         self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
         restage_live_playing(&mut self.game);
-        match origin {
-            EntryOrigin::Confirm => self.game.menu_key(MenuKey::Confirm, true),
-            EntryOrigin::Press { x, y } => {
-                self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
-            }
-        }
+        self.echo_entry(origin);
     }
 
     /// Waiting Confirm with an empty draft: slash drafts route through
@@ -2247,7 +2223,7 @@ impl OnlineSession {
             return;
         }
         self.clear_resident_channel();
-        self.resident_press = None;
+        self.clear_channel_echo();
         self.resident_room = None;
         if let Err(source) = self.gateway.send_frame(Request::ChannelLogout.id(), &[]) {
             tracing::warn!(%source, "channel logout send failed");
@@ -3164,78 +3140,14 @@ impl OnlineSession {
         }
     }
 
-    /// Run the networked gates for one press edge: `true` eats the
-    /// edge (the game never sees it). Releases and keys always pass
-    /// through — the game answers those locally.
+    /// Run the networked press gate for one edge. The press module
+    /// owns the four hit tests, the decision, and the single echo;
+    /// this seam only translates its disposition into gate truth.
     fn swallow_networked_edge(&mut self, edge: &InputEdge) -> bool {
-        let (x, y) = match *edge {
-            InputEdge::PointerDown { x, y } => (x, y),
-            InputEdge::PointerUp { x, y } => (x, y),
-            _ => return false,
-        };
-        if self.game.screen() == Screen::Channel {
-            // Swallow only the release matching a replayed resident face
-            // press; other releases (e.g. scrollbar drag) pass through.
-            if let InputEdge::PointerUp { .. } = *edge {
-                if self.resident_press == Some((x, y)) {
-                    self.resident_press = None;
-                    return true;
-                }
-                return false;
-            }
-            if let Some(channel) = self.game.channel_enter_at(x, y) {
-                // Resident channel: skip the wire round trip and replay
-                // the press through the same Room transition.
-                if self.is_resident_channel(&channel) {
-                    self.resident_press = Some((x, y));
-                    self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
-                    return true;
-                }
-                // Eaten: the game must not advance before the identity
-                // stages — the poll replays this press once it does.
-                self.begin_channel_login(channel, EntryOrigin::Press { x, y });
-                return true;
-            }
-            return false;
+        match self.dispatch_pointer_edge(edge) {
+            PressDisposition::Swallow => true,
+            PressDisposition::Local => false,
         }
-        if self.game.screen() == Screen::Room {
-            // Swallow only the release matching a replayed resident row
-            // press; other releases pass through.
-            if let InputEdge::PointerUp { .. } = *edge {
-                if self.resident_room_press == Some((x, y)) {
-                    self.resident_room_press = None;
-                    return true;
-                }
-                return false;
-            }
-            if let Some(number) = self.game.room_number_at(x, y) {
-                // Resident room: replay locally instead of re-sending
-                // a join the server ignores on an occupied room
-                // (ticket #231); the wire path stays for the rest.
-                if let Some(title) = self.game.room_title_at(x, y) {
-                    if self.resident_room.as_deref() == Some(title) {
-                        self.resident_room_press = Some((x, y));
-                        self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
-                        return true;
-                    }
-                }
-                self.set_pending_room_join(number, "");
-                self.set_pending_room_join(number, "");
-                // Eaten: the game must not advance before the snapshot
-                // stages — the poll replays this press once it does.
-                self.begin_room_join(EntryOrigin::Press { x, y });
-                return true;
-            }
-            // A press that hits no room never sends: only Confirm
-            // (with an explicit `--online-join-room`) retries a
-            // pending join.
-            return self.pending_room.is_some();
-        }
-        if self.game.screen() == Screen::Waiting && self.game.waiting_confirm_hit(x, y) {
-            self.confirm_waiting();
-            return true;
-        }
-        false
     }
 
     /// `true` while a Confirm-paced attempt still awaits its answers
@@ -3288,7 +3200,7 @@ impl GameLoop for OnlineSession {
             if self.pending_room.is_none() {
                 self.game.menu_key(key, down);
             } else {
-                self.begin_room_join(EntryOrigin::Confirm);
+                self.begin_room_join(EntryEcho::Confirm);
             }
             return;
         }
@@ -3475,7 +3387,7 @@ fn level_for_difficulty(difficulty: u8) -> usize {
 }
 
 #[cfg(test)]
-mod session_tests {
+pub(super) mod session_tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
@@ -3497,7 +3409,7 @@ mod session_tests {
     };
 
     /// One whole frame off the fake server's socket.
-    fn read_frame(stream: &mut TcpStream) -> Frame {
+    pub(super) fn read_frame(stream: &mut TcpStream) -> Frame {
         let mut header = [0u8; 4];
         stream.read_exact(&mut header).unwrap();
         let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
@@ -3559,7 +3471,7 @@ mod session_tests {
 
     /// Game walked Avi → Channel, paired with a live fake gateway; the
     /// server end runs `with_server`.
-    fn channel_session(
+    pub(super) fn channel_session(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
@@ -3572,7 +3484,7 @@ mod session_tests {
     }
     /// Game walked Avi → Channel → Room, paired with a live fake
     /// gateway; the server end runs `with_server`.
-    fn room_session(
+    pub(super) fn room_session(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
@@ -3587,7 +3499,7 @@ mod session_tests {
 
     /// Minimal joined snapshot: master seat of a 7-key room titled
     /// Lobby (the `connect --join-room` answer shape).
-    fn joined_snapshot() -> o2jam_net::JoinedRoom {
+    pub(super) fn joined_snapshot() -> o2jam_net::JoinedRoom {
         let mut slots = Vec::new();
         for index in 0..7u8 {
             slots.push(o2jam_net::RoomSlot {
@@ -3651,7 +3563,7 @@ mod session_tests {
     /// Guest snapshot: our seat is 1 under a ready master at seat 0.
     /// Teams follow the server's first-unused-team rule (master A, guest
     /// B), so the team-balance gate passes on readiness alone.
-    fn guest_snapshot() -> o2jam_net::JoinedRoom {
+    pub(super) fn guest_snapshot() -> o2jam_net::JoinedRoom {
         let mut room = joined_snapshot();
         room.member_id = 1;
         room.team = 1;
@@ -3666,7 +3578,7 @@ mod session_tests {
     /// the snapshot the Room Confirm join would have staged (that
     /// exchange is covered above) and marks the session joined, so
     /// Waiting Confirm means START/READY instead of the offline walk.
-    fn joined_waiting_session(
+    pub(super) fn joined_waiting_session(
         room: o2jam_net::JoinedRoom,
         with_server: impl FnOnce(TcpStream) + Send + 'static,
     ) -> (OnlineSession, thread::JoinHandle<()>) {
@@ -3709,7 +3621,7 @@ mod session_tests {
 
     /// One native-canvas paint through the session: game frame first,
     /// then the stats section (tick poll plus echo drain).
-    fn paint_frame(session: &mut OnlineSession) {
+    pub(super) fn paint_frame(session: &mut OnlineSession) {
         let mut buf = vec![0u32; 800 * 600];
         let mut frame = o2jam_render::Frame {
             buf: &mut buf,
@@ -3732,7 +3644,10 @@ mod session_tests {
     /// writes and observe an empty socket (issue #52); polling the
     /// drained state removes the wall-clock race without weakening
     /// the assertions that follow.
-    fn paint_until(session: &mut OnlineSession, condition: impl Fn(&OnlineSession) -> bool) {
+    pub(super) fn paint_until(
+        session: &mut OnlineSession,
+        condition: impl Fn(&OnlineSession) -> bool,
+    ) {
         let deadline = std::time::Instant::now() + DRAIN_POLL_TIMEOUT;
         loop {
             paint_frame(session);
@@ -3921,7 +3836,7 @@ mod session_tests {
     /// Script the interactive channel-entry exchange (ticket #30):
     /// the 1004 login answers success, then the 2001 character answer
     /// the gate asserts.
-    fn answer_entry_login(stream: &mut TcpStream) {
+    pub(super) fn answer_entry_login(stream: &mut TcpStream) {
         use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
         let login = read_frame(stream);
         assert_eq!(login.id, 1004);
@@ -4396,7 +4311,7 @@ mod session_tests {
         assert!(session.gift_claim_attempt.is_none());
     }
 
-    fn entry_channel() -> o2jam_net::ChannelState {
+    pub(super) fn entry_channel() -> o2jam_net::ChannelState {
         o2jam_net::ChannelState {
             gateway_id: 0,
             channel_id: 2,
@@ -4455,65 +4370,6 @@ mod session_tests {
     }
 
     #[test]
-    fn tt230_resident_face_press_replays_without_wire() {
-        // Ticket #230: a face press naming the resident channel replays
-        // locally with no ChannelLogin on the wire. The resident press
-        // at the pinned face point (524, 246) must reach Room while the
-        // server sees zero frames (read with a timeout: any send fails
-        // the test instead of hanging it).
-        use std::io::Read;
-        let (mut session, server) = channel_session(|mut stream| {
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut header = [0u8; 4];
-            assert!(
-                stream.read_exact(&mut header).is_err(),
-                "resident face press sent a frame on the wire"
-            );
-        });
-        session.game.set_channels(vec![entry_channel()]);
-        session.set_resident_channel(entry_channel());
-        session.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(
-            session.game.screen(),
-            Screen::Room,
-            "resident face press enters Room with no wire round trip"
-        );
-        server.join().unwrap();
-    }
-
-    #[test]
-    fn tt331_resident_channel_confirm_replays_without_second_login() {
-        // Live chain: run_online boot 1004/1005 -> set_resident_channel
-        // -> GameLoop::menu_key(Confirm) -> confirm_channel. Confirm on
-        // the resident row must advance locally: a second 1004 draws a
-        // 1001 -1 from Memoryer and strands the walk in Channel (issue
-        // #331 red proof).
-        use std::io::Read;
-        let (mut session, server) = channel_session(|mut stream| {
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut header = [0u8; 4];
-            assert!(
-                stream.read_exact(&mut header).is_err(),
-                "resident Confirm sent a second ChannelLogin on the wire"
-            );
-        });
-        session.game.set_channels(vec![entry_channel()]);
-        session.set_resident_channel(entry_channel());
-        session.menu_key(MenuKey::Confirm, true);
-        paint_frame(&mut session);
-        assert_eq!(
-            session.game.screen(),
-            Screen::Room,
-            "resident Confirm enters Room with no wire round trip"
-        );
-        server.join().unwrap();
-    }
-
-    #[test]
     fn tt331_confirm_on_nonresident_channel_still_sends_login() {
         // The residency shortcut must stay row-specific: a different
         // row still logs in and stages the 2001 identity.
@@ -4540,53 +4396,6 @@ mod session_tests {
                 .nickname,
             "gate"
         );
-    }
-
-    #[test]
-    fn tt231_resident_room_press_replays_without_wire() {
-        // Ticket #231: a row press naming the resident room replays
-        // locally with no join on the wire. The resident row press at
-        // the fallback band (400, 154) must reach Waiting while the
-        // server sees zero frames (read with a timeout: any send fails
-        // the test instead of hanging it).
-        use o2jam_net::RoomListEntry;
-        use std::io::Read;
-        let (mut session, server) = room_session(|mut stream| {
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut header = [0u8; 4];
-            assert!(
-                stream.read_exact(&mut header).is_err(),
-                "resident room press sent a frame on the wire"
-            );
-        });
-        session.game.set_rooms(vec![RoomListEntry {
-            number: 7,
-            state_code: 1,
-            title: "Lobby".to_owned(),
-            has_password: false,
-            music_id: 0,
-            difficulty: 0,
-            key_mode: 2,
-            game_mode: 0,
-            speed: 1,
-            capacity: 8,
-            user_count: 5,
-            min_level: 0,
-            max_level: 0,
-            skills: vec![],
-            premium: false,
-            room_type: 0,
-        }]);
-        session.resident_room = Some("Lobby".to_owned());
-        session.ingest_snapshot(&InputSnapshot::click_at(400, 154));
-        assert_eq!(
-            session.game.screen(),
-            Screen::Waiting,
-            "resident room press enters Waiting with no wire round trip"
-        );
-        server.join().unwrap();
     }
 
     #[test]
@@ -5091,7 +4900,7 @@ mod session_tests {
         // Live caller chain:
         //   winit pointer down -> window.rs::route_input
         //   -> InputEdge::PointerDown -> OnlineSession::swallow_networked_edge
-        //   -> ScreenGame::channel_enter_at (None on an inactive row)
+        //   -> ScreenGame::press_kind_at (Local on an inactive row)
         //   -> no begin_channel_login; ScreenGame::ingest_snapshot moves
         //      the highlight only
         //   paint -> ScreenGame::paint -> paint_channel_scene
@@ -5437,56 +5246,6 @@ mod session_tests {
             session.game.screen() == Screen::Waiting
         });
         server.join().unwrap();
-    }
-
-    #[test]
-    fn waiting_confirm_click_sends_ready_and_stays() {
-        // Staged confirm buttons ride the networked Confirm gate (4008
-        // for guests); the shell stays in Waiting for the broadcast.
-        use o2jam_net::Ready;
-        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, Ready::COMMAND);
-        });
-        session.game_mut().load_scene(
-            Screen::Waiting,
-            vec![o2jam_shell::avatar::ScenePlacement {
-                role: o2jam_shell::avatar::PlacementRole::Single,
-                id: "IDC_BUTTON_SWAIT_READY".to_owned(),
-                code: 0,
-                sprite: None,
-                rect: o2jam_render::Rect {
-                    x: 100,
-                    y: 100,
-                    w: 200,
-                    h: 60,
-                },
-            }],
-            std::collections::HashMap::new(),
-        );
-        session.ingest_snapshot(&InputSnapshot::click_at(150, 130));
-        server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Waiting);
-    }
-
-    #[test]
-    fn waiting_menu_confirm_sends_ready_through_snapshot() {
-        // The session's Confirm gates ride the snapshot too: a Menu
-        // edge (what the window queues for Enter) reaches the 4008
-        // exchange, never the game's local advance.
-        use o2jam_net::Ready;
-        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, Ready::COMMAND);
-        });
-        let mut snapshot = InputSnapshot::new();
-        snapshot.push_edge(o2jam_shell::InputEdge::Menu {
-            key: MenuKey::Confirm,
-            down: true,
-        });
-        session.ingest_snapshot(&snapshot);
-        server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
     #[test]

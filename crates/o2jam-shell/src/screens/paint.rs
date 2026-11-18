@@ -3963,7 +3963,7 @@ fn paint_waiting_confirm_face(
 /// (`docs/room-enums.md` "Waiting master gate"): the master arm enables
 /// `START 0x16202012` (file `0xae3d3`) and the non-master arm enables
 /// `READY 0x16202013` (file `0xae835`), so the same staged rect fires a
-/// different request per role (`ScreenGame::waiting_confirm_hit`).
+/// different request per role (`ScreenGame::press_kind_at`).
 #[must_use]
 pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
     if is_room_master {
