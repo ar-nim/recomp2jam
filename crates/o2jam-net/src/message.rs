@@ -168,8 +168,9 @@ pub const MEMORYER_CLIENT_ID: &str = "726PNA-B1YW-28ZG9M-I5SC-Q0OPM6";
 
 /// Gender as the wire carries it: a null-terminated string (Memoryer
 /// `AuthGenderCodec` is decode-only and reads `"m"`/`"1"`, `"f"`/`"0"`,
-/// else `Any`). The exe's exact byte for this field is unverified, so
-/// both spellings decode and we send the numeric one.
+/// else `Any`). A tapped 1000 from the exe sends the launch blob's
+/// gender word verbatim (`"1"` for the male tester account, 2026-11-18),
+/// so both spellings decode and we send the numeric one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Gender {
     /// `"0"` on the wire.

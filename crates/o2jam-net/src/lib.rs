@@ -36,6 +36,8 @@ pub mod strings;
 pub mod testing;
 pub mod wallet;
 
+pub use auth_parameters::LaunchIdentity;
+
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 
 pub use character::{

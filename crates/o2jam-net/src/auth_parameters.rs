@@ -13,6 +13,7 @@
 use std::sync::OnceLock;
 
 use crate::error::Error;
+use crate::message::Gender;
 
 /// Number of fields carried by an `AuthParameters` blob, in wire order.
 pub const AUTH_PARAMETER_FIELD_COUNT: usize = 19;
@@ -40,6 +41,21 @@ fn encrypt_table() -> &'static [u32] {
         }
         table
     })
+}
+
+/// Account fields the exe copies from its blob into the 1000 frame.
+///
+/// Memoryer validates only `token`; `user_id` and `gender` are stored
+/// with the session. The exe's live 1000 body carries the blob's
+/// `UserIndexId` and gender word verbatim (issue #265 wire tap).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchIdentity {
+    /// Blob field `UserIndexId`.
+    pub user_id: i32,
+    /// Blob field `Username` (the session token).
+    pub token: String,
+    /// Blob field `Gender`, decoded by Memoryer's gender codec.
+    pub gender: Gender,
 }
 
 /// The 19 launch-identity fields, in Memoryer's wire order.
@@ -163,6 +179,41 @@ impl AuthParameters {
         Self::parse(&plain).ok()
     }
 
+    /// Read the account fields the exe takes from this blob into 1000.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidField` when `UserIndexId` is not an `i32`.
+    pub fn launch_identity(&self) -> Result<LaunchIdentity, Error> {
+        let user_id = self
+            .user_index_id
+            .parse::<i32>()
+            .map_err(|_| Error::InvalidField {
+                field: "UserIndexId",
+                reason: "not a 32-bit integer",
+            })?;
+        Ok(LaunchIdentity {
+            user_id,
+            token: self.username.clone(),
+            gender: Gender::from_code(&self.gender),
+        })
+    }
+
+    /// Decrypt a launch blob and read its 1000 identity fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidField` when the blob cannot be decrypted
+    /// or its `UserIndexId` is not an `i32`.
+    pub fn launch_identity_from_blob(blob: &str) -> Result<LaunchIdentity, Error> {
+        Self::decrypt(blob)
+            .ok_or(Error::InvalidField {
+                field: "launch blob",
+                reason: "cannot decrypt AuthParameters",
+            })?
+            .launch_identity()
+    }
+
     /// Number of fields this blob carries.
     #[must_use]
     pub fn field_count(&self) -> usize {
@@ -255,7 +306,11 @@ pub mod cipher {
             output[out_index] = super::hex_to_byte(&hex, 2);
             out_index += 1;
         }
-        let text = String::from_utf8(output).ok()?;
+        // The reference cipher's `ModExp` can yield invalid UTF-8 for
+        // some byte pairs; its decoder uses replacement fallback rather
+        // than rejecting the blob. Match that behavior so an argv minted
+        // for a real account stays readable here.
+        let text = String::from_utf8_lossy(&output);
         Some(text.trim_end_matches([' ', '\0']).to_owned())
     }
 }
@@ -352,6 +407,75 @@ pub fn mirror_token(gateway_address: &str, gateway_port: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_blob_yields_the_exe_account_fields_for_the_1000_frame() {
+        // Live caller chain: `recomp2jam connect --launch-blob BLOB`
+        // -> `AuthParameters::launch_identity_from_blob` ->
+        // `ConnectParams::into_connect_options` -> `AuthorizeRequest`
+        // (1000) -> Memoryer AuthController. The blob itself is minted
+        // by `assemble_launch_arguments` for the external exe.
+        let params = AuthParameters {
+            user_index_id: "1".to_owned(),
+            username: "test-session-token".to_owned(),
+            gender: "1".to_owned(),
+            ..AuthParameters::default()
+        };
+        let blob = params.encode();
+
+        let identity = AuthParameters::launch_identity_from_blob(&blob).expect("launch identity");
+
+        assert_eq!(identity.user_id, 1);
+        assert_eq!(identity.token, "test-session-token");
+        assert_eq!(identity.gender, Gender::Male);
+        assert_eq!(identity.gender.as_code(), "1");
+    }
+
+    #[test]
+    fn minted_account_blob_decodes_identity_when_cipher_yields_invalid_utf8() {
+        // Live failure (2026-11-18): `connect --launch-blob` rejected a
+        // real account argv because the reference cipher's ModExp quirk
+        // put invalid UTF-8 in one non-identity field. The reference
+        // decoder uses replacement fallback; strict decoding dropped
+        // the whole blob and the 1000 never reached Memoryer.
+        let params = AuthParameters {
+            user_index_id: "2".to_owned(),
+            username: "069c9541-9a91-7aa5-4449-e02f3b3381df".to_owned(),
+            level: "1".to_owned(),
+            gender: "1".to_owned(),
+            nickname: "tester2".to_owned(),
+            ..AuthParameters::default()
+        };
+
+        let decoded = AuthParameters::decrypt(&params.encode()).expect("decoded blob");
+
+        assert_eq!(decoded.user_index_id, "2");
+        assert_eq!(decoded.username, params.username);
+        assert_eq!(decoded.gender, "1");
+        assert_ne!(decoded.email, params.email);
+    }
+
+    #[test]
+    fn minted_test_account_argv_round_trips_all_nineteen_fields() {
+        let params = AuthParameters {
+            user_index_id: "1".to_owned(),
+            username: "test-session-token".to_owned(),
+            level: "7".to_owned(),
+            gender: "1".to_owned(),
+            nickname: "tester".to_owned(),
+            gateway_address: "127.0.0.1".to_owned(),
+            gateway_port: "15010".to_owned(),
+            ..AuthParameters::default()
+        };
+
+        let argv = assemble_launch_arguments(&params, "127.0.0.1", "15010");
+
+        assert_eq!(argv.len(), 6);
+        assert!(argv[1..]
+            .iter()
+            .all(|word| word == "|test|??|127.0.0.1|15010"));
+        assert_eq!(AuthParameters::decrypt(&argv[0]), Some(params));
+    }
 
     #[test]
     fn launch_blob_round_trips_through_rsa_cipher_and_carries_nineteen_fields() {

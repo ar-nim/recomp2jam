@@ -59,6 +59,14 @@ enum Command {
         /// Username.
         #[arg(long)]
         token: String,
+        /// RSA launch blob whose account fields fill the 1000 frame
+        /// (overrides `--user-id`, `--token`, and `--gender`).
+        #[arg(long)]
+        launch_blob: Option<String>,
+        /// Keep the authorized transport open for N seconds after login
+        /// (rig interop: lets two clients share a room on one server).
+        #[arg(long, default_value_t = 0)]
+        hold_after_join: u64,
         /// Account gender (male, female, any).
         #[arg(long, default_value = "any")]
         gender: String,
@@ -331,6 +339,10 @@ enum Command {
         /// Username for `--online`.
         #[arg(long, requires = "online")]
         token: Option<String>,
+        /// RSA launch blob whose account fields fill the 1000 frame
+        /// (overrides `--user-id`, `--token`, and gender).
+        #[arg(long, requires = "online")]
+        online_launch_blob: Option<String>,
         /// Gateway TCP port for `--online`.
         #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
         port: u16,
@@ -459,6 +471,8 @@ struct ConnectParams {
     user_id: i32,
     token: String,
     gender: String,
+    launch_blob: Option<String>,
+    hold_after_join: u64,
     relay_key1: i32,
     relay_key2: i32,
     gateway_id: Option<i16>,
@@ -468,6 +482,25 @@ struct ConnectParams {
     avatar_opa: Option<String>,
     join_room: Option<i32>,
     room_password: String,
+}
+
+/// Override the hand-built login identity with the exe blob's account
+/// fields. Both CLI entry points use this seam so the 1000 frame carries
+/// the same user id, token, and gender as the external client's argv.
+///
+/// # Errors
+///
+/// The blob cannot be decrypted or its `UserIndexId` is not an `i32`.
+fn apply_launch_blob(options: &mut connect::ConnectOptions, blob: Option<&str>) -> Result<()> {
+    let Some(blob) = blob else {
+        return Ok(());
+    };
+    let identity = o2jam_net::AuthParameters::launch_identity_from_blob(blob)
+        .context("reading launch blob identity")?;
+    options.user_id = identity.user_id;
+    options.token = identity.token;
+    options.gender = identity.gender;
+    Ok(())
 }
 
 impl ConnectParams {
@@ -480,7 +513,7 @@ impl ConnectParams {
         self,
         song: Option<connect::SongFlowOptions>,
     ) -> Result<connect::ConnectOptions> {
-        Ok(connect::ConnectOptions {
+        let mut options = connect::ConnectOptions {
             host: self.host,
             port: self.port,
             user_id: self.user_id,
@@ -495,7 +528,9 @@ impl ConnectParams {
             join_room: self.join_room,
             room_password: self.room_password,
             song,
-        })
+        };
+        apply_launch_blob(&mut options, self.launch_blob.as_deref())?;
+        Ok(options)
     }
 }
 
@@ -772,9 +807,21 @@ impl OnlineParams {
 /// login flow reports.
 fn run_connect(song_flow: SongFlowParams, params: ConnectParams) -> Result<()> {
     let song = song_flow.into_song_flow()?;
+    let hold_seconds = params.hold_after_join;
     let options = params.into_connect_options(song)?;
-    let report = connect::connect_and_login(&options)?;
+    if hold_seconds == 0 {
+        let report = connect::connect_and_login(&options)?;
+        o2jam_net::connect_report::print_connect_report(&report);
+        return Ok(());
+    }
+    let (report, mut gateway) = connect::connect_and_login_with_transport(&options)?;
     o2jam_net::connect_report::print_connect_report(&report);
+    for _ in 0..hold_seconds {
+        gateway.send_frame(o2jam_net::Generic::Ping.id(), &[])?;
+        // Best-effort echo drain; a missed broadcast is not a login fault.
+        let _ = gateway.next_frame();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
     Ok(())
 }
 
@@ -794,6 +841,8 @@ fn run_command(command: Command) -> Result<()> {
             port,
             user_id,
             token,
+            launch_blob,
+            hold_after_join,
             gender,
             relay_key1,
             relay_key2,
@@ -852,6 +901,8 @@ fn run_command(command: Command) -> Result<()> {
                 port,
                 user_id,
                 token,
+                launch_blob,
+                hold_after_join,
                 gender,
                 relay_key1,
                 relay_key2,
@@ -967,6 +1018,7 @@ fn run_command(command: Command) -> Result<()> {
             host,
             user_id,
             token,
+            online_launch_blob,
             port,
             online_gateway_id,
             online_channel_id,
@@ -993,6 +1045,7 @@ fn run_command(command: Command) -> Result<()> {
             host,
             user_id,
             token,
+            online_launch_blob,
             port,
             online_gateway_id,
             online_channel_id,
@@ -1027,6 +1080,7 @@ struct PlayOptions {
     host: Option<String>,
     user_id: Option<i32>,
     token: Option<String>,
+    online_launch_blob: Option<String>,
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
@@ -1057,6 +1111,7 @@ fn run_play(opts: PlayOptions) -> Result<()> {
             &opts.host,
             opts.user_id,
             &opts.token,
+            opts.online_launch_blob.clone(),
             opts.port,
             opts.online_gateway_id,
             opts.online_channel_id,
@@ -1378,6 +1433,7 @@ fn setup_online(
     host: &Option<String>,
     user_id: Option<i32>,
     token: &Option<String>,
+    launch_blob: Option<String>,
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
@@ -1407,7 +1463,8 @@ fn setup_online(
     };
     let pending_room = params.pending_room_join();
     let pending_song = params.pending_song_choice();
-    let options = params.into_connect_options();
+    let mut options = params.into_connect_options();
+    apply_launch_blob(&mut options, launch_blob.as_deref())?;
     let relay_down = relay_gate::relay_down_now();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
@@ -1905,6 +1962,8 @@ mod cli_build_tests {
             user_id: 7,
             token: "tester".to_owned(),
             gender: "any".to_owned(),
+            launch_blob: None,
+            hold_after_join: 0,
             relay_key1: 0,
             relay_key2: 0,
             gateway_id: Some(1),
@@ -2070,6 +2129,27 @@ mod cli_build_tests {
         assert_eq!(options.gender, Gender::Any);
         assert_eq!(options.channel, Some((1, 2)));
         assert!(options.song.is_some());
+    }
+
+    #[test]
+    fn connect_takes_1000_identity_from_launch_blob() {
+        let blob = o2jam_net::AuthParameters {
+            user_index_id: "2".to_owned(),
+            username: "blob-session-token".to_owned(),
+            gender: "1".to_owned(),
+            ..o2jam_net::AuthParameters::default()
+        }
+        .encode();
+        let params = ConnectParams {
+            launch_blob: Some(blob),
+            ..connect_params()
+        };
+
+        let options = params.into_connect_options(None).unwrap();
+
+        assert_eq!(options.user_id, 2);
+        assert_eq!(options.token, "blob-session-token");
+        assert_eq!(options.gender, Gender::Male);
     }
 
     #[test]

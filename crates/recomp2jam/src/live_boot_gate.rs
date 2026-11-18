@@ -323,7 +323,8 @@ mod live_boot_gate_tests {
         let user_id = Some(7);
         let token = Some("gate".to_owned());
         let transport = setup_online(
-            &mut game, true, &host, user_id, &token, port, None, None, None, "", None, 0, 0, 0,
+            &mut game, true, &host, user_id, &token, None, port, None, None, None, "", None, 0, 0,
+            0,
         )
         .unwrap()
         .expect("online setup returns the live transport");
