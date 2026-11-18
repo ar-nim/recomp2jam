@@ -104,6 +104,18 @@ def json_metric(value: float | None) -> float | str | None:
     return value
 
 
+def legacy_baseline(legacy: dict[str, Any], scene: str) -> dict[str, Any]:
+    """Describe the old #332 numbers, or mark a new matched state unbaselined."""
+    numbers = legacy.get(scene)
+    if numbers is None:
+        return {
+            "ssim": None,
+            "psnr": None,
+            "reason": "no #332 downsampled baseline for this matched state",
+        }
+    return {"ssim": numbers[0], "psnr": numbers[1]}
+
+
 def score_scene(scene: str, regions: list[dict[str, Any]], pack: Path,
                 thresholds: dict[str, float], legacy: dict[str, Any]) -> dict[str, Any]:
     """Score one scene and return its gate plus review artifacts."""
@@ -135,10 +147,7 @@ def score_scene(scene: str, regions: list[dict[str, Any]], pack: Path,
         "full_frame_validation": {"ssim": full_ssim, "psnr": json_metric(full_psnr)},
         "regions": enriched,
         "gameplay_gate": gate,
-        "legacy_downsampled_weighted": {
-            "ssim": legacy[scene][0],
-            "psnr": legacy[scene][1],
-        },
+        "legacy_downsampled_weighted": legacy_baseline(legacy, scene),
         "contact_sheet": str(sheet),
         "contact_sheet_sha256": sha256_of(sheet),
     }

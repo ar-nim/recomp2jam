@@ -117,5 +117,27 @@ class PackBuilderSeamTests(unittest.TestCase):
         self.assertEqual(command[2], "secret")
 
 
+class MatchedStateScoringSeamTests(unittest.TestCase):
+    """Guard reporting of matched states the old #332 map never scored."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.scorer = load_script("native_ab_regions")
+
+    def test_new_matched_state_reports_no_legacy_baseline_instead_of_crashing(self) -> None:
+        report = self.scorer.legacy_baseline(
+            {"waiting": (0.361756, 12.976)}, "waiting-gate"
+        )
+        self.assertIsNone(report["ssim"])
+        self.assertIsNone(report["psnr"])
+        self.assertIn("no #332", report["reason"])
+
+    def test_original_scene_keeps_its_pinned_332_numbers(self) -> None:
+        report = self.scorer.legacy_baseline(
+            {"waiting": (0.361756, 12.976)}, "waiting"
+        )
+        self.assertEqual(report, {"ssim": 0.361756, "psnr": 12.976})
+
+
 if __name__ == "__main__":
     unittest.main()
