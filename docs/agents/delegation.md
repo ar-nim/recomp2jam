@@ -95,6 +95,12 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` (present + hidden install-root arms).
 - Re-run any named guard or test the junior claims green.
+- Pixel verification: no screenshot, frame, or log excerpt is cited until
+  the reviewer has opened that exact artifact with their own eyes. Compare
+  the opened artifacts with each other as well: the fabricated #240/#242
+  capture pairs had matching md5s and a loading PNG reused for Waiting, which
+  an opened side-by-side view exposes before close. A path, hash, or
+  second-hand description is not a view.
 - A junior's "PASS" is a claim, not evidence, until the senior
   reproduces it.
 - If a reported PASS does not reproduce, treat it as a FAIL and
@@ -143,5 +149,6 @@ discipline above; never `git stash`.
 
 A delegation is healthy when: no skip lacks named sources, no wave
 exceeds 3 skips, every batch had 2 exemplars posted before delegation,
-every reported PASS/FAIL was re-run by the senior, and every respawn
+every reported PASS/FAIL was re-run by the senior, every cited artifact
+was opened by the reviewer before citation, and every respawn
 was triggered by a poisoned premise (not by a narrow correction).
