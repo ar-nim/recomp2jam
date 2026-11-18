@@ -27,6 +27,8 @@
 #   RIG_INSTALL_ROOT    game-data root (default <repo>/install-root/O2Jam)
 #   RIG_MEMORYER_HOST   default 127.0.0.1
 #   RIG_MEMORYER_PORT   default 15010
+#   RIG_PROC_ROOT       /proc root used by the server-identity probe (test seam)
+#   RIG_SS_FIXTURE      ss -tlnp output file instead of a live ss call (test seam)
 #   RIG_RELAY_PORTS     ports that must be FREE (default "39311 39312":
 #                       local Memoryer runs with relay disabled)
 #   RIG_LISTEN_PORTS    ports this run will bind; verified free, then claimed
@@ -44,6 +46,9 @@
 # Doubt log (flagged for the senior, not silently resolved):
 # - Memoryer "answering" is a TCP connect probe only; no protocol ping exists
 #   that would not disturb the server. A squatter accepting TCP would pass.
+#   The rig-run preflight additionally records the listening process pid and
+#   its start time (server-identity); a pack written without an identifiable
+#   owner of :15010 fails the preflight instead of claiming provenance.
 # - Without pactl/pipewire the sink check degrades to name-only (recorded).
 # - The system default sink is only warned about, never changed: Wine honors
 #   PULSE_SINK, and flipping the owner's default sink is out of scope.
@@ -247,6 +252,90 @@ PYEOF
     return "$RIG_E_SERVER"
   fi
   return 0
+}
+
+# The process that owns the listening port is the real continuity anchor: a
+# port can survive a silent server restart, a pid alone can be reused. The
+# /proc start time is converted to an epoch with /proc/stat's btime, so two
+# packs can be compared without a shared clock or a live server.
+#
+# RIG_PROC_ROOT and RIG_SS_FIXTURE exist only for hermetic tests; production
+# reads /proc and `ss -tlnp`. Nothing here signals or restarts the server.
+rig_server_identity() {
+  local port="${1:-${RIG_MEMORYER_PORT:-15010}}"
+  python3 - "$port" "${RIG_PROC_ROOT:-/proc}" "${RIG_SS_FIXTURE:-}" <<'PYEOF' 2>/dev/null
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+port, proc_root, fixture = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    if fixture:
+        with open(fixture, "r", encoding="utf-8") as handle:
+            listen_lines = handle.read().splitlines()
+    else:
+        listen_lines = subprocess.run(
+            ["ss", "-tlnp"], capture_output=True, text=True, check=True
+        ).stdout.splitlines()
+    pids = []
+    for line in listen_lines:
+        if "LISTEN" not in line or not re.search(rf"[:.]{re.escape(port)}\s", line):
+            continue
+        pids.extend(int(match) for match in re.findall(r"pid=(\d+)", line))
+    with open(f"{proc_root}/stat", "r", encoding="utf-8") as handle:
+        btime = int(re.search(r"^btime (\d+)", handle.read(), re.MULTILINE).group(1))
+    ticks_per_second = int(os.environ.get("RIG_CLK_TCK", os.sysconf("SC_CLK_TCK")))
+    for pid in dict.fromkeys(pids):
+        with open(f"{proc_root}/{pid}/stat", "r", encoding="utf-8") as handle:
+            stat = handle.read()
+        # The command name inside parentheses can contain spaces; fields
+        # after the closing parenthesis start with state (field 3).
+        fields = stat[stat.rfind(")") + 2:].split()
+        start_ticks = int(fields[19])  # field 22: starttime
+        boot_epoch = btime + start_ticks // ticks_per_second
+        boot_utc = datetime.fromtimestamp(boot_epoch, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        print(
+            f"memoryer_pid={pid} memoryer_boot_epoch={boot_epoch} "
+            f"memoryer_boot_utc={boot_utc}"
+        )
+        sys.exit(0)
+except (OSError, ValueError, AttributeError, IndexError, subprocess.CalledProcessError):
+    pass
+sys.exit(1)
+PYEOF
+}
+
+# Called by the rig-run preflight with the run's out-dir. `unknown` is used
+# only when the caller explicitly disabled the server check; a run that
+# expects Memoryer must be able to name the process it actually used.
+rig_record_server_identity() {
+  local out_dir="$1" port="${2:-${RIG_MEMORYER_PORT:-15010}}" identity
+  if [ "${RIG_EXPECT_MEMORYER:-1}" != "1" ]; then
+    identity="memoryer_pid=unknown memoryer_boot_epoch=unknown memoryer_boot_utc=unknown"
+  else
+    identity="$(rig_server_identity "$port")" || {
+      rig_fail "$RIG_E_SERVER" "server-identity" "cannot identify the process listening on :$port via ss and /proc"
+      return "$RIG_E_SERVER"
+    }
+  fi
+  printf '%s\n' "$identity" > "$out_dir/server-identity"
+  rig_note "server identity: $identity"
+  return 0
+}
+
+# Manifest params are one string; append the recorded fields verbatim so a
+# pack comparison sees a restart as a different pid and boot epoch.
+rig_server_identity_params() {
+  local file="$1/server-identity"
+  if [ -r "$file" ]; then
+    tr '\n' ' ' < "$file"
+  else
+    printf '%s' "memoryer_pid=unknown memoryer_boot_epoch=unknown memoryer_boot_utc=unknown"
+  fi
 }
 
 # --- ports --------------------------------------------------------------------------

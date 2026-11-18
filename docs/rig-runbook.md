@@ -73,6 +73,69 @@ would have refused the #278 retraction. A run dir written before
 `--command` and `--build` by hand, or `verify` fails loud (an unnamed
 command is not provenance).
 
+### Memoryer liveness, identity, and dumps (#345)
+
+The shared preflight does more than a TCP connect probe. `rig-run.sh run`
+looks up the process listening on the Memoryer port with `ss -tlnp` and
+reads its start time from `/proc/<pid>/stat` plus `/proc/stat`'s `btime`.
+It writes one line to `<out-dir>/server-identity`:
+
+```
+memoryer_pid=92326 memoryer_boot_epoch=1794986056 memoryer_boot_utc=2026-11-18T07:14:16Z
+```
+
+Both pack writers (`rig-afk.sh`, `rig-wine-run.sh`) append those fields
+to the manifest `params`, so a server restarted between two legs is
+visible from the packs alone:
+
+```sh
+jq -r '[.params, .created_at] | @tsv' leg-a/manifest.json leg-b/manifest.json
+# different memoryer_boot_epoch (or memoryer_pid) = a new server: continuity void
+```
+
+A preflight that expects Memoryer but cannot name the listener fails
+with exit 13; it never restarts or signals the server. `RIG_EXPECT_MEMORYER=0`
+records `unknown` fields and is for hermetic tests only. Never restart
+Memoryer during a live leg: announce a restart, and start the next pack
+after it.
+
+The documented start command is `scripts/memoryer-start.sh`; it refuses to
+start a second instance when the port is taken (exit 13, identity of the
+current listener printed) and starts one with runtime minidumps enabled.
+`scripts/play-local.sh` prints that command when the port is dead. On a
+crash, `DOTNET_DbgEnableMiniDump=1` writes a managed heap dump
+(`DOTNET_DbgMiniDumpType=2`, type `Heap`) to
+`~/scratch/memoryer-dumps/coredump.<pid>.<epoch>.dmp` as named by
+`DOTNET_DbgMiniDumpName`. This is exactly what the wrapper runs:
+
+```sh
+mkdir -p "$HOME/scratch/memoryer-dumps"
+cd ~/memoryer-local && setsid nohup env PATH=$HOME/.dotnet:$PATH \
+  DOTNET_DbgEnableMiniDump=1 DOTNET_DbgMiniDumpType=2 \
+  DOTNET_DbgMiniDumpName="$HOME/scratch/memoryer-dumps/coredump.%p.%t.dmp" \
+  dotnet bin/Memoryer.Encore.dll >> server.log 2>&1 < /dev/null &
+```
+
+The 14:05:36 SIGABRT was that second-instance class: the stored core holds
+`SocketException (98): Address already in use` from
+`Memoryer.DefaultWorker.StartAsync` (`DefaultWorker.cs:52`) via
+`Encore.Server.TcpServer<T>.Start` and `TcpListener.Start`; the unhandled
+exception passed through `Host.StartAsync` and `Program.Main`
+(`Program.cs:225`) and the runtime aborted the stray process. The main
+instance kept serving.
+The runtime dump is the one with a managed stack for `dotnet-dump`;
+the kernel dump from systemd-coredump stays at
+`/var/lib/systemd/coredump/core.dotnet.1000.<boot-id>.<pid>.<epoch>.zst`
+(for example the 14:05:36 abort:
+`/var/lib/systemd/coredump/core.dotnet.1000.c0b9ef761ea749a7b60b564bba220889.106781.1794981936000000.zst`,
+compressed with zstd; use `coredumpctl info <pid>` to find the path).
+
+The 15:10:49 clean shutdown of the main instance was a KDE reboot
+requested by `plasma-shutdown` (`systemd-logind: reboot requested from
+client PID 691435 (plasma-shutdown)`), not systemd-oomd or slice
+pressure; the session sent SIGTERM to its background jobs. An OOM event
+would have a `systemd-oomd` kill line, which the journal lacks.
+
 ### Committed capture records (#308)
 
 A committed record such as `docs/captures/t240/` is a hash-pinned pointer,

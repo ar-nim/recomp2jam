@@ -296,7 +296,7 @@ manifest_params_field() {
   if [ -n "$INJECT_KEYS" ]; then
     field="$field inject=$INJECT_KEYS x$INJECT_COUNT"
   fi
-  printf '%s' "$field"
+  printf '%s %s' "$field" "$(rig_server_identity_params "$OUT_DIR")"
 }
 
 # One layout contract (#302): manifests declare artifacts/screenshots, and

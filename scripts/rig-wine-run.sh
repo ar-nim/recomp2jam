@@ -55,6 +55,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/rig-preflight.sh
+. "$SCRIPT_DIR/lib/rig-preflight.sh"
 
 die() { echo "rig-wine-run: $*" >&2; exit 2; }
 
@@ -304,7 +306,7 @@ phase_package() {
     --pair "$PAIR" \
     --build "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE, repaint $ROW_REPAINT, dismiss $ROW_DISMISS)" \
-    --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256 wire_tap=$WIRE_TAP gateway_port=$GATEWAY_PORT relay_fastfail=$relay_sha $(join_outcome_fields)" \
+    --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256 wire_tap=$WIRE_TAP gateway_port=$GATEWAY_PORT relay_fastfail=$relay_sha $(join_outcome_fields) $(rig_server_identity_params "$OUT_DIR")" \
     "${input_log_args[@]}" >> "$REPORT_FILE" 2>&1 \
     || { note "manifest write FAILED"; return 1; }
   local injector="$RIG_WINE_INJECTOR_DIR/sendinput-helper.exe.so"

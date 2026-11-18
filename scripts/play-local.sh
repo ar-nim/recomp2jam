@@ -47,8 +47,11 @@ fi
 
 # 2. Memoryer must be up and answering (connect probe, not just listening).
 if ! rig_check_memoryer; then
-  echo "play-local: Memoryer is not running. Start it with:" >&2
-  echo "  cd ~/memoryer-local && setsid nohup env PATH=\$HOME/.dotnet:\$PATH dotnet bin/Memoryer.Encore.dll > server.log 2>&1 &" >&2
+  echo "play-local: Memoryer is not running. Start ONE instance:" >&2
+  echo "  bash \"$REPO_ROOT/scripts/memoryer-start.sh\"" >&2
+  echo "  The wrapper sets DOTNET_DbgEnableMiniDump=1 DOTNET_DbgMiniDumpType=2 and" >&2
+  echo "  DOTNET_DbgMiniDumpName=\"\$HOME/scratch/memoryer-dumps/coredump.%p.%t.dmp\", and" >&2
+  echo "  refuses a second instance while :15010 is listening (docs/rig-runbook.md)." >&2
   exit "$RIG_E_SERVER"
 fi
 

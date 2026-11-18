@@ -122,6 +122,9 @@ preflight_run_checks() {
   fi
   rig_check_install_root || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_memoryer || { code=$?; preflight_release "$out_dir"; return "$code"; }
+  # #345: pin the server process behind the port before any leg runs, so a
+  # silent restart between legs is visible in the packs' manifest params.
+  rig_record_server_identity "$out_dir" || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_relay_ports_free || { code=$?; preflight_release "$out_dir"; return "$code"; }
   if rig_audio_capturing && [ -z "${RIG_SINK_NAME:-}" ] && [ -z "$CALLER_SINK" ]; then
     # A capture run owns its sink: a shared sink would mix other runs (and
