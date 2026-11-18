@@ -14990,6 +14990,62 @@ mod game_tests {
     }
 
     #[test]
+    fn options_dialog_clicks_preserve_tab_rebind_and_settings_outputs() {
+        // Golden guard for the #139 options module move: stage every
+        // tab, press a value button on Sound and Game, then arm a Key
+        // rebind. The dialog's observable outputs must stay byte
+        // identical when the state and click logic move behind a seam.
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[
+                (OPTION_KEY_LANE_FIRST, 100, 100),
+                (OPTION_KEY_3KEY_MODE, 140, 100),
+            ],
+        );
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[(OPTION_SOUND_BG_MUSIC_DOWN, 100, 100)],
+        );
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[
+                (PlanetOptionTab::Game.default_code(), 180, 100),
+                (OPTION_GAME_NOTETYPE2, 220, 100),
+            ],
+        );
+        open_options(&mut game);
+        click_button(&mut game, 100, 100);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 180, 100);
+        click_button(&mut game, 220, 100);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        click_button(&mut game, 100, 100);
+        click_button(&mut game, 140, 100);
+
+        let observed = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}",
+            game.planet_option_tab(),
+            game.option_rebind_armed(),
+            game.options(),
+            game.planet_modal(),
+            game.lane_bindings(),
+        );
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in observed.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        assert_eq!(
+            hash, 0x6C32_EBA2_9BF8_54AD,
+            "options outputs drifted: {observed}"
+        );
+    }
+
+    #[test]
     fn options_key_tab_rebind_answers_on_the_new_lane() {
         use winit::keyboard::KeyCode;
         let mut game = ScreenGame::new();
