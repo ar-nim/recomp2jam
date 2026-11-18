@@ -100,6 +100,7 @@ Guards: `myroom_chrome_sweep_presses_every_staged_control`
 | 11 slot buttons | select the slot (filter semantics OPEN, `docs/myroom.md`) | staged ordinal |
 | 10 bag cells + bag pager | pick cells; pager turns over staged inventory, holds | staged inventory |
 | `APPLY` (INVENTORY) | equips the picked cell, queues 5004, drains once; nothing picked queues nothing | exe slot derivation (`docs/equip.md`) |
+| `APPLY` body + `SLOTCOVER` / `USERINFO` art | default Inventory face hides the INVENTORY body and status plate; the baked STATUS button and slotcover show (#369) | `myroom_entry_paints_inventory_panel_not_status_plate`; switching gesture OPEN |
 | 5 gift cells + gift pager | pick cells; pagers hold; claim with no staged rows queues nothing | staged gift views |
 | Caption codes (`NICKNAME`, `LEVEL`, …) | land nowhere | text, not buttons |
 | `VACATE` | labeled no-op: records only, queues nothing | send shape OPEN — next: rig capture of a Vacate press |

@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     avatar_item_by_id, bind_scene_rects, load_archive_sprite, load_scene_figures,
-    paint_scene_figures, scene_block, scene_sprite_names, AvatarFigure, ScenePlacement,
+    paint_scene_figures, paint_scene_figures_live, scene_block, scene_sprite_names, AvatarFigure,
+    ScenePlacement,
 };
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
@@ -4329,6 +4330,18 @@ pub fn paint_side_scene(
     figures: &HashMap<String, AvatarFigure>,
 ) {
     paint_scene_figures(frame, placements, figures);
+}
+
+/// [`paint_side_scene`] behind a per-placement filter (the MyRoom panel
+/// face hides the art that would cover the exe's default Inventory
+/// view). Unfiltered sides keep the plain entry above.
+pub fn paint_side_scene_live(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    keep: impl Fn(&ScenePlacement) -> bool,
+) {
+    paint_scene_figures_live(frame, placements, figures, keep);
 }
 
 #[cfg(test)]

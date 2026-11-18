@@ -24,6 +24,7 @@ mod live_boot_gate_tests {
         Request, RoomList, WireMessage, HEADER_LEN,
     };
     use o2jam_render::Frame as RenderFrame;
+    use o2jam_shell::screens::side::MyRoomPanel;
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::{GameLoop, Screen};
 
@@ -642,6 +643,11 @@ mod live_boot_gate_tests {
         assert!(live.enter_screen(Screen::Channel));
         assert!(live.enter_screen(Screen::Room));
         assert!(live.visit_side(SideScreen::MyRoom));
+        assert_eq!(
+            live.myroom().panel(),
+            MyRoomPanel::Inventory,
+            "default live MyRoom entry opens the exe's Inventory face (#369)"
+        );
         let mut painted = vec![0u32; 800 * 600];
         live.paint_at(
             &mut RenderFrame {

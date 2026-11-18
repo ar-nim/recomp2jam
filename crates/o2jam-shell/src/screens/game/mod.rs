@@ -32,34 +32,34 @@ use super::paint::{
     list_row_hit, paint_avi_scene, paint_channel_chat, paint_dialog_scene, paint_lanking_board,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
-    paint_myroom_data, paint_myroom_figure, paint_myroom_scene, paint_payment_notice,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
-    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_hover,
+    paint_room_list, paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
+    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
-    myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
-    password_action_at, payment_side_notice, planet_action_at, select_chrome_action_at,
-    select_filter_button_id, select_filter_choice_at, select_music_rows,
-    select_music_songs_with_labels, select_row_hit, shop_action_at, side_scene_slot,
-    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
-    LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction,
-    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    myroom_identity_captions, myroom_panel_kept, myroom_record_slot, myroom_wallet_captions,
+    paint_side_scene, paint_side_scene_live, password_action_at, payment_side_notice,
+    planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
+    select_music_rows, select_music_songs_with_labels, select_row_hit, shop_action_at,
+    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomPanel, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
     OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -4673,6 +4673,14 @@ impl ScreenGame {
         self.myroom
     }
 
+    /// Show the other upper-right MyRoom face. Seam suffices: the exe
+    /// pack pins the default face but no switching gesture, so no
+    /// staged control maps here yet (capture OPEN in `docs/myroom.md`).
+    pub fn show_myroom_panel(&mut self, panel: MyRoomPanel) -> &mut Self {
+        self.myroom.show_panel(panel);
+        self
+    }
+
     /// Committed equip send for the session bridge, if any (5004).
     /// One take sends once; the next apply replaces the queued send.
     pub fn take_equip_send(&mut self) -> Option<EquipItem> {
@@ -5578,7 +5586,14 @@ impl ScreenGame {
     /// overlay inks into staged TEXT rects; without staged rows or
     /// goods it paints nothing (art-only).
     fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
-        paint_side_scene(frame, &self.side_placements, &self.side_figures);
+        if self.side == Some(SideScreen::MyRoom) {
+            let panel = self.myroom.panel();
+            paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
+                myroom_panel_kept(placed, panel)
+            });
+        } else {
+            paint_side_scene(frame, &self.side_placements, &self.side_figures);
+        }
         // The billing views complete no web call, so the
         // Payment overlay inks the unwired notice over the
         // staged art (miss path paints nothing); every other
@@ -5685,7 +5700,10 @@ impl ScreenGame {
     fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
-                paint_myroom_scene(frame, art);
+                let panel = self.myroom.panel();
+                art.paint_backdrop_live(frame, Screen::Myroom, |placed| {
+                    myroom_panel_kept(placed, panel)
+                });
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
                 self.paint_myroom_overlay(frame, &art.placements);
             }
@@ -5720,7 +5738,13 @@ impl ScreenGame {
         let views = myroom_gift_views(table, &self.catalog_songs, character);
         let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
         let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
-        let mut captions = myroom_identity_captions(character);
+        // Identity fields belong to the status face; the exe's default
+        // Inventory face hides them with the rest of that plate (#369).
+        let mut captions = if self.myroom.panel() == MyRoomPanel::Status {
+            myroom_identity_captions(character)
+        } else {
+            Vec::new()
+        };
         // Money paints from the single wallet (#202): the character
         // record fed it at staging, purchases refresh it after.
         captions.extend(myroom_wallet_captions(&self.wallet));
@@ -11089,6 +11113,118 @@ mod game_tests {
         game
     }
 
+    /// MyRoom side with three synthetic panel bodies: red slotcover,
+    /// green status plate (same rect, staged after it), blue inventory
+    /// button body. The real sprites' anchors equal their `.bnd` rects.
+    fn myroom_panel_overlay() -> (ScreenGame, Rect, Rect) {
+        use super::super::side::{MYROOM_APPLY_CODE, MYROOM_SLOTCOVER_CODE, MYROOM_USERINFO_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let placement = |code: u32, id: &str, sprite: &str, rect: Rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            sprite: Some(sprite.to_owned()),
+            code,
+            rect,
+        };
+        let panel = Rect {
+            x: 10,
+            y: 10,
+            w: 100,
+            h: 50,
+        };
+        let button = Rect {
+            x: 200,
+            y: 10,
+            w: 60,
+            h: 23,
+        };
+        let placements = vec![
+            placement(MYROOM_SLOTCOVER_CODE, "SLOTCOVER", "SlotCover.ojs", panel),
+            placement(MYROOM_USERINFO_CODE, "USERINFO", "Status.ojs", panel),
+            placement(
+                MYROOM_APPLY_CODE,
+                "INVENTORY",
+                "InventoryButton.ojs",
+                button,
+            ),
+        ];
+        let figures = HashMap::from([
+            ("SlotCover.ojs".to_owned(), solid_figure(100, 50, 0x7C00)),
+            ("Status.ojs".to_owned(), solid_figure(100, 50, 0x03E0)),
+            (
+                "InventoryButton.ojs".to_owned(),
+                solid_figure(60, 23, 0x001F),
+            ),
+        ]);
+        game.load_side_scene(placements, figures);
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, panel, button)
+    }
+
+    fn paint_myroom_panel(game: &mut ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_side(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf
+    }
+
+    #[test]
+    fn myroom_entry_paints_inventory_panel_not_status_plate() {
+        // Live caller chain (paint guard, #369):
+        //   main.rs::run_play -> session -> visit_side(MyRoom)
+        //   -> paint_side -> staged slotcover body at its .bnd rect.
+        // Exe b8 myroom.png `1743d36d…fae0` opens on Inventory plus the
+        // background's baked STATUS button; our base `ff5f949f…459ddc`
+        // opened on Myroom_Status.ojs plus Myroom_Inventory.ojs. Both
+        // later bodies overwrite the first face in staged file order.
+        let (mut game, panel, button) = myroom_panel_overlay();
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Inventory);
+        let buf = paint_myroom_panel(&mut game);
+        let panel_pixel = buf[(panel.y + 2) as usize * 800 + (panel.x + 2) as usize];
+        assert!(
+            near_xrgb(panel_pixel, pack_xrgb(255, 0, 0)),
+            "slotcover art wins the default panel face"
+        );
+        assert!(
+            !near_xrgb(panel_pixel, pack_xrgb(0, 255, 0)),
+            "the status plate is hidden on entry"
+        );
+        assert_eq!(
+            buf[(button.y + 2) as usize * 800 + (button.x + 2) as usize],
+            0,
+            "the inventory button body is hidden; the baked STATUS button shows"
+        );
+    }
+
+    #[test]
+    fn myroom_status_face_restores_the_plate_and_inventory_button() {
+        // seam: no exe gesture is pinned for switching faces; this
+        // guard proves both staged faces stay reachable through the
+        // state seam that `paint_side` reads (docs/myroom.md OPEN).
+        let (mut game, panel, button) = myroom_panel_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
+        let buf = paint_myroom_panel(&mut game);
+        let panel_pixel = buf[(panel.y + 2) as usize * 800 + (panel.x + 2) as usize];
+        assert!(
+            near_xrgb(panel_pixel, pack_xrgb(0, 255, 0)),
+            "the status plate paints when that face is selected"
+        );
+        assert!(
+            near_xrgb(
+                buf[(button.y + 2) as usize * 800 + (button.x + 2) as usize],
+                pack_xrgb(0, 0, 255)
+            ),
+            "the inventory button body returns on the status face"
+        );
+    }
+
     #[test]
     fn myroom_slot_click_selects_through_staged_rect() {
         // Live caller chain:
@@ -11476,9 +11612,11 @@ mod game_tests {
 
     #[test]
     fn myroom_captions_paint_into_their_bnd_rects() {
-        // The nickname TEXT placement inks its own rect; the beside
-        // rect stays blank; without staged data nothing paints.
+        // The nickname TEXT placement belongs to the status face
+        // (#369); it inks its own rect and the beside rect stays blank.
+        // Without staged data nothing paints.
         let mut game = myroom_open_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
             &mut Frame {

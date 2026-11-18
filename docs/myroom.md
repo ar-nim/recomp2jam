@@ -63,6 +63,44 @@ through the `.bnd` like every other bound scene.
   equipment, inventory, item/music gifts, cash wallets); staged
   through `set_myroom_character` until a live gateway exists.
 
+## Ticket #369 (default upper-right face)
+
+Exe b8 (`~/scratch/side-scenes/b8-cash/manifest.json`, manifest
+`f9d4a695…3f8b`, exe `83a04541…c823b`,
+`artifacts/screenshots/myroom.png` `1743d36d…fae0`) opens the panel with
+an `Inventory` badge at x≈427..476, y≈22..46 and the slot grid beneath;
+our base shot `ff5f949f…459ddc` opened on `STATUS` with user-info fields.
+
+Pin from the shipped sheet and the staged `.bnd` (111 rects, ordinal
+`(code & 0xFFF)-1`):
+
+| Code | Control / body | `.bnd` rect | Sprite anchor |
+|---|---|---|---|
+| `0x15203034` | INVENTORY button `Myroom_Inventory.ojs` | (147,307)-(207,330) | (147,307), 60x23 |
+| `0x15500035` | SLOTCOVER `Myroom_SlotCover.ojs` | (240,46)-(734,358) | (240,46), 494x312 |
+| `0x15500036` | USERINFO `Myroom_Status.ojs` | (392,22)-(776,379) | (392,22), 384x357 |
+
+The background `State_Myroom.ojs` already carries the cyan `STATUS`
+button at the INVENTORY rect. In staged file order 0x34 → 0x35 → 0x36,
+so our old painter covered that baked label with the INVENTORY body and
+then covered the slot grid with the status plate. The exe's default face
+keeps only the background label + slotcover; the other face shows the
+status plate + INVENTORY body. Which gesture switches faces is not in the
+qualified capture: OPEN, next step = a pinned slot/button press capture
+under the same manifest. No wire behavior is bound to the face.
+
+Landed: `MyRoomPanel` defaults to `Inventory`; `paint_side` and
+`paint_myroom` filter staged placements through `myroom_panel_kept`
+(never literal geometry), and identity captions ink only on the status
+face. `show_myroom_panel` is the documented seam while the gesture is
+OPEN. Guards:
+`myroom_entry_paints_inventory_panel_not_status_plate` (live chain),
+`myroom_status_face_restores_the_plate_and_inventory_button` (seam),
+and the live gate assertion in
+`live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
+Matched-state pixel hash against the exe pack stays OPEN without a live
+boot; the synthetic guard pins paint order, not a 1:1 screenshot hash.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to

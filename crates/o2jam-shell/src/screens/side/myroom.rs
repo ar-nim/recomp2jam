@@ -162,6 +162,43 @@ pub const MYROOM_GIFT_NUM_CODE: u32 = 0x1540_004F;
 pub const MYROOM_GIFT_ITEMNAME_CODE: u32 = 0x1540_0051;
 /// Gift sender caption (`IDC_TEXT_GIFT_SENDER`).
 pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
+/// Large upper-right panel: `IDC_IMAGE_SMYROOM_SLOTCOVER`
+/// (`Myroom_SlotCover.ojs`, 109x81-derived 494x312 body at `.bnd` rect
+/// (240,46)-(734,358)). This is the exe's default Inventory face.
+pub const MYROOM_SLOTCOVER_CODE: u32 = 0x1550_0035;
+/// Same panel's `IDC_IMAGE_SMYROOM_USERINFO` (`Myroom_Status.ojs`,
+/// rect (392,22)-(776,379)). Later in staged order, so it covers the
+/// slot grid whenever both bodies paint.
+pub const MYROOM_USERINFO_CODE: u32 = 0x1550_0036;
+
+/// Upper-right face shown on MyRoom entry. The exe b8 capture
+/// (`1743d36d…fae0`) opens on `Inventory`; the status plate is the other
+/// face. A gesture that switches faces is not pinned by that pack
+/// (next step: qualified slot/button press capture), so this state is
+/// driven only through [`MyRoomState::show_panel`] until one is found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MyRoomPanel {
+    /// Equipment-slot grid plus the background's baked STATUS button.
+    #[default]
+    Inventory,
+    /// `Myroom_Status.ojs` plate plus the INVENTORY button body.
+    Status,
+}
+
+/// Whether one staged MyRoom placement belongs to the visible panel
+/// face. The Inventory face hides the status plate and the INVENTORY
+/// button body: the latter would cover the background's STATUS label.
+/// Every other placement (backdrop, avatar, bag, gift) stays live.
+#[must_use]
+pub fn myroom_panel_kept(placed: &ScenePlacement, panel: MyRoomPanel) -> bool {
+    !matches!(
+        (placed.code, panel),
+        (
+            MYROOM_USERINFO_CODE | MYROOM_APPLY_CODE,
+            MyRoomPanel::Inventory
+        )
+    )
+}
 
 /// One pager step: which end of the row run the press moves toward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +357,8 @@ pub struct MyRoomState {
     gift_page: usize,
     /// Selected gift cell within the page (`None` until picked).
     gift_cell: Option<usize>,
+    /// Visible upper-right panel face (exe default: Inventory).
+    panel: MyRoomPanel,
 }
 
 impl Default for MyRoomState {
@@ -339,6 +378,7 @@ impl MyRoomState {
             bag_cell: None,
             gift_page: 0,
             gift_cell: None,
+            panel: MyRoomPanel::Inventory,
         }
     }
 
@@ -370,6 +410,19 @@ impl MyRoomState {
     #[must_use]
     pub const fn gift_cell(self) -> Option<usize> {
         self.gift_cell
+    }
+
+    /// Visible upper-right panel face.
+    #[must_use]
+    pub const fn panel(self) -> MyRoomPanel {
+        self.panel
+    }
+
+    /// Switch the panel face. Seam suffices: no live input gesture is
+    /// pinned yet (qualified exe press capture OPEN), so no control
+    /// maps here; the state keeps both faces reachable for the painter.
+    pub fn show_panel(&mut self, panel: MyRoomPanel) {
+        self.panel = panel;
     }
 
     /// Record a slot-button press; past the eleventh button the
