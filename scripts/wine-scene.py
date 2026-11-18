@@ -74,6 +74,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image
@@ -124,6 +125,107 @@ AIMS = {
         "docs/wine-boot.md Attempt 11: the waiting-room READY pill sits at "
         "(680,143) and sends 4008",
     ),
+    # #330 side scenes. Each aim was fired once in boot b1-explore on :260;
+    # the cited frame is the resulting framebuffer capture (sha256 in the
+    # aim string). Docs pin the control code and rect; the capture pins the
+    # live coordinate. Existing AIMS strings above are unchanged.
+    "option-gear": (
+        729,
+        580,
+        "docs/planet.md OPTION gear rect (710,561)-(748,599); live "
+        "~/scratch/side-scenes/b1-explore/explore/04-after-gear.png "
+        "sha256=6d17a781e4d5e522da5ad72e62c26281ae0d7317b20bde9d7bad73421548043e",
+    ),
+    "exit-disc": (
+        769,
+        580,
+        "docs/planet.md EXIT disc rect (750,561)-(788,599); live "
+        "~/scratch/side-scenes/b1-explore/explore/08-after-exit-disc.png "
+        "sha256=3dbcdf2f23c1069a9e7bc2e69cbc8aabc6cb4fa3f9ee343d98f1b4f2622e8553",
+    ),
+    "board-prime": (
+        557,
+        195,
+        "live b1-explore/explore/02-after-x-557-195.png sha256="
+        "5b38c0d05467e9280d6122f210899c97dd1946f158c86c41828aa0db439c3482; "
+        "harmless board click that primes the canvas before the first control",
+    ),
+    "crash-cancel": (
+        451,
+        330,
+        "live b1-explore/explore/no-board.png sha256="
+        "24a76463e21dea812e230055a85ce0612816de6b048b9557ca5b17beef555d29; "
+        "Cancel of the stale-dump crash report box",
+    ),
+    "crash-cancel-alt": (
+        420,
+        295,
+        "docs/wine-boot.md Attempt 11: the same crash report Cancel sits at "
+        "(420,295) when the box is centred higher",
+    ),
+    "room-musicshop": (
+        350,
+        16,
+        "docs/hover.md IDC_BUTTON_SROOM_MUSICSHOP 0x13200037 rect "
+        "317,2-384,31; live b1-explore/explore/h04-musicshop-long.png "
+        "sha256=964be986ee1fa269306ad2115dfdb18efc1cc511e5dfa765e5845698bb8ee8aa",
+    ),
+    "room-myroom": (
+        517,
+        16,
+        "docs/hover.md IDC_BUTTON_SROOM_MYROOM 0x13200009 rect 484,2-550,31; "
+        "live b1-explore/explore/e01-myroom.png sha256="
+        "0758c389ae49076f419a24e7d9e14a710808205c0b1a2dee84e661cbbc8d57eb",
+    ),
+    "room-firststep": (
+        689,
+        16,
+        "docs/hover.md IDC_BUTTON_SROOM_FIRSTSTEP 0x13200032 rect 660,1-718,32; "
+        "live b1-explore/explore/i03-firststep.png sha256="
+        "2b1deb31a32de95df5b77520fd4f8a135f05c404820bf93e96852076b6c294ed",
+    ),
+    "room-messenger": (
+        644,
+        580,
+        "docs/hover.md IDC_BUTTON_SROOM_MESSENGER 0x13200048 rect "
+        "627,571-662,590; live b1-explore/explore/e04-messenger.png sha256="
+        "946e503319b6fa18fcd28b2cf9230b9124b5177cc002567c07afac84631ad917",
+    ),
+    "options-exit": (
+        472,
+        532,
+        "live b1-explore/explore/04-after-gear.png sha256="
+        "6d17a781e4d5e522da5ad72e62c26281ae0d7317b20bde9d7bad73421548043e; "
+        "Options dialog EXIT button (Escape is unreliable)",
+    ),
+    "side-dialog-ok": (
+        400,
+        368,
+        "live b1-explore/explore/e04-messenger.png sha256="
+        "946e503319b6fa18fcd28b2cf9230b9124b5177cc002567c07afac84631ad917; "
+        "OK of the side-state MESSAGE popup",
+    ),
+    "side-back": (
+        757,
+        580,
+        "live b1-explore/explore/h02-shop-back.png sha256="
+        "118591bae1dc95b4a2c3dd3bbfeeb5fecea6a524c40eedb60168a1ba449ef170; "
+        "BACK on MyRoom, Item Shop and Music Shop returns the room stage",
+    ),
+    "myroom-itemshop": (
+        89,
+        320,
+        "live b1-explore/explore/f03-back-from-shop.png sha256="
+        "9c898bfb357010d961eb3829fef738e5cb0e0f3ead83c285372b26ed8eb35b4b; "
+        "MyRoom ITEM SHOP plate under the figure",
+    ),
+    "itemshop-cash-charge": (
+        92,
+        355,
+        "live b1-explore/explore/g01-cash-charge.png sha256="
+        "007e9ed7cb8d608f9bd877e65ebaf137d80c6be3593bdf0138e0ed09bc2265f2; "
+        "Item Shop cash charge plate in the left panel",
+    ),
 }
 
 # The exe swallows a READY click until the pill is live. e2-playing-qualified
@@ -170,6 +272,9 @@ WAITING_AFFORDANCE_BOXES = {
     "song_slots": (610, 445, 790, 565),
     "back_button": (700, 570, 790, 598),
 }
+CASH_TITLE_BOX = (195, 5, 375, 45)   # Cash Charge dialog's blue title bar
+CASH_TITLE_BLUE_FRACTION = 0.30
+
 CUE_QUIET_SECONDS = 6.0     # watch the joined room before any stimulus
 CUE_HOST_START_SECONDS = 14.0  # after the READY probe has been read
 
@@ -197,6 +302,79 @@ PLAYING_HUD_BLUE_FRACTION = 0.20
 PLAYING_TIMEOUT_SECONDS = 90.0
 
 SCENE_TARGETS = ["planet", "channel", "room", "waiting", "loading", "playing"]
+
+
+class SideStep(NamedTuple):
+    """One click, its settle time, and the scene its pixels must prove."""
+
+    scene: str
+    aim: str
+    settle: float
+    close_key: str = ""
+    close_aim: str = ""
+
+
+class SidePlan(NamedTuple):
+    """A side-scene walk: whether it starts from the room stage and its steps."""
+
+    needs_room: bool
+    steps: tuple[SideStep, ...]
+    prime_aim: str = ""
+
+
+# #330 side scenes. Each coordinate is cited in AIMS; each guard threshold
+# is measured on the boot-1 frame named there. A target's last step names
+# the scene reported by scene-probe.sh and by the manifest.
+SIDE_PLANS = {
+    "options": SidePlan(False, (
+        SideStep("options", "option-gear", 4.0, "escape"),
+    ), "board-prime"),
+    "quit-confirm": SidePlan(False, (
+        SideStep("options", "option-gear", 4.0, "", "options-exit"),
+        SideStep("quit-confirm", "exit-disc", 4.0),
+    ), "board-prime"),
+    "myroom": SidePlan(True, (
+        SideStep("myroom", "room-myroom", 8.0),
+    )),
+    "itemshop": SidePlan(True, (
+        SideStep("myroom", "room-myroom", 8.0),
+        SideStep("itemshop", "myroom-itemshop", 12.0),
+    )),
+    "cash-charge": SidePlan(True, (
+        SideStep("myroom", "room-myroom", 8.0),
+        SideStep("messenger", "room-messenger", 8.0,
+                 close_aim="side-dialog-ok"),
+        SideStep("itemshop", "myroom-itemshop", 12.0),
+        SideStep("cash-charge", "itemshop-cash-charge", 8.0),
+    )),
+    "musicshop": SidePlan(True, (
+        SideStep("musicshop", "room-musicshop", 12.0),
+    )),
+    "tutorial": SidePlan(True, (
+        SideStep("musicshop", "room-musicshop", 12.0, close_aim="side-back"),
+        SideStep("tutorial", "room-firststep", 8.0),
+    )),
+    "messenger": SidePlan(True, (
+        SideStep("myroom", "room-myroom", 8.0),
+        SideStep("messenger", "room-messenger", 8.0),
+    )),
+}
+SIDE_TARGETS = tuple(SIDE_PLANS)
+
+# (box, colour predicate, minimum share) measured on boot b1-explore.
+# A click cue alone can mislabel a frozen frame; the guard refuses pixels
+# that do not show the named screen. Classifiers are optional for #330, so
+# these only gate the label, they do not claim a general scene classifier.
+SIDE_SIGNATURES = {
+    "options": ((240, 50, 480, 90), "orange", 0.40),
+    "quit-confirm": ((250, 200, 400, 230), "green", 0.30),
+    "myroom": ((100, 10, 200, 45), "green", 0.10),
+    "itemshop": ((250, 70, 600, 350), "neutral_dark", 0.50),
+    "cash-charge": ((220, 70, 600, 500), "uniform_panel", 0.80),
+    "musicshop": ((250, 70, 600, 350), "blue", 0.40),
+    "tutorial": ((320, 40, 720, 210), "white", 0.20),
+    "messenger": ((260, 235, 530, 375), "blue", 0.70),
+}
 
 # Scene signatures, measured from this leg's own frames (captures cited in
 # docs/captures/t240/findings.md). A capture is labelled only when its own
@@ -267,6 +445,26 @@ def mean_saturation(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
     left, top, right, bottom = box
     pixels = frame[top:bottom, left:right]
     return float((pixels.max(axis=2) - pixels.min(axis=2)).mean())
+
+
+def region_fraction(frame: np.ndarray, box: tuple[int, int, int, int],
+                    predicate: str) -> float:
+    """Share of a box painted with one of the side-scene's signature colours."""
+    left, top, right, bottom = box
+    pixels = frame[top:bottom, left:right]
+    red, green, blue = (pixels[:, :, index] for index in range(3))
+    brightness = pixels.mean(axis=2)
+    tests = {
+        "orange": (red > 180) & (green > 100) & (green < 200) & (blue < 100),
+        "green": (green > 150) & (green > red + 25) & (green > blue + 25),
+        "blue": (blue > 110) & (blue > red + 50) & (blue > green + 20),
+        "white": brightness > 220,
+        "uniform_panel": (brightness > 220) | (brightness < 45),
+        "dark": (brightness > 10) & (brightness < 45),
+        "neutral_dark": (brightness > 20) & (brightness < 130) &
+                        (abs(red - blue) < 25),
+    }
+    return float(tests[predicate].mean())
 
 
 def waiting_affordance_lines(frames: Frames, log: SceneLog) -> None:
@@ -449,6 +647,34 @@ class Frames:
         changed = np.abs(frame[top:bottom, left:right] -
                          rest[top:bottom, left:right])
         return float(changed.mean())
+
+    def side_guard_fraction(self, name: str) -> float:
+        """Measured signature share for one #330 side scene."""
+        box, predicate, _ = SIDE_SIGNATURES[name]
+        frame = self.last if self.last is not None else self.grab()
+        return region_fraction(frame, box, predicate)
+
+    def cash_title_is_up(self) -> bool:
+        """The billing web view is blank in both states; its title is not."""
+        frame = self.last if self.last is not None else self.grab()
+        return region_fraction(frame, CASH_TITLE_BOX, "blue") > \
+            CASH_TITLE_BLUE_FRACTION
+
+    def side_scene_is_up(self, name: str) -> bool:
+        _, _, minimum = SIDE_SIGNATURES[name]
+        if self.side_guard_fraction(name) <= minimum:
+            return False
+        if name == "cash-charge":
+            return self.cash_title_is_up()
+        return True
+
+    def crash_report_is_up(self) -> bool:
+        """Stale-dump report box: blue title bar over a light grey body."""
+        frame = self.last if self.last is not None else self.grab()
+        title = frame[250, 400]
+        body = frame[290, 400]
+        return bool(title[2] > 200 and title[1] > 100 and title[0] < 100
+                    and body.mean() > 230)
 
 
 class WireTapLog:
@@ -813,6 +1039,91 @@ def capture_scene(frames: Frames, log: SceneLog, shots: Path, name: str,
     mean = frames.capture(shots / f"{name}.png")
     log.scene(name, mean, cue, f"{name}.png")
     return True
+
+
+def side_evidence_line(name: str, fraction: float, cue: str) -> str:
+    """Name the guard, its threshold, and the boot-1 frame that measured it."""
+    box, predicate, minimum = SIDE_SIGNATURES[name]
+    coordinates = ",".join(str(value) for value in box)
+    return (
+        f"{name} signature {predicate}={fraction:.3f} "
+        f"box={coordinates} min={minimum:.2f} "
+        f"evidence=~/scratch/side-scenes/b1-explore/explore "
+        f"aim={cue} (boot-1 frame sha256 in that aim's AIMS entry)"
+    )
+
+
+def capture_side_scene(frames: Frames, log: SceneLog, shots: Path, name: str,
+                       cue: str) -> bool:
+    """Write a side-scene PNG only when its measured guard passes.
+
+    The click names the stimulus; the pixel guard stops a frozen or wrong
+    scene from being relabelled. This is a label guard, not a general
+    classifier (#330 makes signatures optional).
+    """
+    frames.grab()
+    if not frames.side_scene_is_up(name):
+        fraction = frames.side_guard_fraction(name)
+        log.event(f"stage {name} NOT captured: guard={fraction:.3f} cue={cue}")
+        return False
+    mean = frames.capture(shots / f"{name}.png")
+    log.event(side_evidence_line(name, frames.side_guard_fraction(name), cue))
+    log.scene(name, mean, cue, f"{name}.png")
+    return True
+
+
+def activate_aim(injector: Input, aim: str) -> None:
+    """Fire the same aim twice: the first click after a scene change is swallowed.
+
+    Pinned by boot b5: MyRoom's ITEM SHOP hovered under a single click while
+    the frame stayed MyRoom for 12 s. The repeat lands after focus settles.
+    """
+    injector.send_click(aim)
+    time.sleep(1.2)
+    injector.send_click(aim)
+
+
+def execute_side_plan(plan: SidePlan, frames: Frames, injector: Input,
+                      log: SceneLog, shots: Path) -> list[str]:
+    """Click each planned aim and capture only the scenes that appear."""
+    reached: list[str] = []
+    for step in plan.steps:
+        activate_aim(injector, step.aim)
+        time.sleep(step.settle)
+        if not capture_side_scene(frames, log, shots, step.scene,
+                                  f"click:{step.aim}"):
+            break
+        reached.append(step.scene)
+        if step.close_key:
+            injector.send_key(step.close_key, "down")
+            injector.send_key(step.close_key, "up")
+            time.sleep(1.0)
+        if step.close_aim:
+            injector.send_click(step.close_aim)
+            time.sleep(3.0)
+    return reached
+
+
+def dismiss_stale_crash_report(frames: Frames, injector: Input,
+                               log: SceneLog) -> bool:
+    """Clear the stale-dump report box that can cover the boot board."""
+    frames.grab()
+    if not frames.crash_report_is_up():
+        return False
+    log.event("stale crash report box up; dismiss before the board")
+    injector.send_click("crash-cancel")
+    time.sleep(2)
+    frames.grab()
+    if frames.crash_report_is_up():
+        log.event("crash report still up; retry the higher Cancel aim")
+        injector.send_click("crash-cancel-alt")
+        time.sleep(2)
+    return True
+
+
+def board_ready(frames: Frames) -> bool:
+    frames.grab()
+    return frames.board_is_up()
 
 
 def observe_waiting_transition(frames: Frames, wire: WireTapLog,
@@ -1364,6 +1675,41 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
     return reached
 
 
+def drive_side_scenes(arguments, frames: Frames, server: ServerLog,
+                      injector: Input, log: SceneLog, shots: Path,
+                      wire: WireTapLog) -> list[str]:
+    """Reach a #330 side scene; reuse the pinned planet->room walk if needed.
+
+    The plan's last step names the reported scene. A room-side boot disables
+    the host bot: these scenes need no room host, only the pinned lobby walk.
+    """
+    dismiss_stale_crash_report(frames, injector, log)
+    plan = SIDE_PLANS[arguments.target]
+    if plan.needs_room:
+        room_arguments = argparse.Namespace(**vars(arguments))
+        room_arguments.target = "room"
+        room_arguments.host_user_index_id = 0
+        reached = drive(room_arguments, frames, server, injector, log,
+                        shots, wire)
+        if "room" not in reached:
+            return reached
+    else:
+        reached = []
+        if not wait_until(lambda: board_ready(frames), 150.0, 2.0):
+            frames.capture(shots / "probe-failure.png")
+            log.event("stage planet FAILED reason=board never rendered")
+            return reached
+        if not capture_scene(frames, log, shots, "planet", "probe:board"):
+            frames.capture(shots / "probe-failure.png")
+            return reached
+        reached.append("planet")
+    if plan.prime_aim:
+        injector.send_click(plan.prime_aim)
+        time.sleep(1.0)
+    reached.extend(execute_side_plan(plan, frames, injector, log, shots))
+    return reached
+
+
 def read_env(out_dir: Path, wine_prefix: str) -> dict:
     """The run's env (from rig-run.sh's env.sh) plus this process's own."""
     merged = dict(os.environ)
@@ -1378,13 +1724,14 @@ def read_env(out_dir: Path, wine_prefix: str) -> dict:
     return merged
 
 
-def main() -> int:
+def build_argument_parser() -> argparse.ArgumentParser:
+    """One parser for the CLI and the seam tests that check its targets."""
     parser = argparse.ArgumentParser(prog="wine-scene")
     parser.add_argument("--attach", required=True)
     parser.add_argument("--display", required=True)
     parser.add_argument("--shots", default="")
     parser.add_argument("--target", default="loading",
-                        choices=SCENE_TARGETS)
+                        choices=SCENE_TARGETS + list(SIDE_TARGETS))
     parser.add_argument("--music-id", type=int, default=757)
     parser.add_argument("--account", default="tester")
     parser.add_argument("--server-log",
@@ -1418,6 +1765,11 @@ def main() -> int:
                              "fresh 2005 data (docs/wine-boot.md Attempt 12)")
     parser.add_argument("--wineprefix", default=os.environ.get("WINEPREFIX", ""))
     parser.add_argument("--no-host", action="store_true")
+    return parser
+
+
+def main() -> int:
+    parser = build_argument_parser()
     arguments = parser.parse_args()
     if arguments.no_host:
         arguments.host_user_index_id = 0
@@ -1439,7 +1791,12 @@ def main() -> int:
                      read_env(out_dir, arguments.wineprefix), log)
     reached: list[str] = []
     try:
-        reached = drive(arguments, frames, server, injector, log, shots, wire)
+        if arguments.target in SIDE_TARGETS:
+            reached = drive_side_scenes(
+                arguments, frames, server, injector, log, shots, wire)
+        else:
+            reached = drive(
+                arguments, frames, server, injector, log, shots, wire)
     finally:
         log.event(f"drive done reached={','.join(reached)} probe_dir={probe_dir}")
     return 0 if reached else 1
