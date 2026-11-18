@@ -62,3 +62,30 @@ Retired: `result_paints_loaded_avatar_at_the_row_slot`,
 `result_avatar_paints_at_the_local_row_slot`,
 `result_avatar_clips_to_the_exe_row_band`,
 `result_avatar_hangs_its_visible_box_at_the_slot`.
+
+## 2026-11-18 — #310: 4018 member-record write side is PINNED, not OPEN
+
+Contradiction recorded (exe is oracle, never silently resolved): the
+#294 triage comment said the record write side "has no pinned evidence
+and no next-step ticket". That is stale. `docs/net-protocol.md` §4c pins
+the 4018 `ScoreCompleted` handler (VA `0x55fbe0`, file `0x15fbe0`) and
+row reader (VA `0x5411a0`, file `0x1411a0`) writing into member-record
+words `+0x2142/44/46/48/5C/4C`, `+0x2160`, `+0x2164`, `+0x20/24`,
+`+0x2166`, `+0x2C/0x2128`, `+0x2168`, `+0x2158`, plus the head's room-master
+marker `+0x30` (evidence `ev_476a9085…`, `ev_e5954df4…`, `ev_cbd5ca48…`,
+`ev_6902875a…`, `ev_5308dcbd…`, `ev_d19ae823…`). The earlier claim stays
+on the issue as history; it is not an OPEN pin and must not be used to
+excuse an unfilled record.
+
+Rust side now stages one `ResultMemberRecord` per admitted 4018 row in
+`OnlineSession::apply_score_completed` before the existing total restage.
+The 8-seat bound reproduces the exe member guard (file `0x15fd54`); only
+`active == 1` rows commit (file `0x15fd8e`). Guard:
+`result_drain_stages_4018_rows_into_exe_record_fields` (scripted-gateway
+Tier 2, reads every staged word back through `OnlineSession::result_record`).
+No production reader consumes the mirror yet, so the row digits still
+paint from local `Score`/`PeerBars`; that paint wiring is a separate
+follow-up, not a reason to leave the record empty. Still OPEN with named
+next steps: the value globals `0x77ee42/44/46/48` have no proven writer
+(`docs/cresult-anchors.md` item 3 — next step REA trace of the register-held
+store), and 4040 rank bytes stay out of scope (#310).

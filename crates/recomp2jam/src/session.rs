@@ -74,8 +74,10 @@
 //! send retries on the next paint; later paints send nothing, and
 //! leaving Result clears the latch. Every Result paint then drains
 //! the tally answers — 4017 submissions (traced per member), the
-//! 4018 ranked table (each entry total re-staged onto its seat, so
-//! the verdict turns on server-authoritative peer totals), and 4040
+//! 4018 ranked table (each active row fills the exe-pinned
+//! [`result_records::ResultMemberRecord`] words before its total is
+//! re-staged onto the seat, so the verdict turns on
+//! server-authoritative peer totals), and 4040
 //! rank places (decoded and validated; the gateway never emits it —
 //! the `FinalizeRank` broadcast stays commented out server-side).
 //! Result input wires (relay shapes pinned by #87, landed in #88):
@@ -173,6 +175,9 @@ use crate::loading::{
     load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
     LOADING_GATE_STEPS,
 };
+mod result_records;
+
+use result_records::ResultMemberRecord;
 
 /// Short socket window for the per-frame stats section (one tick send
 /// plus the echo drain): a paint must never stall the frame loop on a
@@ -529,6 +534,10 @@ pub struct OnlineSession {
     /// Last ready flag per seat, from 4009 echoes (`None` while the
     /// seat never echoed) — same bridge shape as `slot_actions`.
     ready_echoes: [Option<bool>; 8],
+    /// Result record words per seat, from 4018 rows (`None` while the
+    /// seat never sent an active row). Mirrors the exe's member record
+    /// at the offsets pinned in `docs/net-protocol.md` §4c.
+    result_records: [Option<result_records::ResultMemberRecord>; 8],
 }
 
 impl OnlineSession {
@@ -568,6 +577,7 @@ impl OnlineSession {
             silent_audio: true,
             slot_actions: [None; 8],
             ready_echoes: [None; 8],
+            result_records: [None; 8],
         }
     }
 
@@ -1208,6 +1218,18 @@ impl OnlineSession {
             .get(usize::from(member_id))
             .copied()
             .flatten()
+    }
+
+    /// Result record words for a seat, from the last 4018 frame
+    /// (`None` while no active row named that seat). No production
+    /// reader yet: the shell paint wiring follows separately.
+    #[allow(
+        dead_code,
+        reason = "bridge query for the shell paint follow-up; tested below"
+    )]
+    #[must_use]
+    pub fn result_record(&self, member_id: u8) -> Option<&result_records::ResultMemberRecord> {
+        self.result_records.get(usize::from(member_id))?.as_ref()
     }
 
     /// Transmit the pending chat draft as 3011.
@@ -2162,6 +2184,7 @@ impl OnlineSession {
             tracing::debug!(id = frame.id, "dropping undecodable score table");
             return;
         };
+        self.stage_result_records(&completed);
         self.stage_server_totals(&completed);
     }
 
@@ -2607,6 +2630,28 @@ impl OnlineSession {
             teams.submit(usize::from(room.member_id), local_points);
         }
         self.stage_teams(teams);
+    }
+
+    /// Fill the exe-pinned member record words from the admitted rows of
+    /// one 4018 frame. The exe guards member `< 8` (file `0x15fd54`) and
+    /// admits only `active == 1` (file `0x15fd8e`); other rows are
+    /// consumed without a commit, so they leave no staged record.
+    fn stage_result_records(&mut self, completed: &ScoreCompleted) {
+        for entry in &completed.scores {
+            let Some(record) = self.result_records.get_mut(usize::from(entry.member_id)) else {
+                tracing::debug!(
+                    member = entry.member_id,
+                    "skipping 4018 row outside member range"
+                );
+                continue;
+            };
+            if entry.active {
+                *record = Some(ResultMemberRecord::from_score_entry(
+                    entry,
+                    completed.room_master,
+                ));
+            }
+        }
     }
 
     /// Re-stage the battle mirror from the server-ranked 4018 table:
@@ -3387,7 +3432,10 @@ mod session_tests {
     use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
-    use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
+    use super::{
+        level_for_difficulty, result_records::ResultMemberRecord, saturate_bonus, OnlineSession,
+        SongChoice,
+    };
 
     /// One whole frame off the fake server's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -5957,6 +6005,110 @@ mod session_tests {
             session.game.battle_verdict(),
             Some(o2jam_shell::screens::paint::BattleVerdict::Lose)
         );
+    }
+
+    /// Live caller chain: `main.rs::run_play` → `setup_online` →
+    /// `run_windowed_session` → `OnlineSession::paint` → `poll_tally` →
+    /// `drain_tally_answers` → `apply_score_completed` →
+    /// `ResultMemberRecord::from_score_entry` → this test's read-back.
+    /// A scripted gateway sends one active and one inactive 4018 row;
+    /// the exe admits only `active == 1` (file `0x15fd8e`).
+    #[test]
+    fn result_drain_stages_4018_rows_into_exe_record_fields() {
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry};
+
+        let mut room = joined_snapshot();
+        room.slots[0].member = Some(member("host", true));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 2,
+                        active: false,
+                        cool: 99,
+                        good: 99,
+                        bad: 99,
+                        miss: 99,
+                        max_combo: 99,
+                        jam: 99,
+                        score: 99_999,
+                        reward: 99,
+                        level: 9,
+                        experience: 9,
+                        result: MatchResult::Lose,
+                        gem: 9,
+                        cash_point: 9,
+                        speed: 9,
+                        long_note_score: 9,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(0).is_some());
+        server.join().unwrap();
+
+        let expected = ResultMemberRecord {
+            cool: 11,
+            good: 22,
+            bad: 33,
+            miss: 44,
+            max_combo: 55,
+            jam_combo: 66,
+            long_note_score: 60,
+            score: 777,
+            reward: 88,
+            result: MatchResult::Win,
+            speed: 2,
+            level: 3,
+            experience: 2000,
+            gem: 11_000,
+            cash_point: 125,
+            room_master: true,
+        };
+        assert_eq!(session.result_record(0), Some(&expected));
+        assert_eq!(session.result_record(2), None);
     }
 
     /// Wire-shape replay for the result input arms (#87, wired in
