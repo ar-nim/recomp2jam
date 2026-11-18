@@ -266,12 +266,14 @@ fn waiting_shows_ready_dot_for_occupied_seat() {
 }
 
 #[test]
-fn loading_shows_progress_bar() {
+fn loading_hides_the_unpinned_progress_bar() {
     let mut game = ScreenGame::new();
     walk_to_loading(&mut game);
     let buf = painted_game(&mut game, 64, 48, 0);
     assert_eq!(buf[0], loading_background());
-    assert!(buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+    // 7.55 shows no bar at load-complete or mid-load; the OPEN
+    // placeholder stays out of the fallback and art scenes.
+    assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
 }
 
 #[test]
@@ -565,12 +567,13 @@ fn waiting_layers_seats_over_staged_art() {
 }
 
 #[test]
-fn loading_layers_bar_over_staged_art() {
+fn loading_layers_staged_art_without_the_open_bar() {
     let mut game = ScreenGame::new();
     stage_screen_art(&mut game, Screen::Loading, "MusicLoading.ojs");
     walk_to_loading(&mut game);
     let buf = painted_game(&mut game, 64, 48, 0);
-    assert_composed(&buf, &[pack_xrgb(0x30, 0xB0, 0x30)]);
+    assert_composed(&buf, &[]);
+    assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
 }
 
 #[test]

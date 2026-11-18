@@ -662,7 +662,7 @@ pub struct ScreenGame {
     chat_input: String,
     selected_music: Option<SetRoomMusic>,
     /// Live loading status (walk fraction + title–artist, lifecycle
-    /// §9): `None` paints the indeterminate full bar.
+    /// §9): `None` leaves the (gated-off) indeterminate bar unset.
     loading_status: Option<LoadingStatus>,
     /// Loading-gate phase held by the walk (0 entry ..= 4 armed;
     /// [`LOADING_GATE_PHASES`]): advances only through staged
@@ -6117,9 +6117,10 @@ impl ScreenGame {
         art.paint_overlay(frame);
     }
 
-    /// Loading gate: staged art behind the progress bar. A staged
-    /// walk fraction paints the live bar plus title–artist; unknown
-    /// (no status, or no art) keeps the indeterminate full bar.
+    /// Loading gate: staged art, then title–artist. The OPEN progress
+    /// bar stays hidden in every state until its exe pin (see
+    /// [`paint_loading_bar`](crate::screens::paint::paint_loading_bar));
+    /// staged walk status is retained but not painted as a bar.
     fn paint_loading(&self, frame: &mut Frame<'_>) {
         match (
             self.scene_art(Screen::Loading),
@@ -17475,7 +17476,7 @@ mod game_tests {
     }
 
     #[test]
-    fn scene_art_backs_loading_bar() {
+    fn scene_art_backs_loading_without_the_open_bar() {
         use MenuKey;
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
@@ -17496,7 +17497,7 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+        assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 
     fn battle_teams_self_wins() -> o2jam_game::RoomTeams {
@@ -18996,8 +18997,9 @@ mod game_tests {
     }
 
     #[test]
-    fn loading_paints_the_staged_walk_fraction() {
-        // 64x48: track x16 w32 y16; half fill spans x16..32.
+    fn loading_hides_the_staged_walk_fraction() {
+        // 64x48: the OPEN track would sit at x16 w32 y16, but no exe
+        // bar is visible at load-complete or mid-load, so no fill.
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
@@ -19012,8 +19014,8 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0x30, 0xB0, 0x30));
-        assert_ne!(buf[16 * 64 + 40], pack_xrgb(0x30, 0xB0, 0x30));
+        assert_eq!(game.loading_status(), Some(&loading_status_at_half()));
+        assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 
     #[test]
@@ -19037,8 +19039,8 @@ mod game_tests {
     }
 
     #[test]
-    fn loading_without_a_walk_keeps_the_full_bar() {
-        // No status: the legacy indeterminate full bar (x16..48).
+    fn loading_without_a_walk_hides_the_full_bar() {
+        // No status: the legacy full bar (x16..48) stays gated off.
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
@@ -19053,7 +19055,7 @@ mod game_tests {
             0,
         );
         assert_eq!(game.loading_status(), None);
-        assert_eq!(buf[16 * 64 + 47], pack_xrgb(0x30, 0xB0, 0x30));
+        assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 
     #[test]

@@ -5329,9 +5329,25 @@ fn loading_song_origin(frame: &Frame<'_>) -> (i32, i32) {
     (frame.w as i32 / 4, frame.h as i32 / 2 + 12)
 }
 
+/// Visibility gate for the OPEN loading-bar placeholder.
+///
+/// OPEN (7.55, SHA-256 `83a045…`): the exe's `(200,272,320,28)` crop has
+/// no bar at load-complete (`blit-pass/pack/frames/ref/loading.png`) nor
+/// mid-load (`no-response/f1-playing-qualified/artifacts/screenshots/
+/// loading.png`), while the Rust frame (`live-cover/green/frames/
+/// frame-000146-loading.png`) carries the invented green fill. Keep the
+/// painter as a tracked element, but do not show it until the pin: real
+/// bar art and the visibility rule from `MusicLoading.ojs` — where the
+/// exe's indicator is, when it appears, and whether it tracks download
+/// progress (the shell models no download, so every fraction is synthetic).
+/// OPEN labeling follows `docs/geometry-audit.md`; next step is a rig read
+/// of the gate mount plus a capture with a real download in flight.
+const LOADING_BAR_VISIBLE: bool = false;
+
 /// Loading progress bar over a dark track (no background fill:
 /// shared by the flat fallback and the art scene). The track rect
-/// is an OPEN placeholder; only the fill fraction is live.
+/// is an OPEN placeholder; only the fill fraction is live. Hidden from
+/// the loading frames until [`LOADING_BAR_VISIBLE`] is evidence-pinned.
 fn paint_loading_bar(frame: &mut Frame<'_>) {
     paint_loading_bar_with_progress(frame, 1.0);
 }
@@ -5392,10 +5408,13 @@ fn paint_loading_song(frame: &mut Frame<'_>, status: &LoadingStatus) {
     draw_text_cell(frame, x, y, &caption, art_title_ink(), Cell::Loading);
 }
 
-/// Paint the loading gate scene.
+/// Paint the loading gate scene. The OPEN bar stays hidden; see
+/// [`LOADING_BAR_VISIBLE`].
 fn paint_loading(frame: &mut Frame<'_>) {
     fill_background(frame, Screen::Loading);
-    paint_loading_bar(frame);
+    if LOADING_BAR_VISIBLE {
+        paint_loading_bar(frame);
+    }
 }
 
 /// Per-song illustration behind the loading bar/caption: the staged
@@ -5439,8 +5458,9 @@ fn paint_loading_cover(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
 /// `MusicLoading.ojs` planet fallback — the exe mounts that overlay
 /// only when the song load returns 0 (file `0xe47a0`, ev
 /// `68d920c2…`), so a present cover (the load succeeded) replaces
-/// it. Then the fractional bar plus the song title/artist. The caption
-/// now routes through `Cell::Loading` (the gate Trebuchet 27x65
+/// it. The OPEN fractional bar stays hidden until [`LOADING_BAR_VISIBLE`];
+/// the song title/artist still paints. The caption now routes through
+/// `Cell::Loading` (the gate Trebuchet 27x65
 /// recommendation per `docs/loading-type.md`); Arial 7x14 still has
 /// no cell and the OJN/Vorbis path stays a gap. Unpainted while the
 /// shell carries no walk state.
@@ -5452,14 +5472,16 @@ pub fn paint_loading_scene_with_status(
     if !paint_loading_cover(frame, art) {
         art.paint_backdrop(frame, Screen::Loading);
     }
-    paint_loading_bar_with_progress(frame, status.clamped_progress());
+    if LOADING_BAR_VISIBLE {
+        paint_loading_bar_with_progress(frame, status.clamped_progress());
+    }
     paint_loading_song(frame, status);
 }
 
-/// Paint staged loading art (`MusicLoading.ojs`) with the live
-/// progress bar on top. Legacy indeterminate form (full bar, no
-/// caption): `game.rs` carries no walk fraction or song names yet,
-/// so callers with live state use [`paint_loading_scene_with_status`].
+/// Paint staged loading art (`MusicLoading.ojs`) with no visible bar:
+/// the legacy full-bar form is gated off by [`LOADING_BAR_VISIBLE`].
+/// Callers with a walk fraction or song names use
+/// [`paint_loading_scene_with_status`].
 pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_loading_scene_with_status(
         frame,
@@ -8448,10 +8470,13 @@ mod paint_tests {
     }
 
     #[test]
-    fn loading_scene_keeps_bar_over_art() {
+    fn loading_scene_hides_the_open_bar_over_art() {
+        // OPEN: no exe bar at load-complete or mid-load, so neither
+        // the green fill nor its dark track may reach the frame.
         let buf = paint_art(Screen::Loading, &corner_art(), 64, 48);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+        assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+        assert!(!buf.contains(&scrim_color()));
     }
 
     #[test]
@@ -8522,7 +8547,7 @@ mod paint_tests {
         }
         let loading = paint_art(Screen::Loading, &art, 16, 12);
         assert!(!loading.contains(&background_of(Screen::Loading)));
-        assert!(loading.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+        assert!(!loading.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
         let playing = paint_art(Screen::Playing, &art, 16, 12);
         assert_eq!(playing[0], background_of(Screen::Playing));
         let result = paint_art(Screen::Result, &art, 16, 12);
@@ -10270,10 +10295,11 @@ mod paint_tests {
     }
 
     #[test]
-    fn loading_cover_paints_full_bleed_behind_bar_and_caption() {
+    fn loading_cover_paints_full_bleed_behind_caption() {
         // Staged OJN cover (2x2 opaque stand-in, distinct corners —
         // geometry only, never real art) stretches over the whole
-        // frame while the live bar and caption ink on top.
+        // frame while the caption ink paints on top. The OPEN bar
+        // stays hidden.
         let art = SceneArt {
             placements: Vec::new(),
             figures: HashMap::from([(LOADING_COVER_SPRITE.to_owned(), cover_figure())]),
@@ -10302,8 +10328,8 @@ mod paint_tests {
             "69-row Loading scrim covers the bottom-right on 64x48"
         );
         assert!(
-            buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
-            "bar fill survives over the cover"
+            !buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
+            "OPEN bar fill stays off the cover"
         );
         assert!(
             buf.contains(&art_title_ink()),
@@ -11223,25 +11249,19 @@ mod paint_tests {
     }
 
     #[test]
-    fn loading_fill_spans_the_walk_fraction() {
-        // Fractional bar: the track stays put, the green fill spans
-        // `progress` of the `w/2` inner width (32x24 frame: track
-        // x8 w16, half fill x8..16 at 0.5).
-        let art = SceneArt::default();
-        let status = LoadingStatus {
-            progress: 0.5,
-            title: String::new(),
-            artist: String::new(),
-        };
+    fn loading_fill_spans_the_walk_fraction_at_the_painter_seam() {
+        // Seam-only guard: the live scene call is gated off by
+        // [`LOADING_BAR_VISIBLE`] until the exe bar is pinned, so this
+        // pins the hidden painter's math, not a player-visible frame.
+        // 32x24 frame: track x8 w16, half fill x8..16 at 0.5.
         let mut buf = vec![0u32; 32 * 24];
-        paint_loading_scene_with_status(
+        paint_loading_bar_with_progress(
             &mut Frame {
                 buf: &mut buf,
                 w: 32,
                 h: 24,
             },
-            &art,
-            &status,
+            0.5,
         );
         let green = pack_xrgb(0x30, 0xB0, 0x30);
         assert_eq!(buf[4 * 32 + 8], green, "fill starts at the track");

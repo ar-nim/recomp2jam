@@ -60,8 +60,8 @@ const WHITE_TEXT: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 const AMBER_CURSOR: u32 = pack_xrgb(0xFF, 0xD0, 0x20);
 /// Waiting ready-dot ink.
 const READY_GREEN: u32 = pack_xrgb(0x30, 0xE0, 0x30);
-/// Loading progress-bar ink.
-const LOADING_GREEN: u32 = pack_xrgb(0x30, 0xB0, 0x30);
+/// OPEN loading progress-bar ink; absent from the exe's gate frames.
+const OPEN_BAR_GREEN: u32 = pack_xrgb(0x30, 0xB0, 0x30);
 /// Highway note ink.
 const NOTE_BLUE: u32 = pack_xrgb(0x40, 0xC0, 0xFF);
 
@@ -725,7 +725,7 @@ fn waiting_top_buttons_sit_on_their_own_block_rects() {
 }
 
 #[test]
-fn loading_layers_bar_over_real_loading_gate() {
+fn loading_layers_real_art_without_the_open_bar() {
     let path = archive_path(PLAYING_ARCHIVE);
     let Some(archive) = install_archives().playing else {
         println!("skip loading: missing {}", path.display());
@@ -740,7 +740,11 @@ fn loading_layers_bar_over_real_loading_gate() {
     game.load_scene(Screen::Loading, placements, figures);
     walk_to_loading(&mut game);
     let frame = painted(&mut game, 0);
-    assert_composed(&frame, &staged, &[LOADING_GREEN], "loading");
+    assert_composed(&frame, &staged, &[], "loading");
+    assert!(
+        !frame.contains(&OPEN_BAR_GREEN),
+        "loading: OPEN progress bar must stay unpainted"
+    );
 }
 
 #[test]
