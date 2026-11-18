@@ -37,15 +37,15 @@ use super::paint::{
     paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
     paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_hover,
-    paint_room_list, paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_room_list, paint_room_scene_with_hover, paint_room_user_panel, paint_screen,
+    paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
+    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -2874,6 +2874,23 @@ impl ScreenGame {
             return None;
         }
         room_panel_hit(placements, x, y)
+    }
+
+    /// Staged room panel under the pointer, when no dialog, modal, or
+    /// side view owns input. The same rect hit test as a click, but
+    /// only a listed room makes the row template live (the empty-list
+    /// hover sweep pinned no panel overlay, `docs/hover.md`).
+    fn hovered_room_panel(&self) -> Option<usize> {
+        if self.flow.current() != Screen::Room
+            || self.rooms.is_empty()
+            || self.room_dialog.is_some()
+            || self.planet_modal().is_some()
+            || self.side.is_some()
+        {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        self.room_panel_click(x, y)
     }
 
     /// `SetRoomMusic` body behind one dialog row: the row's song id
@@ -5917,7 +5934,14 @@ impl ScreenGame {
         let hovered_code = self.hovered_room_control().map(|control| control.code);
         match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
             (Some(art), false) => {
-                paint_room_scene(frame, &self.rooms, self.room_highlight, art, hovered_code);
+                paint_room_scene_with_hover(
+                    frame,
+                    &self.rooms,
+                    self.room_highlight,
+                    art,
+                    hovered_code,
+                    self.hovered_room_panel(),
+                );
             }
             (Some(art), true) => {
                 paint_lobby_backdrop_live(frame, Screen::Room, art, |placed| {
@@ -8870,6 +8894,89 @@ mod game_tests {
             0,
         );
         assert_eq!(rest, hovered, "row panels repaint nothing on hover");
+    }
+
+    #[test]
+    fn room_hover_outline_paints_the_staged_overlay_on_the_hovered_panel() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::load_scene ->
+        // GameLoop::mouse_moved -> ScreenGame::paint_room ->
+        // paint_room_scene_with_hover -> paint_room_rows_with_hover ->
+        // paint_room_panel_rows -> room hover overlay. Matched A/B pin
+        // (live-lane-2 task3, pointer (523,260)): the exe paints the
+        // orange `Room_MOver.ojs` outline on the right-middle panel
+        // while its detail ink stays on the highlighted left panel.
+        // Archive-independent synthetic art: CI has no game data.
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let rects = [
+            (26, 82),
+            (26, 177),
+            (26, 272),
+            (317, 82),
+            (317, 177),
+            (317, 272),
+        ];
+        let ids = [
+            "IDC_BUTTON_SROOM_EXBUTTON1",
+            "IDC_BUTTON_SROOM_EXBUTTON2",
+            "IDC_BUTTON_SROOM_EXBUTTON3",
+            "IDC_BUTTON_SROOM_EXBUTTON5",
+            "IDC_BUTTON_SROOM_EXBUTTON4",
+            "IDC_BUTTON_SROOM_EXBUTTON6",
+        ];
+        let placements: Vec<_> = ids
+            .iter()
+            .zip(rects)
+            .enumerate()
+            .map(|(index, (id, (x, y)))| ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0x1301_201B + u32::try_from(index).unwrap_or(0),
+                sprite: Some("Room_ButtonRoom.ojs".to_owned()),
+                rect: Rect {
+                    x,
+                    y,
+                    w: 288,
+                    h: 91,
+                },
+            })
+            .collect();
+        let overlay = solid_figure(292, 95, 0x7C00);
+        let figures = HashMap::from([
+            (
+                "Room_ButtonRoom.ojs".to_owned(),
+                solid_figure(288, 91, 0x001F),
+            ),
+            ("Room_MOver.ojs".to_owned(), overlay),
+        ]);
+        game.load_scene(Screen::Room, placements, figures);
+        game.ingest_snapshot(&InputSnapshot::motion_to(523, 260));
+        assert_eq!(game.hovered_room_panel(), Some(4), "right-middle panel");
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let outline = pack_xrgb(0xFF, 0x00, 0x00);
+        assert_eq!(
+            buf[181 * 800 + 317],
+            outline,
+            "outline on hovered right panel"
+        );
+        assert_ne!(
+            buf[86 * 800 + 26],
+            outline,
+            "no outline on highlighted left panel"
+        );
     }
 
     #[test]
@@ -12968,6 +13075,52 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[250 * 800 + 300], bar, "highlight row keeps the bar");
+    }
+
+    #[test]
+    fn channel_select_bar_row_follows_each_legs_own_pointer_state() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_channel_dialog -> GameLoop::mouse_moved ->
+        // ScreenGame::paint_channel -> paint_channel_scene ->
+        // paint_channel_rows -> paint_channel_highlight. The matched
+        // A/B (live-lane-2 task3) named (405,378) on both legs, but
+        // the exe frame's arrow tip is (401,366) — its relay-OK aim
+        // — so the exe bar sits on row 2 and ours on row 3. Both are
+        // correct for their real pointer: no painter off-by-one.
+        let mut game = ScreenGame::new();
+        let four_channels: Vec<_> = (1..=4)
+            .map(|channel_id| ChannelState {
+                gateway_id: 0,
+                channel_id,
+                capacity: 100,
+                population: 5,
+                active: true,
+            })
+            .collect();
+        game.set_channels(four_channels);
+        let figures = HashMap::from([(
+            "Dialog_ChannelSelectBar.ojs".to_owned(),
+            solid_figure(348, 44, 0x7C00),
+        )]);
+        game.load_scene(Screen::Planet, Vec::new(), figures.clone());
+        game.load_scene(Screen::Channel, Vec::new(), figures);
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        let bar = pack_xrgb(0xFF, 0x00, 0x00);
+        for (pointer, row, row_top) in [((401, 366), 2, 324), ((405, 378), 3, 375)] {
+            game.ingest_snapshot(&InputSnapshot::motion_to(pointer.0, pointer.1));
+            assert_eq!(game.hovered_channel_row(), Some(row), "pointer {pointer:?}");
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            assert_eq!(buf[(row_top + 1) * 800 + 300], bar, "bar at row {row}");
+        }
     }
 
     #[test]

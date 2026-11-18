@@ -18,6 +18,7 @@ use crate::avatar::{
     PLAYING_BACKDROP_CODE,
 };
 use crate::screen::Screen;
+use crate::screens::paint::ROOM_HOVER_SPRITE;
 use crate::screens::side::{
     PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
     INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK,
@@ -999,6 +1000,16 @@ fn load_figures(
             None => push_miss(report, state, block_name, name),
         }
     }
+}
+
+/// Decode the code-mounted room-panel mouse-over body. The 7.55
+/// `ControlList_Interface.txt` names no control for it (the exe
+/// mounts it in code), so the bound `STATE_ROOM` run cannot stage it.
+/// Callers merge this figure into the Room scene like the channel
+/// dialog's hand-staged select bar. Missing art leaves no overlay.
+#[must_use]
+pub fn stage_room_hover_overlay(archive: &[u8]) -> Option<AvatarFigure> {
+    load_archive_sprite_for_stage(archive, ROOM_HOVER_SPRITE, None)
 }
 
 /// Record one miss and log its warning with the State, the Block,

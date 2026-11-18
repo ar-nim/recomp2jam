@@ -1879,9 +1879,19 @@ pub struct StagedPlanetBoard<'a> {
 /// banner frame (refresh arm VA `0x48e4b0`), so the rest stack omits
 /// the banner placement and the selected layer is laid over it. Both
 /// the bare board and the board under the channel dialog use this path.
+/// The five emblem buttons are omitted from the rest stack too: their
+/// dim rest art is baked into the bound `State_Planet.ojs` sheet, and
+/// the exe mounts a button body only on hover/press. The matched #361
+/// A/B measures sheet versus exe within ~1 level per channel; the old
+/// all-layers stack painted the bright button body over the sheet.
+/// Other bodies keep their verified all-layers stack.
 fn paint_planet_board(frame: &mut Frame<'_>, art: &SceneArt, promo_index: u32) {
     art.paint_backdrop_live(frame, Screen::Planet, |placed| {
         placed.code != PLANET_PROMO_IMAGE_CODE
+            && !matches!(
+                planet_action_for_code(placed.code),
+                Some(PlanetAction::Emblem { .. })
+            )
     });
     paint_planet_promo_frame(frame, art, promo_index);
 }
@@ -2715,13 +2725,24 @@ fn paint_room_rows(
     highlight: usize,
     art: Option<&SceneArt>,
 ) {
+    paint_room_rows_with_hover(frame, rooms, highlight, art, None);
+}
+
+/// Same row paint with the staged panel under the pointer, if any.
+fn paint_room_rows_with_hover(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    art: Option<&SceneArt>,
+    hovered_panel: Option<usize>,
+) {
     match art {
         Some(art) => {
             let origins = room_panel_origins(&art.placements);
             if origins.is_empty() {
                 paint_room_fallback_rows(frame, rooms, highlight);
             } else {
-                paint_room_panel_rows(frame, rooms, highlight, art, &origins);
+                paint_room_panel_rows(frame, rooms, highlight, art, &origins, hovered_panel);
             }
         }
         None => paint_room_fallback_rows(frame, rooms, highlight),
@@ -2902,6 +2923,13 @@ fn paint_clone_digit(
     );
 }
 
+/// Code-mounted mouse-over outline (`Room_MOver.ojs`, 292x95 body).
+/// The exe paints it over the hovered row template; the table names no
+/// control for it, so the figure is hand-staged like the channel select
+/// bar (`docs/hover.md` negative pin for the empty-list arm, live
+/// positive pin in issue #368).
+pub const ROOM_HOVER_SPRITE: &str = "Room_MOver.ojs";
+
 /// Native origin of one staged room panel (`None` when the staged art
 /// binds no such panel).
 fn room_panel_origin(placements: &[ScenePlacement], panel_id: &str) -> Option<(i32, i32)> {
@@ -2911,19 +2939,78 @@ fn room_panel_origin(placements: &[ScenePlacement], panel_id: &str) -> Option<(i
         .map(|placed| (placed.rect.x, placed.rect.y))
 }
 
+/// Code-mounted mouse-over outline over one staged panel. The body
+/// is two pixels larger than the `.bnd` panel on each side, so its
+/// origin is the centered difference between the placed rect and the
+/// decoded layer — geometry comes from the staged art, never a
+/// painter literal. The outline paints last, above panel art and row
+/// ink (live #368 pair: detail ink stays on the highlighted panel).
+fn paint_room_panel_hover_outline(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    panels: &[&str],
+    hovered_panel: Option<usize>,
+) {
+    let Some(index) = hovered_panel else {
+        return;
+    };
+    let Some(panel_id) = panels.get(index).copied() else {
+        return;
+    };
+    let Some(placed) = art.placements.iter().find(|placed| placed.id == panel_id) else {
+        return;
+    };
+    let Some(figure) = art
+        .figures
+        .get(ROOM_HOVER_SPRITE)
+        .filter(|figure| !figure.is_empty())
+    else {
+        return;
+    };
+    let Some(layer) = figure.layer(0) else {
+        return;
+    };
+    let (Ok(rect_w), Ok(rect_h), Ok(layer_w), Ok(layer_h)) = (
+        i32::try_from(placed.rect.w),
+        i32::try_from(placed.rect.h),
+        i32::try_from(layer.image.w),
+        i32::try_from(layer.image.h),
+    ) else {
+        return;
+    };
+    let origin_x = placed
+        .rect
+        .x
+        .saturating_add(rect_w.saturating_sub(layer_w) / 2);
+    let origin_y = placed
+        .rect
+        .y
+        .saturating_add(rect_h.saturating_sub(layer_h) / 2);
+    let (dx, dy) = anchor_in_frame(origin_x, origin_y, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        dx + layer.dx,
+        dy + layer.dy,
+        Some(layer.colorkey),
+    );
+}
+
 /// Room rows at their staged `.bnd` panel origins, one live room per
 /// panel: the number at its pinned plate origin, the title and the
 /// seat count at theirs, each sized to its template rect — the live
 /// splits (`findings.md` §2) replace the old combined string. Bare
 /// on the panel art (no scrim: the panels carry their own chrome).
 /// Rooms past the staged panels stay off-page (the Left/Right pager
-/// is untraced); the highlight cursor rides the selected panel.
+/// is untraced); the highlight cursor rides the selected panel, while
+/// the mouse-over outline rides the hovered panel.
 fn paint_room_panel_rows(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
     art: &SceneArt,
     origins: &[(i32, i32)],
+    hovered_panel: Option<usize>,
 ) {
     let ink = caption_ink(art_title_ink());
     let panels = room_panel_instances(&art.placements);
@@ -2971,6 +3058,7 @@ fn paint_room_panel_rows(
             paint_cursor(frame, cursor.0, cursor.1);
         }
     }
+    paint_room_panel_hover_outline(frame, art, &panels, hovered_panel);
 }
 
 /// Room rows at the legacy quarter-frame anchor (flat fallback and
@@ -3445,6 +3533,19 @@ pub fn paint_room_scene(
     art: &SceneArt,
     hovered_code: Option<u32>,
 ) {
+    paint_room_scene_with_hover(frame, rooms, highlight, art, hovered_code, None);
+}
+
+/// Same staged scene, with the room panel under the pointer named so
+/// the code-mounted mouse-over art can follow it.
+pub fn paint_room_scene_with_hover(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    art: &SceneArt,
+    hovered_code: Option<u32>,
+    hovered_panel: Option<usize>,
+) {
     let panels = room_panel_instances(&art.placements);
     art.paint_backdrop_live(frame, Screen::Room, |placed| {
         room_chrome_visible(placed.code) && clone_instance_live(placed, &panels, rooms.len())
@@ -3457,7 +3558,7 @@ pub fn paint_room_scene(
     // per-panel rects, so the template art overlaps its own panel —
     // the exe's per-row template clone offsets stay OPEN past the
     // title/number/count pins (`findings.md` §2).
-    paint_room_rows(frame, rooms, highlight, Some(art));
+    paint_room_rows_with_hover(frame, rooms, highlight, Some(art), hovered_panel);
     paint_room_hover(frame, art, hovered_code);
 }
 
@@ -10672,32 +10773,60 @@ mod paint_tests {
 
     #[test]
     fn hovered_emblem_reveals_the_pinned_plate_band() {
-        // Wine sweep (`docs/hover.md`): hovering EASY/NORMAL/HARD
-        // adds the body's own 84x18 light plate band (EASY
-        // (94,44)-(178,62)) with no frame swap. The rest stack keeps
-        // the top layer (the dark selected plate), so the hover
-        // repaints layer 0 clipped to the pinned band rect — and
-        // only there.
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::paint_planet ->
+        // paint_planet_scene -> paint_planet_board -> rest omits the
+        // emblem button; hover -> paint_planet_hover -> plate band.
+        // Matched #361 A/B: rest is the sheet's baked dim art (within
+        // ~1 level/channel), not the bright button body; hover mounts
+        // button frame 0 only inside EASY's pinned band
+        // (94,44)-(178,62). No frame swap outside the band.
         use super::super::side::{PlanetAction, PLANET_BUTTON_EASY_CODE};
         let sprite = "Planet_Btn_Easy.ojs";
+        let mut sheet = AvatarFigure::default();
+        sheet.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0xE0, 0x03].repeat(99 * 112), 99, 112)
+                .expect("sheet plate"),
+            dx: 87,
+            dy: 32,
+            colorkey: 0xFFFF,
+        });
         let art = SceneArt {
-            placements: vec![ScenePlacement {
-                role: PlacementRole::Single,
-                id: String::new(),
-                code: PLANET_BUTTON_EASY_CODE,
-                sprite: Some(sprite.to_owned()),
-                rect: Rect {
-                    x: 87,
-                    y: 32,
-                    w: 99,
-                    h: 112,
+            placements: vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "sheet".to_owned(),
+                    code: 0,
+                    sprite: Some("State_Planet_Fixture.ojs".to_owned()),
+                    rect: Rect {
+                        x: 87,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
                 },
-            }],
-            figures: HashMap::from([(
-                sprite.to_owned(),
-                anchored_two_frame_figure(99, 112, 87, 32, [0x1F, 0x00], [0x00, 0x7C]),
-            )]),
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: PLANET_BUTTON_EASY_CODE,
+                    sprite: Some(sprite.to_owned()),
+                    rect: Rect {
+                        x: 87,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+            ],
+            figures: HashMap::from([
+                ("State_Planet_Fixture.ojs".to_owned(), sheet),
+                (
+                    sprite.to_owned(),
+                    anchored_two_frame_figure(99, 112, 87, 32, [0x1F, 0x00], [0x00, 0x7C]),
+                ),
+            ]),
         };
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
         let red = pack_xrgb(0xFF, 0x00, 0x00);
         let mut rest = vec![0u32; 800 * 600];
@@ -10713,7 +10842,17 @@ mod paint_tests {
             None,
             1,
         );
-        assert_eq!(rest[50 * 800 + 136], red, "rest keeps the top layer");
+        assert_eq!(
+            rest[50 * 800 + 136],
+            green,
+            "rest uses the baked sheet, not either button frame"
+        );
+        assert_eq!(rest[100 * 800 + 136], green, "rest body is the sheet");
+        assert_eq!(
+            rest[50 * 800 + 90],
+            green,
+            "rest beside the band is the sheet"
+        );
         let mut hovered = vec![0u32; 800 * 600];
         paint_planet_scene(
             &mut Frame {
@@ -10732,14 +10871,15 @@ mod paint_tests {
         assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
         assert_eq!(
             hovered[100 * 800 + 136],
-            red,
-            "below the band the rest stack stands"
+            green,
+            "below the band the sheet stands"
         );
         assert_eq!(
             hovered[50 * 800 + 90],
-            red,
-            "left of the band the rest stack stands"
+            green,
+            "left of the band the sheet stands"
         );
+        assert_ne!(red, green, "the two button frames stay distinct fixtures");
     }
 
     #[test]
@@ -10912,13 +11052,15 @@ mod paint_tests {
     }
 
     #[test]
-    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard (kept red-by-design per the #63 art-delta-guard rule; exact exe dim coefficients stay OPEN per #113)"]
+    #[ignore = "superseded by #361: rest uses the baked sheet, this fixture has no sheet layer"]
     fn quest_and_tutorial_rest_paints_the_dimmed_frame() {
-        // Ticket #137: the exe runs both plates at ~0.32x staged
-        // brightness in every state (`docs/planet.md`), so the rest
-        // paint must dim frame 0, never stack it full-colour. The
-        // modeled desaturation stands in for #26's rest-dim; today
-        // the rest stack paints full colour, so this guard is red.
+        // Historical model: the exe runs both plates at ~0.32x staged
+        // brightness (`docs/planet.md`). The matched #361 A/B settled
+        // the mechanism — the dim plates are baked into
+        // `State_Planet.ojs`, and the button bodies are not mounted at
+        // rest — so this desaturated-button fixture is superseded by
+        // the sheet-based rest guard. Kept ignored as evidence history.
+
         use super::super::side::{PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE};
         const BODY_WORD: u16 = 0x7C00;
         let dimmed = desaturate_rgb555(BODY_WORD);

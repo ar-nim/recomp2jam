@@ -12,10 +12,11 @@ use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, Gender, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{AvatarFigure, ScenePlacement};
+use o2jam_shell::screens::paint::ROOM_HOVER_SPRITE;
 use o2jam_shell::screens::side::SideScreen;
 use o2jam_shell::staging::{
-    read_install_archives, stage_dialog, stage_state, state_of_screen, state_of_side, Dialog,
-    StageContext, State,
+    read_install_archives, stage_dialog, stage_room_hover_overlay, stage_state, state_of_screen,
+    state_of_side, Dialog, StageContext, State,
 };
 use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -431,6 +432,14 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     }
     if let Some(art) = stage_state(archive, State::Result, StageContext::default()).art {
         game.load_scene(Screen::Result, art.placements, art.figures);
+    }
+    if let Some(figure) = stage_room_hover_overlay(archive) {
+        game.merge_scene_figures(
+            Screen::Room,
+            [(ROOM_HOVER_SPRITE.to_owned(), figure)]
+                .into_iter()
+                .collect(),
+        );
     }
     stage_planet_dialogs(game, archive);
 }

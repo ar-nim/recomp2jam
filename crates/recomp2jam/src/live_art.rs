@@ -20,11 +20,11 @@ use std::path::PathBuf;
 
 use o2jam_shell::avatar::load_archive_sprite;
 use o2jam_shell::avatar::PlayingArtMode;
-use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE};
+use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE, ROOM_HOVER_SPRITE};
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
-    read_install_archives, stage_byname_sheet, stage_dialog, stage_state, Dialog, StageContext,
-    StagingArchive, State, BYNAME_TABLE,
+    read_install_archives, stage_byname_sheet, stage_dialog, stage_room_hover_overlay, stage_state,
+    Dialog, StageContext, StagingArchive, State, BYNAME_TABLE,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -72,6 +72,12 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
         if let Some(art) = stage_state(archive, state, ctx).art {
             game.load_scene(screen, art.placements, art.figures);
         }
+    }
+    if let Some(figure) = stage_room_hover_overlay(archive) {
+        game.merge_scene_figures(
+            Screen::Room,
+            HashMap::from([(ROOM_HOVER_SPRITE.to_owned(), figure)]),
+        );
     }
     stage_select_dialog_art(game, archive);
     stage_channel_dialog(game, archive);
@@ -300,7 +306,8 @@ mod live_art_tests {
     use o2jam_shell::screens::game::PlanetModal;
     use o2jam_shell::screens::side::PlanetOptionTab;
     use o2jam_shell::staging::{
-        read_install_archives, stage_state, StageContext, StagedArt, State,
+        read_install_archives, stage_room_hover_overlay, stage_state, StageContext, StagedArt,
+        State,
     };
 
     /// Archives behind the staging (`true` while `install-root` holds
@@ -895,7 +902,7 @@ mod live_art_tests {
     /// room, and the stage-aware skin). `None` without the archives.
     fn declaration_game() -> Option<ScreenGame> {
         use o2jam_shell::avatar::{load_archive_sprite, PlayingArtMode};
-        use o2jam_shell::screens::paint::DIALOG_BAR_SPRITE;
+        use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, ROOM_HOVER_SPRITE};
         use o2jam_shell::staging::{stage_dialog, Dialog};
         use std::collections::HashMap;
         let installed = read_install_archives(&install_root());
@@ -918,6 +925,12 @@ mod live_art_tests {
             if let Some(art) = stage_state(&interface, state, ctx).art {
                 expected.load_scene(screen, art.placements, art.figures);
             }
+        }
+        if let Some(figure) = o2jam_shell::staging::stage_room_hover_overlay(&interface) {
+            expected.merge_scene_figures(
+                Screen::Room,
+                HashMap::from([(ROOM_HOVER_SPRITE.to_owned(), figure)]),
+            );
         }
         if let Some(art) =
             stage_dialog(&interface, Dialog::SelectMusic, StageContext::default()).art
@@ -1148,6 +1161,22 @@ mod live_art_tests {
         }
         let (bare, staged) = paint_pair(Screen::Room, 0);
         assert_ne!(bare, staged);
+    }
+
+    #[test]
+    fn room_hover_overlay_stages_from_the_code_mounted_archive_body() {
+        // Live chain: main.rs::run_play -> stage_interface_scenes ->
+        // stage_room_hover_overlay -> ScreenGame::merge_scene_figures ->
+        // paint_room_scene_with_hover. Archives absent -> skip cleanly
+        // (CI has no game data). The body has no ControlList entry.
+        let Some(interface) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing install-root archives");
+            return;
+        };
+        let overlay = stage_room_hover_overlay(&interface).expect("room hover body");
+        let layer = overlay.layer(0).expect("one mouse-over body");
+        assert_eq!(layer.image.w, 292);
+        assert_eq!(layer.image.h, 95);
     }
 
     #[test]
