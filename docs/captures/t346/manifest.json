@@ -1,0 +1,10 @@
+{
+  "pair": "wine-x11-matched vs native-x11-matched",
+  "build": "3385f38a0344d61f546d8a2f53ae8383071c2faf",
+  "params": "800x600 native frames; no resize; matched host state plan; server_boot=2026-11-18T15:14:16+08:00 server_pid=92326 server_identity_record=post-hoc",
+  "server_recheck": {
+    "pid_after_last_leg": 92326,
+    "boot_after_last_leg": "2026-11-18T15:14:16+08:00",
+    "unchanged": true
+  }
+}

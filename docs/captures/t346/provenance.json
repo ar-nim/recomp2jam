@@ -1,0 +1,152 @@
+{
+  "schema": "ab346-matched-pack-provenance-v1",
+  "created_at": "2026-11-18T11:59:50.554559+00:00",
+  "replaces": "/home/arnim/scratch/native-ab-334/pack (stale-but-pinned in #334)",
+  "shared_server": "127.0.0.1:15010 (Memoryer, never restarted)",
+  "server_pid": 92326,
+  "server_boot": "2026-11-18T15:14:16+08:00",
+  "server_boot_line": 7191,
+  "server_identity_record": "Post-hoc record: pid/boot read from /proc/92326 lstart at 20:28 +0800 after the last leg; server.log line 7191 is the matching 15:14:20.942 startup banner. pid 92326 was observed unchanged at every live check.",
+  "server_start_line": 8365,
+  "host_plan": [
+    {
+      "name": "base-ready",
+      "commands": [],
+      "shot": "base-ready.png"
+    },
+    {
+      "name": "member-downloading",
+      "commands": [
+        "music-list=100,200",
+        "music-state=4",
+        "sync-member=0"
+      ],
+      "await_opcode": 4037,
+      "shot": "member-downloading.png"
+    },
+    {
+      "name": "gate-dclick-probe",
+      "commands": [],
+      "dclick": [
+        140,
+        140
+      ],
+      "shot": "gate-dclick-probe.png"
+    },
+    {
+      "name": "gate-closed",
+      "commands": [
+        "update-slot=2"
+      ],
+      "await_opcode": 3009,
+      "shot": "gate-closed.png"
+    },
+    {
+      "name": "back-to-base",
+      "commands": [
+        "update-slot=2",
+        "music-state=0",
+        "sync-member=0"
+      ],
+      "await_opcode": 4037,
+      "shot": "back-to-base.png"
+    },
+    {
+      "name": "guest-ready",
+      "action": "guest-ready",
+      "shot": "guest-ready.png"
+    },
+    {
+      "name": "song-start",
+      "action": "song-start",
+      "commands": [
+        "start"
+      ],
+      "shot": "loading.png"
+    }
+  ],
+  "exe_leg": {
+    "out_dir": "/home/arnim/scratch/p346/exe",
+    "build": "13b546e761bd59b68f92695d98b502de3a63b6aa",
+    "wine_prefix": "/home/arnim/scratch/240-fix/prefix",
+    "audio": {
+      "route": "sink",
+      "on_default_sink": "0",
+      "preboot_breach": "0",
+      "sink": "rig_null_2728855",
+      "state": "captured"
+    },
+    "manifest_sha256": "2a3c4715261e1e0965fea180036d79952b378953965c48347dcc46562bd3ef97"
+  },
+  "rust_leg": {
+    "out_dir": "/home/arnim/scratch/p346/rust",
+    "build": "13b546e761bd59b68f92695d98b502de3a63b6aa",
+    "trace_sha256": "1a77f9188cf28bd0f572499009f37d500806e9da2759a699cf75fd63afa88021",
+    "audio": {
+      "route": "sink",
+      "on_default_sink": "0",
+      "preboot_breach": "0",
+      "sink": "rig_null_2783712",
+      "state": "captured"
+    },
+    "manifest_sha256": "d57a9deafc7b78e34761428c65c3fad69397943d45338ec3672ec44334d28892"
+  },
+  "proof_sha256": "3bee382f80398840b59a01d09c447c5e0ea72a87d2f50a312a049d6c3dc68802",
+  "loading_residual": "Under the matched start (C2S 4008 + host 4010/4012), the exe paints its Loading art while the Rust client flips its screen label to loading but still paints the Waiting sheet. Extra 5 s and 20 s dwell captures reproduce the same pixels. The pair is scored as a real matched-state FAIL, not a #334 scenario delta.",
+  "frame_sources": {
+    "planet": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/planet.png",
+      "ref_source_sha256": "235f53521171be4f1d4c725d16143332fa47b66813f9e1c5b8e8b09fe68ddc21",
+      "test_source": "/home/arnim/scratch/p346/rust/frames/frame-000001-planet.png",
+      "test_source_sha256": "cb493583e22e4b2925040fa64ae7ee1d1bea0f818025b67f8c05fc867f4932ad"
+    },
+    "channel": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/channel.png",
+      "ref_source_sha256": "3c79af37986b4a554f8724088f0b058441ecd024bad5ba8b6dd00560e37723dc",
+      "test_source": "/home/arnim/scratch/p346/rust/states/channel.png",
+      "test_source_sha256": "ef278f3d559a7cb92791436fe52836717bc0349a6cd09484dc084882a16f3fa5"
+    },
+    "room": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/room.png",
+      "ref_source_sha256": "d6ef9dd58ba738ea1a8dc10e7426aad83a7ebff854517778df08e5149f62ba89",
+      "test_source": "/home/arnim/scratch/p346/rust/states/room.png",
+      "test_source_sha256": "2640a7315aa2d60cb44656ee9b57a0996087fba4db137935b83026823e2737dc"
+    },
+    "waiting": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/base-ready.png",
+      "ref_source_sha256": "fea46175f40e5645be2231ca23c14578bf93d55a39844bc02b85b99a11bc34d2",
+      "test_source": "/home/arnim/scratch/p346/rust/states/base-ready.png",
+      "test_source_sha256": "8bd5a44bdca12f65170358b7cc3719160fef30b5e75fdff4c5c9f53321e469fa"
+    },
+    "loading": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/loading.png",
+      "ref_source_sha256": "b555123f6d099f64330f000ea52cd4f2eeeb3716f9fa4139a6bf362466eaaaed",
+      "test_source": "/home/arnim/scratch/p346/rust/states/loading.png",
+      "test_source_sha256": "559e358dcb8bd19dc70e1086bcd19a8041fe4563e6e50a08ac1154ce01c76d04"
+    },
+    "waiting-download": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/member-downloading.png",
+      "ref_source_sha256": "5b1d606c6efa04a5d7e38bca2fc9a303751f73752210bb97141b70cc2eaf61e7",
+      "test_source": "/home/arnim/scratch/p346/rust/states/member-downloading.png",
+      "test_source_sha256": "e58c4f210778e3bfc8525b3c7018f3e4da72e354042f72a4c0c7fa67a3289c68"
+    },
+    "waiting-gate": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/gate-closed.png",
+      "ref_source_sha256": "69f8f83a2ebbfc0dcab454acbe0f401c109d5c7fed7cf4a5122d6c75ecf50912",
+      "test_source": "/home/arnim/scratch/p346/rust/states/gate-closed.png",
+      "test_source_sha256": "c5141b1630da0f099c8f98f621725a0a94f6d1805b3e81a6f02c8947e1d9e767"
+    },
+    "waiting-back": {
+      "ref_source": "/home/arnim/scratch/p346/exe/artifacts/screenshots/back-to-base.png",
+      "ref_source_sha256": "2b5eeb9b1b82128c832a8cf859b36a3e3c40a69b1cfd408e0a861380ec6a3eb1",
+      "test_source": "/home/arnim/scratch/p346/rust/states/back-to-base.png",
+      "test_source_sha256": "c5141b1630da0f099c8f98f621725a0a94f6d1805b3e81a6f02c8947e1d9e767"
+    }
+  },
+  "transformations": [
+    "Native 800x600 PNG pairs copied byte-for-byte; no crop, scale, or resample.",
+    "Region rects are #334's native map (legacy rect x2); classes unchanged.",
+    "Extra waiting-state scenes reuse the waiting rects with new matched frames."
+  ],
+  "excluded_from_repo": "all PNG/WAV/capture bytes stay in this scratch pack"
+}

@@ -142,8 +142,11 @@ The current reference numbers are `docs/captures/t346/region-metrics.json`
 from `~/scratch/p346/pack/`, built from one matched replay on one Memoryer
 (`docs/captures/t346/proof.json`, `raw-proof.json`, `plan.json`, `trace.json`).
 The same wire/server state ran on both legs; containment was `route=sink`,
-`on_default_sink=0`, `preboot_breach=0`. All scenes still FAIL the default
-worst-region gate (SSIM ≥ 0.95, PSNR ≥ 35 dB). Weighted SSIM, old → new:
+`on_default_sink=0`, `preboot_breach=0`. The pack `manifest.json` records
+`server_boot=2026-11-18T15:14:16+08:00 server_pid=92326` with a post-hoc
+identity note; the pid and boot time were unchanged on the post-leg re-check.
+All scenes still FAIL the default worst-region gate (SSIM ≥ 0.95, PSNR ≥ 35
+dB). Weighted SSIM, old → new:
 
 | Scene | Weighted SSIM | Worst scored region | Residual |
 |---|---|---|---|
