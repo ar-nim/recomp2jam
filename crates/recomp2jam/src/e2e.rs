@@ -604,6 +604,13 @@ fn write_trace_json(dir: Option<&Path>, report: &E2eReport) -> anyhow::Result<()
 
 #[cfg(test)]
 mod tests {
+    /// Loading ink comes from the staged catalog caption. Without
+    /// game data the walk still checks the screen edge, but that one
+    /// frame stays flat and carries no ink assertion.
+    fn loading_caption_staged() -> bool {
+        std::fs::read(install_root().join("O2Jam/Image/OJNList.dat")).is_ok()
+    }
+
     /// The live input path is a press snapshot plus a release
     /// snapshot (the #115 press split), not `click_planet`. With real
     /// staged art, the down/up pair must open the gear dialog exactly
@@ -671,7 +678,7 @@ mod tests {
         for step in &report.steps {
             let side_step = step.action.starts_with("waiting-visits-")
                 || step.action.ends_with("-returns-to-waiting");
-            if side_step {
+            if side_step || (step.action == "start-enters-loading" && !loading_caption_staged()) {
                 continue;
             }
             assert!(
