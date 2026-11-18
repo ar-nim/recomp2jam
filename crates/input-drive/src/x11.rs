@@ -207,6 +207,9 @@ fn game_args(frames: &Path, input_log: &Path) -> Vec<String> {
         "--input-log".to_owned(),
         input_log.display().to_string(),
         "--no-sound".to_owned(),
+        // Input-routing probe: keep the pre-#244 channel path so the
+        // gear click measures input delivery, not the relay notice.
+        "--no-relay-gate".to_owned(),
     ]
 }
 
@@ -414,6 +417,19 @@ mod x11_tests {
         assert!(
             args.iter().any(|arg| arg == "--no-sound"),
             "probe child must carry the rig fence, got {args:?}"
+        );
+    }
+
+    /// Ticket #244: the input-routing probe opts out of the new
+    /// relay notice so its gear click still measures input delivery
+    /// on the bare planet board. The default client boot keeps the
+    /// gate; only this harness argument skips it.
+    #[test]
+    fn x11_game_args_skip_the_relay_notice_gate() {
+        let args = game_args(Path::new("/tmp/frames"), Path::new("/tmp/input.log"));
+        assert!(
+            args.iter().any(|arg| arg == "--no-relay-gate"),
+            "input probe must keep the pre-notice planet path, got {args:?}"
         );
     }
 

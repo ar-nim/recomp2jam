@@ -235,6 +235,11 @@ enum Command {
         /// never reach the speakers).
         #[arg(long)]
         no_sound: bool,
+        /// Trace-harness affordance: skip the relay probe and keep
+        /// the original channel path for input-routing probes. The
+        /// default boot always applies the #244 gate.
+        #[arg(long)]
+        no_relay_gate: bool,
         /// Fixed-clock test affordance: advance the virtual clock by
         /// this many ms per painted frame (deterministic windowed
         /// traces without an audio device).
@@ -515,6 +520,7 @@ struct OnlineCli {
     arena: i32,
     interface: Option<String>,
     no_sound: bool,
+    no_relay_gate: bool,
     fixed_clock: Option<u64>,
     frame_dump: Option<String>,
     input_log: Option<String>,
@@ -557,7 +563,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     // Probe before any channel-list exchange: the exe's relay check
     // sits on the reconnect that precedes `03EA` (files `0x8e340`/
     // `0x474630`, capture `~/scratch/p244-capture`).
-    let relay_down = relay_gate::relay_down_now();
+    let relay_down = !opts.no_relay_gate && relay_gate::relay_down_now();
     let (report, gateway) =
         connect::connect_and_login_with_room_stage(&connect_options, &owned_ids)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
@@ -888,6 +894,7 @@ fn run_command(command: Command) -> Result<()> {
             arena,
             interface,
             no_sound,
+            no_relay_gate,
             fixed_clock,
             frame_dump,
             input_log,
@@ -908,6 +915,7 @@ fn run_command(command: Command) -> Result<()> {
             arena,
             interface,
             no_sound,
+            no_relay_gate,
             fixed_clock,
             frame_dump,
             input_log,

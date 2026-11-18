@@ -135,3 +135,9 @@ opens Channel with the rows. Live caller chain: `run_online` /
 `information_dialog_stages_the_one_ok_sheet`,
 `relay_up_when_a_pinned_style_endpoint_answers`,
 `relay_down_when_every_pinned_style_endpoint_refuses`.
+
+Harness note: the default `online` boot applies the gate. The
+`input-drive` X11 routing probe passes `--no-relay-gate` so its gear
+click still measures input delivery on the bare planet board; guard
+`x11_game_args_skip_the_relay_notice_gate` pins that argument. This
+is a trace affordance, not an exe behavior claim.
