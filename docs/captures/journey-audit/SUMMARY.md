@@ -164,3 +164,8 @@ component label and `P2`. Titles below are the live issue titles.
 | [#367](https://github.com/ar-nim/recomp2jam/issues/367) | Room R12: exe has a Room-state information sheet with OK at `(400,365)`; our client has only the Channel-entry relay modal; fuse arming stays OPEN. |
 | [#368](https://github.com/ar-nim/recomp2jam/issues/368) | Room R10: p346 matched window has exe orange panel outline/corner tab and no ours (`room_panels_right` 0.934513) — pointer state vs painter still OPEN. |
 | [#369](https://github.com/ar-nim/recomp2jam/issues/369) | MyRoom story 7: exe opens on `Inventory` badge + slot grid; ours opens on the STATUS plate — default upper-right face differs. |
+
+## 5. Capture-tooling method notes
+
+- [Residual taxonomy in region metrics](residual-taxonomy.md) — #250 schema fields, evidence rules, triage report, and the linked-Bug filing flow.
+- [Paired-video assessment](paired-video-assessment.md) — #249 consumer audit and close recommendation; no video capture was implemented.

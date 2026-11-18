@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Score native 800x600 gameplay regions from a local A/B pack.
+"""Score native 800x600 gameplay regions, or render a residual report.
+
+Usage: scripts/native_ab_regions.py --pack PACK [--annotations PATH]
+       scripts/native_ab_regions.py --pack PACK --triage [--output PATH]
 
 Both inputs are unscaled RGB PNGs from the same native capture path. Unlike
-#332, no bicubic/point-sample mismatch remains in the comparison.
+#332, no bicubic/point-sample mismatch remains in the comparison. Scoring
+adds taxonomy fields without changing existing keys. --triage reads the saved
+metrics; it needs neither pixels nor ffmpeg and never writes to the tracker.
 """
 from __future__ import annotations
 
@@ -23,6 +28,12 @@ from native_ab import (  # noqa: E402  (local helper module, loaded after sys.pa
     parse_ssim,
     sha256_of,
     write_json,
+)
+from residual_taxonomy import (  # noqa: E402  (local helper module, loaded after sys.path)
+    TAXONOMY_SCHEMA,
+    apply_taxonomy_to_metrics,
+    load_annotations,
+    render_triage_report,
 )
 
 LEGACY_BASELINE = {
@@ -184,13 +195,76 @@ def score_all_scenes(pack: Path, region_map: Path, thresholds_path: Path) -> dic
     return result
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pack", type=Path, required=True, help="local-only pack root")
+    parser.add_argument(
+        "--annotations", type=Path, help="pack-local residual-annotations.json"
+    )
+    parser.add_argument(
+        "--triage", action="store_true", help="render the residual report instead of scoring"
+    )
+    parser.add_argument(
+        "--metrics", type=Path, help="metrics to triage (default: pack/region-metrics.json)"
+    )
+    parser.add_argument(
+        "--group-by", choices=("divergence", "residual"),
+        help="report grouping axis (default: divergence)",
+    )
+    parser.add_argument(
+        "--output", type=Path, help="write the triage report here instead of stdout"
+    )
+    return parser
+
+
+def run_triage(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Render the report from saved metrics without touching capture bytes."""
+    source = args.metrics or args.pack / "region-metrics.json"
+    try:
+        annotations = load_annotations(args.annotations) if args.annotations else {}
+        metrics = apply_taxonomy_to_metrics(json.loads(source.read_text()), annotations)
+        report = render_triage_report(metrics, args.group_by or "divergence", source=source)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(report, encoding="utf-8")
+            print(f"triage report: {args.output}")
+        else:
+            print(report)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(str(error))
+    return 0
+
+
+def score_with_taxonomy(pack: Path, annotations_path: Path | None) -> dict[str, Any]:
+    """Score every scene and stamp the annotation provenance."""
+    region_map = pack / "regions-v1-native.json"
+    thresholds_path = pack / "thresholds/skill-default.json"
+    metrics = score_all_scenes(pack, region_map, thresholds_path)
+    annotations = load_annotations(annotations_path) if annotations_path else {}
+    enriched = apply_taxonomy_to_metrics(metrics, annotations)
+    enriched["taxonomy"] = {
+        "schema": TAXONOMY_SCHEMA,
+        "annotation_source": str(annotations_path) if annotations_path else None,
+        "annotation_sha256": sha256_of(annotations_path) if annotations_path else None,
+    }
+    return enriched
+
+
+def reject_triage_only_options(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Refuse report options that scoring would silently ignore."""
+    for flag in ("--metrics", "--group-by", "--output"):
+        option = flag.lstrip("-").replace("-", "_")
+        if getattr(args, option):
+            parser.error(f"{flag} needs --triage")
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
-    region_map = args.pack / "regions-v1-native.json"
-    thresholds_path = args.pack / "thresholds/skill-default.json"
-    metrics = score_all_scenes(args.pack, region_map, thresholds_path)
+    if args.triage:
+        return run_triage(args, parser)
+    reject_triage_only_options(args, parser)
+    metrics = score_with_taxonomy(args.pack, args.annotations)
     output = args.pack / "region-metrics.json"
     write_json(output, metrics)
     print(f"metrics: {output} {sha256_of(output)}")
@@ -202,6 +276,7 @@ def main() -> int:
             f"weighted={gate['area_weighted_ssim']:.6f}/{gate['area_weighted_psnr_from_mse']}",
             f"pass={gate['all_scored_regions_pass']}",
         )
+    print(f"taxonomy: {TAXONOMY_SCHEMA}; metrics sha256 {sha256_of(output)}")
     return 0
 
 
