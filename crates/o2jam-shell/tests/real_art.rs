@@ -1039,3 +1039,168 @@ fn playing_control_list_mounts_only_the_solo_sheet() {
         "the lone block still binds the solo sheet"
     );
 }
+
+/// #303 live-chain guard: the master emblem is the seat-template
+/// `BOSSMARK` control (`0x1650002F`, `Wait_BossMark.ojs`) paired by
+/// code ordinal to `State_Waiting.bnd`. Its rest image must ink the
+/// room creator's seat only — not a duplicate of that seat in the
+/// peer list. Geometry comes from an independent ControlList/bind
+/// parse; the frame is driven through `ScreenGame` from boot walk.
+#[test]
+fn master_emblem_stages_only_on_the_creator_seat_with_real_art() {
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some(archive) = install_archives().interface else {
+        println!("skip master emblem: missing {}", path.display());
+        return;
+    };
+    let entries = parse_opi(&archive).expect("Interface1.opi parses");
+    let list_entry = find_opi_entry(&entries, "ControlList_Interface.txt").unwrap();
+    let list_body = opi_entry_body(&archive, list_entry).unwrap();
+    let list = parse_control_list(&decode_control_text(list_body).unwrap()).unwrap();
+    let block = o2jam_shell::avatar::scene_block(&list, "STATE_WAITING").unwrap();
+    let bind_name = block.bound_file.clone().unwrap();
+    let bind_entry = find_opi_entry(&entries, &bind_name).unwrap();
+    let bind = parse_bnd(opi_entry_body(&archive, bind_entry).unwrap()).unwrap();
+    let paired: HashMap<u32, o2jam_render::Rect> =
+        o2jam_file::pair_entries_with_rects(block, &bind)
+            .into_iter()
+            .filter_map(|placed| {
+                placed.rect.map(|c| {
+                    (
+                        placed.entry.code,
+                        o2jam_render::Rect {
+                            x: c.x1 as i32,
+                            y: c.y1 as i32,
+                            w: c.x2 - c.x1,
+                            h: c.y2 - c.y1,
+                        },
+                    )
+                })
+            })
+            .collect();
+    const BOSS_CODE: u32 = 0x1650_002F;
+    const FIRST_SEAT_CODE: u32 = 0x1601_5022;
+    let boss = paired
+        .get(&BOSS_CODE)
+        .expect("BOSSMARK pairs with a bnd rect");
+    let first_seat = paired
+        .get(&FIRST_SEAT_CODE)
+        .expect("EXTEND1 pairs with a bnd rect");
+    let art = stage_state(&archive, State::Waiting, StageContext::default())
+        .art
+        .expect("waiting art staged");
+    let staged = art
+        .placements
+        .iter()
+        .find(|placed| {
+            placed.code == BOSS_CODE && placed.role == o2jam_shell::avatar::PlacementRole::Clone
+        })
+        .expect("BOSSMARK clone staged");
+    assert_eq!(
+        staged.rect.x,
+        first_seat.x + boss.x,
+        "staged rect uses the bound seat origin"
+    );
+    let figure = art.figures.get("Wait_BossMark.ojs").expect("boss figure");
+    let layer = figure.layer(0).expect("master emblem image");
+    let sprite = layer.image.view();
+    // The most common opaque word is the star body (not its dark
+    // outline), so the sample survives the half-resolution probe.
+    let mut counts = HashMap::new();
+    for &word in sprite.pixels {
+        if word != layer.colorkey {
+            *counts.entry(word).or_insert(0usize) += 1;
+        }
+    }
+    let (&word, _) = counts
+        .iter()
+        .filter(|(word, count)| {
+            let (r, g, b) = o2jam_file::rgb555_to_rgb888(**word);
+            **count >= 5 && r > 200 && g > 220 && b < 80
+        })
+        .max_by_key(|(_, count)| **count)
+        .expect("emblem has a gold star body");
+    let index = sprite
+        .pixels
+        .iter()
+        .position(|pixel| *pixel == word)
+        .expect("dominant word is in the sprite");
+    let (px, py) = (index % sprite.w, index / sprite.w);
+    let (r, g, b) = o2jam_file::rgb555_to_rgb888(word);
+    let star_ink = pack_xrgb(r, g, b);
+    let ink_at_seat = |game: &mut ScreenGame, seat: usize| {
+        let parent = paired
+            .get(&(FIRST_SEAT_CODE + seat as u32))
+            .unwrap_or_else(|| panic!("seat {seat} pairs with a bnd rect"));
+        let rect = o2jam_render::Rect {
+            x: parent.x + boss.x,
+            y: parent.y + boss.y,
+            w: boss.w,
+            h: boss.h,
+        };
+        let scaled = o2jam_render::scale_rect_to_frame(&rect, PROBE_W, PROBE_H);
+        let (x, y) = (
+            usize::try_from(scaled.x + layer.dx + px as i32).unwrap(),
+            usize::try_from(scaled.y + layer.dy + py as i32).unwrap(),
+        );
+        painted(game, 0)[y * PROBE_W + x]
+    };
+
+    let mut host = seated_room();
+    host.member_id = 0;
+    host.slots.push(RoomSlot {
+        index: 1,
+        state_code: 1,
+        member: None,
+    });
+    host.slots[1].member = Some(RoomMember {
+        nickname: "guest".to_owned(),
+        master: false,
+        ..host.slots[0].member.clone().unwrap()
+    });
+    let mut game = ScreenGame::new();
+    game.set_joined_room(host);
+    game.load_scene(Screen::Waiting, art.placements.clone(), art.figures.clone());
+    for screen in [
+        Screen::Planet,
+        Screen::Channel,
+        Screen::Room,
+        Screen::Waiting,
+    ] {
+        assert!(game.enter_screen(screen), "walk to {screen:?}");
+    }
+    assert_eq!(
+        ink_at_seat(&mut game, 0),
+        star_ink,
+        "creator's seat shows the bound emblem"
+    );
+    assert_ne!(
+        ink_at_seat(&mut game, 1),
+        star_ink,
+        "no duplicate emblem on the next seat"
+    );
+
+    let mut guest = seated_room();
+    guest.member_id = 1;
+    guest.slots.push(RoomSlot {
+        index: 1,
+        state_code: 1,
+        member: None,
+    });
+    guest.slots[1].member = Some(RoomMember {
+        nickname: "guest".to_owned(),
+        master: false,
+        ..guest.slots[0].member.clone().unwrap()
+    });
+    game.set_joined_room(guest);
+    assert_eq!(
+        ink_at_seat(&mut game, 1),
+        star_ink,
+        "guest sees the emblem on the master peer"
+    );
+    assert_ne!(
+        ink_at_seat(&mut game, 0),
+        star_ink,
+        "guest's own seat has no master emblem"
+    );
+}

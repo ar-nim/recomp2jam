@@ -4367,7 +4367,11 @@ fn staged_seats(room: &JoinedRoom) -> Vec<StagedSeat> {
     });
     for (offset, slot) in room.slots.iter().take(WAITING_PEERS).enumerate() {
         let index = u8::try_from(offset + 1).unwrap_or(u8::MAX);
-        seats.push(staged_peer_seat(slot, room.champion == Some(index)));
+        seats.push(staged_peer_seat(
+            slot,
+            slot.index != room.member_id,
+            room.champion == Some(index),
+        ));
     }
     while seats.len() < WAITING_SEATS {
         seats.push(empty_staged_seat());
@@ -4375,8 +4379,10 @@ fn staged_seats(room: &JoinedRoom) -> Vec<StagedSeat> {
     seats
 }
 
-/// Staged view of one wire slot.
-fn staged_peer_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
+/// Staged view of one wire slot. The local member already has seat 0;
+/// its wire slot is also present in `slots`, and a duplicate master
+/// flag there would paint the creator emblem on a second seat.
+fn staged_peer_seat(slot: &RoomSlot, is_peer: bool, champion: bool) -> StagedSeat {
     match &slot.member {
         Some(member) => StagedSeat {
             name: member.nickname.clone(),
@@ -4386,7 +4392,7 @@ fn staged_peer_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             present: true,
             locked: false,
             champion,
-            master: member.master,
+            master: is_peer && member.master,
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
         },
@@ -11630,6 +11636,58 @@ mod paint_tests {
         assert_ne!(buf[200 * 800 + 10], red, "live line covers art");
         assert!(has_ink_near(&buf, art_title_ink()));
         assert_eq!(buf[0], 0, "covers no longer stack at the frame corner");
+    }
+
+    /// #303 red guard (seam): the seat template's `BOSSMARK` clone
+    /// stages only on the creator's seat. The host is seat 0; a
+    /// duplicate of its own wire slot in the peer list would paint a
+    /// second emblem on seat 1.
+    #[test]
+    fn master_emblem_stages_only_on_the_creator_seat() {
+        let mut room = waiting_room();
+        let guest = RoomMember {
+            nickname: "guest".to_owned(),
+            master: false,
+            ..room.slots[0].member.clone().expect("host seated")
+        };
+        room.slots[1].member = Some(guest);
+        let boss_placement = |seat: usize| ScenePlacement {
+            role: PlacementRole::Clone,
+            id: format!("IDC_BUTTON_SWAIT_EXTEND{}", seat + 1),
+            code: 0x1650_002F,
+            sprite: Some("Wait_BossMark.ojs".to_owned()),
+            rect: Rect {
+                x: 20 + (seat * 60) as i32,
+                y: 40,
+                w: 28,
+                h: 28,
+            },
+        };
+        let art = SceneArt {
+            placements: vec![boss_placement(0), boss_placement(1)],
+            figures: HashMap::from([("Wait_BossMark.ojs".to_owned(), red_figure())]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_eq!(buf[40 * 800 + 20], red, "creator seat shows the emblem");
+        assert_ne!(
+            buf[40 * 800 + 80],
+            red,
+            "no duplicate emblem on the peer seat"
+        );
     }
 
     /// Synthetic two-record Waiting art for #343: record 0 is the
