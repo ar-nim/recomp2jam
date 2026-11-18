@@ -7,6 +7,8 @@ sink? It is not a pixel-parity verdict.
 
 ## Method
 
+Use `scripts/capture-log-diff.py BEFORE/input.log AFTER/input.log --judged-first` for the log-order contract, then rerun with `--full` for the whole-log diff; this applies the filters below without hand-rolled `sed`.
+
 - Trace: `~/scratch/native-ab-334/native-walk-to-loading.json`, 19 events,
   SHA-256 `ab89594201fe7efad709b795b94cc42cb5d04afdd857d437ddf0876175e4ef0d`.
   Both legs replay this same file; no event is added, removed or retimed.
