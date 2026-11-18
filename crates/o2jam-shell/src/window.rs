@@ -549,14 +549,36 @@ pub fn present_layout(
     })
 }
 
+/// The next point on a fixed heartbeat grid. Steps already passed by a
+/// slow paint are skipped, so paint cost never stretches the step
+/// (the 7.55 avatar step is 66 ms, `EV-P229-DWELL-1`).
+fn next_heartbeat_deadline(
+    due: std::time::Instant,
+    now: std::time::Instant,
+    gap: std::time::Duration,
+) -> std::time::Instant {
+    if gap.is_zero() {
+        return now;
+    }
+    let missed_steps = now.saturating_duration_since(due).as_nanos() / gap.as_nanos();
+    let steps = u32::try_from(missed_steps)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let Some(step) = gap.checked_mul(steps) else {
+        return now;
+    };
+    due.checked_add(step).unwrap_or(now)
+}
+
 /// One `about_to_wait` paint decision: whether this pass owes the
 /// compositor a frame, and the next heartbeat deadline. Pure so the
 /// idle policy stays pinned without a window (scenario guards below).
 ///
 /// Static scenes (`None`) repaint only the pass an input or resize
-/// dirtied. Heartbeat scenes repaint that pass too, plus pace further
-/// paints off the last one — Playing holds its tick, lobby drains ride
-/// their poll gap, and the first heartbeat pass paints immediately.
+/// dirtied. Heartbeat scenes repaint that pass too, then follow their
+/// fixed grid: input re-arms from the input paint, while an overdue
+/// heartbeat steps from its own deadline. Playing holds its tick, lobby
+/// drains ride their poll gap, and the first pass paints immediately.
 fn plan_repaint(
     input_dirty: bool,
     gap: Option<std::time::Duration>,
@@ -567,7 +589,12 @@ fn plan_repaint(
         return (input_dirty, None);
     };
     if input_dirty || next_due.is_none_or(|due| now >= due) {
-        (true, Some(now + gap))
+        let due = if input_dirty {
+            now + gap
+        } else {
+            next_due.map_or(now + gap, |due| next_heartbeat_deadline(due, now, gap))
+        };
+        (true, Some(due))
     } else {
         (false, next_due)
     }
@@ -778,6 +805,39 @@ mod tests {
         assert_eq!(
             plan_repaint(false, Some(gap), Some(due), due),
             (true, Some(due + gap))
+        );
+    }
+
+    #[test]
+    fn avatar_step_survives_a_paint_that_eats_the_deadline_slack() {
+        // Live caller chain: about_to_wait -> plan_repaint ->
+        // set_control_flow(WakeUpUntil(due)) -> winit RedrawRequested ->
+        // WindowHandler::present/capture_frame -> shell.paint_at(now_ms) ->
+        // avatar_animation_phase. The 7.55 avatar step is 66 ms
+        // (EV-P229-DWELL-1); a 45 ms paint inside that step must not
+        // add its cost to the next deadline.
+        let start = std::time::Instant::now();
+        let gap = std::time::Duration::from_millis(66);
+        let due = start + gap;
+        let painted_at = due + std::time::Duration::from_millis(45);
+        assert_eq!(
+            plan_repaint(false, Some(gap), Some(due), painted_at),
+            (true, Some(due + gap))
+        );
+    }
+
+    #[test]
+    fn heartbeat_skips_deadlines_missed_by_a_long_paint() {
+        // The same live chain as avatar_step_survives_a_paint_that_eats_
+        // the_deadline_slack: a paint longer than a whole step must
+        // resume on the next future grid point, not busily repaint.
+        let start = std::time::Instant::now();
+        let gap = std::time::Duration::from_millis(66);
+        let due = start + gap;
+        let painted_at = due + gap + std::time::Duration::from_millis(10);
+        assert_eq!(
+            plan_repaint(false, Some(gap), Some(due), painted_at),
+            (true, Some(due + gap + gap))
         );
     }
 
