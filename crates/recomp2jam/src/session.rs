@@ -599,6 +599,22 @@ impl OnlineSession {
         self
     }
 
+    /// Paint the pending host pick before its 4000/4002/4030 exchange
+    /// resolves. A local Waiting Confirm (no joined room) advances without
+    /// the 4031 answer, so this is the only selection the staged catalog
+    /// can resolve an album cover from on that walk. Sends no packet; the
+    /// answer restages the same pick through [`Self::resolve_song_select`].
+    pub fn stage_pending_song_selection(&mut self) -> &mut Self {
+        if let Some(choice) = self.pending_song {
+            self.game.set_selected_music(SetRoomMusic {
+                music_id: choice.music_id,
+                difficulty: choice.difficulty,
+                speed: choice.speed,
+            });
+        }
+        self
+    }
+
     /// Stage the install's local music availability (`Music` folder
     /// scan, `docs/music-availability.md` §1) into the select-music
     /// dialog's rows. Order-independent with
@@ -6894,6 +6910,51 @@ mod session_tests {
         server.join().unwrap();
         assert_eq!(chart.song_id, 757);
         assert!(session.game.has_loading_cover());
+    }
+
+    /// Live chain: `main.rs::run_online` -> `assemble_online_session` ->
+    /// `OnlineSession::stage_pending_song_selection` ->
+    /// `ScreenGame::set_selected_music` -> `resolve_song_cover` ->
+    /// `stage_loading_cover` -> `paint_loading` -> `paint_loading_cover`.
+    /// The replayed Waiting Confirm is a local advance (no joined room, no
+    /// 4031 answer), so boot staging is the only cover source on that walk.
+    /// The install holds the OJN bytes; the catalog rows here are synthetic.
+    /// Skip cleanly when the install is absent (CI has no game data).
+    #[test]
+    fn local_waiting_advance_paints_the_pending_host_picks_installed_cover() {
+        let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        if !chart_path.is_file() {
+            println!("skip: missing installed chart");
+            return;
+        }
+        let (port, server) = fake_gateway(|_stream| {});
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        let catalog_blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&catalog_blob).unwrap();
+        session.set_song_catalog(&entries);
+        assert!(!session.game.has_loading_cover());
+        session.set_pending_song(host_choice());
+        session.stage_pending_song_selection();
+        assert_eq!(
+            session.game.selected_music().map(|pick| pick.music_id),
+            Some(757),
+            "the CLI host pick must stage before the 4031 answer"
+        );
+        assert!(
+            session.game.has_loading_cover(),
+            "the staged catalog must resolve the pending pick's cover"
+        );
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Loading);
+        server.join().unwrap();
     }
 
     #[test]

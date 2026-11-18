@@ -626,6 +626,8 @@ fn assemble_online_session(
     }
     stage_session_catalog(&mut session);
     session.stage_live_art();
+    // Live art replaces the Loading figures, so resolve the cover after it.
+    session.stage_pending_song_selection();
     if let Some(title) = create_room {
         let room = session.create_and_join_room(title)?;
         tracing::info!(title = room.title, "room created");
