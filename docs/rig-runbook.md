@@ -17,7 +17,7 @@ protocol-only and never counts as a live pair.
 | Pair | Input driver | Video backend | Status | Proof |
 |---|---|---|---|---|
 | Xvfb + XTEST | XTEST (X11 protocol events) | self-spawned Xvfb, 1024x768 | **Proven** | native pair: Playing reached, 60 judged presses (`docs/captures/t76/findings.md`) |
-| Live seat + ydotool | ydotool (kernel uinput) | real compositor seat | Manual spot-check only; never feeds numbers | procedure proven, live execution needs a supervised unlocked session (#242, ready-for-human) |
+| Live seat + ydotool | ydotool (kernel uinput) | real compositor seat | Manual spot-check only; never feeds numbers | procedure proven and dry-run pinned at `docs/captures/t242/seat-dry-run.txt`; live execution needs an owner-present supervised unlocked session (#242, ready-for-human) |
 | Wine X11 + SendInput | winegcc SendInput helper | Wine under Xvfb | **Qualified to the room stage** | `scripts/rig-wine-run.sh` pack, pair `wine-x11-sendinput`: planet → channel → room with provenance (`docs/captures/t240/findings.md`); waiting/loading OPEN (join wall, same note) |
 | Synthetic compositor fixture | `wl_pointer` injection | headless compositor | Protocol-only | CI seam only, never a budget pair (#126, #127) |
 
