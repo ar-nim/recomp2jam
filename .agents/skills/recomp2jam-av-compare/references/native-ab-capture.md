@@ -11,14 +11,17 @@ native capture cannot stage a scene; label every such result downsampled.
 All commands run from the worktree root. Game data stays in git-ignored
 `install-root/`; no game art, music, or capture bytes enter the repository.
 
-1. Copy data and build the release client. In a git worktree,
-   `scripts/worktree-setup.sh` already made the real copy; elsewhere copy it
-   yourself (remove any old symlink first — never `ln -s` or `cp -al`):
+1. Claim a data slot and build the release client:
 
    ```bash
-   cp -a /path/to/install-root install-root   # skip when it already exists
+   scripts/worktree-setup.sh
    cargo build --release -p recomp2jam
    ```
+
+   The setup script claims one of four slots under `~/scratch/install-data`,
+   refreshes it from the main checkout, and symlinks `install-root/` and
+   `extracted/` to that slot. Slots are not shared; run
+   `scripts/worktree-release.sh` when done to drop the claim (slot data stays).
 
 2. Check the local Memoryer gateway on `127.0.0.1:15010`. Read the session
    token from its database; never write the token into a manifest, log, or

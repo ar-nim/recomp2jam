@@ -40,9 +40,9 @@ export RIG_INSTALL_ROOT
 
 # 1. Game data: the client stages art from install-root (git-ignored).
 if ! rig_check_install_root; then
-  echo "play-local: copy the game data first (never link it):" >&2
-  echo "  cp -a /path/to/your/install-root \"$REPO_ROOT/install-root\"" >&2
-  echo "  (scripts/worktree-setup.sh does this for agent worktrees)" >&2
+  echo "play-local: claim a pooled data slot first:" >&2
+  echo "  scripts/worktree-setup.sh" >&2
+  echo "  (symlinks install-root/ and extracted/ into ~/scratch/install-data/slotN)" >&2
   exit "$RIG_E_DATA"
 fi
 

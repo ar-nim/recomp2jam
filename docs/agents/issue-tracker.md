@@ -133,19 +133,25 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 Agent worktrees are created **beside** the main checkout, named
 `/home/arnim/Projects/recomp2jam-wt<N>-v<ticket>` on branch `cb2/tt-<ticket>`
-(or the assigned branch). Each gets its own real copies of `install-root/`
-and `extracted/` from the main checkout (~2.3G; ~0.1s locally on btrfs CoW,
-longer where reflinks are unavailable; git-ignored). Never symlink or hardlink
-them: runs write into the data (`option.ini`,
-Temp→Music promotion), and a shared path or inode makes one worktree's
-hidden-arm gate flake every other worktree.
+(or the assigned branch). Four persistent data slots live at
+`~/scratch/install-data/slot{1..4}/`, each with its own real `install-root/`
+and `extracted/` copy. Worktrees symlink their data paths at ONE slot each;
+no two concurrent worktrees resolve to the same physical dir. A shared path
+would make one hidden-arm gate flake every other worktree (ec29b).
 
 Immediately after `git worktree add`, run from inside the new worktree:
 
     scripts/worktree-setup.sh
 
-This makes the data copies, then sets `remote.origin.pushurl` to
-`ext::<repo>/scripts/no-push.sh` and
+This claims a free slot with an atomic `mkdir` marker (all four busy = error,
+matching the max-4-agent rule), refreshes that slot from the read-only main
+checkout, and symlinks `install-root/`/`extracted/` to it. Runs write through
+the symlinks into their own slot (`option.ini`, Temp→Music promotion);
+refresh replaces the slot contents from the source, so a previous user's
+download drift never leaks. Release on the way out with
+`scripts/worktree-release.sh`, which drops the
+claim marker but keeps the slot data. The script also sets
+`remote.origin.pushurl` to `ext::<repo>/scripts/no-push.sh` and
 enables the ext transport locally, so `git push` fails locally with a clear
 message before touching origin. The main checkout is never configured this
 way; `worktree-setup.sh` refuses to run there, keeping the orchestrator's

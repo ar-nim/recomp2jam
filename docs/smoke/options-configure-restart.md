@@ -64,9 +64,9 @@ Frames and ini bytes stay in scratch; they may contain genuine art.
 
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
 warnings`, `cargo test --workspace`: exit codes `0/0/0` with
-`install-root` present and `0/0/0` with the worktree data directory renamed
-aside and restored (path rechecked; worktrees now use copies, not symlinks).
-Each arm reported 28
+`install-root` present and `0/0/0` with the worktree data symlink renamed
+aside and restored (path rechecked; the symlink now points at this worktree's
+own persistent pool slot). Each arm reported 28
 `test result:` lines (19 binary + 9 doc-test sections) and
 `2624 passed; 0 failed` in total.
 

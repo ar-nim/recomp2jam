@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# worktree-setup.sh — prepare a linked worktree: no push, private game data.
+# worktree-setup.sh — prepare a linked worktree: no push, pooled game data.
 #
 # Run this once, from inside an agent worktree, right after `git worktree add`.
 # It points origin's push URL at scripts/no-push.sh (an ext:: remote helper
 # that refuses with a clear message) using per-worktree config, so `git push`
-# fails locally and never reaches origin. It also makes real recursive copies
-# of the git-ignored game data from the main checkout: ~2.3G install-root and
-# ~3.9M extracted. cp -a gives every worktree its own inodes (btrfs CoW
-# reflinks are write-independent): ~0.1s locally, up to ~2.3G disk per copy
-# where reflinks are unavailable. Never link or hardlink (cp -al): runs write
-# into the data, and shared inodes or paths make one worktree's hidden-arm
-# gate flake every other worktree.
+# fails locally and never reaches origin.
 #
-# The main checkout is untouched: it stays the read-only copy source.
-# Refuses to run in the main checkout. Idempotent.
+# It also claims one of four persistent data slots under
+# ~/scratch/install-data/slot{1..4}, refreshes that slot from the read-only
+# main checkout, and symlinks this worktree's install-root/extracted at the
+# slot. Slots are never shared: a hidden-arm run cannot flake another
+# worktree. A claim marker is the lock; scripts/worktree-release.sh drops it
+# without deleting the slot data. Refreshing costs ~0.1s here on btrfs CoW
+# (cp -a, since rsync is absent), up to ~2.3G where reflinks are unavailable.
+# Refuses to run in the main checkout. Idempotent for an already-linked tree.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/install-data-pool.sh"
 MAIN_CHECKOUT="/home/arnim/Projects/recomp2jam"
-GAME_DATA_DIRS=(install-root extracted)
 
 # Guard 1: never run in the main checkout.
 TOPLEVEL="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)"
@@ -37,43 +37,61 @@ case "$GIT_DIR" in
         ;;
 esac
 
-require_real_source_dir() {
-    local source_dir="$1"
-    if [ ! -d "$source_dir" ] || [ -L "$source_dir" ]; then
-        echo "worktree-setup: missing real data source $source_dir" >&2
-        echo "worktree-setup: the main checkout must hold the game data" >&2
-        exit 1
-    fi
+verify_slot_symlinks() {
+    local slot_name="$1"
+    local data_name target expected
+    for data_name in "${POOL_DATA_DIRS[@]}"; do
+        target="$REPO_ROOT/$data_name"
+        expected="$POOL_ROOT/$slot_name/$data_name"
+        if [ ! -L "$target" ] || [ "$(readlink "$target")" != "$expected" ]; then
+            return 1
+        fi
+    done
 }
 
-copy_game_data_dir() {
-    local data_name="$1"
-    local source_dir="$MAIN_CHECKOUT/$data_name"
-    local target_dir="$REPO_ROOT/$data_name"
-    local staging_dir
-
-    require_real_source_dir "$source_dir"
-
-    if [ -L "$target_dir" ]; then
-        echo "worktree-setup: refusing: $target_dir is a symlink; remove it before setup" >&2
-        exit 1
-    fi
-    if [ -e "$target_dir" ]; then
-        [ -d "$target_dir" ] || { echo "worktree-setup: $target_dir is not a directory" >&2; exit 1; }
-        echo "worktree-setup: $data_name already copied; skipping"
-        return 0
-    fi
-
-    staging_dir="$(mktemp -d "$REPO_ROOT/.worktree-data.XXXXXX")"
-    chmod --reference="$source_dir" "$staging_dir"
-    if ! cp -a --reflink=auto -- "$source_dir/." "$staging_dir/"; then
-        rm -rf -- "$staging_dir"
-        echo "worktree-setup: copy failed: $source_dir -> $target_dir" >&2
-        exit 1
-    fi
-    mv -T -- "$staging_dir" "$target_dir"
-    echo "worktree-setup: copied $data_name ($source_dir -> $target_dir)"
+refuse_stale_data_entries() {
+    local data_name target
+    for data_name in "${POOL_DATA_DIRS[@]}"; do
+        target="$REPO_ROOT/$data_name"
+        if [ -e "$target" ] || [ -L "$target" ]; then
+            echo "worktree-setup: refusing existing $target; remove the stale entry first" >&2
+            exit 1
+        fi
+    done
 }
+
+report_busy_slots() {
+    local slot_number owner_file slot_dir
+    echo "worktree-setup: all $POOL_SLOT_COUNT data slots are claimed (max 4 concurrent worktrees)" >&2
+    for ((slot_number = 1; slot_number <= POOL_SLOT_COUNT; slot_number++)); do
+        slot_dir="$POOL_ROOT/slot$slot_number"
+        owner_file="$slot_dir/$POOL_CLAIM_DIR/$POOL_OWNER_FILE"
+        if [ -f "$owner_file" ]; then
+            printf '  slot%d: %s\n' "$slot_number" "$(<"$owner_file")" >&2
+        fi
+    done
+}
+
+claimed_slot=""
+setup_complete=0
+cleanup_failed_claim() {
+    if [ "$setup_complete" -eq 0 ] && [ -n "$claimed_slot" ]; then
+        install_data_pool_release_slot "$claimed_slot" || true
+    fi
+}
+trap cleanup_failed_claim EXIT
+
+existing_slot="$(install_data_pool_marker_slot "$REPO_ROOT")" || existing_slot=""
+if [ -n "$existing_slot" ]; then
+    if ! verify_slot_symlinks "$existing_slot"; then
+        echo "worktree-setup: marker names $existing_slot but the data links disagree" >&2
+        echo "worktree-setup: run scripts/worktree-release.sh, then retry setup" >&2
+        exit 1
+    fi
+    echo "worktree-setup: already linked to $existing_slot; skipping claim and refresh"
+    setup_complete=1
+    exit 0
+fi
 
 NO_PUSH="$REPO_ROOT/scripts/no-push.sh"
 [ -x "$NO_PUSH" ] || { echo "worktree-setup: missing $NO_PUSH" >&2; exit 1; }
@@ -96,6 +114,13 @@ else
     echo "worktree-setup: OK — push refused locally"
 fi
 
-for data_name in "${GAME_DATA_DIRS[@]}"; do
-    copy_game_data_dir "$data_name"
-done
+refuse_stale_data_entries
+claimed_slot="$(install_data_pool_claim_slot "$REPO_ROOT")" || {
+    report_busy_slots
+    exit 1
+}
+echo "worktree-setup: claimed $claimed_slot; refreshing from $POOL_SOURCE_ROOT"
+install_data_pool_refresh_slot "$claimed_slot"
+install_data_pool_link_worktree "$REPO_ROOT" "$claimed_slot"
+echo "worktree-setup: linked install-root/ and extracted/ to $POOL_ROOT/$claimed_slot"
+setup_complete=1
