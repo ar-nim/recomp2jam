@@ -80,13 +80,20 @@ fi
 #     commits that touch only docs, scripts, or CI must not mark a
 #     cargo-current binary stale. Uncommitted edits are NOT detected
 #     (limitation: the guard reads committed timestamps only).
-BIN="$REPO_ROOT/target/release/recomp2jam"
+# PLAY_LOCAL_PROFILE=debug selects the dev profile (e.g. the #223
+# avatar-breathing check, which needs the slow debug paint path).
+PROFILE="${PLAY_LOCAL_PROFILE:-release}"
+case "$PROFILE" in
+  release|debug) ;;
+  *) echo "play-local: PLAY_LOCAL_PROFILE must be release|debug (got '$PROFILE')" >&2; exit 2 ;;
+esac
+BIN="$REPO_ROOT/target/$PROFILE/recomp2jam"
 HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct -- crates/ Cargo.toml Cargo.lock 2>/dev/null || echo 0)"
 if [ -x "$BIN" ] && [ "${HEAD_TS:-0}" -gt 0 ]; then
   BIN_TS="$(stat -c %Y "$BIN" 2>/dev/null || echo 0)"
   if [ "${BIN_TS:-0}" -lt "$HEAD_TS" ]; then
-    echo "play-local: release binary is stale (built before checkout HEAD ${HEAD_TS})" >&2
-    echo "play-local: rebuild first: cargo build --release --manifest-path \"$REPO_ROOT/Cargo.toml\"" >&2
+    echo "play-local: $PROFILE binary is stale (built before checkout HEAD ${HEAD_TS})" >&2
+    echo "play-local: rebuild first: cargo build --profile $PROFILE --manifest-path \"$REPO_ROOT/Cargo.toml\"" >&2
     exit 1
   fi
 fi
