@@ -6,6 +6,7 @@ mod chat;
 mod lanking;
 mod musicshop;
 mod planet;
+mod result_records;
 mod shop;
 mod waiting;
 
@@ -17,6 +18,7 @@ pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::planet::PlanetBoardState;
+pub use self::result_records::ResultMemberRecord;
 use self::shop::ShopState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
@@ -644,6 +646,10 @@ pub struct ScreenGame {
     /// `SKILLCOUNT` source; `JoinedRoom.skills` carries the ring ids
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
+    /// 4018 member records by seat (exe offsets pinned in
+    /// `ResultMemberRecord`). `None` while no admitted row named the
+    /// seat; the row painter falls back to local score only there.
+    result_member_records: [Option<ResultMemberRecord>; 8],
     select_music_art: Option<SceneArt>,
     /// Local seat role mirrored from the exe's word at VA `0x77ee86`
     /// (#343). A normal base-ready room reads 3 (Spectator); no relay
@@ -988,6 +994,7 @@ impl ScreenGame {
             catalog_chart_files: HashMap::new(),
             song_cover: None,
             skill_counts: [0, 0, 0],
+            result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
             select_music_art_cache: None,
@@ -2474,6 +2481,30 @@ impl ScreenGame {
             .filter(|music_id| *music_id != 0)
     }
 
+    /// Stage one admitted 4018 row's words for its seat. The exe's
+    /// row reader commits only active rows in member range; the
+    /// caller owns that admission, so a staged record always has a
+    /// real wire row behind it.
+    pub fn stage_result_member_record(&mut self, member_id: u8, record: ResultMemberRecord) {
+        if let Some(seat) = self.result_member_records.get_mut(usize::from(member_id)) {
+            *seat = Some(record);
+        }
+    }
+
+    /// The joined room's song choice (`None` while no song stands):
+    /// the 3003 snapshot shape, kept current by [`Self::set_room_music`]
+    /// on 4001 changes. A joined guest that never picks locally uses
+    /// this selection to stage the same cover a master's pick stages.
+    #[must_use]
+    pub fn room_music_selection(&self) -> Option<o2jam_net::SetRoomMusic> {
+        let room = self.waiting.as_ref()?;
+        (room.music_id != 0).then_some(o2jam_net::SetRoomMusic {
+            music_id: room.music_id,
+            difficulty: room.difficulty,
+            speed: room.speed,
+        })
+    }
+
     /// The music state this client announces for one song (§2): `Ready`
     /// when the install's `Music` folder carries the chart file,
     /// `NoMusic` otherwise (the exe's two-way answer, VA `0x4be808`).
@@ -3735,15 +3766,15 @@ impl ScreenGame {
         (rank != 0).then_some(rank)
     }
 
-    /// Live result rank rows: the local `Score`/`LongNoteBonus` on
-    /// row 0, `PeerBars` rank bytes per position, joined-room member
-    /// names in seat order (self `YOU` first — local-only, the wire
-    /// sends no self nickname — then the occupied wire slots, capped
-    /// at eight seats). Peer rows carry no
-    /// judgements/combos/score/bonus (per-member 4014/4016 tallies
-    /// stay server-side, so those columns stay unpainted there);
-    /// speed is the shared room code on every named row, absent
-    /// offline.
+    /// Live result rank rows: joined-room member names in seat order
+    /// (self `YOU` first — local-only, the wire sends no self
+    /// nickname — then the occupied wire slots, capped at eight), and
+    /// each seat's digits from the admitted 4018 member record when
+    /// one stands. The local `Score`/`LongNoteBonus` falls back only
+    /// where no record names that seat: offline play stages no 4018,
+    /// and the exe's local +0x31 writer stays unpinned. Rank bytes
+    /// still ride `PeerBars`; speed comes from the record's `+0x2168`
+    /// or the shared room code when no record stands.
     #[must_use]
     pub fn result_rank_rows(&self) -> Vec<ResultRankRow> {
         let score = self.playing.score();
@@ -3751,7 +3782,9 @@ impl ScreenGame {
         let peers = self.playing.peers();
         let room = self.waiting.as_ref();
         let speed = room.map(|joined| joined.speed);
-        let mut names: Vec<(String, Option<u8>)> = vec![("YOU".to_owned(), None)];
+        // (name, +0x31 portrait byte, 4018 member seat)
+        let mut names: Vec<(String, Option<u8>, Option<u8>)> =
+            vec![("YOU".to_owned(), None, room.map(|joined| joined.member_id))];
         if let Some(joined) = room {
             for slot in joined.slots.iter().take(7) {
                 if let Some(member) = slot.member.as_ref() {
@@ -3764,7 +3797,7 @@ impl ScreenGame {
                     // skip): whether the result copy already holds
                     // 1-based bytes stays OPEN (next step: populated
                     // battle-row capture, docs/cresult-anchors.md).
-                    names.push((member.nickname.clone(), Some(member.team)));
+                    names.push((member.nickname.clone(), Some(member.team), Some(slot.index)));
                 }
             }
         }
@@ -3773,16 +3806,37 @@ impl ScreenGame {
             .into_iter()
             .take(8)
             .enumerate()
-            .map(|(position, (name, seat_byte))| {
+            .map(|(position, (name, seat_byte, member_id))| {
                 let local = position == 0;
+                let record = member_id
+                    .and_then(|id| self.result_member_records.get(usize::from(id)))
+                    .copied()
+                    .flatten();
                 ResultRankRow {
                     rank: Self::result_row_rank(peers, position, row_count),
                     name: Some(name),
-                    judgements: local.then_some(score.counts),
-                    combos: local.then_some((score.max_combo, score.jam.level())),
-                    score: local.then_some(Self::saturate_rank_score(score.points)),
-                    bonus: local.then_some(bonus_points),
-                    speed,
+                    judgements: record
+                        .map(|row| {
+                            [
+                                u32::from(row.cool),
+                                u32::from(row.good),
+                                u32::from(row.bad),
+                                u32::from(row.miss),
+                            ]
+                        })
+                        .or_else(|| local.then_some(score.counts)),
+                    combos: record
+                        .map(|row| (u32::from(row.max_combo), u32::from(row.jam_combo)))
+                        .or_else(|| local.then_some((score.max_combo, score.jam.level()))),
+                    score: record
+                        .map(|row| row.score)
+                        .or_else(|| local.then_some(Self::saturate_rank_score(score.points))),
+                    // `+0x2164` is the reward cell, not the long-note
+                    // word at `+0x2158` (unpainted — OPEN).
+                    bonus: record
+                        .map(|row| u64::from(row.reward))
+                        .or_else(|| local.then_some(bonus_points)),
+                    speed: record.map(|row| row.speed).or(speed),
                     // The local row's +0x31 writer is unpinned (the
                     // shell stages no local member record): row 0
                     // resolves no chip until a source lands — the

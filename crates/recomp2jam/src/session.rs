@@ -75,7 +75,7 @@
 //! leaving Result clears the latch. Every Result paint then drains
 //! the tally answers — 4017 submissions (traced per member), the
 //! 4018 ranked table (each active row fills the exe-pinned
-//! [`result_records::ResultMemberRecord`] words before its total is
+//! `ResultMemberRecord` words before its total is
 //! re-staged onto the seat, so the verdict turns on
 //! server-authoritative peer totals), and 4040
 //! rank places (decoded and validated; the gateway never emits it —
@@ -163,7 +163,9 @@ use o2jam_net::{
     SetRoomArena, SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent,
     SyncMusicDownload, UpdateMusicState, WaitingMusicChanged, WireMessage,
 };
-use o2jam_shell::screens::game::{LobbyChat, SlashCommand, StartGateVerdict, StartRequest};
+use o2jam_shell::screens::game::{
+    LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
+};
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -177,9 +179,6 @@ use crate::loading::{
     LOADING_GATE_STEPS,
 };
 use press::{EntryEcho, PressDisposition};
-mod result_records;
-
-use result_records::ResultMemberRecord;
 
 /// Short socket window for the per-frame stats section (one tick send
 /// plus the echo drain): a paint must never stall the frame loop on a
@@ -531,7 +530,7 @@ pub struct OnlineSession {
     /// Result record words per seat, from 4018 rows (`None` while the
     /// seat never sent an active row). Mirrors the exe's member record
     /// at the offsets pinned in `docs/net-protocol.md` §4c.
-    result_records: [Option<result_records::ResultMemberRecord>; 8],
+    result_records: [Option<ResultMemberRecord>; 8],
 }
 
 impl OnlineSession {
@@ -1216,14 +1215,15 @@ impl OnlineSession {
     }
 
     /// Result record words for a seat, from the last 4018 frame
-    /// (`None` while no active row named that seat). No production
-    /// reader yet: the shell paint wiring follows separately.
+    /// (`None` while no active row named that seat). The row painter
+    /// reads the per-seat mirror staged into `ScreenGame`; this
+    /// read-back pins the write side against the same words.
     #[allow(
         dead_code,
-        reason = "bridge query for the shell paint follow-up; tested below"
+        reason = "write-side read-back for 4018 guards; painter reads the staged shell mirror"
     )]
     #[must_use]
-    pub fn result_record(&self, member_id: u8) -> Option<&result_records::ResultMemberRecord> {
+    pub fn result_record(&self, member_id: u8) -> Option<&ResultMemberRecord> {
         self.result_records.get(usize::from(member_id))?.as_ref()
     }
 
@@ -2631,10 +2631,10 @@ impl OnlineSession {
                 continue;
             };
             if entry.active {
-                *record = Some(ResultMemberRecord::from_score_entry(
-                    entry,
-                    completed.room_master,
-                ));
+                let admitted = ResultMemberRecord::from_score_entry(entry, completed.room_master);
+                *record = Some(admitted);
+                self.game
+                    .stage_result_member_record(entry.member_id, admitted);
             }
         }
     }
@@ -2688,12 +2688,26 @@ impl OnlineSession {
             return;
         }
         if self.joined_waiting && !self.game.is_room_master() {
+            self.stage_guest_room_song();
             self.game.force_advance_to_loading();
         } else {
             self.game.menu_key(MenuKey::Confirm, true);
         }
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
+        }
+    }
+
+    /// Give a joined guest the chart selection its room already
+    /// carries. The 4011 body is empty on the live lane (#355), so the
+    /// exe's cover comes from the selected chart's OJN. A guest never
+    /// picks locally: its room's song is the selection, and feeding it
+    /// to `set_selected_music` runs the same catalog-token cover
+    /// staging the master's pick uses. No song, no cover: nothing is
+    /// invented.
+    fn stage_guest_room_song(&mut self) {
+        if let Some(selection) = self.game.room_music_selection() {
+            self.game.set_selected_music(selection);
         }
     }
 
@@ -3410,13 +3424,10 @@ pub(super) mod session_tests {
         Request, StatKind, SyncMemberMusicStateEvent, UpdateGameStats, WaitingMusicChanged,
         WireMessage, HEADER_LEN,
     };
-    use o2jam_shell::screens::game::LobbyChat;
+    use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord};
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
-    use super::{
-        level_for_difficulty, result_records::ResultMemberRecord, saturate_bonus, OnlineSession,
-        SongChoice,
-    };
+    use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
 
     /// One whole frame off the fake server's socket.
     pub(super) fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -5684,6 +5695,66 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// Matched #355 start shape: a joined guest with a room song, a
+    /// staged catalog, no local pick, and an empty-body 4011 (the
+    /// live-lane pin). The exe's cover is the selected chart's OJN
+    /// JPEG; the guest must stage it through the same seam the
+    /// native replay path uses before Loading paints.
+    ///
+    /// Live caller chain: `main.rs::run_online` ->
+    /// `assemble_online_session` -> `run_windowed_session` ->
+    /// `Shell::paint_backbuffer` -> `OnlineSession::paint` ->
+    /// `poll_wire` -> `poll_waiting_chat` -> `poll_start` ->
+    /// `OnlineSession::stage_guest_room_song` ->
+    /// `ScreenGame::set_selected_music` -> `resolve_song_cover` ->
+    /// `ScreenGame::stage_loading_cover` -> `paint_loading_cover`.
+    /// The install holds the OJN bytes; the catalog rows are
+    /// synthetic. Skip cleanly when the install is absent (CI has
+    /// no game data).
+    #[test]
+    fn matched_guest_start_stages_the_room_song_loading_cover() {
+        let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        if !chart_path.is_file() {
+            println!("skip: missing installed chart");
+            return;
+        }
+        let catalog_blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&catalog_blob).unwrap();
+        let (port, server) = fake_gateway(|mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        let mut room = guest_snapshot();
+        room.music_id = 757;
+        room.difficulty = 2;
+        room.speed = 1;
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_joined_room(room.clone());
+        game.set_song_catalog(&entries);
+        assert!(!game.has_loading_cover());
+        assert!(game.selected_music().is_none());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.joined_room = Some(room);
+        session.joined_waiting = true;
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Loading);
+        assert!(
+            session.game.has_loading_cover(),
+            "the matched guest must stage the room song's OJN cover"
+        );
+    }
+
     #[test]
     fn loading_confirm_sends_4012_then_enters_playing() {
         use o2jam_net::{ConfirmMusicLoaded, Request};
@@ -6033,6 +6104,132 @@ pub(super) mod session_tests {
         };
         assert_eq!(session.result_record(0), Some(&expected));
         assert_eq!(session.result_record(2), None);
+    }
+
+    /// #365 read side: two active 4018 rows must ink both Result rows.
+    /// The scripted gateway drives the real session from Waiting to
+    /// Result, then hands the tally triple two member records whose
+    /// digits differ from the local score (cool 1, score 200).
+    ///
+    /// Live caller chain: `main.rs::run_play` ->
+    /// `run_windowed_session` -> `OnlineSession::paint` -> `poll_tally`
+    /// -> `drain_tally_answers` -> `apply_score_completed` ->
+    /// `stage_result_records` -> `ScreenGame::stage_result_member_record`
+    /// -> `ScreenGame::result_rank_rows` -> `paint_result_rank_rows`
+    /// -> `paint_result_rank_row`.
+    #[test]
+    fn result_rows_read_the_two_staged_4018_member_records() {
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry};
+
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        room.slots[2].member = Some(member_on_team("idle", true, 2));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 4,
+                        experience: 3000,
+                        result: MatchResult::Lose,
+                        gem: 12_000,
+                        cash_point: 0,
+                        speed: 3,
+                        long_note_score: 90,
+                    },
+                    ScoreEntry {
+                        member_id: 2,
+                        active: false,
+                        cool: 99,
+                        good: 99,
+                        bad: 99,
+                        miss: 99,
+                        max_combo: 99,
+                        jam: 99,
+                        score: 999_999,
+                        reward: 99,
+                        level: 9,
+                        experience: 9,
+                        result: MatchResult::Lose,
+                        gem: 9,
+                        cash_point: 9,
+                        speed: 9,
+                        long_note_score: 9,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(1).is_some());
+        server.join().unwrap();
+
+        let rows = session.game.result_rank_rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].judgements, Some([11, 22, 33, 44]));
+        assert_eq!(rows[0].combos, Some((55, 66)));
+        assert_eq!(rows[0].score, Some(777));
+        assert_eq!(rows[0].bonus, Some(88));
+        assert_eq!(rows[0].speed, Some(2));
+        assert_eq!(rows[1].judgements, Some([50, 0, 0, 0]));
+        assert_eq!(rows[1].combos, Some((200, 9)));
+        assert_eq!(rows[1].score, Some(50_000));
+        assert_eq!(rows[1].bonus, Some(300));
+        assert_eq!(rows[1].speed, Some(3));
+        // The exe discards `active == 0` rows: no record reaches the
+        // third seat, so its digits stay unpainted even though the
+        // wire named a huge score there.
+        assert_eq!(rows[2].score, None);
+        assert_eq!(rows[2].judgements, None);
     }
 
     /// Wire-shape replay for the result input arms (#87, wired in

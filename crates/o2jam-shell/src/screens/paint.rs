@@ -6065,25 +6065,24 @@ const RESULT_ROW_NAME_LIMIT: usize = 100;
 /// without data stay unpainted with documented reasons, never
 /// invented values. Rank bytes ride `PeerBars` (nonzero deliveries
 /// only); names ride the joined room (`YOU` is local-only, the wire
-/// sends no self nickname); judgements/combos/score/bonus ride the
-/// local `Score`/`LongNoteBonus` (per-member 4014/4016 tallies stay
-/// server-side, so those columns stay unpainted on peer rows); speed
-/// rides the shared room speed code.
+/// sends no self nickname); judgements/combos/score/reward/speed
+/// ride the admitted 4018 member record, falling back to the local
+/// `Score`/`LongNoteBonus` only where no record names that seat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultRankRow {
     /// Rank number (`%d` at x=91, 2+ players only).
     pub rank: Option<u8>,
     /// Nickname at x=128 (truncated past 100 display chars).
     pub name: Option<String>,
-    /// COOL/GOOD/BAD/MISS at x=230 (local row only).
+    /// COOL/GOOD/BAD/MISS at x=230 (record `+0x2142/44/46/48`).
     pub judgements: Option<[u32; 4]>,
-    /// MAX then JAM combo at x=416 (local row only).
+    /// MAX then JAM combo at x=416 (record `+0x215c`/`+0x214c`).
     pub combos: Option<(u32, u32)>,
-    /// Score at x=530 (local row only).
+    /// Score at x=530 (record `+0x2160`).
     pub score: Option<u32>,
-    /// Hold bonus at x=626 (local row only).
+    /// Reward at x=626 (record `+0x2164`; local hold bonus fallback).
     pub bonus: Option<u64>,
-    /// Room speed code at x=685 (every named row shares it).
+    /// Scroll speed at x=685 (record `+0x2168`, else room code).
     pub speed: Option<u8>,
     /// Member record `+0x31` — the first 4043 `MemberInfo` seat byte:
     /// a 1-based index into the eight constant portrait slots

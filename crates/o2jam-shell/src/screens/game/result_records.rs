@@ -2,14 +2,15 @@
 //!
 //! The 7.55 result row painter reads fixed words from one
 //! `0x2190`-byte member record per seat (`docs/cresult-anchors.md`,
-//! `FUN_004c3b40` at file `0xc3b40`). `docs/net-protocol.md` §4c pins the
-//! write side: the 4018 row reader (VA `0x5411a0`, file `0x1411a0`) stores
-//! the wire fields into those same offsets, and the 4018 head (VA
-//! `0x55fbe0`, file `0x15fbe0`) writes the room-master marker. This module
-//! models those words directly, so each field carries its exe offset in
-//! place of an invented layout. Evidence IDs: `ev_476a9085…`,
-//! `ev_e5954df4…`, `ev_cbd5ca48…`, `ev_6902875a…`, `ev_5308dcbd…`,
-//! `ev_d19ae823…`. Version pin: 7.55, 5,029,888 B, sha256 `83a04541…72c823b`.
+//! `FUN_004c3b40` at file `0xc3b40`). `docs/net-protocol.md` §4c pins
+//! the write side: the 4018 row reader (VA `0x5411a0`, file
+//! `0x1411a0`) stores the wire fields into those same offsets, and
+//! the 4018 head (VA `0x55fbe0`, file `0x15fbe0`) writes the
+//! room-master marker. The record lives here, beside its row painter,
+//! so both sides name one layout instead of duplicating exe offsets.
+//! Evidence IDs: `ev_476a9085…`, `ev_e5954df4…`, `ev_cbd5ca48…`,
+//! `ev_6902875a…`, `ev_5308dcbd…`, `ev_d19ae823…`. Version pin: 7.55,
+//! 5,029,888 B, sha256 `83a04541…72c823b`.
 
 use o2jam_net::play::{MatchResult, ScoreEntry};
 
