@@ -1755,7 +1755,6 @@ impl ScreenGame {
         self.payment_art.is_some()
     }
 
-<<<<<<< HEAD
     /// Stage the Playing-archive Tutorial bodies through the shared
     /// declaration: the live boot path parks them here, and
     /// [`Self::visit_side`] mounts them when FIRSTSTEP opens the
@@ -1776,7 +1775,8 @@ impl ScreenGame {
     #[must_use]
     pub const fn tutorial_art_staged(&self) -> bool {
         self.tutorial_art.is_some()
-=======
+    }
+
     /// Stage the Cash Charge view with its Item Shop host board
     /// (the qualified b8 charge-plate capture). Staging never moves
     /// the flow; the plate click opens the view on its own.
@@ -1792,7 +1792,6 @@ impl ScreenGame {
         self.cash_charge_art
             .as_ref()
             .is_some_and(|art| art.dialog.has_figures())
->>>>>>> 905ef9c (fix(shell): paint exe-pinned Cash Charge chrome at b8 rect)
     }
 
     /// Stage one exe-literal Playing sheet beside the Playing scene:
