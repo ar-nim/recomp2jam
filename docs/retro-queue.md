@@ -146,7 +146,7 @@ Findings and the rules that now carry them:
    hidden-arm regression as pre-existing on a stale base while main was
    green. Rule: `scripts/gate-check.sh --no-push` is the only accepted gate
    evidence; "pre-existing" claims quote gate-check output from the named
-   base commit. Landed in docs/agents/delegation.md.
+   base commit. Landed in docs/agents/delegation.md. Tracker record: #350.
 2. **Cherry-pick abort reset main.** A multi-commit cherry-pick chain ended
    in `--abort`, which silently reset local main and lost a pushed commit.
    Rule: multi-commit legs merge `--no-ff`; cherry-picks are single-commit
