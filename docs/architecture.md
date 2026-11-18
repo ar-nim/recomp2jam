@@ -47,8 +47,10 @@ Wire: `o2jam-net/src/frame.rs`, `message.rs`, `play.rs`, `relay.rs`.
 - **`o2jam-text`** (now: CP949 decode + `ab_glyph` + system Noto Sans CJK KR;
   missing font degrades to ASCII). No test fails without the font.
 - **`o2jam-net`** (now: frame/message/rooms/play/relay/shop/gift/wallet/
-  character/strings/inflate + endpoint/opcode map). Shell fold: chat + peer-life
-  only; the rest is documented, not wired.
+  character/strings/inflate + endpoint/opcode map + `connect_report` text seam;
+  the report shape borrows `o2jam-game` peer types, wire parsing still has no
+  game dependency). Shell fold: chat + peer-life only; the rest is documented,
+  not wired.
 - **`o2jam-shell`** (now: `ScreenGame`/`load_scene`/`ScreenFlow`, 7 main + 9 side
   scenes, `.bnd` staging, winit keymap, sample-clock Playing, trace hooks
   `screen_name`/`state_hash`/fixed clock). Composition FAILs stay in
