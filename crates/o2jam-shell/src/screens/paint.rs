@@ -845,9 +845,14 @@ fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt, top: usize, l
         let (dx, dy) = anchor_in_frame(track.x + local.0, track.y + local.1, frame.w, frame.h);
         figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
     };
-    paint_part(frame, CHANNEL_SCROLL_UP_SPRITE, CHANNEL_SCROLL_UP_LOCAL);
+    // The dialog sheet bakes both arrow plates at the bnd track ends
+    // (white rule outside each triangle); the messenger sprites use the
+    // opposite rule order. Only the movable thumb is a separate body.
+    if !channel_dialog_sheet_staged(Some(art)) {
+        paint_part(frame, CHANNEL_SCROLL_UP_SPRITE, CHANNEL_SCROLL_UP_LOCAL);
+        paint_part(frame, CHANNEL_SCROLL_DOWN_SPRITE, CHANNEL_SCROLL_DOWN_LOCAL);
+    }
     paint_part(frame, CHANNEL_SCROLL_BAR_SPRITE, (0, thumb_y - track.y));
-    paint_part(frame, CHANNEL_SCROLL_DOWN_SPRITE, CHANNEL_SCROLL_DOWN_LOCAL);
 }
 
 /// Entry-button plate for one viewport slot, scaled to the frame:
@@ -980,6 +985,17 @@ pub const CHANNEL_SCROLL_UP_SPRITE: &str = "Messenger_Main_Scroll_Up.ojs";
 /// Scroll down arrow (`Messenger_Main_Scroll_Down.ojs`, 21x20) at
 /// scroll-local (0,196) (bnd-pinned).
 pub const CHANNEL_SCROLL_DOWN_SPRITE: &str = "Messenger_Main_Scroll_Down.ojs";
+
+/// Whether the staged dialog sheet already paints the dark list field.
+/// Its baked rows and scroll track cover the fallback scrim; repainting
+/// the scrim would hide the sheet's own chrome.
+fn channel_dialog_sheet_staged(art: Option<&SceneArt>) -> bool {
+    art.is_some_and(|art| {
+        art.figures
+            .get(CHANNEL_DIALOG_SPRITE)
+            .is_some_and(|sheet| !sheet.is_empty())
+    })
+}
 
 /// Enter-button faces for the visible rows: staged
 /// [`CHANNEL_ENTER_SPRITE`] frame 0 at the bnd-derived face origins
@@ -2267,7 +2283,9 @@ fn paint_channel_rows(
     hovered_row: Option<usize>,
 ) {
     let (top, shown) = channel_viewport_from_top(top, channels.len());
-    paint_channel_scrim(frame, shown);
+    if !channel_dialog_sheet_staged(art) {
+        paint_channel_scrim(frame, shown);
+    }
     let visible: Vec<(usize, &ChannelState)> =
         channels.iter().skip(top).take(shown).enumerate().collect();
     let w = i32::try_from(frame.w).unwrap_or(0);
@@ -13235,6 +13253,104 @@ mod paint_tests {
             );
             assert_eq!(buf, vec![0x123456u32; 16 * 12], "{screen:?}");
         }
+    }
+
+    #[test]
+    fn staged_dialog_sheet_keeps_its_scroll_track_outside_the_scrim() {
+        // Live caller chain:
+        //   main.rs::run_play -> ScreenGame::paint -> paint_at
+        //   -> ScreenGame::paint_channel -> paint_channel_scene
+        //   -> paint_channel_rows -> paint_channel_scrim.
+        // The exe's `Dialog_ChannelInfo.ojs` sheet bakes the dark
+        // list field and the scroll track; the fallback scrim must not
+        // repaint them once that sheet is staged.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(800, 466, [0x1F, 0x00]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(
+            buf[300 * 800 + 580],
+            pack_xrgb(0, 0, 255),
+            "staged sheet owns the scroll track, not the fallback scrim"
+        );
+    }
+
+    #[test]
+    fn staged_dialog_sheet_keeps_its_scroll_arrows_but_not_the_thumb() {
+        // Live caller chain:
+        //   ScreenGame::paint_channel -> paint_channel_scene
+        //   -> paint_channel_rows -> paint_channel_scroll_art.
+        // The exe sheet bakes both arrow plates (`Dialog_ChannelInfo.ojs`,
+        // native x573..594, arrows y213..233 and y409..429); only the
+        // movable thumb is a separate staged body. A repaint of the
+        // messenger arrow sprites would swap the white-rule order.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_DIALOG_SPRITE.to_owned(),
+                    solid_figure(800, 466, [0x1F, 0x00]),
+                ),
+                (
+                    CHANNEL_SCROLL_UP_SPRITE.to_owned(),
+                    solid_figure(21, 20, [0x00, 0x7C]),
+                ),
+                (
+                    CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
+                    solid_figure(21, 20, [0x00, 0x7C]),
+                ),
+                (
+                    CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
+                    solid_figure(21, 45, [0xE0, 0x03]),
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(
+            buf[220 * 800 + 580],
+            pack_xrgb(0, 0, 255),
+            "up arrow stays the sheet's baked plate"
+        );
+        assert_eq!(
+            buf[419 * 800 + 580],
+            pack_xrgb(0, 0, 255),
+            "down arrow stays the sheet's baked plate"
+        );
+        assert_eq!(
+            buf[250 * 800 + 580],
+            pack_xrgb(0, 255, 0),
+            "thumb still repaints as a staged body"
+        );
     }
 
     #[test]

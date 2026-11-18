@@ -50,3 +50,39 @@ re-anchored: the Gulimche 'C' glyph tops the row 8 px above the old
 digit-led stand-in (224+50·index). Shots: all 19 captures
 byte-identical before/after — the staged channel frame shows no
 delta, no PNG regen. (ev: D25 pin in `docs/claims.md`; `docs/channel-fill.md`)
+
+## Ticket #337 — staged dialog sheet owns its list field and arrow plates (2026-11-18)
+
+Native 800x600 A/B (7.55 exe SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`, Wine
+reference frame `~/scratch/native-ab-334/pack/frames/ref/channel.png` SHA-256
+`dfeacf9ef64c6508c635028efd657a107880031c8b9b18f583d5a121e6311d01`,
+2x-rescaled native region map
+`51f335c27b101152e395ac11338c45e0e78fde8430d60bd36ebdb972a77cb744`) pins two
+blit deltas on the staged path:
+
+- `Dialog_ChannelInfo.ojs` paints the list field and the bnd scroll track
+  `(573,213)-(594,429)` itself. At native `(580,300)` the reference reads
+  `(41,40,41)`, the decoded sheet reads `(41,41,41)`, and the Rust frame read
+  `(8,8,16)` — `paint_channel_scrim` overwrote the sheet. The scrim now paints
+  only without a staged sheet (`screens/paint.rs:992`, call at `:2287`).
+- The sheet also bakes both arrow plates (white rule outside each triangle).
+  Repainting `Messenger_Main_Scroll_Up/Down.ojs` swapped the rule order: the
+  arrow crop's mean absolute error against the reference was 29.91/28.0 for
+  Rust versus 9.8/0.49 for the sheet. The separate thumb body still repaints
+  (`screens/paint.rs:812`, guard at `:851`).
+
+Live caller chain: `main.rs::run_play` → `ScreenGame::paint` → `paint_at` →
+`ScreenGame::paint_channel` (`screens/game/mod.rs:5863`) → `paint_channel_scene`
+(`screens/paint.rs:2483`) → `paint_channel_rows` (`:2277`) →
+`paint_channel_scrim` (`:1013`) / `paint_channel_scroll_art` (`:812`).
+Scenario-named guards:
+`staged_dialog_sheet_keeps_its_scroll_track_outside_the_scrim`,
+`staged_dialog_sheet_keeps_its_scroll_arrows_but_not_the_thumb`. Native
+gameplay crop SSIM before → after: `scroll_track` 0.467124 → 0.999670,
+`row_bars` 0.539644 → 0.609808, flanks 0.521937/0.544637 → 0.538779/0.561471;
+channel weighted 0.689990 → 0.715018. Residual gaps in row selection,
+flank promo art and the footer strip are server-vintage/capture-scenario
+deltas, not pinned painter faults. The full per-region metrics are local-only
+(`~/scratch/blit-pass/pack/region-metrics.json` SHA-256
+`dbc8401d69a973a221f1fd5be1877094a8cccafd258688de411035741aaeff5b`).
