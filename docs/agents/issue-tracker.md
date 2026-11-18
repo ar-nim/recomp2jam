@@ -133,14 +133,19 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 Agent worktrees are created **beside** the main checkout, named
 `/home/arnim/Projects/recomp2jam-wt<N>-v<ticket>` on branch `cb2/tt-<ticket>`
-(or the assigned branch). They symlink `install-root/` and `extracted/` to
-the main checkout's copies (never commit those symlinks).
+(or the assigned branch). Each gets its own real copies of `install-root/`
+and `extracted/` from the main checkout (~2.3G; ~0.1s locally on btrfs CoW,
+longer where reflinks are unavailable; git-ignored). Never symlink or hardlink
+them: runs write into the data (`option.ini`,
+Temp→Music promotion), and a shared path or inode makes one worktree's
+hidden-arm gate flake every other worktree.
 
 Immediately after `git worktree add`, run from inside the new worktree:
 
     scripts/worktree-setup.sh
 
-This sets `remote.origin.pushurl` to `ext::<repo>/scripts/no-push.sh` and
+This makes the data copies, then sets `remote.origin.pushurl` to
+`ext::<repo>/scripts/no-push.sh` and
 enables the ext transport locally, so `git push` fails locally with a clear
 message before touching origin. The main checkout is never configured this
 way; `worktree-setup.sh` refuses to run there, keeping the orchestrator's

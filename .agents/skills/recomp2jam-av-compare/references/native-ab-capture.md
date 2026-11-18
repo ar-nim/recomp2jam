@@ -11,10 +11,12 @@ native capture cannot stage a scene; label every such result downsampled.
 All commands run from the worktree root. Game data stays in git-ignored
 `install-root/`; no game art, music, or capture bytes enter the repository.
 
-1. Link data and build the release client:
+1. Copy data and build the release client. In a git worktree,
+   `scripts/worktree-setup.sh` already made the real copy; elsewhere copy it
+   yourself (remove any old symlink first — never `ln -s` or `cp -al`):
 
    ```bash
-   ln -s /path/to/install-root install-root   # skip when it already exists
+   cp -a /path/to/install-root install-root   # skip when it already exists
    cargo build --release -p recomp2jam
    ```
 

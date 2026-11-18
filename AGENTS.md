@@ -20,9 +20,12 @@ Pick one branch:
   gameplay behavior in `docs/gameplay.md`.
 - Game data → local-only under `install-root/` + `extracted/`
   (git-ignored); layout in `docs/install-layout.md`, status in
-  `docs/progress.md`. Fresh worktree? Symlink `install-root/` first:
-  archives resolve from the build dir, so without it the client
-  silently paints fallbacks (guard: `scripts/verify-shots.sh`).
+  `docs/progress.md`. Fresh worktree? Run `scripts/worktree-setup.sh`:
+  it makes real ~2.3G copies with independent inodes (no symlink or hardlink;
+  CoW reflinks are write-safe), so each worktree writes only its own data.
+  Archives resolve from the build dir, so
+  without them the client silently paints fallbacks
+  (guard: `scripts/verify-shots.sh`).
 - Rig procedure → `docs/rig-runbook.md` (single home for rig lore).
 - Implementing → invoke `/skill:clean-code` and hold its 10/10:
   intent-revealing names, small functions, scenario-named tests.

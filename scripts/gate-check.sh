@@ -10,6 +10,10 @@
 #   5. git push origin main
 #   6. git rev-parse equality (main == origin/main)
 #
+# Since worktree-setup.sh gives every worktree a real data copy, step 4's
+# mv is a local directory rename: it hides this checkout's data only and
+# cannot flake another worktree's present-arm run. The EXIT trap restores it.
+#
 # Usage: scripts/gate-check.sh [--no-push|--dry-run]
 #   --no-push / --dry-run : skip the push + verify step (for local proof runs).
 #   GATE_CHECK_NO_PUSH=1   : same, via environment.
@@ -46,6 +50,7 @@ cargo test --workspace
 
 step "cargo test --workspace (install-root hidden)"
 if [ "$present_root_existed" -eq 1 ]; then
+    # Real per-worktree directory: this rename stays inside $REPO_ROOT.
     HIDDEN_BACKUP="$REPO_ROOT/.install-root.gate-hidden"
     mv "$REPO_ROOT/install-root" "$HIDDEN_BACKUP"
 fi

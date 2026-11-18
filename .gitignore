@@ -67,5 +67,5 @@ Thumbs.db
 # Env
 .env
 
-# gate-check temporary hidden install-root
+# gate-check temporary hidden install-root (real per-worktree copy)
 .install-root.gate-hidden
