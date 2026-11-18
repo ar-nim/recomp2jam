@@ -21,8 +21,8 @@ use crate::screen::Screen;
 use crate::screens::paint::ROOM_HOVER_SPRITE;
 use crate::screens::side::{
     PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
-    INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK,
-    SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE,
+    INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+    TUTORIAL_BACKGROUND_SPRITE,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -274,8 +274,10 @@ pub enum Dialog {
     SelectMusic,
     /// Channel list (`DIALOG_CHANNEL_INFO`) over the planet board.
     ChannelInfo,
-    /// First-open options tab (`DIALOG_OPTION_KEY`, which tab opens
-    /// first stays OPEN) over Planet.
+    /// Key options tab (`DIALOG_OPTION_KEY`) over Planet. Its block
+    /// is the dialog's own identity, not `PLANET_OPTION_FIRST_TAB`:
+    /// the first-open sheet (#359) is a separate paint choice and
+    /// must not duplicate this row when it flips to Sound.
     PlanetOption,
     /// Sound options tab (`DIALOG_OPTION_SOUND`) over Planet:
     /// staged so the tab switches flip between genuine sheets.
@@ -303,7 +305,7 @@ impl Dialog {
         match self {
             Dialog::SelectMusic => SELECT_MUSIC_DIALOG_BLOCK,
             Dialog::ChannelInfo => CHANNEL_INFO_DIALOG_BLOCK,
-            Dialog::PlanetOption => PLANET_OPTION_FIRST_TAB.block_name(),
+            Dialog::PlanetOption => PlanetOptionTab::Key.block_name(),
             Dialog::PlanetOptionSound => PlanetOptionTab::Sound.block_name(),
             Dialog::PlanetOptionGame => PlanetOptionTab::Game.block_name(),
             Dialog::PlanetQuit => QUIT_DIALOG_BLOCK,
@@ -391,7 +393,7 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
     DialogRow {
         dialog: Dialog::PlanetOption,
         host: State::Planet,
-        block: PLANET_OPTION_FIRST_TAB.block_name(),
+        block: PlanetOptionTab::Key.block_name(),
     },
     DialogRow {
         dialog: Dialog::PlanetOptionSound,

@@ -374,21 +374,21 @@ const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
-/// Input wiring so far: any lane key or canvas click dismisses the
-/// splash onto the bare planet board, and the splash auto-advances
-/// there on its measured 5 s hold (ticket #24, guard:
+/// Input wiring so far: Escape and a canvas click dismiss the splash
+/// onto the bare planet board; lane keys stay inert (#356) and the
+/// splash auto-advances on its measured 5 s hold (guard:
 /// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
 /// clock for the hold (ticket #54, claims B38); the fixed-clock
-/// path stays the headless seam. The dismiss arms stay
-/// stand-ins: the exe set is only partly pinned (Escape dismisses
-/// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
-/// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
-/// `key-enter/` and `key-space/` both follow the ~5 s timer shape
-/// instead — yet Space is a lane bind, so the any-lane-key mapping
-/// is unpinned by counterexample). OPEN: the full `VK` sweep plus
-/// the exe lane-key mapping (guards: `lane_key_dismisses_splash_into_planet_board`,
+/// path stays the headless seam. The exe set is only partly pinned
+/// (Escape dismisses within ~0.3 s, `~/scratch/avi-hold/run3-escape/`;
+/// Enter and Space show no fast dismiss — `~/scratch/wt24-rig/`
+/// `key-enter/` and `key-space/` both follow the ~5 s timer).
+/// OPEN: the full `VK` sweep; the lane-key stand-in is removed, not
+/// replaced by a claim that Escape is the only exe key (guards:
+/// `lane_press_keeps_the_staged_splash_visible`,
+/// `lane_keys_keep_the_splash_until_escape_or_the_pinned_hold`,
 /// `click_dismisses_splash_into_planet_board`,
-/// `splash_click_edge_lands_the_same_bare_board`,
+/// `splash_click_edge_lands_the_same_bare_board_as_escape`,
 /// `escape_dismisses_splash_into_planet_board`,
 /// `splash_menu_keys_keep_splash`).
 /// Team buttons a waiting room offers (`TEAMA..H`, 0..7 — the
@@ -602,8 +602,8 @@ pub struct ScreenGame {
     /// Tab order follows [`PlanetOptionTab`] declaration order
     /// (Key, Sound, Game) — see [`Self::option_tab_slot`].
     planet_option_art: [Option<SceneArt>; 3],
-    /// Open options tab (first-open stand-in, OPEN — see
-    /// [`PLANET_OPTION_FIRST_TAB`]).
+    /// Open options tab (starts on the b3/b4-pinned Sound sheet —
+    /// see [`PLANET_OPTION_FIRST_TAB`]).
     planet_option_tab: PlanetOptionTab,
     /// Options-dialog values (`option.ini` beside the install root;
     /// loaded at boot, written back on the tab SAVE commit).
@@ -4189,8 +4189,8 @@ impl ScreenGame {
     }
 
     /// Stage the options-dialog sheet for the first-open tab
-    /// (`Dialog_Option_*` placements plus figures, OPEN — see
-    /// [`PLANET_OPTION_FIRST_TAB`]). The gear modal paints the
+    /// (`Dialog_Option_*` placements plus figures, pinned by b3/b4 —
+    /// see [`PLANET_OPTION_FIRST_TAB`]). The gear modal paints the
     /// open tab's sheet dialog-relative; empty art keeps the
     /// fallback title. Staging never moves the flow.
     pub fn load_planet_option_scene(
@@ -6575,15 +6575,13 @@ impl GameLoop for ScreenGame {
         if !down {
             return;
         }
-        match self.flow.current() {
-            Screen::Avi => {
-                self.enter(Screen::Planet);
-            }
-            Screen::Playing => {
-                let now = self.now_ms();
-                self.strike_at(lane, now);
-            }
-            _ => {}
+        // Splash lane presses stay inert (#356): the exe keeps the
+        // splash on Space and the other lane binds; only Escape and
+        // the pinned wall hold dismiss it. The former any-lane-key
+        // arm was a refuted stand-in.
+        if self.flow.current() == Screen::Playing {
+            let now = self.now_ms();
+            self.strike_at(lane, now);
         }
     }
 
@@ -7102,7 +7100,7 @@ mod game_tests {
     /// through a lit-emblem click (EASY center): the S0.3 boot walk
     /// every test driver shares.
     fn dismiss_splash_to_dialog(game: &mut ScreenGame) {
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
     }
 
@@ -7148,7 +7146,7 @@ mod game_tests {
     fn menu_walks_lobbies_to_playing() {
         use MenuKey;
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.menu_key(MenuKey::Confirm, true);
@@ -7281,7 +7279,7 @@ mod game_tests {
     fn menu_backs_out_of_lobbies() {
         use MenuKey;
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -7427,7 +7425,7 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
         // Empty list never moves.
         let mut bare = ScreenGame::new();
-        bare.lane_key(0, true);
+        bare.menu_key(MenuKey::Back, true);
         bare.click_planet(136, 88);
         bare.menu_key(MenuKey::Down, true);
         assert_eq!(bare.channel_scene.highlight, 0);
@@ -7438,7 +7436,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         // Ticket #189: Up/Down are rig-pinned no-ops, so the highlight
@@ -7455,7 +7453,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -7488,7 +7486,7 @@ mod game_tests {
         // (502,236)-(546,257).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.channel_scene.highlight, 0);
@@ -7502,7 +7500,7 @@ mod game_tests {
         // target).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.channel_enter_at(524, 297), None);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 297));
@@ -7516,7 +7514,7 @@ mod game_tests {
         // row 0 face (502,236)-(546,257).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.channel_scene.highlight, 0);
@@ -7531,7 +7529,7 @@ mod game_tests {
         // router.
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
@@ -7820,7 +7818,7 @@ mod game_tests {
         // never enters Room.
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
         assert_eq!(game.channel_scene.highlight, 0);
@@ -7834,7 +7832,7 @@ mod game_tests {
     fn click_outside_channel_rows_keeps_channel() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         game.ingest_snapshot(&InputSnapshot::click_at(700, 152));
@@ -7849,7 +7847,7 @@ mod game_tests {
         // read the pinned row rect (both axes), not the y band.
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         // y = 240 sits inside row 0's band (224-275).
         game.ingest_snapshot(&InputSnapshot::click_at(583, 240));
@@ -7868,7 +7866,7 @@ mod game_tests {
     fn six_channel_game() -> ScreenGame {
         let mut game = ScreenGame::new();
         game.set_channels(six_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game
@@ -8044,7 +8042,7 @@ mod game_tests {
         }
         let mut game = ScreenGame::new();
         game.set_channels(seven_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
@@ -8092,7 +8090,7 @@ mod game_tests {
         // listed, the row bands arm nothing and clicks hold the
         // dialog — the empty dialog still paints over the splash.
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 240));
@@ -8137,7 +8135,7 @@ mod game_tests {
     fn click_with_slash_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.set_channel_input("/w bob hi");
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
@@ -8151,7 +8149,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -8167,7 +8165,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         // Left-column second panel, file order index 1
@@ -8496,7 +8494,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -8540,7 +8538,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -8597,7 +8595,7 @@ mod game_tests {
     fn press_planet_game() -> ScreenGame {
         use crate::screens::side::PLANET_PROMO_LEFT_CODE;
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(
             Screen::Planet,
             vec![
@@ -8680,7 +8678,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -8909,7 +8907,7 @@ mod game_tests {
         // Archive-independent synthetic art: CI has no game data.
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -9163,7 +9161,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -9965,7 +9963,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.menu_key(MenuKey::Back, true);
@@ -9976,7 +9974,7 @@ mod game_tests {
     fn channel_list_paints_text_and_cursor() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         // 64x48 list: rows from y 18, text x 16; '2' top bar first.
         let mut buf = vec![0u32; 64 * 48];
@@ -10041,7 +10039,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -10058,7 +10056,7 @@ mod game_tests {
         // paints OPEN dim while the locked room paints LOCK red.
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(super::MenuKey::Confirm, true);
         let mut buf = vec![0u32; 200 * 150];
@@ -10092,7 +10090,7 @@ mod game_tests {
     fn room_list_paints_rows_and_cursor() {
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(super::MenuKey::Confirm, true);
         // 64x48 list: rows from y 12, text x 16; '3' top bar first.
@@ -12456,18 +12454,19 @@ mod game_tests {
     }
 
     #[test]
-    fn lane_key_dismisses_splash_into_planet_board() {
-        let mut game = ScreenGame::new();
+    fn lane_press_keeps_the_staged_splash_visible() {
+        let mut game = staged_splash_boot();
         assert_eq!(game.screen(), Screen::Avi);
         game.lane_key(3, true);
-        assert_eq!(game.screen(), Screen::Planet);
+        game.lane_key(3, false);
+        assert_eq!(game.screen(), Screen::Avi);
         let mut buf = vec![0u32; 16 * 12];
         game.paint(&mut Frame {
             buf: &mut buf,
             w: 16,
             h: 12,
         });
-        assert_eq!(buf[0], background_of(Screen::Planet));
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0), "logo still paints");
     }
 
     #[test]
@@ -12555,7 +12554,7 @@ mod game_tests {
         // own, so the windowed loop parks on these boards. The walk
         // follows the pinned menu path (`menu_walks_lobbies_to_playing`).
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(GameLoop::idle_repaint_interval(&game), None);
         for (key, screen) in [
@@ -12702,13 +12701,14 @@ mod game_tests {
     }
 
     #[test]
-    fn avi_boot_reaches_the_bare_planet_board_on_both_edges() {
-        // Key edge: boot shows the staged splash, one lane key
-        // dismisses onto the bare board.
+    fn avi_boot_reaches_the_bare_planet_board_on_escape_and_hold_edges() {
+        // Escape edge (#356): boot shows the staged splash and the
+        // pinned Back key dismisses onto the bare board. Lane keys
+        // no longer skip the hold (separate guard above).
         let mut keyed = staged_splash_boot();
         assert_eq!(keyed.screen(), Screen::Avi);
         let boot_hash = keyed.state_hash();
-        keyed.lane_key(3, true);
+        keyed.menu_key(MenuKey::Back, true);
         assert_eq!(keyed.screen(), Screen::Planet);
         assert_ne!(
             keyed.state_hash(),
@@ -12729,15 +12729,47 @@ mod game_tests {
 
     #[test]
     fn splash_menu_keys_keep_splash() {
-        // Dismiss-set boundary: only Back (Escape) leaves the splash —
+        // Dismiss-set boundary: Back (Escape) leaves the splash;
         // Confirm (Enter), Up, and Down keep it (rig-pinned Enter
-        // non-dismiss, `~/scratch/wt24-rig/key-enter/`; lane keys and
-        // canvas clicks are the stand-in dismiss arms, ticket #24).
+        // non-dismiss, `~/scratch/wt24-rig/key-enter/`). Lane keys
+        // keep it too since #356; the canvas-click dismiss arm stays
+        // a separate stand-in.
         let mut game = staged_splash_boot();
         for key in [MenuKey::Confirm, MenuKey::Up, MenuKey::Down] {
             game.menu_key(key, true);
             assert_eq!(game.screen(), Screen::Avi, "{key:?} keeps the splash");
         }
+    }
+
+    /// Ticket #356: the winit key path reaches this seam as
+    /// `WindowHandler::deliver_snapshot` -> `GameLoop::ingest_snapshot`
+    /// -> `InputEdge::Lane` -> `GameLoop::lane_key` -> this game.
+    /// Space (lane 3) and the other six bound lanes must keep the
+    /// splash: the exe's Enter/Space rig legs follow the ~5 s hold,
+    /// while Escape (`avi-hold/run3-escape/`) is the pinned fast
+    /// dismiss. The full exe VK set stays OPEN; this guard only
+    /// removes the refuted any-lane-key stand-in.
+    #[test]
+    fn lane_keys_keep_the_splash_until_escape_or_the_pinned_hold() {
+        assert_eq!(crate::lane_key(3), Some(winit::keyboard::KeyCode::Space));
+        let mut game = staged_splash_boot();
+        {
+            let game_loop: &mut dyn GameLoop = &mut game;
+            for lane in 0..crate::LANE_COUNT {
+                game_loop.lane_key(lane, true);
+                game_loop.lane_key(lane, false);
+                assert_eq!(
+                    game_loop.screen_name(),
+                    "avi",
+                    "lane {lane} must not fast-dismiss the splash"
+                );
+            }
+        }
+        assert_eq!(game.screen(), Screen::Avi);
+        paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS - 1);
+        assert_eq!(game.screen(), Screen::Avi, "hold still owns the edge");
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet, "Escape still dismisses");
     }
 
     #[test]
@@ -12752,12 +12784,12 @@ mod game_tests {
     }
 
     #[test]
-    fn splash_click_edge_lands_the_same_bare_board() {
+    fn splash_click_edge_lands_the_same_bare_board_as_escape() {
         // Third boot edge: a canvas click reaches the same bare board
-        // (and the same state hash) as the lane-key edge — every
-        // dismiss arm converges, no input invents a scene.
+        // (and the same state hash) as the pinned Escape edge — every
+        // remaining dismiss arm converges, no input invents a scene.
         let mut keyed = staged_splash_boot();
-        keyed.lane_key(3, true);
+        keyed.menu_key(MenuKey::Back, true);
         assert_eq!(keyed.screen(), Screen::Planet);
         let mut clicked = staged_splash_boot();
         clicked.ingest_snapshot(&InputSnapshot::click_at(400, 300));
@@ -13008,7 +13040,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Channel, placements, figures);
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
@@ -13045,7 +13077,7 @@ mod game_tests {
         )]);
         game.load_scene(Screen::Planet, Vec::new(), figures.clone());
         game.load_scene(Screen::Channel, Vec::new(), figures);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 340));
@@ -13104,7 +13136,7 @@ mod game_tests {
         )]);
         game.load_scene(Screen::Planet, Vec::new(), figures.clone());
         game.load_scene(Screen::Channel, Vec::new(), figures);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         let bar = pack_xrgb(0xFF, 0x00, 0x00);
         for (pointer, row, row_top) in [((401, 366), 2, 324), ((405, 378), 3, 375)] {
@@ -13134,7 +13166,7 @@ mod game_tests {
             PlanetAction, PlanetBand, PLANET_BUTTON_EASY_CODE, PLANET_BUTTON_FREE_CODE,
         };
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(
             Screen::Planet,
             vec![
@@ -13202,7 +13234,7 @@ mod game_tests {
             PLANET_NORMAL_RECT, PLANET_OPTION_CODE, PLANET_OPTION_RECT,
         };
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(
             Screen::Planet,
             vec![
@@ -13355,7 +13387,7 @@ mod game_tests {
         // over an emblem must not arm board hover behind it.
         use crate::screens::side::{PlanetAction, PlanetBand};
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
@@ -13380,7 +13412,7 @@ mod game_tests {
         // the middle cell and Right on the right cell, never crossed.
         use crate::screens::side::{PlanetAction, PlanetPromo, PLANET_PROMO_RIGHT_CODE};
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(
             Screen::Planet,
             vec![
@@ -13515,7 +13547,7 @@ mod game_tests {
             PLANET_PROMO_STOP_CODE,
         };
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         let banner = "Planet_Promotion.ojs";
         let mut frames = AvatarFigure::default();
         for word in [0x7C00u16, 0x03E0u16, 0x001Fu16] {
@@ -13660,7 +13692,7 @@ mod game_tests {
         // the repaint pulse, so the advance lands within one pulse
         // of the cadence.
         let mut game = promo_carousel_game();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(
             GameLoop::idle_repaint_interval(&game),
@@ -13674,7 +13706,7 @@ mod game_tests {
         // owes the loop nothing — stopped stays fully idle (the #138
         // parked-loop result holds on the promo board too).
         let mut game = promo_carousel_game();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(400, 523);
         assert!(!game.planet_promo_spinning());
         assert_eq!(GameLoop::idle_repaint_interval(&game), None);
@@ -13688,7 +13720,7 @@ mod game_tests {
         // Channel/Room/Waiting lobbies through the public seam, so
         // the modal arm carries the covered-board case here.)
         let mut game = promo_carousel_game();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         assert!(game.planet_promo_spinning());
@@ -14034,7 +14066,7 @@ mod game_tests {
         // past the 3000 ms cadence advances the banner one frame —
         // the heartbeat pulse drives the accumulator through paint.
         let mut game = promo_carousel_game();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
             paint_planet_frame_at(&mut game, now_ms);
         }
@@ -14047,7 +14079,7 @@ mod game_tests {
         // leaves the banner on its frame — the accumulator never
         // arms while stopped.
         let mut game = promo_carousel_game();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(400, 523);
         assert!(!game.planet_promo_spinning());
         for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
@@ -14080,7 +14112,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         let mut buf = vec![STALE_SPLASH; 64 * 48];
@@ -14108,7 +14140,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Room, placements, figures);
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -14333,7 +14365,7 @@ mod game_tests {
             premium: false,
             room_type: 0,
         }]);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -14359,7 +14391,7 @@ mod game_tests {
         // selection rides arrow scrolls plus a mouse row click.
         let mut game = ScreenGame::new();
         game.set_channels(six_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
@@ -14390,7 +14422,7 @@ mod game_tests {
         let (placements, figures) = corner_scene_art("State_Planet.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Planet, placements, figures);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
@@ -14408,7 +14440,7 @@ mod game_tests {
     fn planet_fallback_paints_card_and_title() {
         // No staged art: flat card plus the placeholder title.
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
             &mut Frame {
@@ -14464,7 +14496,7 @@ mod game_tests {
             .collect();
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Planet, placements, HashMap::new());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -14487,7 +14519,7 @@ mod game_tests {
         // Without placements no caption paints (no fallback geometry).
         let mut bare = ScreenGame::new();
         bare.load_scene(Screen::Planet, Vec::new(), HashMap::new());
-        bare.lane_key(3, true);
+        bare.menu_key(MenuKey::Back, true);
         let mut bare_buf = vec![0u32; 800 * 600];
         bare.paint_at(
             &mut Frame {
@@ -14503,7 +14535,7 @@ mod game_tests {
     #[test]
     fn power_disc_opens_quit_confirm_and_ok_quits() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game.click_planet(769, 580);
         assert_eq!(
@@ -14537,7 +14569,7 @@ mod game_tests {
         // rect 1): records the family pick and opens the dialog
         // over the board (live-verified 2026-11-09, `docs/planet.md`).
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game.click_planet(386, 88);
         assert_eq!(
@@ -14555,7 +14587,7 @@ mod game_tests {
         // like the mouse emblem edge, so the board always goes
         // somewhere. No bare-board → Room path is evidenced.
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Channel);
@@ -14568,7 +14600,7 @@ mod game_tests {
         // rects 12/14): each press records its cell, the board
         // stays, and no modal opens (carousel semantics OPEN).
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.load_scene(
             Screen::Planet,
             vec![
@@ -14617,7 +14649,7 @@ mod game_tests {
     #[test]
     fn quit_confirm_cancel_closes_without_quitting() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         // CANCEL fallback box center (native 450,253).
@@ -14630,7 +14662,7 @@ mod game_tests {
     #[test]
     fn gear_disc_opens_options_and_escape_closes_it() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(729, 580);
         assert_eq!(
             game.planet_modal(),
@@ -14703,7 +14735,7 @@ mod game_tests {
     /// Open the options dialog on the planet board (gear disc
     /// fallback rect, no staged board art needed).
     fn open_options(game: &mut ScreenGame) {
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(729, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
     }
@@ -14723,6 +14755,8 @@ mod game_tests {
             &[(OPTION_KEY_LANE_FIRST, 100, 100)],
         );
         open_options(&mut game);
+        // The gear opens Sound (#359); this guard exercises Key.
+        game.switch_option_tab(PlanetOptionTab::Key);
         click_button(&mut game, 100, 100);
         assert_eq!(game.option_rebind_armed(), Some(0));
         assert!(game.capture_raw_key(KeyCode::KeyA, true));
@@ -14745,6 +14779,7 @@ mod game_tests {
             &[(OPTION_KEY_LANE_FIRST + 1, 140, 100)],
         );
         open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
         click_button(&mut game, 140, 100);
         assert_eq!(game.option_rebind_armed(), Some(1));
         assert!(
@@ -14823,19 +14858,25 @@ mod game_tests {
         let mut game = ScreenGame::new();
         stage_option_buttons(
             &mut game,
-            PlanetOptionTab::Key,
-            &[(super::super::side::OPTION_KEY_SOUNDSET, 100, 100)],
+            PlanetOptionTab::Sound,
+            &[(super::super::side::OPTION_SOUND_KEYSET, 100, 100)],
         );
-        stage_option_buttons(&mut game, PlanetOptionTab::Sound, &[]);
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(super::super::side::OPTION_KEY_SOUNDSET, 140, 100)],
+        );
         open_options(&mut game);
-        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Key);
-        click_button(&mut game, 100, 100);
         assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+        click_button(&mut game, 100, 100);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Key);
         assert_eq!(
             game.option_rebind_armed(),
             None,
             "switching tabs disarms a pending rebind"
         );
+        click_button(&mut game, 140, 100);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
     }
 
     #[test]
@@ -14855,6 +14896,7 @@ mod game_tests {
             &[(PlanetOptionTab::Sound.save_code(), 100, 100)],
         );
         open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
         click_button(&mut game, 100, 100);
         assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyA, true));
         game.switch_option_tab(PlanetOptionTab::Sound);
@@ -15783,7 +15825,7 @@ mod game_tests {
     /// staged control.
     fn game_with_open_create_dialog() -> ScreenGame {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -15884,7 +15926,7 @@ mod game_tests {
             .expect("create-room stages with real bytes");
         let placements = art.placements.clone();
         game.load_create_room_scene(art.placements, art.figures);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -15933,7 +15975,7 @@ mod game_tests {
             }],
             HashMap::new(),
         );
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -15955,7 +15997,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -15988,7 +16030,7 @@ mod game_tests {
     fn password_dialog_commits_join_and_enters_waiting() {
         let mut game = ScreenGame::new();
         // Room screen needed for the dialog commit path to advance.
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -16076,7 +16118,7 @@ mod game_tests {
             HashMap::new(),
         );
         game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game
     }
@@ -16134,7 +16176,7 @@ mod game_tests {
         game.with_audio(Box::new(NullBackend::new()), HashMap::new());
         game.stage_scene_bgm(bank);
         assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(8));
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
         assert!(game.scene_bgm_selection().is_some_and(|sel| sel.repeat));
@@ -17625,7 +17667,7 @@ mod game_tests {
         // the side gate.
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.load_side_scene(shop_side_placements(), HashMap::new());
@@ -18251,7 +18293,7 @@ mod game_tests {
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -20424,7 +20466,7 @@ mod game_tests {
     #[test]
     fn channel_confirm_with_a_whisper_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.set_channel_input("/w host psst");
@@ -20447,7 +20489,7 @@ mod game_tests {
     #[test]
     fn typing_appends_to_the_channel_draft_only_while_there() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.text_input("hi");
@@ -20463,7 +20505,7 @@ mod game_tests {
     #[test]
     fn channel_backspace_erases_one_character_only_while_there() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.text_input("héllo");
         game.delete_text();
@@ -20478,7 +20520,7 @@ mod game_tests {
     #[test]
     fn channel_confirm_with_a_draft_sends_and_stays_in_channel() {
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.set_channel_input("go");
         game.menu_key(MenuKey::Confirm, true);
@@ -20885,7 +20927,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -20933,7 +20975,7 @@ mod game_tests {
         // survives for when the sheet closes.
         let mut game = ScreenGame::new();
         // Boot → Planet → Channel → Room (the documented walk).
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -21145,7 +21187,7 @@ mod game_tests {
     fn channel_typing_leaves_the_room_draft_alone() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.set_lobby_input(LobbyChat::Room, "room");
@@ -21325,6 +21367,7 @@ mod game_tests {
         std::fs::create_dir_all(&root).expect("temp install root");
         game.load_options(&root);
         open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
         click_staged_dialog_button(&mut game, &placements, PlanetOptionTab::Key.save_code());
         assert_eq!(
             game.planet_modal(),
@@ -21345,6 +21388,7 @@ mod game_tests {
             return;
         };
         open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
         click_staged_dialog_button(&mut game, &placements, PlanetOptionTab::Key.exit_code());
         assert_eq!(game.planet_modal(), None, "EXIT closes the dialog");
     }
@@ -21361,6 +21405,7 @@ mod game_tests {
         };
         stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
         open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
         // Paint parity (guards #132): the KEY3 lane button's art must
         // paint at its staged rect, so visible art and the hit rect
         // coincide. Isolate the dialog paint (no board backdrop) so

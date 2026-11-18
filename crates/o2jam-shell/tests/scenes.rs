@@ -88,7 +88,7 @@ fn painted_game(game: &mut ScreenGame, w: usize, h: usize, now_ms: u64) -> Vec<u
 
 /// Walk the menu journey from splash to the loading gate.
 fn walk_to_loading(game: &mut ScreenGame) {
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
@@ -218,7 +218,7 @@ fn splash_paints_logo_card_over_background() {
 fn channel_lists_entries_with_highlight_cursor() {
     let mut game = ScreenGame::new();
     game.set_channels(two_channels());
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     assert_eq!(game.screen(), Screen::Channel);
     let buf = painted_game(&mut game, 64, 48, 0);
@@ -234,12 +234,12 @@ fn room_marks_locked_room_row() {
     // frame for the open/locked rows to differ.
     let mut open_game = ScreenGame::new();
     open_game.set_rooms(vec![room_row(false)]);
-    open_game.lane_key(3, true);
+    open_game.menu_key(MenuKey::Back, true);
     open_game.click_planet(136, 88);
     open_game.menu_key(MenuKey::Confirm, true);
     let mut locked_game = ScreenGame::new();
     locked_game.set_rooms(vec![room_row(true)]);
-    locked_game.lane_key(3, true);
+    locked_game.menu_key(MenuKey::Back, true);
     locked_game.click_planet(136, 88);
     locked_game.menu_key(MenuKey::Confirm, true);
     let open = painted_game(&mut open_game, 96, 48, 0);
@@ -255,7 +255,7 @@ fn room_marks_locked_room_row() {
 fn waiting_shows_ready_dot_for_occupied_seat() {
     let mut game = ScreenGame::new();
     game.set_joined_room(seated_room());
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
@@ -357,7 +357,7 @@ fn result_retries_to_waiting_and_leaves_to_room() {
 #[test]
 fn waiting_backs_out_to_room_list() {
     let mut game = ScreenGame::new();
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
@@ -521,7 +521,7 @@ fn channel_layers_list_over_staged_art() {
     let mut game = ScreenGame::new();
     game.set_channels(two_channels());
     stage_screen_art(&mut game, Screen::Channel, "Dialog_ChannelSelectBar.ojs");
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     assert_eq!(game.screen(), Screen::Channel);
     let buf = painted_game(&mut game, 64, 48, 0);
@@ -538,7 +538,7 @@ fn room_layers_rows_over_staged_art() {
     let mut game = ScreenGame::new();
     game.set_rooms(vec![room_row(false)]);
     stage_screen_art(&mut game, Screen::Room, "Room_List.ojs");
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Room);
@@ -554,7 +554,7 @@ fn waiting_layers_seats_over_staged_art() {
     let mut game = ScreenGame::new();
     game.set_joined_room(seated_room());
     stage_screen_art(&mut game, Screen::Waiting, "Wait_TeamA.ojs");
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);

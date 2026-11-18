@@ -24,7 +24,7 @@ mod live_boot_gate_tests {
         Request, RoomList, WireMessage, HEADER_LEN,
     };
     use o2jam_render::Frame as RenderFrame;
-    use o2jam_shell::screens::side::MyRoomPanel;
+    use o2jam_shell::screens::side::{MyRoomPanel, PlanetOptionTab};
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::{GameLoop, Screen};
 
@@ -246,6 +246,105 @@ mod live_boot_gate_tests {
         );
         let served = server.join().unwrap();
         assert_eq!(served.nickname, "gate");
+    }
+
+    /// Ticket #356 live chain: `live_boot_gate` test ->
+    /// `connect::connect_and_login_with_transport` ->
+    /// `assemble_online_session` -> `OnlineSession`'s `GameLoop::lane_key`
+    /// -> `ScreenGame::lane_key`. The exe keeps the splash on Space and
+    /// the other lane binds (`~/scratch/wt24-rig/key-space/`); only
+    /// Escape is the pinned fast dismiss (`avi-hold/run3-escape/`).
+    #[test]
+    fn live_boot_lane_press_keeps_the_splash_then_escape_dismisses_it() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        assert_eq!(session.screen(), Screen::Avi);
+        {
+            let game_loop: &mut dyn GameLoop = &mut session;
+            game_loop.lane_key(3, true); // Space, the pinned lane-3 bind
+            game_loop.lane_key(3, false);
+            assert_eq!(
+                game_loop.screen_name(),
+                "avi",
+                "a live lane press must not skip the splash hold"
+            );
+        }
+        assert_eq!(session.screen(), Screen::Avi);
+        session
+            .game_mut()
+            .menu_key(o2jam_shell::MenuKey::Back, true);
+        assert_eq!(session.screen(), Screen::Planet, "Escape reaches Planet");
+        server.join().unwrap();
+    }
+
+    /// Ticket #359 live chain: `live_boot_gate` test ->
+    /// `connect::connect_and_login_with_transport` ->
+    /// `assemble_online_session` (stages `Dialog_Option_*.bnd`) ->
+    /// `OnlineSession`'s `GameLoop::ingest_snapshot` (gear press/release)
+    /// -> `ScreenGame::click_planet` -> `planet_board.open_modal(Options)`
+    /// -> `ScreenGame::paint` -> `paint_planet_options` over the open
+    /// tab's staged sheet. The b3/b4 exe captures (manifest sha256
+    /// `4f0428d0…` / `e2241ab5…`, `options.png` `333f9bae…` / `6d17a781…`)
+    /// pin Sound sliders as the first sheet.
+    #[test]
+    fn live_boot_gear_opens_the_pinned_sound_sheet() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        assert_eq!(session.screen(), Screen::Avi);
+        session
+            .game_mut()
+            .menu_key(o2jam_shell::MenuKey::Back, true);
+        assert_eq!(session.screen(), Screen::Planet);
+        {
+            let game_loop: &mut dyn GameLoop = &mut session;
+            game_loop.ingest_snapshot(&o2jam_shell::InputSnapshot::press_at(729, 580));
+            game_loop.ingest_snapshot(&o2jam_shell::InputSnapshot::release_at(729, 580));
+        }
+        assert!(
+            session.game_mut().planet_modal().is_some(),
+            "gear press opens the options modal"
+        );
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Sound,
+            "b3/b4 pin the four volume sliders as the first sheet"
+        );
+        // The painter reads the open tab's staged `.bnd` sheet: paint
+        // Sound, flip to Key through the switch, and require the frame
+        // to change. A constant flip with no painter wiring stays red.
+        let mut sound_frame = vec![0u32; 800 * 600];
+        let mut key_frame = vec![0u32; 800 * 600];
+        session.game_mut().paint(&mut RenderFrame {
+            buf: &mut sound_frame,
+            w: 800,
+            h: 600,
+        });
+        session.game_mut().switch_option_tab(PlanetOptionTab::Key);
+        session.game_mut().paint(&mut RenderFrame {
+            buf: &mut key_frame,
+            w: 800,
+            h: 600,
+        });
+        assert_ne!(sound_frame, key_frame, "the painter shows the open sheet");
+        server.join().unwrap();
     }
 
     /// Ticket #136: side screens opened from the room on the live

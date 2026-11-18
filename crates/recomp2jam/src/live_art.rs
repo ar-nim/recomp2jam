@@ -86,8 +86,9 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
 }
 
 /// Stage the planet-board modal sheets: all three options tabs
-/// (`DIALOG_OPTION_KEY/SOUND/GAME`; which tab opens first stays
-/// OPEN) and the quit-confirm (`Dialog_Question1`). Both stay modal
+/// (`DIALOG_OPTION_KEY/SOUND/GAME`; the gear opens Sound, pinned by
+/// the b3/b4 exe captures) and the quit-confirm (`Dialog_Question1`).
+/// Both stay modal
 /// art (the game paints them dialog-relative only while open),
 /// never scene slots. Each block stages independently; a miss keeps
 /// the fallback popup/title. Shared with the shots walk (one
@@ -409,7 +410,7 @@ mod live_art_tests {
     /// onto the bare board, then one Confirm per edge: emblem →
     /// dialog → room → waiting → loading).
     fn walk_to(game: &mut ScreenGame, target: Screen) {
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         if target == Screen::Planet {
             return;
         }
@@ -734,7 +735,7 @@ mod live_art_tests {
             .expect("interface archive stages");
         let mut game = live_game();
         stage_planet_dialogs(&mut game, &archive);
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(729, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
         let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);

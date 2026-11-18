@@ -2330,9 +2330,10 @@ pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
 
 /// Options dialog over the bare board: the staged
 /// `Dialog_Option_*` sheet for `tab` (dialog-relative), or a
-/// title-only fallback without staged art (tab choice and mount
-/// stay OPEN — see [`PLANET_OPTION_FIRST_TAB`](super::side::PLANET_OPTION_FIRST_TAB)/// ). Escape (and the tab's `Option_Exit` button, when staged)
-/// closes it.
+/// title-only fallback without staged art. The gear's first tab is
+/// pinned to Sound by the b3/b4 captures (see
+/// [`PLANET_OPTION_FIRST_TAB`](super::side::PLANET_OPTION_FIRST_TAB)).
+/// Escape (and the tab's `Option_Exit` button, when staged) closes it.
 pub fn paint_planet_options(frame: &mut Frame<'_>, art: Option<&SceneArt>, tab: PlanetOptionTab) {
     if let Some(art) = art.filter(|art| art.has_figures()) {
         paint_dialog_scene(frame, art);

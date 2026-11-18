@@ -2917,8 +2917,8 @@ pub const fn planet_caption_for_code(code: u32) -> Option<PlanetCaption> {
 /// Options-dialog tab: one per `Dialog_Option_*` block
 /// (`ControlList_Interface.txt`; the blocks name each other's
 /// tab buttons for switching). The gear opens the dialog
-/// (live-pinned, `docs/wine-boot.md`); which tab it opens on
-/// first stays OPEN (see [`PLANET_OPTION_FIRST_TAB`]).
+/// (live-pinned, `docs/wine-boot.md`) on the Sound sheet
+/// (b3/b4 exe captures; see [`PLANET_OPTION_FIRST_TAB`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanetOptionTab {
     /// Key bindings (`DIALOG_OPTION_KEY`, line 1242).
@@ -3095,15 +3095,15 @@ pub const OPTION_GAME_LONGNOTE_USED: u32 = 0x2F20_9016;
 /// Game-tab long-note buttons (see [`OPTION_GAME_LONGNOTE_USED`]).
 pub const OPTION_GAME_LONGNOTE_NONE: u32 = 0x2F20_9017;
 
-/// First-open tab stand-in: the Key block (first in
-/// `ControlList_Interface.txt` file order). OPEN: no capture or
-/// static pin shows which tab the gear opens first. Named next
-/// step — rig capture of a gear click (`~/scratch/planet-verify/`
-/// recipe: boot explorer desktop, dismiss the notice, SendInput
-/// click the gear disc at native ~(729,580), capture the dialog).
+/// First-open tab: the Sound slider sheet, pinned by the exe
+/// b3/b4 gear captures (manifest sha256 `4f0428d0…` / `e2241ab5…`,
+/// `options.png` `333f9bae…` / `6d17a781…`): both frames show
+/// `배경음악 Vol`, `게임음악/효과음 Vol (F2/F1)`, `게임음악 Vol`,
+/// `효과음 Vol` with DEFAULT/SAVE/EXIT. The former Key stand-in
+/// (first in `ControlList_Interface.txt` file order) was refuted.
 /// Tab switching rides the staged `KEYSET`/`SOUNDSET`/`GAMESET`
 /// codes through their `.bnd` rects (no literals).
-pub const PLANET_OPTION_FIRST_TAB: PlanetOptionTab = PlanetOptionTab::Key;
+pub const PLANET_OPTION_FIRST_TAB: PlanetOptionTab = PlanetOptionTab::Sound;
 
 /// Channel-list dialog block (`CDChannelInfo`; `ControlList_Interface.txt`
 /// `DIALOG_CHANNEL_INFO`). Host State is Planet: the sheet opens over the
@@ -4963,8 +4963,10 @@ mod side_tests {
         assert_eq!(PlanetOptionTab::Key.exit_code(), 0x2520_0017);
         assert_eq!(PlanetOptionTab::Sound.exit_code(), 0x2620_0012);
         assert_eq!(PlanetOptionTab::Game.exit_code(), 0x2F20_000F);
-        // First-open tab is an OPEN stand-in (file order), never a pin.
-        assert_eq!(PLANET_OPTION_FIRST_TAB, PlanetOptionTab::Key);
+        // First-open sheet pinned by the exe b3/b4 gear captures:
+        // manifest `4f0428d0…` / `e2241ab5…`, `options.png`
+        // `333f9bae…` / `6d17a781…` — four volume sliders.
+        assert_eq!(PLANET_OPTION_FIRST_TAB, PlanetOptionTab::Sound);
     }
 
     #[test]

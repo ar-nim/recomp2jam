@@ -490,7 +490,7 @@ pub fn stage_room_lobby(game: &mut ScreenGame) {
         premium: false,
         room_type: 0,
     }]);
-    game.lane_key(3, true);
+    game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     debug_assert_eq!(game.screen(), Screen::Room);

@@ -2368,7 +2368,7 @@ mod cli_build_tests {
             population: 5,
             active: true,
         }]);
-        game.lane_key(3, true);
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(o2jam_shell::MenuKey::Confirm, true);
         assert_eq!(game.screen(), o2jam_shell::Screen::Room);

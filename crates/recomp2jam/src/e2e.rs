@@ -233,15 +233,16 @@ impl E2eWalker {
         Ok(())
     }
 
-    /// Dismiss the splash onto the bare board with the lane key.
+    /// Dismiss the splash onto the bare board with the pinned Escape
+    /// edge (lane keys keep the splash since #356).
     ///
     /// # Errors
     ///
     /// The dismiss edge misses Planet.
     fn dismiss_splash(&mut self) -> anyhow::Result<()> {
-        self.game.lane_key(3, true);
+        self.game.menu_key(MenuKey::Back, true);
         self.require_screen(Screen::Planet, "splash-dismiss")?;
-        self.record("lane-key-dismisses-splash", E2E_MENU_PAINT_MS)
+        self.record("escape-dismisses-splash", E2E_MENU_PAINT_MS)
     }
 
     /// Open the Options dialog through the gear disc, then Escape out.

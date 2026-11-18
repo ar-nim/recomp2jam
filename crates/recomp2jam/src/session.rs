@@ -3480,7 +3480,7 @@ pub(super) mod session_tests {
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -3497,7 +3497,7 @@ pub(super) mod session_tests {
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
@@ -3510,7 +3510,7 @@ pub(super) mod session_tests {
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -3605,7 +3605,7 @@ pub(super) mod session_tests {
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -3626,7 +3626,7 @@ pub(super) mod session_tests {
     ) -> (OnlineSession, thread::JoinHandle<()>) {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -3905,7 +3905,7 @@ pub(super) mod session_tests {
         });
 
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -3994,7 +3994,7 @@ pub(super) mod session_tests {
         });
 
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -4102,7 +4102,7 @@ pub(super) mod session_tests {
         });
 
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -4194,7 +4194,7 @@ pub(super) mod session_tests {
         });
 
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -4282,7 +4282,7 @@ pub(super) mod session_tests {
             role: PlacementRole::Single,
         };
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -5730,7 +5730,7 @@ pub(super) mod session_tests {
         room.difficulty = 2;
         room.speed = 1;
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -7288,7 +7288,7 @@ pub(super) mod session_tests {
         }
         let (port, server) = fake_gateway(|_stream| {});
         let mut game = ScreenGame::new();
-        game.lane_key(3, true);
+        game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);

@@ -28,6 +28,11 @@ state-walk shortcut. Aims are native pixels: gear `(729,580)` from
 
 ## What was driven, what persisted
 
+This trace predates #359: it records the old Key-first stand-in.
+The current client opens the Sound sheet first, pinned by the exe
+b3/b4 gear captures (see `docs/options.md`); the tab-switch steps
+below still exercise the same staged codes.
+
 Configure phase (16 events): Escape dismissed Avi → planet; gear
 `(729,580)` opened Key; `KEY1 (320,362)` armed lane 0 and XTEST `a`
 rebound it; Key SAVE `(409,532)`; SOUNDSET `(405,123)`, BGM Down

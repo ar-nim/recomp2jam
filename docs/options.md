@@ -4,8 +4,25 @@ The gear disc opens three staged sheets over the planet board
 (`DIALOG_OPTION_KEY` / `DIALOG_OPTION_SOUND` / `DIALOG_OPTION_GAME`,
 all three staged through the declaration since #18 — tab switches
 ride the staged `KEYSET`/`SOUNDSET`/`GAMESET` codes through their
-`.bnd` rects, never literals). Which tab opens first stays OPEN
-(first-open stand-in: Key).
+`.bnd` rects, never literals).
+
+First-open sheet: **Sound**, the four volume sliders. Exe 7.55
+(`OTwo.exe` sha256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`),
+two qualified gear packs:
+
+- `~/scratch/side-scenes/b3-dialogs/`, manifest sha256
+  `4f0428d04ebd8ceba875f67e8eb4daa4d880d7379323b735483cbc3567c176d2`,
+  `artifacts/screenshots/options.png` sha256
+  `333f9baee3795c5cdfe05be230a3857ca31f4d6fb5fad88454c1303c84d6198d`.
+- `~/scratch/side-scenes/b4-dialogs/`, manifest sha256
+  `e2241ab5974a66c222cc925f994ffae60b81cd0e1a51905fb059eb8971a506c2`,
+  `artifacts/screenshots/options.png` sha256
+  `6d17a781e4d5e522da5ad72e62c26281ae0d7317b20bde9d7bad73421548043e`.
+
+Both frames show `배경음악 Vol`, `게임음악/효과음 Vol (F2/F1)`,
+`게임음악 Vol`, `효과음 Vol`, with DEFAULT/SAVE/EXIT. The former Key
+stand-in (first in `ControlList_Interface.txt` file order) is
+refuted; this pin replaces it. Tab-switch captures remain OPEN.
 
 ## What the dialog does
 
