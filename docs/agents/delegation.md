@@ -117,6 +117,65 @@ template) and adds:
 - Implementer address: address the subagent as `implementer` (never `junior`)
   throughout the brief and its report.
 
+## Brief and report templates
+
+Copy these shapes verbatim. `docs/agents/issue-tracker.md` (implementer brief
+template) stays authoritative for tracker and window-seam rules; the templates
+below make their shape a single source instead of a per-spawn rewrite.
+
+### Brief template
+
+```text
+Ticket: #<number> — <title> (one ticket, one leg)
+Worktree: <path> | Branch: <name>
+Pre-flight: git rev-parse --show-toplevel == <path>
+Base SHA: <full 40-hex SHA>; git cat-file -t <sha> prints commit
+Acceptance: <paste every criterion verbatim; no paraphrase>
+Deliverables: <exact filenames>; no aliases or variants without asking
+Evidence: <paths / evidence ids>; reviewer opens each artifact (pixel rule)
+Gates: <exact commands, both test arms>; wrap blocking runs in timeout 600
+Thinking: medium | Skips left: 3 | Exemplars: <verified SHAs or doc entries>
+Never push; never comment on or close issues. Report: the template below.
+```
+
+### Report template
+
+```text
+## Answer
+<answer first: what changed and why, in one or two sentences>
+
+## Branch and commit
+Branch: <name>
+Base SHA: <full SHA copied from the brief>
+Commit SHA: <full SHA printed by git rev-parse HEAD>
+Verification: <paste git rev-parse HEAD and git cat-file -t <sha> output>
+
+## Files
+- <exact path>:<line> — <change>
+<every touched file; `git status` clean of unintended files; no aliases>
+
+## Acceptance criteria
+| Criterion (verbatim) | MET / NOT MET / OPEN | Command + output or file:line |
+
+## Gates
+- <exact command> — exit <n>
+<PASS and FAIL lines for every named guard; no bare PASS>
+
+## Skips
+<none, or each skip with its named sources>
+
+## Reproduce
+1. <command>
+2. <command>
+
+## Evidence opened
+<exact artifacts the reviewer opened, or none — docs-only>
+```
+
+A report with a short SHA, a SHA from memory, or a renamed file is rejected
+on sight: two 2026-11-16 reports transposed SHAs, and a full `git rev-parse`
+output plus exact filenames is what makes the transposition visible.
+
 ## Merge-conflict discipline
 
 Retro 2026-11-12: mid-conflict mistakes cost a session. When a merge
