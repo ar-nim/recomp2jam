@@ -272,7 +272,12 @@ Closed by slice 3: the 4025 send moments (§2's table above) and the
 ## 6. Our client today
 
 Slices 1-3 landed (1+2 merged with the #273/#274 song-dialog filter
-columns, `docs/select-filters.md`); slices 4-5 still open.
+columns, `docs/select-filters.md`). The promote half of slice 4 landed:
+the queue is pumped in Waiting, a fetched chart is staged in `Music\Temp\`
+and renamed into `Music\`, the staged catalog takes the rescan, and the
+session sends `4038` (100 %) then `5012`. The real WinInet FTP transfer,
+partial progress and the download bar are still OPEN; without a fetch
+source the engine stays idle.
 
 - `crates/o2jam-file/src/music.rs`: pure availability model.
   `installed_music(names)` packs a `Music\` listing into the seat shape
@@ -314,14 +319,18 @@ columns, `docs/select-filters.md`); slices 4-5 still open.
   stand-in shape the song dialog uses. `music_state_for(song_id)` is our
   own byte (§2's two-way answer) and `room_music_id` the staged room
   song.
-- `crates/o2jam-shell/src/music_download.rs`: the pure download queue
-  behind the kick (§4). `MusicDownload::enqueue` keeps one request per
-  song and `is_running` is the scene's `+0x4fc`; the transfer, promote,
-  progress and announce are slice 4.
+- `crates/o2jam-shell/src/music_download.rs`: the download queue behind
+  the kick (§4). `MusicDownload::enqueue` keeps one request per song and
+  `is_running` is the scene's `+0x4fc`; `pump` reads a named chart from
+  the configured source, parks it in `Music\Temp\`, renames it into
+  `Music\` (VA `0x4fa5b0`) and reports the completion. `chart_file_name`
+  is the exe's `o2ma<id>.ojn` name (VA `0x4f7a30`).
 - `crates/o2jam-shell/src/screens/game/mod.rs` `begin_music_download`
-  is the kick the session calls; the download notice
+  is the kick the session calls; `pump_music_downloads` advances the
+  queue and restages the scanned availability into every catalog row,
+  so a promoted song becomes selectable again. The download notice
   (`WAITING_START_DOWNLOAD_NOTICE`, VA `0x6459e8`) stands in for the
-  download bar (`Wait_Downloding.ojs`) until slice 4 paints it.
+  download bar (`Wait_Downloding.ojs`), whose geometry stays OPEN.
 - `crates/recomp2jam/src/connect.rs`: `run_song_flow` sends the honest
   `UpdateMusicState` 4025 (`Ready 0` when the install has the chart
   file, `NoMusic 1` when not) instead of the old blind
@@ -339,7 +348,14 @@ columns, `docs/select-filters.md`); slices 4-5 still open.
   the 4035 answer marks our own state non-Ready, retries `4010` from the
   4035/4037 ready arms, and keeps Waiting when a 4011 arrives with a
   non-zero result. 4039 decodes and traces only — the percentage has no
-  staged seat field until the download bar lands (slice 4).
+  staged seat field until the download bar lands (OPEN).
+  `configure_music_source` points the engine at the optional
+  `O2JAM_MUSIC_SOURCE` local mirror (our adapter, not an exe setting;
+  the WinInet FTP client stays OPEN). Each Waiting paint runs
+  `poll_music_downloads` -> `ScreenGame::pump_music_downloads` and reports
+  a promoted chart as `SetDownloadProgress` 4038 (100 %) then
+  `SyncMusicDownload` 5012 (§4's announce). Partial progress percentages,
+  retry notices and the bar remain OPEN.
 - `crates/o2jam-net`: 4025 `UpdateMusicState`, 4026/4022/4024/4058 event
   ids, 4034 `AcquireMusicRequest`, 4035 `AcquireMusic`, 4036
   `SyncMemberMusicState`, 4037 `SyncMemberMusicStateEvent`, 4039

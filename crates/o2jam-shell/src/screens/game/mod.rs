@@ -66,7 +66,7 @@ use super::side::{
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
     SELECT_NOT_DOWNLOADED_NOTICE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
 };
-use crate::music_download::MusicDownload;
+use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
@@ -521,8 +521,8 @@ pub const WAITING_START_NOT_READY_NOTICE: &str = "Some players are not ready.";
 pub const WAITING_START_TEAMS_NOTICE: &str = "The teams do not match.";
 /// Download-in-progress notice (VA `0x6459e8`): the pinned text for
 /// "a transfer is running, wait for it". The exe shows the download bar
-/// (`Wait_Downloding.ojs`, §4) at this moment instead; the bar lands in
-/// slice 4, so this class stands in until then.
+/// (`Wait_Downloding.ojs`, §4) at this moment instead; its sheet
+/// geometry stays OPEN, so this class stands in until then.
 pub const WAITING_START_DOWNLOAD_NOTICE: &str =
     "The song is downloading. Press OK after it completes.";
 
@@ -2769,14 +2769,39 @@ impl ScreenGame {
     /// Kick the room song's download (the exe's `StartMusicDownload`,
     /// VA `0x4bb1e0`): enqueue it and mark the download running, so a
     /// START press only re-arms the face until the transfer completes.
-    /// `true` when the queue took the song; the transfer itself is
-    /// slice 4, so nothing leaves the machine yet.
+    /// `true` when the queue took the song; the per-frame transfer
+    /// pump fetches it from the configured source (§4).
     pub fn begin_music_download(&mut self, song_id: u16) -> bool {
         let queued = self.music_download.enqueue(song_id);
         if queued {
             self.note_waiting_download();
         }
         queued
+    }
+
+    /// Point the download engine at its `Music\` folder and fetch
+    /// source. The session uses the install folder; a guard uses a
+    /// throwaway pair of folders so no game data is touched.
+    pub fn set_music_download_dirs(
+        &mut self,
+        music_dir: std::path::PathBuf,
+        source_dir: Option<std::path::PathBuf>,
+    ) -> &mut Self {
+        self.music_download.set_transfer_dirs(music_dir, source_dir);
+        self
+    }
+
+    /// Advance the queued transfers and stage each promoted chart's
+    /// availability back into the catalog (§4). The session reports the
+    /// returned completions on the wire.
+    #[must_use]
+    pub fn pump_music_downloads(&mut self) -> Vec<MusicDownloadCompletion> {
+        let completions = self.music_download.pump();
+        if !completions.is_empty() {
+            let music_dir = self.music_download.music_dir().to_path_buf();
+            self.set_installed_music(crate::music_install::installed_music_in(&music_dir));
+        }
+        completions
     }
 
     /// Stage the download-in-progress notice: a transfer stands (or the
@@ -2788,8 +2813,8 @@ impl ScreenGame {
         self
     }
 
-    /// Drop one finished transfer from the queue (slice 4's pump owns
-    /// the call; the last drop clears the running flag).
+    /// Drop one finished transfer from the queue (the pump owns the
+    /// call; the last drop clears the running flag).
     pub fn finish_music_download(&mut self, song_id: u16) -> &mut Self {
         self.music_download.finish(song_id);
         self
@@ -15077,6 +15102,55 @@ mod game_tests {
             Some(757),
             "the refused row leaves the staged song alone"
         );
+    }
+
+    #[test]
+    fn a_promoted_chart_makes_its_dialog_row_selectable_again() {
+        // Live chain: `session::OnlineSession::poll_music_downloads` ->
+        // `ScreenGame::pump_music_downloads` -> `MusicDownload::pump`
+        // (Temp promote) -> `ScreenGame::set_installed_music` -> the
+        // same MUSELECT -> `click_select_music` ->
+        // `pick_select_music_row` path the refusal guard walks. The
+        // folders and chart bytes are synthetic (CI-safe).
+        let root = std::env::temp_dir().join("recomp2jam-promote-selectable");
+        let source = root.join("source");
+        let music = root.join("Music");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&source).expect("source dir");
+        std::fs::create_dir_all(&music).expect("music dir");
+        std::fs::write(source.join("o2ma770.ojn"), b"synthetic").expect("source chart");
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game.set_music_download_dirs(music.clone(), Some(source));
+        game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+        let blob = lanking_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        walk_to_waiting(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.select_music_notice(),
+            Some(SELECT_NOT_DOWNLOADED_NOTICE),
+            "the missing chart refuses the row before the transfer"
+        );
+        assert!(!game.has_pending_music_send());
+
+        assert!(game.begin_music_download(770));
+        let completions = game.pump_music_downloads();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].file_name, "o2ma770.ojn");
+        assert!(music.join("o2ma770.ojn").exists());
+        assert!(!game.music_download().is_running());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.take_music_send().map(|pick| pick.music_id),
+            Some(770),
+            "the promoted chart makes the row pickable"
+        );
+        assert_eq!(game.select_music_notice(), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
