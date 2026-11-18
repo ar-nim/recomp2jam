@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/rig-provenance.sh emit OUT_DIR --producer BINARY [options]
 #   scripts/rig-provenance.sh check OUT_DIR
-#   scripts/rig-provenance.sh check-record DIR
+#   scripts/rig-provenance.sh check-record DIR [--local-pack RUN_DIR]
 #   scripts/rig-provenance.sh cite OUT_DIR [--claim none|exe]
 #
 # emit: probes the tool versions (python3, Xvfb, wine, capture tool,
@@ -20,7 +20,8 @@
 #     (producer kind exe + wine version), which is the #278 check.
 # check-record: verifies the three prefixed copies in a committed capture
 #     record against record-hashes.txt, and that the citation quotes the
-#     pinned provenance. It never reads the local, git-ignored run dir (#308).
+#     pinned provenance. --local-pack also compares those pins and the
+#     citation text with the git-ignored local run dir (#308).
 #
 # Options for emit:
 #   --producer BINARY            the binary that produced the captures
@@ -302,8 +303,9 @@ cmd_check() {
 cmd_check_record() {
   local record_dir="${1:-}"
   [ -n "$record_dir" ] || die "check-record: record directory required"
+  shift
   require_python
-  python3 "$LIB" check-record "$record_dir"
+  python3 "$LIB" check-record "$record_dir" "$@"
 }
 
 cmd_cite() {

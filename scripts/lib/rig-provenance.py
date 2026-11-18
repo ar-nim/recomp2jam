@@ -26,7 +26,15 @@ MANIFEST_HASH_KEY = "manifest_sha256"
 # A committed capture record is a hash-pinned pointer: copyrighted bytes
 # stay in the local, git-ignored run dir.
 RECORD_HASHES_NAME = "record-hashes.txt"
-RECORD_COPIES = ("wine-provenance.json", "wine-manifest.json", "wine-citation.txt")
+RECORD_PROVENANCE = "wine-provenance.json"
+RECORD_MANIFEST = "wine-manifest.json"
+RECORD_CITATION = "wine-citation.txt"
+RECORD_TO_LOCAL = {
+    RECORD_PROVENANCE: "provenance.json",
+    RECORD_MANIFEST: "manifest.json",
+    RECORD_CITATION: "citation.txt",
+}
+RECORD_COPIES = tuple(RECORD_TO_LOCAL)
 
 EXE_KIND = "exe"
 CLIENT_BUILD_KIND = "client-build"
@@ -473,8 +481,8 @@ def record_copy_problems(record_dir: Path, pins: dict[str, str]) -> list[str]:
 def citation_link_problems(record_dir: Path) -> list[str]:
     """The citation must quote the pinned provenance, not merely exist."""
     try:
-        document = json.loads((record_dir / RECORD_COPIES[0]).read_text(encoding="utf-8"))
-        citation = (record_dir / RECORD_COPIES[2]).read_text(encoding="utf-8")
+        document = json.loads((record_dir / RECORD_PROVENANCE).read_text(encoding="utf-8"))
+        citation = (record_dir / RECORD_CITATION).read_text(encoding="utf-8")
     except (OSError, json.JSONDecodeError) as error:
         return [f"record: cannot read the pinned provenance or citation ({error})"]
     problems = []
@@ -495,6 +503,35 @@ def citation_link_problems(record_dir: Path) -> list[str]:
     return problems
 
 
+def local_pack_problems(record_dir: Path, pins: dict[str, str], local_pack: Path) -> list[str]:
+    """Tie the committed pins and citation to the qualified local pack."""
+    if not local_pack.is_dir():
+        return [f"record: local pack not found: {local_pack}"]
+    problems = []
+    for record_name, local_name in RECORD_TO_LOCAL.items():
+        path = local_pack / local_name
+        if not path.is_file():
+            problems.append(f"record: local pack lacks {local_name}")
+            continue
+        actual = sha256_of(path)
+        pinned = pins[record_name]
+        if actual != pinned:
+            problems.append(
+                f"record: local {local_name} sha256 {actual} != pinned {pinned}"
+            )
+    citation_path = local_pack / RECORD_TO_LOCAL[RECORD_CITATION]
+    if citation_path.is_file():
+        committed_citation = record_dir / RECORD_CITATION
+        if (
+            committed_citation.is_file()
+            and citation_path.read_bytes() != committed_citation.read_bytes()
+        ):
+            problems.append(
+                "record: local pack citation text does not match wine-citation.txt"
+            )
+    return problems
+
+
 def report_record_problems(problems: list[str]) -> int:
     print("rig-provenance: RECORD CHECK FAILED", file=sys.stderr)
     for problem in problems:
@@ -511,15 +548,21 @@ def cmd_check_record(args: argparse.Namespace) -> int:
     record_dir = Path(args.record_dir).resolve()
     if not record_dir.is_dir():
         return usage_error(f"record dir not found: {record_dir}")
+    local_pack = Path(args.local_pack).resolve() if args.local_pack else None
     pins, problems = read_record_pins(record_dir / RECORD_HASHES_NAME)
     problems += record_copy_problems(record_dir, pins)
     if not problems:
         problems += citation_link_problems(record_dir)
+    if not problems and local_pack is not None:
+        problems += local_pack_problems(record_dir, pins, local_pack)
     if problems:
         return report_record_problems(problems)
     for name in RECORD_COPIES:
         print(f"rig-provenance: {name} sha256 {pins[name]} (pinned)")
-    print("rig-provenance: record check OK; citation quotes the pinned provenance")
+    if local_pack is None:
+        print("rig-provenance: record check OK; citation quotes the pinned provenance")
+    else:
+        print("rig-provenance: record check OK; committed copies match the qualified local pack")
     return 0
 
 
@@ -632,6 +675,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     record = commands.add_parser("check-record", help="verify a hash-pinned committed record")
     record.add_argument("record_dir")
+    record.add_argument(
+        "--local-pack",
+        default="",
+        metavar="DIR",
+        help="also compare the pins and citation with the git-ignored local run dir",
+    )
 
     cite = commands.add_parser("cite", help="print a citation paragraph")
     cite.add_argument("run_dir")

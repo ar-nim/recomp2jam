@@ -93,7 +93,27 @@ bash scripts/rig-provenance.sh check-record docs/captures/t240
 ```
 
 The check also confirms that `wine-citation.txt` quotes the manifest hash
-and all six artifact hashes in the pinned provenance (#308).
+and all six artifact hashes in the pinned provenance (#308). On a machine with
+the qualified local pack, `--local-pack ~/scratch/240-fix/wine2` additionally
+compares the pack's three file hashes with the pins and its citation bytes with
+`wine-citation.txt`; CI omits the flag because the pack is git-ignored.
+
+These are the hashes to paste when citing this record from a story-verification
+comment (values are the pins in `record-hashes.txt`):
+
+| Committed pointer file | sha256 |
+|---|---|
+| `docs/captures/t240/wine-provenance.json` | `f6f7f52ceaa70fe26e9dffde9fba1d252bac50a68410f83296b52a35ee3be994` |
+| `docs/captures/t240/wine-manifest.json` | `57089d0365191ebba4261abe5f5d38785908f528a3e7ca80e905e357cf3f3cfa` |
+| `docs/captures/t240/wine-citation.txt` | `15442fbffd60aee7e305d64329dc43c045aea56183b931a76a153e358948b6c3` |
+
+Copy-paste form: `docs/captures/t240/record-hashes.txt` (#308) pins
+`f6f7f52ceaa70fe26e9dffde9fba1d252bac50a68410f83296b52a35ee3be994`
+(provenance), `57089d0365191ebba4261abe5f5d38785908f528a3e7ca80e905e357cf3f3cfa`
+(manifest) and `15442fbffd60aee7e305d64329dc43c045aea56183b931a76a153e358948b6c3`
+(accepted citation); verify with
+`bash scripts/rig-provenance.sh check-record docs/captures/t240`. Re-citing the
+exe claim needs the local pack; the committed record alone is not a run dir.
 
 Audio: the exe's stream landed on the run's own sink (verified live:
 `pactl list sink-inputs` showed `application.name = "OTwo.exe"` on

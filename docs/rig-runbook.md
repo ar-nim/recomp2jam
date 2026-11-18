@@ -90,7 +90,21 @@ verifies all three hashes and checks that `wine-citation.txt` quotes the
 manifest hash and every artifact hash in the pinned provenance. A changed
 byte is a loud nonzero exit. Re-citing with `cite ... --claim exe` requires
 the local, git-ignored pack `~/scratch/240-fix/wine2`; `cite` still refuses
-the committed directory by design.
+the committed directory by design. The local pack is never committed: it holds
+the copyrighted screenshots and audio that the pin's citation hashes.
+
+On a machine that holds that pack, add `--local-pack` to tie the pointer to it:
+
+```
+bash scripts/rig-provenance.sh check-record docs/captures/t240 \
+    --local-pack ~/scratch/240-fix/wine2
+```
+
+The extended check hashes the pack's `provenance.json`, `manifest.json` and
+`citation.txt`, requires each to equal the matching committed pin, and requires
+the pack's citation text to equal `wine-citation.txt`. CI omits the flag and
+checks the committed pins alone. Both modes fail loudly on drift
+(`scripts/tests/test_rig_provenance_record.py` pins the one-byte red proof).
 
 The scheduled injector stamps one epoch per press to its own record file
 across all lanes; the pairing script matches epochs to judged lines,
