@@ -542,12 +542,46 @@ path may borrow devices from the other.
 | Capture      | owner eyes, ad hoc             | manifest'd artifacts only                   |
 | Runs when    | owner present                  | any time, unattended (AFK)                 |
 
-Rules:
+Rules (the mechanisms are enforced by the rig kit, not just documented;
+#282):
 
 - The agent path never touches the owner path: no real-seat windows,
   no default-sink audio, no ambient session env (the #267 fence;
   rig-run refuses leaked WAYLAND_DISPLAY). The owner path never feeds
   budget numbers (existing pair rule).
+- Displays come from one registry: `rig-run.sh registry` lists each live
+  display claim with owner PID and purpose. `rig-run.sh run-auto` and
+  `rig-afk.sh` call the shared `rig_allocate_display`, which claims a
+  free display atomically; a pinned collision exits 10 with a loud
+  message. `rig-run.sh stop` releases that run's claims. Nothing
+  pattern-kills or signals another run's X server.
+- Audio is scoped before launch: `rig_check_audio_sink` asks
+  `pactl get-default-sink` and refuses an explicit default-sink target
+  with exit 12. `RIG_OWNER_PATH=1` is the only owner-path exception,
+  used with the `attended` policy of `play-local.sh`. Scripted agents
+  keep the per-run virtual sink and its monitor tap.
+- The child environment is sanitized on the same surface: `rig-run.sh`
+  unsets `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`, `QT_QPA_PLATFORM`, and
+  the inherited `RIG_OWNER_PATH`, and writes the virtual sink into
+  `<out-dir>/env.sh`, which downstream drivers source. An AFK runner strips those ambient vars at the boot
+  boundary (as it strips `DISPLAY` for #344).
+- The separation guard is `scripts/rig-separation-guard.sh` (also run
+  by `rig-run.sh selftest`). It arms a stub owner seat (display up,
+  default sink present, session env set) and proves that a leaked
+  Wayland env is refused, a default-sink target fails preflight, the
+  agent boot lands on a private display and virtual sink, two
+  concurrent boots get different displays, and a pinned collision
+  fails without killing anyone. It uses stubs only: no real display,
+  sound server, or owner process is touched.
+
+Verification (all hermetic; no game data or live seat needed):
+
+```sh
+scripts/rig-run.sh selftest          # includes the separation guard
+scripts/rig-afk.sh selftest          # includes two concurrent AFK boots
+scripts/rig-separation-guard.sh      # guard alone
+RIG_STATE_DIR=/tmp/rig-registry-demo scripts/rig-run.sh registry
+```
 - Every agent run captures all three modalities it can reach — input
   (injector record + client input log), video (frame dump and/or
   framebuffer capture), audio (monitor tap of the virtual sink) — and

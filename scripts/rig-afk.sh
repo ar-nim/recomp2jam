@@ -108,37 +108,11 @@ SEED=""
 BUILD=""
 
 # --- 1. display ------------------------------------------------------------
-display_up() { xdpyinfo -display "$1" >/dev/null 2>&1; }
-
-display_is_free() {
-  local candidate="$1"
-  if [ "$candidate" = ":98" ]; then
-    return 1
-  fi
-  if [ -n "$CALLER_DISPLAY" ] && [ "$candidate" = "$CALLER_DISPLAY" ]; then
-    return 1
-  fi
-  if display_up "$candidate"; then
-    return 1
-  fi
-  if rig_claimed_by display "$candidate" >/dev/null 2>&1; then
-    return 1
-  fi
-  return 0
-}
-
-# The runbook's private-display rule needs a picker: the first display in the
-# range that nothing answers on and no live run owns.
+# One registry serves every rig entry point: the shared allocator takes the
+# display claim atomically, so two AFK runs cannot pick the same display in
+# the gap between allocation and rig-run's preflight (#282).
 allocate_display() {
-  local number candidate
-  for number in $(seq "$DISPLAY_FIRST" "$DISPLAY_LAST"); do
-    candidate=":$number"
-    if display_is_free "$candidate"; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  return 1
+  rig_allocate_display "$OUT_DIR" "rig-afk" "$DISPLAY_FIRST" "$DISPLAY_LAST"
 }
 
 # --- 2. phases -------------------------------------------------------------
@@ -500,6 +474,8 @@ inject_presses() {
 
 stop_session() {
   if [ ! -f "$(out_path pids)" ]; then
+    # A display may already be claimed when boot fails before rig-run starts.
+    rig_release_claims "$OUT_DIR" 2>/dev/null || true
     echo "rig-afk: no pidfile in $OUT_DIR; nothing to stop" >&2
     return 0
   fi
@@ -761,6 +737,35 @@ selftest_leg_ambient_display_pinned() {
   selftest_leg_pass "$leg" "--display :0 refused before boot when DISPLAY=:0 is ambient"
 }
 
+selftest_leg_allocator_isolation() {
+  local leg="allocator-isolation"
+  local out_a="$TMP/alloc-a" out_b="$TMP/alloc-b"
+  "${SENV[@]}" bash "$0" run "$out_a" \
+    --binary "$TMP/target/debug/fake-client" --scene-script "$TMP/bin/drive-stub" \
+    --target loading >"$TMP/alloc-a.out" 2>&1 &
+  local pid_a=$!
+  "${SENV[@]}" bash "$0" run "$out_b" \
+    --binary "$TMP/target/debug/fake-client" --scene-script "$TMP/bin/drive-stub" \
+    --target loading >"$TMP/alloc-b.out" 2>&1 &
+  local pid_b=$!
+  if ! wait "$pid_a"; then
+    sed -n '1,40p' "$TMP/alloc-a.out" >&2
+    selftest_fail "$leg" "first concurrent runner failed"
+  fi
+  if ! wait "$pid_b"; then
+    sed -n '1,40p' "$TMP/alloc-b.out" >&2
+    selftest_fail "$leg" "second concurrent runner failed"
+  fi
+  local display_a display_b
+  display_a="$(sed -n 's/^rig-afk: run [^ ]* on \(:[0-9]*\).*/\1/p' "$TMP/alloc-a.out" | head -1)"
+  display_b="$(sed -n 's/^rig-afk: run [^ ]* on \(:[0-9]*\).*/\1/p' "$TMP/alloc-b.out" | head -1)"
+  [ -n "$display_a" ] && [ -n "$display_b" ] ||
+    selftest_fail "$leg" "a runner did not report its allocated display"
+  [ "$display_a" != "$display_b" ] ||
+    selftest_fail "$leg" "both runners allocated $display_a"
+  selftest_leg_pass "$leg" "two concurrent AFK runners got $display_a and $display_b"
+}
+
 selftest_leg_menu_only() {
   local leg="menu-only-skip"
   selftest_run menu -- --target loading || true
@@ -834,6 +839,7 @@ cmd_selftest() {
   selftest_leg_happy
   selftest_leg_ambient_display
   selftest_leg_ambient_display_pinned
+  selftest_leg_allocator_isolation
   selftest_leg_menu_only
   selftest_leg_scene
   selftest_leg_frames

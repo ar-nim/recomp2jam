@@ -3,9 +3,15 @@
 #
 # Usage:
 #   scripts/rig-run.sh run <display> <out-dir> -- <binary> [args...]
+#   scripts/rig-run.sh run-auto <out-dir> -- <binary> [args...]
 #   scripts/rig-run.sh stop <out-dir>
 #   scripts/rig-run.sh status <out-dir>
+#   scripts/rig-run.sh registry
 #   scripts/rig-run.sh selftest
+#
+# run-auto allocates a display from the registry (a lock per display with
+# owner PID + purpose), so two concurrent runs cannot share one display. The
+# claim is released by `stop`; collisions are reported, never killed (#282).
 #
 # run: enforces the shared preflight (scripts/lib/rig-preflight.sh) — no
 #     conflicting display/port/prefix claims, no occupied relay ports,
@@ -26,7 +32,8 @@
 # Refusals:
 #   - malformed invocations exit 2 (usage errors)
 #   - display conflicts exit 10 (:98 reserved; the caller's own DISPLAY;
-#     a leaked Wayland environment; a display claimed by a live run)
+#     a leaked Wayland environment; a display claimed by a live run;
+#     no free display in the allocation range)
 #   - port/audio/server/data/prefix rejections exit 11/12/13/14/15
 #     (see scripts/lib/rig-preflight.sh)
 set -euo pipefail
@@ -51,9 +58,13 @@ fail_with() { local code="$1"; shift; echo "rig-run: $*" >&2; exit "$code"; }
 # --- environment capture (before any sanitizing) -------------------------
 CALLER_DISPLAY="${DISPLAY:-}"
 CALLER_WAYLAND="${WAYLAND_DISPLAY:-}"
+# Explicit sink intent is captured before sanitizing so an agent's own
+# virtual sink can be allocated without silently replacing a caller's choice.
+CALLER_SINK="${PULSE_SINK:-}"
 
 sanitize_env() {
-  unset WAYLAND_DISPLAY XDG_SESSION_TYPE QT_QPA_PLATFORM 2>/dev/null || true
+  # The owner-path sink exception must never ride in from the owner's shell.
+  unset WAYLAND_DISPLAY XDG_SESSION_TYPE QT_QPA_PLATFORM RIG_OWNER_PATH 2>/dev/null || true
   export WINIT_UNIX_BACKEND=x11
   # Containment default: automated audio never reaches the speakers. An
   # explicitly chosen sink still passes through the null-sink preflight.
@@ -89,26 +100,35 @@ preflight_release() {
 }
 
 preflight_run_checks() {
-  local display="$1" out_dir="$2" owner code sink repo_root
+  local display="$1" out_dir="$2" owner owner_out code sink repo_root
   repo_root="$(cd "$(dirname "$0")/.." && pwd)"
   RIG_INSTALL_ROOT="${RIG_INSTALL_ROOT:-$repo_root/install-root/O2Jam}"
   export RIG_INSTALL_ROOT
-  if display_up "$display"; then
-    if owner="$(rig_claimed_by display "$display")"; then
+  # An allocating run already owns this claim. Any other live owner is a
+  # collision: report it and stop, never touch the other run's X server.
+  owner="$(rig_claimed_by display "$display" 2>/dev/null || true)"
+  if [ -n "$owner" ]; then
+    owner_out="$(rig_owner_field out "$owner")"
+    if [ "$owner_out" != "$out_dir" ]; then
       rig_fail "$RIG_E_DISPLAY" "display-claim" "display $display already claimed by $owner"
       return "$RIG_E_DISPLAY"
     fi
-    rig_note "display $display already up with no live owner; adopting"
+    rig_note "display $display already claimed by this run"
+  else
+    rig_claim "display" "$display" "$out_dir" "$RIG_E_DISPLAY" "rig-run" || return "$?"
+    if display_up "$display"; then
+      rig_note "display $display already up with no live owner; adopting"
+    fi
   fi
-  rig_claim "display" "$display" "$out_dir" "$RIG_E_DISPLAY" || return "$?"
   rig_check_install_root || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_memoryer || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_relay_ports_free || { code=$?; preflight_release "$out_dir"; return "$code"; }
-  if rig_audio_capturing && [ -z "${RIG_SINK_NAME:-}" ]; then
+  if rig_audio_capturing && [ -z "${RIG_SINK_NAME:-}" ] && [ -z "$CALLER_SINK" ]; then
     # A capture run owns its sink: a shared sink would mix other runs (and
     # other agents) into this run's artifact, and stop could not tear it down.
     # The name keeps the preflight's null-sink policy word ("null"), so the
     # audio guard still proves this sink can never be the owner's speakers.
+    # An explicit sink is kept so preflight can reject a default-sink target.
     RIG_SINK_NAME="rig_null_$$"
     export RIG_SINK_NAME
   fi
@@ -169,6 +189,12 @@ write_env_sh() {
   {
     echo "export DISPLAY='$display'"
     echo "export WINIT_UNIX_BACKEND=x11"
+    # Drivers source this file; re-state the fence so an owner session that
+    # surrounded the boot cannot leak back into a later child (#282).
+    echo "unset WAYLAND_DISPLAY"
+    echo "unset XDG_SESSION_TYPE"
+    echo "unset QT_QPA_PLATFORM"
+    echo "unset RIG_OWNER_PATH"
     echo "export PULSE_SINK='${PULSE_SINK:-wine_null}'"
     echo "export PIPEWIRE_NODE='${PIPEWIRE_NODE:-${PULSE_SINK:-wine_null}}'"
     echo "export RIG_AUDIO_ARTIFACT='$(rig_audio_artifact "$out_dir")'"
@@ -184,7 +210,7 @@ cmd_run() {
   validate_display "$display"
   sanitize_env
   mkdir -p "$out_dir"
-  : > "$out_dir/claims"
+  [ -f "$out_dir/claims" ] || : > "$out_dir/claims"
   export RIG_CLAIMS_FILE="$out_dir/claims"
   preflight_run_checks "$display" "$out_dir" || exit "$?"
 
@@ -242,6 +268,26 @@ cmd_run() {
   return 0
 }
 
+
+# Allocation and the claim happen in one rig-run process, so the registry
+# entry has a live owner from boot until `stop`. The caller's own display and
+# :98 stay reserved through rig_allocate_display.
+cmd_run_auto() {
+  local out_dir="$1" display
+  shift
+  [ "${1:-}" = "--" ] && shift
+  [ "$#" -ge 1 ] || die "run-auto: no binary given after --"
+  refuse_leaked_wayland
+  sanitize_env
+  mkdir -p "$out_dir"
+  : > "$out_dir/claims"
+  export RIG_CLAIMS_FILE="$out_dir/claims"
+  display="$(rig_allocate_display "$out_dir" "rig-run")" ||
+    fail_with "$RIG_E_DISPLAY" "no free display in ${RIG_DISPLAY_FIRST:-150}..${RIG_DISPLAY_LAST:-199} (each is up or claimed by a live run)"
+  cmd_run "$display" "$out_dir" "$@"
+}
+
+cmd_registry() { rig_display_registry; }
 
 cmd_run_wayland() {
   local socket="$1" out_dir="$2"; shift 2
@@ -453,6 +499,10 @@ cmd_selftest() {
   # the pkill-fault re-run: stopping twice must be clean and kill nothing else
   bash "$0" stop "$tmp/rig-missing" 2>/dev/null && die "selftest: stop on missing pidfile should fail" || true
   preflight_legs "$tmp"
+  # #282: the separation guard drives this same entry point with an armed
+  # owner seat. It builds its own stub world and isolated claim root.
+  "$(cd "$(dirname "$0")" && pwd)/rig-separation-guard.sh" ||
+    die "selftest: separation guard failed"
   rm -rf "$tmp"
   echo "rig-run: selftest OK"
 }
@@ -727,11 +777,13 @@ main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     run)    [ "$#" -ge 3 ] || die "run: expected <display> <out-dir> -- <binary> [args...]"; cmd_run "$@" ;;
+    run-auto) [ "$#" -ge 2 ] || die "run-auto: expected <out-dir> -- <binary> [args...]"; cmd_run_auto "$@" ;;
     wayland) [ "$#" -ge 3 ] || die "wayland: expected <socket> <out-dir> -- <binary> [args...]"; cmd_run_wayland "$@" ;;
     stop)   [ "$#" -ge 1 ] || die "stop: expected <out-dir>"; cmd_stop "$1" ;;
     status) [ "$#" -ge 1 ] || die "status: expected <out-dir>"; cmd_status "$1" ;;
+    registry) cmd_registry ;;
     selftest) cmd_selftest ;;
-    *) die "usage: rig-run.sh {run <display> <out-dir> -- <binary> [args...] | stop <out-dir> | status <out-dir> | selftest}" ;;
+    *) die "usage: rig-run.sh {run <display> <out-dir> -- <binary> [args...] | run-auto <out-dir> -- <binary> [args...] | stop <out-dir> | status <out-dir> | registry | selftest}" ;;
   esac
 }
 

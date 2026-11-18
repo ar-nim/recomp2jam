@@ -3,7 +3,9 @@
 #
 # Sourced by scripts/rig-run.sh and scripts/play-local.sh. The batch-harness
 # skill demands this checklist be ENFORCED, not documented:
-#   1. displays: no conflicting Wine/Xvfb claim (locks; rig-run.sh owns this);
+#   1. displays: no conflicting Wine/Xvfb claim (the registry below: a lock
+#      per display recording owner PID, purpose, and out-dir; rig-run.sh owns
+#      allocation, collision refusal, and release on stop);
 #   2. ports: relay ports free, declared listen ports free + claimed;
 #   3. audio: virtual/null sink present and selected — NEVER the speakers;
 #   4. server: Memoryer up and answering (TCP connect probe);
@@ -35,6 +37,9 @@
 #                       shared (left loaded, never unloaded under others)
 #   RIG_CREATE_SINK     1 = create a missing null sink via pactl (default);
 #                       0 = reject when the sink is absent
+#   RIG_DISPLAY_FIRST / RIG_DISPLAY_LAST  display allocation range (150..199)
+#   RIG_OWNER_PATH      1 = attended owner path may select the default sink;
+#                       never set by an agent run (see rig_check_audio_sink)
 #
 # Doubt log (flagged for the senior, not silently resolved):
 # - Memoryer "answering" is a TCP connect probe only; no protocol ping exists
@@ -62,9 +67,15 @@ rig_fail() {
 rig_note() { echo "rig-preflight: $1" >&2; }
 
 # --- lock ownership -------------------------------------------------------------
-# Each claim is a lockdir holding "pid=<pid> out=<out-dir>". mkdir is atomic:
-# two concurrent runs cannot claim the same display/port/prefix. A lock whose
-# owner is dead is stale and reclaimed with a note; a live one rejects.
+# Each claim is a lockdir holding "pid=<pid> out=<out-dir> purpose=<purpose>
+# name=<resource>". mkdir is atomic: two concurrent runs cannot claim the
+# same display/port/prefix. A lock whose owner is dead is stale and reclaimed
+# with a note; a live one rejects. No claim operation signals another process:
+# collisions are reported, never resolved by killing anything.
+
+rig_owner_field() {
+  printf '%s' "$2" | sed -n "s/.*[ ]$1=\([^ ]*\).*/\1/p"
+}
 
 rig_state_dir() {
   local dir="${RIG_STATE_DIR:-}"
@@ -82,24 +93,36 @@ rig_lock_path() {
   printf '%s/locks/%s' "$state" "$safe"
 }
 
-rig_claim() {
-  local kind="$1" name="$2" out_dir="$3" ecode="$4"
-  local state lock owner_pid owner_out
-  state="$(rig_state_dir)" || return "$RIG_E_USAGE"
+# Try to own a resource without reporting a collision. Returns 0 when the
+# lock was taken, 1 when another live owner holds it. Allocation walks past
+# a collision; an explicit claim reports it through rig_claim below.
+rig_claim_lock() {
+  local kind="$1" name="$2" out_dir="$3" purpose="${4:-rig}"
+  local state lock
+  state="$(rig_state_dir)" || return 1
   lock="$(rig_lock_path "$state" "$kind" "$name")"
   if mkdir "$lock" 2>/dev/null; then
-    echo "pid=$$ out=$out_dir" > "$lock/owner"
-    echo "$kind $name" >> "$out_dir/claims"
+    printf 'pid=%s out=%s purpose=%s name=%s\n' "$$" "$out_dir" "$purpose" "$name" > "$lock/owner"
     return 0
   fi
-  if rig_owner_live "$lock"; then
-    rig_fail "$ecode" "$kind-claim" "$kind '$name' already claimed by $(cat "$lock/owner" 2>/dev/null)"
-    return "$ecode"
-  fi
+  rig_owner_live "$lock" && return 1
   rig_note "reclaiming stale $kind lock '$name' (owner dead or processes gone)"
   rm -rf "$lock"
-  mkdir "$lock" 2>/dev/null || { rig_fail "$ecode" "$kind-claim" "cannot claim $kind '$name'"; return "$ecode"; }
-  echo "pid=$$ out=$out_dir" > "$lock/owner"
+  mkdir "$lock" 2>/dev/null || return 1
+  printf 'pid=%s out=%s purpose=%s name=%s\n' "$$" "$out_dir" "$purpose" "$name" > "$lock/owner"
+  return 0
+}
+
+rig_claim() {
+  local kind="$1" name="$2" out_dir="$3" ecode="$4" purpose="${5:-rig}"
+  local state lock owner
+  if ! rig_claim_lock "$kind" "$name" "$out_dir" "$purpose"; then
+    state="$(rig_state_dir)"
+    lock="$(rig_lock_path "$state" "$kind" "$name")"
+    owner="$(cat "$lock/owner" 2>/dev/null || echo unknown)"
+    rig_fail "$ecode" "$kind-claim" "$kind '$name' already claimed by $owner"
+    return "$ecode"
+  fi
   echo "$kind $name" >> "$out_dir/claims"
   return 0
 }
@@ -110,7 +133,7 @@ rig_owner_live() {
   pid="$(printf '%s' "$owner" | sed 's/.*pid=\([0-9]*\).*/\1/')"
   out="$(printf '%s' "$owner" | sed 's/.*out=\([^ ]*\).*/\1/')"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "rig-run"; then
+    if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq 'rig-(run|afk)'; then
       return 0
     fi
   fi
@@ -134,6 +157,47 @@ rig_claimed_by() {
     cat "$lock/owner" 2>/dev/null || echo "pid=? out=unknown"
     return 0
   fi
+  return 1
+}
+
+# The display registry: one line per live display claim, readable by a human
+# or a guard. Stale locks are skipped, not killed or deleted here.
+rig_display_registry() {
+  local state lock owner pid purpose name out
+  state="$(rig_state_dir)" || return 1
+  for lock in "$state"/locks/display-*; do
+    [ -d "$lock" ] || continue
+    rig_owner_live "$lock" || continue
+    owner="$(cat "$lock/owner" 2>/dev/null || true)"
+    pid="$(rig_owner_field pid "$owner")"
+    purpose="$(rig_owner_field purpose "$owner")"
+    name="$(rig_owner_field name "$owner")"
+    out="$(rig_owner_field out "$owner")"
+    printf 'display %s pid %s purpose %s out %s\n' "${name:-?}" "${pid:-?}" "${purpose:-?}" "${out:-?}"
+  done
+  return 0
+}
+
+# Allocate a display by taking its registry claim atomically. A caller's own
+# display, :98, a display that already answers, and a display held by a live
+# owner are all skipped; the first free claim is printed. The caller keeps the
+# claim (and releases it through its claims file on stop).
+rig_allocate_display() {
+  local out_dir="$1" purpose="${2:-rig-run}"
+  local first="${3:-${RIG_DISPLAY_FIRST:-150}}" last="${4:-${RIG_DISPLAY_LAST:-199}}"
+  local number candidate
+  for number in $(seq "$first" "$last"); do
+    candidate=":$number"
+    [ "$candidate" != ":98" ] || continue
+    [ -z "${CALLER_DISPLAY:-}" ] || [ "$candidate" != "$CALLER_DISPLAY" ] || continue
+    xdpyinfo -display "$candidate" >/dev/null 2>&1 && continue
+    if rig_claim_lock display "$candidate" "$out_dir" "$purpose"; then
+      # The claims file is what `stop` reads to release the registry entry.
+      printf 'display %s\n' "$candidate" >> "$out_dir/claims"
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -245,8 +309,16 @@ rig_sink_present() {
   pactl list sinks short 2>/dev/null | awk '{print $2}' | grep -qxF "$sink"
 }
 
+# The system default sink is the owner's speakers. A name-only null check
+# cannot see that a caller explicitly selected it (e.g. an ambient PULSE_SINK
+# copied from the owner's session), so ask the sound server for the identity.
+rig_default_sink() {
+  command -v pactl >/dev/null 2>&1 || return 1
+  pactl get-default-sink 2>/dev/null | head -n 1
+}
+
 rig_check_audio_sink() {
-  local policy="$1" sink="${2:-}"
+  local policy="$1" sink="${2:-}" default_sink
   if [ -z "$sink" ]; then
     if [ "$policy" = "null" ]; then sink="${RIG_SINK_NAME:-${PULSE_SINK:-wine_null}}";
     else sink="${PULSE_SINK:-}"; fi
@@ -257,6 +329,15 @@ rig_check_audio_sink() {
       return 0
     fi
     rig_fail "$RIG_E_AUDIO" "audio-sink" "scripted run would reach the speakers (no null sink selected)"
+    return "$RIG_E_AUDIO"
+  fi
+  default_sink="$(rig_default_sink || true)"
+  if [ -n "$default_sink" ] && [ "$sink" = "$default_sink" ]; then
+    if [ "$policy" = "attended" ] && [ "${RIG_OWNER_PATH:-0}" = "1" ]; then
+      rig_note "owner path selected the default sink '$sink' (RIG_OWNER_PATH=1)"
+      return 0
+    fi
+    rig_fail "$RIG_E_AUDIO" "default-sink" "default sink '$sink' is the owner's speakers; an agent run must use a virtual sink, and the owner path needs RIG_OWNER_PATH=1"
     return "$RIG_E_AUDIO"
   fi
   local lowered
