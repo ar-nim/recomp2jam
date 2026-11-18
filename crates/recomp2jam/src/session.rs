@@ -3151,7 +3151,7 @@ impl OnlineSession {
     }
 
     /// `true` while a Confirm-paced attempt still awaits its answers
-    /// (see the paint-order comment above).
+    /// (see the drain-order note on [`Self::poll_wire`]).
     fn wire_attempt_pending(&self) -> bool {
         self.login_attempt.is_some()
             || self.join_attempt.is_some()
@@ -3160,6 +3160,40 @@ impl OnlineSession {
             || self.music_buy_attempt.is_some()
             || self.gift_list_attempt.is_some()
             || self.gift_claim_attempt.is_some()
+    }
+
+    /// Drain one frame's gateway traffic before the canvas paints it.
+    /// This order is what makes a wire-driven scene change visible in
+    /// the same frame (#347: the 4011 guest advance used to land after
+    /// `ScreenGame::paint`, leaving Waiting pixels under a loading
+    /// label until unrelated input forced a redraw).
+    ///
+    /// Pending-wire polls run before the lobby/waiting drains:
+    /// those skip foreign frames, so a later order would eat the
+    /// 1005/2001, 3003, and 4003/4031 answers before they resolve.
+    /// While an attempt is still in flight the lobby/waiting
+    /// drains pause outright: a single-shot answer landing between
+    /// two drains in one paint would otherwise die as a foreign
+    /// frame with no retry. Chat resumes — nothing is lost, the
+    /// socket buffers it — once the attempt resolves or times out;
+    /// START still advances through `poll_start` meanwhile.
+    /// The queued channel leave goes out first: a back-then-re-enter
+    /// sequence must never put a fresh 1004 on the wire ahead of the
+    /// 2021 leave (Memoryer answers it with a 1001 `-1` auth error
+    /// until the leave resets the session, ticket #175 probe).
+    fn poll_wire(&mut self) {
+        self.flush_channel_logout();
+        self.poll_attempts();
+        self.poll_stats();
+        if self.wire_attempt_pending() {
+            self.poll_start();
+        } else {
+            self.poll_lobby_chat();
+            self.poll_waiting_chat();
+            self.poll_music_downloads();
+        }
+        self.poll_tally();
+        self.flush_result_wire();
     }
 }
 
@@ -3280,35 +3314,11 @@ impl GameLoop for OnlineSession {
     }
 
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
+        self.poll_wire();
         self.game.paint(frame);
         if self.game.screen() != Screen::Loading {
             self.loaded_sent = false;
         }
-        // Pending-wire polls run before the lobby/waiting drains:
-        // those skip foreign frames, so a later order would eat the
-        // 1005/2001, 3003, and 4003/4031 answers before they resolve.
-        // While an attempt is still in flight the lobby/waiting
-        // drains pause outright: a single-shot answer landing between
-        // two drains in one paint would otherwise die as a foreign
-        // frame with no retry. Chat resumes — nothing is lost, the
-        // socket buffers it — once the attempt resolves or times out;
-        // START still advances through `poll_start` meanwhile.
-        // The queued channel leave goes out first: a back-then-re-enter
-        // sequence must never put a fresh 1004 on the wire ahead of the
-        // 2021 leave (Memoryer answers it with a 1001 `-1` auth error
-        // until the leave resets the session, ticket #175 probe).
-        self.flush_channel_logout();
-        self.poll_attempts();
-        self.poll_stats();
-        if self.wire_attempt_pending() {
-            self.poll_start();
-        } else {
-            self.poll_lobby_chat();
-            self.poll_waiting_chat();
-            self.poll_music_downloads();
-        }
-        self.poll_tally();
-        self.flush_result_wire();
     }
 }
 
@@ -5624,6 +5634,54 @@ pub(super) mod session_tests {
         }
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Loading);
+    }
+
+    /// Matched #347 start shape: a joined guest receives the host's
+    /// 4011 broadcast while Waiting, with no local Confirm after it.
+    /// Live caller chain: `run_online` -> `assemble_online_session` ->
+    /// `run_windowed_session` -> `Shell::run` -> `RedrawRequested` ->
+    /// `Shell::paint_backbuffer` -> `OnlineSession::paint` ->
+    /// `ScreenGame::paint` -> `paint_loading_scene_with_status`.
+    /// This seam uses a fake 4011 and a synthetic cover figure because
+    /// it pins the same state->paint handoff without a Wine rig; the
+    /// live pixel gate is the #346 A/B pack re-run.
+    #[test]
+    fn guest_start_broadcast_paints_loading_art_on_the_transition_frame() {
+        use o2jam_render::{pack_xrgb, Rgb555Image};
+        use o2jam_shell::avatar::{AvatarFigure, FigureLayer, LOADING_COVER_SPRITE};
+
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        let mut cover = AvatarFigure::default();
+        cover.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&0x7C00u16.to_le_bytes(), 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        session.game_mut().merge_scene_figures(
+            Screen::Loading,
+            std::collections::HashMap::from([(LOADING_COVER_SPRITE.to_owned(), cover)]),
+        );
+
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        session.paint(&mut frame);
+
+        assert_eq!(session.game.screen(), Screen::Loading);
+        assert_eq!(
+            buf[0],
+            pack_xrgb(0xFF, 0x00, 0x00),
+            "transition frame holds Loading art"
+        );
+        server.join().unwrap();
     }
 
     #[test]
