@@ -76,6 +76,9 @@ template instead of a description.
   variants without asking": two agents in one night padded
   scripts/ with duplicate-named files, and verification caught
   both. Naming is senior business.
+- Reuse merged kit code by dependency, never by copying a file across
+  tickets: #240 vendored #239's drive script verbatim, and the fork now
+  rots in two places.
 - Every brief quotes the documented recipe command for the exact leg
   before adapting it, and routes all runs through kit scripts (never
   bare sleeps, pattern-kills, or hand-rolled display handling).
