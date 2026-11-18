@@ -479,8 +479,10 @@ boot_session() {
   local -a argv=() options=()
   mapfile -t options < <(session_options)
   mapfile -t argv < <(rig_session_argv "$OUT_DIR" "${options[@]}")
-  phase_run boot "$BOOT_TIMEOUT" "$SCRIPT_DIR/rig-run.sh" run "$DISPLAY" "$OUT_DIR" -- \
-    "$BINARY" "${argv[@]}"
+  # DISPLAY is this runner's private display, not a caller display. Rig-run
+  # reads its inherited DISPLAY as CALLER_DISPLAY and would refuse the run.
+  phase_run boot "$BOOT_TIMEOUT" env -u DISPLAY "$SCRIPT_DIR/rig-run.sh" run \
+    "$DISPLAY" "$OUT_DIR" -- "$BINARY" "${argv[@]}"
 }
 
 drive_scenes() {
@@ -732,6 +734,33 @@ selftest_leg_happy() {
   selftest_leg_pass "$leg" "complete pack, five green checks"
 }
 
+selftest_leg_ambient_display() {
+  local leg="ambient-display"
+  selftest_run ambient DISPLAY=:0 -- --target loading || true
+  if [ "$LEG_EXIT" -ne 0 ]; then
+    sed -n '1,30p' "$LEG_LOG" >&2
+    selftest_fail "$leg" "runner exited $LEG_EXIT (want 0)"
+  fi
+  assert_status "$leg" PASS
+  assert_kept "$leg" phases/boot.log
+  assert_line "$leg" "check scene: PASS reached 'loading'"
+  selftest_leg_pass "$leg" "ambient DISPLAY sanitized; the run booted on a private display"
+}
+
+selftest_leg_ambient_display_pinned() {
+  local leg="ambient-display-pinned"
+  selftest_run ambient-pin DISPLAY=:0 -- --display :0 --target loading || true
+  if [ "$LEG_EXIT" -eq 0 ]; then
+    sed -n '1,30p' "$LEG_LOG" >&2
+    selftest_fail "$leg" "runner exited 0; the owner's display was accepted"
+  fi
+  assert_line "$leg" "rig-afk: --display :0 is the caller's DISPLAY"
+  if [ -e "$LEG_OUT" ]; then
+    selftest_fail "$leg" "a refused run created $LEG_OUT (no phase may start)"
+  fi
+  selftest_leg_pass "$leg" "--display :0 refused before boot when DISPLAY=:0 is ambient"
+}
+
 selftest_leg_menu_only() {
   local leg="menu-only-skip"
   selftest_run menu -- --target loading || true
@@ -803,6 +832,8 @@ cmd_selftest() {
   trap 'rm -rf "$TMP"' EXIT
   selftest_stub_world "$TMP"
   selftest_leg_happy
+  selftest_leg_ambient_display
+  selftest_leg_ambient_display_pinned
   selftest_leg_menu_only
   selftest_leg_scene
   selftest_leg_frames
@@ -847,6 +878,11 @@ parse_args() {
     esac
   done
   [ -n "$OUT_DIR" ] || die "usage: rig-afk.sh OUT_DIR [options] (see the header)"
+  # The boot call strips DISPLAY for rig-run, so this runner keeps the
+  # owner-seat refusal for an explicitly pinned display.
+  if [ -n "$PINNED_DISPLAY" ] && [ "$PINNED_DISPLAY" = "$CALLER_DISPLAY" ]; then
+    die "--display $PINNED_DISPLAY is the caller's DISPLAY; the client must never open there"
+  fi
   [ -f "$SCENE_SCRIPT" ] && [ -x "$SCENE_SCRIPT" ] || die "scene script not executable: $SCENE_SCRIPT"
   case "${PAIR:-native}" in
     native | native-xvfb-xtest) PAIR="native-xvfb-xtest" ;;
