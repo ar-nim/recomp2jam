@@ -829,9 +829,10 @@ data evidence only, joined against `~/scratch/t-chanlist.png` /
   PINNED to the wire `channel_id` + 1 by the 2026-11-10 rig capture
   (section below), which refutes the list-ordinal reading.
 - `ChannelInfo_CH_ConnectCount.ojs`: one raw 185x19 layer = the
-  orange 10-segment fill strip. The exe clips it to the population
-  share (live Ch.01 shows one lit segment); the rounding/
-  quantization rule stays OPEN, shell paints pixel-floor.
+  orange 10-segment fill strip. The exe lights whole segments from
+  the 1003 population field; the rounding rule is now EXE-PINNED by
+  the 2026-11-19 proxy rewrite (section below): `ceil(population * 10
+  / capacity)` segments, cropped to `ceil(segments * 185 / 10)` px.
 - `ChannelInfo_CH_Back.ojs`: 3 raw 347x41 frames — frame 0 normal
   bar (opaque gray face well, NOT a cutout: faces must paint after
   the bar), frame 1 etched 입장 bar (trigger OPEN), frame 2 FULL
@@ -929,6 +930,40 @@ comment carries the old OPEN sentence. Pinned behaviour: paint
 order, and leave `active = 0` rows painting the empty slot. The value
 join and its guard test belong to the implementation ticket; the rig
 next step for the `active`/`capacity` question is named above.
+
+## Channel population segment quantization — EXE-PINNED (2026-11-19, #370)
+
+Earlier notes read the packed 1003 body wrong: row 0 is
+`gw=0, id=0, capacity=100, population=1, active=1`, not population 0.
+The old shell rule cropped `185 * 1 / 100 = 1 px`, so no orange segment
+appeared at all. A live proxy between the pinned exe
+(`OTwo.exe` 5,029,888 B, sha256 `83a04541…72c823b`) and Memoryer
+rewrote ONLY the population word of 1003 rows 0..3 to `10, 50, 9, 1`.
+Wire log and frame stay local under `~/scratch/p370-fill-proxy/run1/`;
+no client bytes or captures enter the repo. Private Xvfb `:391`, owned
+Wine prefix, per-run null sink, `wine-scene.py` planet→channel drive.
+
+Measured lit segments from the resulting native frame (strip starts at
+(307,237)): population 10 → 1 segment, 50 → 5, 9 → 1, 1 → 1. That
+refutes a pixel floor and a floor-plus-one rule: 10 visitors would have
+lit two segments under either. The exe rounds the ten-cell share UP:
+
+```
+segments = ceil(population * 10 / capacity)   // 0 with population = 0
+width_px = ceil(segments * 185 / 10)          // 1 → 19, 5 → 93, 10 → 185
+```
+
+Guards: `channel_single_visitor_lights_one_whole_population_segment`,
+`channel_ten_visitors_light_one_segment_not_two`. Red proof: restoring
+the floor rule fails the first at `left: 255, right: 16711680` and the
+second at the whole-segment pixel. Matched re-run against the p361 exe
+frame with byte-equal 1003: `row_bars` SSIM 0.674329 → 0.676613, with
+o change in any other channel region. The lit art lands 1 px right and
+down of the exe segment (our orange bbox x3..18/y4..15 versus exe
+x2..16/y3..14 inside the strip); the bnd count origin stays pinned at
+(90,12), so this 1 px anchor delta is a NAMED RESIDUAL, not a new
+constant. Next evidence step: compare decoded `CH_ConnectCount` layer
+anchors against a stopped-state exe sprite read.
 
 ## Channel scrollbar semantics — EXE-PINNED (static half, #130)
 

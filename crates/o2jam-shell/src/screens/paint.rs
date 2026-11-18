@@ -675,17 +675,43 @@ fn channel_row_full(channel: &ChannelState) -> bool {
 /// Native width of the count strip art (`CH_ConnectCount` 185x19).
 const CHANNEL_COUNT_W: i64 = 185;
 
-/// Filled width of the count strip in native px: the live population
-/// share of capacity, clamped to the strip. Zero capacity or zero
-/// population fills nothing. Segment quantization stays OPEN: live
-/// captures pin one lit segment without pinning the rounding rule,
-/// so this floor rule is the labeled stand-in, not exe proof.
-fn channel_fill_width(channel: &ChannelState) -> usize {
+/// Lit cells in the count strip art (10 segments across 185 native px).
+const CHANNEL_COUNT_SEGMENTS: i64 = 10;
+
+/// Divide a nonnegative value by a positive divisor, rounding up.
+fn ceil_div(numerator: i64, divisor: i64) -> i64 {
+    let quotient = numerator / divisor;
+    if numerator % divisor == 0 {
+        quotient
+    } else {
+        quotient + 1
+    }
+}
+
+/// Whole segments lit by the live population. The 1003 row's population
+/// and capacity are exe-pinned (`docs/net-protocol.md`); a live proxy pin
+/// rewrote only that population word and measured 1, 10, 9 and 50 visitors
+/// against capacity 100 as 1, 1, 1 and 5 lit segments. That rules out a
+/// pixel floor and a floor-plus-one rule: the exe rounds the segment share
+/// UP. Zero population or zero capacity lights nothing; an over-capacity
+/// row saturates at the full strip.
+fn channel_fill_segments(channel: &ChannelState) -> i64 {
     if channel.capacity <= 0 || channel.population <= 0 {
         return 0;
     }
-    let filled = CHANNEL_COUNT_W * i64::from(channel.population) / i64::from(channel.capacity);
-    usize::try_from(filled.clamp(0, CHANNEL_COUNT_W)).unwrap_or(0)
+    let share = i64::from(channel.population) * CHANNEL_COUNT_SEGMENTS;
+    ceil_div(share, i64::from(channel.capacity)).clamp(0, CHANNEL_COUNT_SEGMENTS)
+}
+
+/// Filled width of the count strip in native px: whole lit segments
+/// rounded up to whole pixels. One segment is 19 px, five are 93 px and
+/// ten fill all 185 px.
+fn channel_fill_width(channel: &ChannelState) -> usize {
+    let filled = ceil_div(
+        channel_fill_segments(channel) * CHANNEL_COUNT_W,
+        CHANNEL_COUNT_SEGMENTS,
+    );
+    usize::try_from(filled).unwrap_or(0)
 }
 
 /// Channel number the digit slots show: the wire `channel_id` **plus
@@ -10623,6 +10649,74 @@ mod paint_tests {
             active: false,
         });
         assert_eq!(empty[245 * 800 + 310], blue, "zero cap fills none");
+    }
+
+    /// Paint one synthetic row and return its frame buffer so the count
+    /// strip can be read at pinned native coordinates.
+    fn channel_strip_frame(population: i32, capacity: i32) -> Vec<u32> {
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (
+                    CHANNEL_COUNT_SPRITE.to_owned(),
+                    solid_figure(185, 19, [0xE0, 0x03]), // solid green
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[ChannelState {
+                gateway_id: 0,
+                channel_id: 0,
+                capacity,
+                population,
+                active: true,
+            }],
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        buf
+    }
+
+    #[test]
+    fn channel_single_visitor_lights_one_whole_population_segment() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> OnlineSession::paint
+        //   -> ScreenGame::hold_channel_rows_for_relay_notice
+        //   -> ScreenGame::paint -> paint_channel_scene -> paint_channel_rows
+        //   -> paint_channel_bar_art -> channel_fill_width.
+        // Proxy-pinned exe frame (population 1, capacity 100) lights one
+        // whole segment, not the floor-rounded 1 px of the strip.
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let frame = channel_strip_frame(1, 100);
+        assert_eq!(frame[245 * 800 + 310], green, "first segment lights");
+        assert_eq!(frame[245 * 800 + 330], blue, "second segment stays dark");
+    }
+
+    #[test]
+    fn channel_ten_visitors_light_one_segment_not_two() {
+        // Live caller chain: same as
+        // `channel_single_visitor_lights_one_whole_population_segment`.
+        // The live proxy rewrite of population 10/capacity 100 lit exactly
+        // one segment, refuting the old pixel-share or floor-plus-one rule.
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let frame = channel_strip_frame(10, 100);
+        assert_eq!(frame[245 * 800 + 325], green, "whole first segment lights");
+        assert_eq!(frame[245 * 800 + 330], blue, "second segment stays dark");
     }
 
     #[test]
