@@ -1004,12 +1004,14 @@ class Input:
         self.log.event(f"inject xtest-click {aim} ({x},{y}) rc={result.returncode}")
 
 
-def dismiss_popup(frames: Frames, injector: Input, log: SceneLog, tries: int = 4) -> bool:
+def dismiss_popup(frames: Frames, injector: Input, log: SceneLog,
+                  tries: int = 4, shots: Path | None = None) -> bool:
     """Click the message box's OK while its blue body is up.
 
     Two samples per look: the box's blue body animates (a pulsing ring), so a
     single frame can read low while the box is on screen and swallow the
-    next click.
+    next click. A caller that keeps evidence captures the first up frame so
+    the dialog's text and single OK can be cited (#244).
     """
     for attempt in range(1, tries + 1):
         frames.grab()
@@ -1020,6 +1022,11 @@ def dismiss_popup(frames: Frames, injector: Input, log: SceneLog, tries: int = 4
         log.event(f"popup probe attempt={attempt} max_blue={highest:.3f}")
         if highest <= 0.9:
             return True
+        if shots is not None:
+            popup_shot = shots / "message-box.png"
+            if not popup_shot.exists():
+                mean = frames.capture(popup_shot)
+                log.event(f"popup captured mean={mean:.1f} shot=message-box.png")
         injector.send_click("fallback-ok")
         time.sleep(1.5)
     frames.grab()
@@ -1477,7 +1484,7 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
 
     opened = False
     for attempt in range(1, 4):
-        dismiss_popup(frames, injector, log)
+        dismiss_popup(frames, injector, log, shots=shots)
         injector.send_click("easy-emblem")
         if server.wait_for("03EA", 30.0):
             opened = True
@@ -1487,7 +1494,7 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         log.event("stage channel FAILED reason=no 03EA after three emblem clicks")
         frames.capture(shots / "probe-failure.png")
         return reached
-    dismiss_popup(frames, injector, log)
+    dismiss_popup(frames, injector, log, shots=shots)
     if not capture_scene(frames, log, shots, "channel", "server:03EA"):
         frames.capture(shots / "probe-failure.png")
         return reached
