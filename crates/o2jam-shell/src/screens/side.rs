@@ -7455,6 +7455,91 @@ mod side_tests {
     }
 
     #[test]
+    fn myroom_cluster_pins_observable_outputs_hash() {
+        // Golden guard for the #139 module move: folds the cluster's
+        // code dispatch, selection transitions, staged rows, and
+        // captions into one word. A pure move keeps this byte-identical.
+        let table = myroom_twelve_item_table();
+        let inventory = vec![1, 3, 999, 0, 12];
+        let mut character = CharacterInfo {
+            nickname: "Pin".to_owned(),
+            level: 7,
+            wins: 3,
+            battles: 4,
+            experience: 900,
+            penalty_count: 1,
+            penalty_level: 2,
+            ..CharacterInfo::default()
+        };
+        character.item_gifts.push(GiftItemInfo {
+            gift_id: 7,
+            item_id: 2,
+            sender: "Sender".to_owned(),
+        });
+
+        let mut selection = MyRoomState::new();
+        selection.select_slot(4);
+        selection.turn_bag_page(MyRoomStep::Next, myroom_bag_pages(&inventory, &table));
+        selection.pick_bag_cell(Some(1));
+        selection.turn_gift_page(MyRoomStep::Next, 1);
+        selection.pick_gift_cell(Some(0));
+
+        let bag = myroom_bag_rows(&table, &inventory, selection.bag_page())
+            .iter()
+            .map(|row| (row.item_id, row.name))
+            .collect::<Vec<_>>();
+        let gift_views = myroom_gift_views(&table, &[], &character);
+        let last_gift_page = myroom_gift_pages(&gift_views).saturating_sub(1);
+        let gift_page = myroom_gift_page(&gift_views, selection.gift_page().min(last_gift_page));
+        let mut wallet = WalletState::default();
+        wallet.apply_purchase_wallets(&SyncItemPurchaseWallets {
+            music_cash: 120,
+            item_cash: 340,
+        });
+        wallet.apply_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 1000,
+            point: 250,
+            o2_cash: 5000,
+            cash_point: 56,
+        });
+        let hit = myroom_action_at(
+            &[myroom_hit_placement(MYROOM_SLOT_FIRST_CODE + 2, 10, 10)],
+            11,
+            11,
+        );
+
+        let observed = format!(
+            "{:?}|{}/{:?}/{:?}/{}/{:?}|{bag:?}|{gift_page:?}|{:?}|{:?}|{:?}|{:?}|{hit:?}",
+            [
+                MYROOM_SLOT_FIRST_CODE,
+                MYROOM_BAG_FIRST_CODE,
+                MYROOM_GIFT_FIRST_CODE,
+                MYROOM_BACK_CODE,
+                MYROOM_NICKNAME_CODE,
+            ]
+            .map(myroom_action_for_code),
+            selection.selected_slot(),
+            selection.bag_page(),
+            selection.bag_cell(),
+            selection.gift_page(),
+            selection.gift_cell(),
+            myroom_identity_captions(&character),
+            myroom_wallet_captions(&wallet),
+            myroom_gift_captions(&gift_views, 0, selection.gift_cell()),
+            (myroom_equip_slot(5, 3), myroom_equip_slot(1, 2)),
+        );
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in observed.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        assert_eq!(
+            hash, 0x3CEA_0E90_1429_C6FB,
+            "MyRoom outputs drifted: {observed}"
+        );
+    }
+
+    #[test]
     fn wallet_keeps_latest_wire_words() {
         let mut state = WalletState::default();
         state.apply_cash_point(&SyncCashPointResponse {
