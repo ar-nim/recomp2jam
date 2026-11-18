@@ -1,0 +1,28 @@
+# Verification transcript — 2026-11-18
+
+$ scripts/run-manifest.sh verify /home/arnim/scratch/p241-n203g
+run-manifest: artifact set complete
+rig-provenance: manifest complete
+rig-audio: audio OK (peak -3.6 dBFS > floor -60 dBFS): /home/arnim/scratch/p241-n203g/audio/audio.wav
+exit=0
+
+$ scripts/run-manifest.sh verify docs/captures/t76/release-n203
+run-manifest: artifact set complete
+rig-provenance: note: no captures: provenance not required
+rig-provenance: manifest complete
+exit=0
+
+$ scripts/pair-stats.sh injector.log input.log --min-offset
+offset_ms=-1795003157737
+injections=203 judged=203 lanes=7/7
+p50_ms=6.000 p99_ms=14.000 max_ms=14.000
+p50=6.000 p99=14.000 max=14.000
+
+# Audio containment sidecar facts
+expect=sound
+state=captured
+sink=rig_null_2785254
+route=sink
+peak_dbfs=-3.6
+preboot_breach=0
+on_default_sink=0

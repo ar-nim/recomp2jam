@@ -28,6 +28,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+POPUP_HELPER="$SCRIPT_DIR/lib/planet_popup.py"
 # shellcheck source=lib/rig-session.sh
 . "$SCRIPT_DIR/lib/rig-session.sh"
 
@@ -142,6 +143,23 @@ wait_host_pick_staged() {
   exit 1
 }
 
+# The session creates its own room at boot. On a shared Memoryer other
+# rooms can precede it, so join the row named by the client's own room
+# number instead of always taking row 0 (which can belong to another run).
+created_room_row_control() {
+  local line number
+  line="$(sed -E 's/\x1B\[[0-9;]*[mK]//g' "$OUT_DIR/client.log" 2>/dev/null |
+    grep -m1 'room created with number number=' || true)"
+  number="${line##*number=}"
+  case "$number" in
+    '' | *[!0-9]*) die "no room number in $OUT_DIR/client.log; cannot pick the row" ;;
+  esac
+  if [ "$number" -gt 5 ]; then
+    die "room number $number is outside the six staged room rows; pagination is OPEN"
+  fi
+  printf 'IDC_BUTTON_SROOM_EXBUTTON%d\n' "$((number + 1))"
+}
+
 click_at() {
   local x="$1" y="$2"
   "$REPO_ROOT/scripts/rig-drive.sh" --backend xtest --display "$DISPLAY_NUM" move "$OUT_DIR" "$x" "$y" >/dev/null
@@ -150,6 +168,39 @@ click_at() {
 
 press_key() {
   "$REPO_ROOT/scripts/rig-drive.sh" --backend xtest --display "$DISPLAY_NUM" key "$OUT_DIR" "$1" >/dev/null
+}
+
+latest_frame() {
+  find "$FRAMES" -maxdepth 1 -name '*.png' -type f -printf '%T@ %p\n' 2>/dev/null |
+    sort -nr | head -1 | cut -d' ' -f2-
+}
+
+popup_is_up() {
+  local frame="$1"
+  [ -n "$frame" ] && [ -r "$frame" ] || return 1
+  [ "$(python3 "$POPUP_HELPER" check "$frame" 2>/dev/null)" = "up" ]
+}
+
+# The NORMAL-mode box blocks the Planet emblem. Its OK face is pinned at
+# (400,365) in docs/captures/t240/findings.md; the frame test only decides
+# whether that face needs pressing.
+dismiss_startup_popup() {
+  local frame deadline
+  frame="$(latest_frame)"
+  if ! popup_is_up "$frame"; then
+    return 0
+  fi
+  echo "planet-to-waiting: dismiss NORMAL-mode box at (400,365) (docs/captures/t240/findings.md)"
+  click_at 400 365
+  deadline=$((SECONDS + 10))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    frame="$(latest_frame)"
+    if ! popup_is_up "$frame"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  die "NORMAL-mode box is still up after the OK click"
 }
 
 # --- session lifecycle (standalone mode) -----------------------------------
@@ -179,6 +230,7 @@ stop_session() {
 # 1. Splash -> Planet.
 drive_to_waiting() {
   wait_scene planet 90
+  dismiss_startup_popup
 
   # 2. Planet emblem (control id) -> Channel.
   local px py
@@ -192,9 +244,9 @@ drive_to_waiting() {
   click_at "$cx" "$cy"
   wait_scene room 60
 
-  # 4. Room row (control id panel) -> Waiting.
+  # 4. The room this session created -> Waiting.
   local rx ry
-  read -r rx ry <<<"$(rect_center IDC_BUTTON_SROOM_EXBUTTON1)"
+  read -r rx ry <<<"$(rect_center "$(created_room_row_control)")"
   click_at "$rx" "$ry"
   wait_scene waiting 60
 }

@@ -1,0 +1,6 @@
+planet
+channel
+room
+waiting
+loading
+playing

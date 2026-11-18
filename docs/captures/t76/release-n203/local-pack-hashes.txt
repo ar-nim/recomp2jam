@@ -1,0 +1,5 @@
+# Local, git-ignored pack pins (screenshots and audio are not committed)
+# Verify with: sha256sum -c local-pack-hashes.txt (on the rig host only)
+bd295a41a4dd0ac063b5fe571bc2b689f8a8e163f14f67653ca559ca05ab8022  manifest.json
+4c31758a8e5e6d1e79f8ba6f2ebaa65ed16cdaf5c5c83c52dd81ead95623eab4  provenance.json
+f2663e7e52f5dd8a4b2dd356a1b26c09b34f4ef1e24e84de7e297d4d824f6eb9  artifacts/stats/judged.json

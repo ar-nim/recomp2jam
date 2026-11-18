@@ -119,9 +119,13 @@ def main() -> int:
     parser.add_argument("--out", default="", help="write stats JSON to this path")
     parser.add_argument("--relative", action="store_true",
                         help="normalize both series by their first event before differencing")
+    parser.add_argument("--min-offset", action="store_true",
+                        help="normalize by the fastest paired delivery (all deltas non-negative)")
     parser.add_argument("--require-all-lanes", action="store_true",
                         help="fail unless all 7 lanes appear in both inputs")
     args = parser.parse_args()
+    if args.relative and args.min_offset:
+        parser.error("--relative and --min-offset cannot be combined")
 
     inj_path = Path(args.injector)
     judged_path = Path(args.judged)
@@ -185,6 +189,12 @@ def main() -> int:
             for e, w in zip(inj_lane, judged_lane):
                 deltas.append((w - first_w) - (e - first_e))
 
+    offset_ms = 0
+    if args.min_offset:
+        offset_ms = min(deltas)
+        deltas = [delta - offset_ms for delta in deltas]
+        print(f"offset_ms={offset_ms}")
+
     deltas_sorted = sorted(deltas)
     p50 = percentile(deltas_sorted, 50)
     p99 = percentile(deltas_sorted, 99)
@@ -204,6 +214,7 @@ def main() -> int:
             "p50_ms": p50,
             "p99_ms": p99,
             "max_ms": mx,
+            "offset_ms": offset_ms,
         }, indent=2))
 
     return 0

@@ -43,6 +43,7 @@
 #   --inject-keys LIST    lane keys injected after the drive, e.g.
 #                        lane-0,lane-3,lane-6 (gameplay judged check)
 #   --inject-count N      injection rounds (default 1)
+#   --inject-interval-ms N delay between presses (default 250)
 #   --min-frames N        frame-PNG floor (default 4)
 #   --display :N          pin the display instead of allocating one
 #   --binary PATH         client binary (default target/debug/recomp2jam)
@@ -294,27 +295,45 @@ manifest_params_field() {
     field="$field music-id=$MUSIC_ID"
   fi
   if [ -n "$INJECT_KEYS" ]; then
-    field="$field inject=$INJECT_KEYS x$INJECT_COUNT"
+    field="$field inject=$INJECT_KEYS x$INJECT_COUNT interval=$INJECT_INTERVAL_MS"
   fi
   printf '%s %s' "$field" "$(rig_server_identity_params "$OUT_DIR")"
 }
 
 # One layout contract (#302): manifests declare artifacts/screenshots, and
-# the client writes frames/. Copy each frame into the declared path before
-# the manifest is written, and keep frames/ as the client's own output.
+# the client writes frames/. A held scene can write the same pixels more than
+# once; only the first copy is comparable evidence. Keep frames/ untouched,
+# and stage one copy of each distinct frame into the declared path.
 stage_screenshots() {
-  local frames screenshots frame copied=0
+  local frames screenshots frame digest copied=0 skipped=0
+  local -A staged_digests=()
   frames="$(rig_session_frames "$OUT_DIR")"
   screenshots="$(out_path artifacts/screenshots)"
   mkdir -p "$screenshots"
   [ -d "$frames" ] || return 0
   for frame in "$frames"/*.png; do
     [ -f "$frame" ] || continue
+    digest="$(sha256sum "$frame" | cut -d' ' -f1)"
+    if [ -n "${staged_digests[$digest]:-}" ]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    staged_digests[$digest]="$(basename "$frame")"
     cp -f "$frame" "$screenshots/$(basename "$frame")"
     copied=$((copied + 1))
   done
-  echo "rig-afk: staged $copied frame(s) into artifacts/screenshots" \
+  echo "rig-afk: staged $copied distinct frame(s), skipped $skipped repeat(s) into artifacts/screenshots" \
     >>"$(phase_log package)"
+}
+
+write_stats() {
+  local injector judged stats
+  injector="$(out_path injector.log)"
+  judged="$(rig_session_log "$OUT_DIR")"
+  stats="$(out_path artifacts/stats/judged.json)"
+  [ -f "$injector" ] || return 0
+  "$SCRIPT_DIR/pair-stats.sh" "$injector" "$judged" --min-offset --out "$stats" \
+    >>"$(phase_log package)" 2>&1
 }
 
 write_manifest() {
@@ -349,6 +368,9 @@ package_pack() {
   stage_screenshots || code=$?
   if [ "$code" -eq 0 ]; then
     write_manifest || code=$?
+  fi
+  if [ "$code" -eq 0 ]; then
+    write_stats || code=$?
   fi
   if [ "$code" -eq 0 ] && [ -r "$(rig_session_log "$OUT_DIR")" ]; then
     if [ "${RIG_AFK_FAULT:-}" = "drop-provenance" ]; then
@@ -446,7 +468,7 @@ session_options() {
 record_launch() {
   local -a options=()
   mapfile -t options < <(session_options)
-  rig_session_command_line "$OUT_DIR" "${options[@]}" >"$(out_path launch.txt)"
+  rig_session_command_line "$OUT_DIR" --binary "$BINARY" "${options[@]}" >"$(out_path launch.txt)"
 }
 
 boot_session() {
@@ -469,7 +491,8 @@ drive_scenes() {
 inject_presses() {
   local injector="${RIG_AFK_INJECTOR:-$SCRIPT_DIR/rig-inject.sh}"
   phase_run inject "$INJECT_TIMEOUT" "$injector" --display "$DISPLAY" \
-    --out "$OUT_DIR" --keys "$INJECT_KEYS" --count "$INJECT_COUNT"
+    --out "$OUT_DIR" --keys "$INJECT_KEYS" --count "$INJECT_COUNT" \
+    --interval-ms "$INJECT_INTERVAL_MS"
 }
 
 stop_session() {
@@ -588,6 +611,9 @@ for scene in planet channel room "${STUB_FINAL_SCENE:-loading}"; do
     "$index" "$((index * 1000))" "$scene" >>"$log"
   printf 'frame-%d' "$index" >"$out/frames/000$index.png"
 done
+if [ "${STUB_DUPLICATE_FRAME:-0}" = "1" ]; then
+  cp "$out/frames/0001.png" "$out/frames/0005.png"
+fi
 for round in $(seq 1 "${STUB_JUDGED_LINES:-0}"); do
   printf 'judged %d lane %d\n' "$((round * 100))" "$((round % 7))" >>"$log"
 done
@@ -601,6 +627,7 @@ write_inject_stub() {  # path
 #!/usr/bin/env bash
 # Stand-in injector: writes the injector's own epoch-stamped record.
 set -euo pipefail
+original_argv="$*"
 out=""
 keys="lane-0"
 count=1
@@ -613,6 +640,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$out" ] || { echo "inject-stub: no --out out-dir" >&2; exit 2; }
+printf '%s\n' "$original_argv" >"$out/injector.argv"
 : >"$out/injector.log"
 epoch=1000
 for _ in $(seq 1 "$count"); do
@@ -704,9 +732,15 @@ selftest_leg_happy() {
   assert_line "$leg" "check audio: PASS"
   assert_line "$leg" "check manifest: PASS"
   for kept in report.md report.json provenance.json manifest.json input.log \
-    phases/boot.log audio/audio.wav; do
+    artifacts/stats/judged.json phases/boot.log audio/audio.wav; do
     assert_kept "$leg" "$kept"
   done
+  if ! grep -q '"injections": 7' "$LEG_OUT/artifacts/stats/judged.json"; then
+    selftest_fail "$leg" "stats file does not record seven injections"
+  fi
+  if ! grep -qF "$TMP/target/debug/fake-client" "$LEG_OUT/launch.txt"; then
+    selftest_fail "$leg" "launch.txt does not name the booted binary"
+  fi
   selftest_leg_pass "$leg" "complete pack, five green checks"
 }
 
@@ -821,6 +855,39 @@ selftest_leg_audio_silent() {
   selftest_leg_pass "$leg" "check audio: FAIL run declared sound but the artifact is silent (peak ... dBFS)"
 }
 
+selftest_leg_distinct_frames() {
+  local leg="duplicate-frame-is-not-staged"
+  selftest_run dupe STUB_DUPLICATE_FRAME=1 -- --target loading || true
+  [ "$LEG_EXIT" -eq 0 ] || selftest_fail "$leg" "runner exited $LEG_EXIT (want 0)"
+  assert_status "$leg" PASS
+  local count
+  count="$(find "$LEG_OUT/artifacts/screenshots" -maxdepth 1 -name '*.png' -type f | wc -l)"
+  [ "$count" -eq 4 ] || selftest_fail "$leg" "staged $count screenshots, want 4 distinct"
+  if [ -e "$LEG_OUT/artifacts/screenshots/0005.png" ]; then
+    selftest_fail "$leg" "the repeated frame was staged"
+  fi
+  selftest_leg_pass "$leg" "a repeated client frame is skipped, four distinct frames pass verify"
+}
+
+selftest_leg_inject_interval() {
+  local leg="inject-interval-passed-through"
+  selftest_run interval STUB_FINAL_SCENE=playing STUB_JUDGED_LINES=7 -- \
+    --target playing --inject-keys lane-0,lane-1,lane-2,lane-3,lane-4,lane-5,lane-6 \
+    --inject-count 1 --inject-interval-ms 800 || true
+  if [ "$LEG_EXIT" -ne 0 ]; then
+    sed -n '1,40p' "$LEG_LOG" >&2
+    selftest_fail "$leg" "runner exited $LEG_EXIT (want 0)"
+  fi
+  assert_status "$leg" PASS
+  if ! grep -qF -- '--interval-ms 800' "$LEG_OUT/injector.argv"; then
+    selftest_fail "$leg" "injector did not receive --interval-ms 800: $(cat "$LEG_OUT/injector.argv")"
+  fi
+  if ! grep -qF -- 'interval=800' "$LEG_OUT/manifest.json"; then
+    selftest_fail "$leg" "manifest does not carry interval=800"
+  fi
+  selftest_leg_pass "$leg" "the injector and manifest both carry the 800 ms interval"
+}
+
 selftest_leg_manifest() {
   local leg="manifest-red"
   selftest_run manifest RIG_AFK_FAULT=drop-provenance -- --target loading || true
@@ -846,6 +913,8 @@ cmd_selftest() {
   selftest_leg_judged
   selftest_leg_audio_disabled
   selftest_leg_audio_silent
+  selftest_leg_distinct_frames
+  selftest_leg_inject_interval
   selftest_leg_manifest
   echo "rig-afk: selftest OK"
 }
@@ -859,6 +928,7 @@ parse_args() {
   MUSIC_ID=""
   INJECT_KEYS=""
   INJECT_COUNT=1
+  INJECT_INTERVAL_MS=250
   MIN_FRAMES=4
   BINARY=""
   PINNED_DISPLAY=""
@@ -870,6 +940,7 @@ parse_args() {
       --music-id) MUSIC_ID="$2"; shift 2 ;;
       --inject-keys) INJECT_KEYS="$2"; shift 2 ;;
       --inject-count) INJECT_COUNT="$2"; shift 2 ;;
+      --inject-interval-ms) INJECT_INTERVAL_MS="$2"; shift 2 ;;
       --min-frames) MIN_FRAMES="$2"; shift 2 ;;
       --display) PINNED_DISPLAY="$2"; shift 2 ;;
       --binary) BINARY="$2"; shift 2 ;;
@@ -906,6 +977,9 @@ parse_args() {
   esac
   case "$INJECT_COUNT" in
     '' | *[!0-9]*) die "--inject-count must be a number (got '$INJECT_COUNT')" ;;
+  esac
+  case "$INJECT_INTERVAL_MS" in
+    '' | *[!0-9]*) die "--inject-interval-ms must be a number (got '$INJECT_INTERVAL_MS')" ;;
   esac
   if [ -n "$INJECT_KEYS" ] && [ "$TARGET" != "playing" ]; then
     die "--inject-keys needs --target playing (lane presses are only judged while Playing)"

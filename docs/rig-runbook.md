@@ -226,7 +226,7 @@ One unattended command boots, drives, captures, packages, and checks a run:
 scripts/rig-afk.sh <out-dir> [--pair native] [--scene-script PATH]
     [--target loading|playing] [--music-id ID]
     [--inject-keys lane-0,lane-3,...] [--inject-count N]
-    [--min-frames N] [--display :N] [--binary PATH]
+    [--inject-interval-ms N] [--min-frames N] [--display :N] [--binary PATH]
 scripts/rig-afk.sh selftest
 ```
 
@@ -260,6 +260,17 @@ Self-checks, all of them red on failure and quoted verbatim in
    `rig-audio.sh verify` must measure above the floor.
 5. `manifest` — `run-manifest.sh verify` (artifact set, staged screenshots
    distinct, provenance complete, audio verified).
+
+`--inject-interval-ms` (default 250) keeps the scheduled-press interval in
+one place: the injector receives it and the manifest `params` records it.
+A gameplay pack also writes `artifacts/stats/judged.json` from
+`pair-stats.sh --min-offset`; the figure is normalized by the fastest paired
+delivery, with the raw and `--relative` modes left unchanged.
+
+The packager stages one copy of each distinct frame sha256 into
+`artifacts/screenshots`. A held scene can write identical pixels many times;
+those repeats stay only in the client's `frames/` dump and never count as
+comparable screenshots.
 
 `<out-dir>/status` holds `PASS` or `FAILED`; the runner exits 0 or 1. A failed
 check keeps the whole pack — nothing is deleted and nothing is cleaned up — and
@@ -333,7 +344,11 @@ and cleanup failures keep the evidence instead of deleting it.
   `scripts/planet-to-waiting.sh --attach <out-dir>` drives a session the
   caller already booted (the AFK runner's shape); `--music-id` stages the
   host pick (first Waiting Confirm) so the second reaches Loading, and
-  `--target playing` Confirms at Loading (4012) into Playing.
+  `--target playing` Confirms at Loading (4012) into Playing. The drive first
+  dismisses the NORMAL-mode message box when its pinned blue body is up
+  (`scripts/lib/planet_popup.py`, OK face at `(400,365)`), and joins the room
+  row named by the client's own room number: a shared Memoryer can put other
+  sessions in row 0.
 - Aim: chrome coords resolve from staged BND rects, never hand-read
   pixels. Native aim uses the dump tool's rect query for a BND control
   id (#235); unknown ids fail loudly. Wine aim cites pinned reference

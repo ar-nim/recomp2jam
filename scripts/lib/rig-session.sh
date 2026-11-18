@@ -76,11 +76,18 @@ rig_session_argv() {
 }
 
 # The whole launch command line, as plain words, for provenance and reports.
+# --binary PATH must name the executable the caller actually boots.
 rig_session_command_line() {
-  printf '%s' "$(rig_session_binary)"
+  local out_dir="$1"; shift
+  local binary="$(rig_session_binary)"
+  if [ "${1:-}" = "--binary" ]; then
+    binary="$2"
+    shift 2
+  fi
+  printf '%s' "$binary"
   local argument
   while IFS= read -r argument; do
     printf ' %s' "$argument"
-  done < <(rig_session_argv "$@")
+  done < <(rig_session_argv "$out_dir" "$@")
   printf '\n'
 }

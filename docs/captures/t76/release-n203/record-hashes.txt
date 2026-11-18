@@ -1,0 +1,7 @@
+# Text pointers committed for the N=203 release run
+# Verify with: sha256sum -c record-hashes.txt
+bd295a41a4dd0ac063b5fe571bc2b689f8a8e163f14f67653ca559ca05ab8022  manifest.json
+b45f60a9e479abb1fdc394bc0057dd882bdd86541c6c4ab1058b75d4a9b7c9f4  artifacts/input.log
+f2663e7e52f5dd8a4b2dd356a1b26c09b34f4ef1e24e84de7e297d4d824f6eb9  artifacts/stats/judged.json
+a843b2d4a5601042c8e2430d8af0c0805ebb1d1188ad7c52f76ab0a9e21873a4  artifacts/scene-sequence.txt
+755369688ffa75dd19cd4b4d9214e47b86aba53899971f72a73f9a788328efaa  run-report.md

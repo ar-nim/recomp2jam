@@ -1,0 +1,9 @@
+{
+  "injections": 203,
+  "judged": 203,
+  "lanes": 7,
+  "p50_ms": 6.0,
+  "p99_ms": 14.0,
+  "max_ms": 14,
+  "offset_ms": -1795003157737
+}
