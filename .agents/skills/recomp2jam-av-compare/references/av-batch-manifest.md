@@ -4,6 +4,12 @@ This manifest drives `scripts/batch_compare_av.py`. Paths resolve relative to
 the manifest. Keep manifests that reference proprietary captures under the
 same local-only artifact root.
 
+For blit-fidelity work, use native 800x600 pairs with no `width`, `height`, or
+`fps` override: the #329/#332 downsampled pipeline used different filters on
+each side and can hide sub-2-pixel placement errors. It remains a documented
+fallback only; see [native-ab-capture.md](native-ab-capture.md) for the capture
+path, provenance layout, region-map rescale rule, and the issue #334 example.
+
 ## Top-level object
 
 - `schema_version` (string, required): exactly `recomp2jam-av-v1`.
@@ -16,8 +22,8 @@ same local-only artifact root.
 - `ref` (string, required): original 7.55 reference capture.
 - `test` (string, required): recomp2jam capture.
 - `out_dir` (string, required): per-scene report directory.
-- `width`, `height` (numbers, optional): use 800 and 600 for native-canvas
-  normalization when required.
+- `width`, `height` (numbers, optional): omit for native pairs; only use
+  explicit normalization when the capture plan records a resize.
 - `fps` (number, optional): omit unless resampling is part of the capture plan.
 - `audio_rate` (number, optional): defaults to 48000 in the compare script.
 - `offset` (number, optional): seconds added to the reference input timeline.
@@ -43,6 +49,29 @@ identical frames is a passing value. Finite averages exclude infinite frames;
 the summary records their count.
 
 ## Example
+
+Native example (issue #334; paths inside the local-only pack, no scaling):
+
+```json
+{
+  "schema_version": "recomp2jam-av-v1",
+  "scenes": [
+    {
+      "id": "planet",
+      "label": "STATE_PLANET (native 800x600 still A/B)",
+      "ref": "media/ref/planet.mkv",
+      "test": "media/test/planet.mkv",
+      "out_dir": "reports/planet",
+      "audio_rate": 48000,
+      "duration": 1,
+      "no_vmaf": true,
+      "thresholds": "thresholds/skill-default.json"
+    }
+  ]
+}
+```
+
+Older 400x300 example (downsampled fallback only):
 
 ```json
 {
