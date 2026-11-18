@@ -13,13 +13,16 @@ stripped on every boot, WINIT_UNIX_BACKEND=x11, null audio throughout,
 and only the child processes this script starts are ever terminated.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
-import socket
+import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 SCHEMA_VERSION = "recomp2jam-input-v1"
@@ -40,6 +43,89 @@ KEY_NAME = {
     "menu-up": "up",
     "menu-down": "down",
 }
+DEFAULT_GATEWAY_PORT = 15010
+SESSION_DATABASE = Path.home() / "memoryer-local" / "O2JAM.db"
+
+
+@dataclass(frozen=True)
+class ReplayOptions:
+    """Everything needed to launch one client capture."""
+
+    binary: Path
+    online: bool
+    host: str
+    port: int
+    user_id: int | None
+    token: str
+    gateway_id: int
+    channel_id: int
+    music_id: int | None
+    frames_dir: Path
+    input_log: Path
+
+
+def parse_gateway(endpoint: str) -> tuple[str, int]:
+    """Split a host:port endpoint, defaulting an omitted port."""
+    host, separator, port = endpoint.partition(":")
+    return host, int(port) if separator and port else DEFAULT_GATEWAY_PORT
+
+
+def resolve_binary(requested: str) -> Path:
+    """Find the release client, then the debug client, unless told otherwise."""
+    candidates = [Path(requested)] if requested else [
+        Path("target/release/recomp2jam"),
+        Path("target/debug/recomp2jam"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"binary missing: {candidates[0]} (cargo build -p recomp2jam)")
+
+
+def read_session_token(user_id: int, database: Path = SESSION_DATABASE) -> str:
+    """Read the newest session token; the value never enters an artifact."""
+    if not database.is_file():
+        raise FileNotFoundError(f"token database missing: {database}")
+    with sqlite3.connect(str(database)) as connection:
+        row = connection.execute(
+            "select TUSER_ID from t_o2jam_login where USER_INDEX_ID=? "
+            "order by LOGIN_TIME desc limit 1", (str(user_id),),
+        ).fetchone()
+    if row is None:
+        raise LookupError(f"no session token for user {user_id}")
+    return str(row[0])
+
+
+def child_environment(display: str) -> dict[str, str]:
+    """Keep the capture on a private X11 display, never on the owner's seat."""
+    env = dict(os.environ)
+    env.pop("WAYLAND_DISPLAY", None)
+    env.pop("WAYLAND_SOCKET", None)
+    env["WINIT_UNIX_BACKEND"] = "x11"
+    env["DISPLAY"] = display
+    return env
+
+
+def build_client_command(options: ReplayOptions) -> list[str]:
+    """Build the client argv; both arms use null sound and native frame dumps."""
+    command = [str(options.binary.resolve())]
+    if options.online:
+        command += [
+            "online", "--host", options.host, "--port", str(options.port),
+            "--user-id", str(options.user_id), "--token", options.token,
+            "--gateway-id", str(options.gateway_id),
+            "--channel-id", str(options.channel_id),
+        ]
+        if options.music_id is not None:
+            command += ["--music-id", str(options.music_id)]
+    else:
+        command += ["play", "--window"]
+    command += [
+        "--no-sound",
+        "--frame-dump", str(options.frames_dir),
+        "--input-log", str(options.input_log),
+    ]
+    return command
 
 
 def intended_ms(event):
@@ -169,6 +255,80 @@ def keysym_keycode(display, keysym_name):
     return display.keysym_to_keycode(keysym)
 
 
+def inject_key(display, xtest, keysym_name, down):
+    """Send one real X11 key edge to the window."""
+    from Xlib import X
+
+    code = keysym_keycode(display, keysym_name)
+    event = X.KeyPress if down else X.KeyRelease
+    xtest.fake_input(display, event, code)
+    display.sync()
+
+
+def inject_click(display, xtest, geometry, x, y):
+    """Send a native-frame-coordinate press through XTEST."""
+    from Xlib import X
+
+    xtest.fake_input(display, X.MotionNotify, x=geometry.x + x, y=geometry.y + y)
+    display.sync()
+    time.sleep(0.05)
+    xtest.fake_input(display, X.ButtonPress, 1)
+    display.sync()
+    time.sleep(0.03)
+    xtest.fake_input(display, X.ButtonRelease, 1)
+    display.sync()
+
+
+def inject_click_release(display, xtest, geometry, x, y):
+    """Release a previously held mouse edge without re-pressing."""
+    from Xlib import X
+
+    xtest.fake_input(display, X.MotionNotify, x=geometry.x + x, y=geometry.y + y)
+    display.sync()
+    xtest.fake_input(display, X.ButtonRelease, 1)
+    display.sync()
+
+
+def inject_text(display, xtest, text):
+    """Type printable ASCII as real key taps."""
+    for character in text:
+        key = "space" if character == " " else character
+        inject_key(display, xtest, key, True)
+        inject_key(display, xtest, key, False)
+        time.sleep(0.03)
+
+
+def injection_delay(event_time_ms, previous_time_ms, elapsed_wall_s):
+    """Wait only the remaining trace time, never rewind the timeline."""
+    return max(0.0, (event_time_ms - previous_time_ms) / 1000.0 - elapsed_wall_s)
+
+
+def trace_has_lane_events(trace):
+    """Report whether the trace needs the playing-scene prelude."""
+    return any(
+        isinstance(event.get("control"), str) and event["control"].startswith("lane-")
+        for event in trace["events"]
+    )
+
+
+def record_applied_event(applied, applied_log, event, status):
+    """Append one applied-event record and its plain-text log line."""
+    entry = {
+        "sequence": event["sequence"],
+        "control": event["control"],
+        "action": event["action"],
+        "time_ms": intended_ms(event),
+        "time_us": event.get("time_us"),
+    }
+    applied.append(entry)
+    with applied_log.open("a") as handle:
+        handle.write(
+            f"seq={entry['sequence']} control={entry['control']} "
+            f"action={entry['action']} intended_ms={entry['time_ms']} status={status}\n"
+        )
+    return entry
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trace", required=True, help="trace JSON path")
@@ -183,7 +343,10 @@ def main():
     parser.add_argument("--music-id", type=int, default=757)
     parser.add_argument("--ready-delay", type=float, default=8.0)
     parser.add_argument("--await-timeout", type=float, default=120.0)
-    parser.add_argument("--no-sound", action="store_true")
+    parser.add_argument(
+        "--no-sound", action="store_true",
+        help="accepted for CLI compatibility; the client is always silent",
+    )
     args = parser.parse_args()
 
     trace_path = Path(args.trace)
@@ -196,42 +359,37 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    input_log = out / "input.log"
+    frames_dir = out / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
-    binary = Path(args.binary) if args.binary else None
-    if binary is None:
-        for candidate in (Path("target/release/recomp2jam"), Path("target/debug/recomp2jam")):
-            if candidate.is_file():
-                binary = candidate
-                break
-    if binary is None or not binary.is_file():
-        print("binary missing; cargo build -p recomp2jam first", file=sys.stderr)
+    try:
+        binary = resolve_binary(args.binary)
+    except FileNotFoundError as source:
+        print(f"binary missing: {source}", file=sys.stderr)
         return 2
 
     online = bool(args.gateway and args.user_id is not None)
-    token = args.token
-    if online and not token:
-        db_path = Path.home() / "memoryer-local" / "O2JAM.db"
-        if db_path.is_file():
-            import sqlite3
-            conn = sqlite3.connect(str(db_path))
-            row = conn.execute(
-                "select TUSER_ID from t_o2jam_login where USER_INDEX_ID=? "
-                "order by LOGIN_TIME desc limit 1", (str(args.user_id),)
-            ).fetchone()
-            if row:
-                token = row[0]
-        if not token:
-            print("token missing and not found in Memoryer DB", file=sys.stderr)
-            return 2
-    if online:
-        gateway_host, _, gateway_port = args.gateway.partition(":")
-        gateway_port = int(gateway_port or 15010)
-
-    env = dict(os.environ)
-    env.pop("WAYLAND_DISPLAY", None)
-    env.pop("WAYLAND_SOCKET", None)
-    env["WINIT_UNIX_BACKEND"] = "x11"
-    env["DISPLAY"] = args.display
+    try:
+        token = args.token or (read_session_token(args.user_id) if online else "")
+    except (FileNotFoundError, LookupError) as source:
+        print(f"token lookup failed: {source}", file=sys.stderr)
+        return 2
+    host, port = parse_gateway(args.gateway) if online else ("", 0)
+    options = ReplayOptions(
+        binary=binary,
+        online=online,
+        host=host,
+        port=port,
+        user_id=args.user_id,
+        token=token,
+        gateway_id=args.gateway_id,
+        channel_id=args.channel_id,
+        music_id=args.music_id,
+        frames_dir=frames_dir,
+        input_log=input_log,
+    )
+    env = child_environment(args.display)
 
     lock = Path(f"/tmp/.X{args.display[1:]}-lock")
     started_xvfb = not lock.exists()
@@ -245,37 +403,8 @@ def main():
         )
         time.sleep(0.7)
 
-    input_log = out / "input.log"
-    frames_dir = out / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
     client_log = (out / "client.log").open("w")
-    if online:
-        command = [
-            str(binary.resolve()),
-            "online",
-            "--host", gateway_host,
-            "--port", str(gateway_port),
-            "--user-id", str(args.user_id),
-            "--token", token,
-            "--gateway-id", str(args.gateway_id),
-            "--channel-id", str(args.channel_id),
-        ]
-        if args.music_id is not None:
-            command += ["--music-id", str(args.music_id)]
-        command += [
-            "--no-sound",
-            "--frame-dump", str(frames_dir),
-            "--input-log", str(input_log),
-        ]
-    else:
-        command = [
-            str(binary.resolve()),
-            "play",
-            "--window",
-            "--no-sound",
-            "--frame-dump", str(frames_dir),
-            "--input-log", str(input_log),
-        ]
+    command = build_client_command(options)
     client = subprocess.Popen(command, stdout=client_log, stderr=client_log, env=env)
 
     applied = []
@@ -284,6 +413,7 @@ def main():
     manifest = {
         "trace": str(trace_path.resolve()),
         "binary": str(binary.resolve()),
+        "command": command,
         "display": args.display,
         "started_at": time.time(),
     }
@@ -319,11 +449,7 @@ def main():
         # Wait until the client reaches the playing scene before
         # injecting gameplay (lane) events; menu-only traces inject
         # at whatever scene the client is in.
-        is_gameplay = any(
-            isinstance(e.get("control"), str) and e["control"].startswith("lane-")
-            for e in trace["events"]
-        )
-        if is_gameplay:
+        if trace_has_lane_events(trace):
             def playing_reached():
                 return log.current_screen() == "playing"
             try:
@@ -334,27 +460,10 @@ def main():
         prev_time_ms = 0
         last_applied_wall = time.time()
 
-        def inject_key(keysym_name, down):
-            keycode = keysym_keycode(display, keysym_name)
-            xtest.fake_input(display, X.KeyPress if down else X.KeyRelease, keycode)
-            display.sync()
-
-        def inject_click(x, y):
-            xtest.fake_input(display, X.MotionNotify, x=geometry.x + x, y=geometry.y + y)
-            display.sync()
-            time.sleep(0.05)
-            xtest.fake_input(display, X.ButtonPress, 1)
-            display.sync()
-            time.sleep(0.03)
-            xtest.fake_input(display, X.ButtonRelease, 1)
-            display.sync()
-
         for event in trace["events"]:
             control = event["control"]
-            action = event["action"]
             time_ms = intended_ms(event)
-            time_us = event.get("time_us")
-            delay = (time_ms - prev_time_ms) / 1000.0 - (time.time() - last_applied_wall)
+            delay = injection_delay(time_ms, prev_time_ms, time.time() - last_applied_wall)
             if delay > 0:
                 time.sleep(delay)
             prev_time_ms = time_ms
@@ -362,49 +471,29 @@ def main():
 
             if control == "await-screen":
                 target = event["screen"]
-                def reached():
-                    return log.current_screen() == target
-                wait_for(reached, args.await_timeout, f"screen {target!r}")
-                applied.append({"sequence": event["sequence"], "control": control,
-                                "action": action, "time_ms": time_ms, "time_us": time_us})
-                with applied_log.open("a") as handle:
-                    handle.write(f"seq={event['sequence']} control={control} action={action} "
-                                 f"intended_ms={time_ms} status=accepted\n")
+                wait_for(
+                    lambda: log.current_screen() == target,
+                    args.await_timeout,
+                    f"screen {target!r}",
+                )
+                record_applied_event(applied, applied_log, event, "accepted")
                 continue
 
+            action = event["action"]
             if control in MENU_KEYS:
-                inject_key(MENU_KEYS[control], action == "press")
+                inject_key(display, xtest, MENU_KEYS[control], action == "press")
             elif control.startswith("lane-"):
-                lane_idx = int(control[5:])
-                key_name = LANE_KEYS[lane_idx]
-                inject_key(key_name, action == "press")
+                inject_key(display, xtest, LANE_KEYS[int(control[5:])], action == "press")
             elif control == "click":
-                x, y = event["x"], event["y"]
                 if action == "press":
-                    inject_click(x, y)
+                    inject_click(display, xtest, geometry, event["x"], event["y"])
                 else:
-                    # release-only click: motion then button release
-                    xtest.fake_input(display, X.MotionNotify, x=geometry.x + x, y=geometry.y + y)
-                    display.sync()
-                    xtest.fake_input(display, X.ButtonRelease, 1)
-                    display.sync()
+                    inject_click_release(display, xtest, geometry, event["x"], event["y"])
             elif control == "text":
-                for char in event["text"]:
-                    if char == " ":
-                        inject_key("space", True)
-                        inject_key("space", False)
-                    else:
-                        inject_key(char, True)
-                        inject_key(char, False)
-                    time.sleep(0.03)
+                inject_text(display, xtest, event["text"])
             else:
                 raise RuntimeError(f"unhandled control {control!r}")
-
-            applied.append({"sequence": event["sequence"], "control": control,
-                            "action": action, "time_ms": time_ms, "time_us": time_us})
-            with applied_log.open("a") as handle:
-                handle.write(f"seq={event['sequence']} control={control} action={action} "
-                             f"intended_ms={time_ms} status=applied\n")
+            record_applied_event(applied, applied_log, event, "applied")
 
         time.sleep(2.0)
         verdict = 0

@@ -85,10 +85,36 @@ pack/
   test-capture/          # driver manifest, input/log/applied/client logs
 ```
 
-Wrap each still once as FFV1 `bgr0` plus silent PCM (`-t 1`, 48 kHz stereo)
-only because `compare_av.py` requires an audio stream. No game-audio parity
-is claimed. Do not pass `--width`/`--height` or `--fps`: both inputs are
-already native 800x600, and resampling would reintroduce the old fault.
+The committed helpers build that layout from the two source packs. They copy
+bytes only into the local pack; no game data enters the repository:
+
+```bash
+python3 scripts/native_ab_pack.py build \
+  --pack "$HOME/scratch/native-ab-334/pack" \
+  --wine-lobby "$HOME/scratch/no-response/c3-waiting-qualified" \
+  --wine-loading "$HOME/scratch/no-response/c1-start-cue" \
+  --rust-run "$HOME/scratch/native-ab-334/run2" \
+  --trace "$HOME/scratch/native-ab-334/native-walk-to-loading.json" \
+  --legacy-map "$HOME/scratch/ab-parity-332/regions-v1.json" \
+  --thresholds .agents/skills/recomp2jam-av-compare/references/default-thresholds.json
+
+python3 scripts/native_ab_regions.py \
+  --pack "$HOME/scratch/native-ab-334/pack"
+
+python3 .agents/skills/recomp2jam-av-compare/scripts/batch_compare_av.py \
+  "$HOME/scratch/native-ab-334/pack/av-batch-native.json"
+
+python3 scripts/native_ab_pack.py refresh \
+  --pack "$HOME/scratch/native-ab-334/pack"
+```
+
+The builder finds the Rust scene frame by the driver's `frame-*-<scene>.png`
+name; it refuses zero or multiple matches instead of hand-picking pixels.
+It wraps each still once as FFV1 `bgr0` plus silent PCM (`-t 1`, 48 kHz
+stereo) only because `compare_av.py` requires an audio stream. No
+game-audio parity is claimed. Do not pass `--width`/`--height` or `--fps`:
+both inputs are already native 800x600, and resampling would reintroduce the
+old fault. Re-run `refresh` after reports change to restore full provenance.
 
 ## Region maps
 
