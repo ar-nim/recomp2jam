@@ -72,6 +72,18 @@ pub fn auto_backend() -> Option<InputBackend> {
 #[cfg(test)]
 mod backend_tests {
     use super::*;
+    use std::process::{Command, Output};
+
+    /// Marker env read only in the child probe; its presence proves the
+    /// decoy env reached a live `auto_backend` call.
+    const PROBE_ENV: &str = "INPUT_DRIVE_WAYLAND_FENCE_PROBE";
+    /// Fake socket name: no compositor owns it, so any connection attempt
+    /// would be a wrong-arm selection.
+    const DECOY_SOCKET: &str = "fence-267-decoy-wayland";
+    /// Printed by the child so the parent cannot pass on a filtered-out test.
+    const PROBE_MARKER: &str = "fence-267-probe-ran";
+    /// Harness name from `cargo test -p input-drive -- --list`.
+    const PROBE_TEST: &str = "backend::backend_tests::auto_backend_ignores_ambient_wayland_display";
 
     #[test]
     fn explicit_override_beats_both_env_vars() {
@@ -97,18 +109,46 @@ mod backend_tests {
         assert_eq!(select_backend(None, Some(""), Some("")), None);
     }
 
-    /// Hermeticity guard (#267): an ambient `WAYLAND_DISPLAY` must never
-    /// route the auto-detect to the fixture arm, even when it is set in
-    /// the process environment (as it is on the owner's live KDE
-    /// session). Seam-suffices: `auto_backend` is the single seam between
-    /// the process environment and backend selection; the smoke example's
-    /// `select_auto` is the only live caller, and it may reach the fixture
-    /// arm only through an explicitly pinned socket or `--backend wayland`.
+    /// Hermeticity guard (#267): re-run this test in a child process with a
+    /// decoy ambient `WAYLAND_DISPLAY` and assert the fixture arm is never
+    /// chosen. Seam-suffices: `auto_backend` is the only env-to-backend
+    /// seam, and its only live caller is the `input_smoke` example's
+    /// `select_auto` (cargo tests never run examples); the child exercises
+    /// that seam with real process env, without mutating the parent's env.
     #[test]
     fn auto_backend_ignores_ambient_wayland_display() {
-        // Whatever the ambient environment holds, the fixture arm must not
-        // be selected by ambient state alone.
-        assert_ne!(auto_backend(), Some(InputBackend::WaylandFixture));
+        if std::env::var_os(PROBE_ENV).is_some() {
+            assert_fixture_arm_is_not_auto_selected();
+            return;
+        }
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let mut probe = Command::new(test_binary);
+        probe
+            .arg("--exact")
+            .arg(PROBE_TEST)
+            .arg("--nocapture")
+            .env(PROBE_ENV, "1")
+            .env("WAYLAND_DISPLAY", DECOY_SOCKET)
+            .env_remove("WAYLAND_SOCKET");
+        assert_decoy_probe_refused_fixture_arm(&probe.output().expect("decoy probe runs"));
+    }
+
+    fn assert_fixture_arm_is_not_auto_selected() {
+        println!("{PROBE_MARKER}");
+        assert_ne!(
+            auto_backend(),
+            Some(InputBackend::WaylandFixture),
+            "an ambient WAYLAND_DISPLAY must never select the fixture arm"
+        );
+    }
+
+    fn assert_decoy_probe_refused_fixture_arm(output: &Output) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains(PROBE_MARKER),
+            "decoy WAYLAND_DISPLAY was not refused:\n{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
