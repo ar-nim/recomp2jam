@@ -484,6 +484,33 @@ pub const SELECT_MUSIC_BACKDROP_BAKED_SPRITES: &[&str] = &[
     "SelectMusic_SearchQuestion.ojs",
 ];
 
+/// Result-tab control faces the sheet backdrop already paints (#349).
+/// `Dialog_SelectMusic.ojs` bakes the header labels, the check-all /
+/// remove-all boxes and the row check boxes; the sort bodies
+/// (`SelectMusic_Btn_{Diff,Label,Title,Artist,Down,Rank}.ojs`),
+/// `SelectMusic_RemoveAll.ojs`, `SelectMusic_RemoveBox.ojs` and
+/// `MShop_MMY_Color.ojs` repeat those
+/// faces (and add bright underlines / tags) when painted over it. The
+/// result tab shows the baked faces: the pinned exe capture has one
+/// orange underline under the level sort and no row remove/tag marks.
+/// Their `.bnd` rects still stage for clicks.
+pub const SELECT_MUSIC_RESULT_TAB_BAKED_SPRITES: &[&str] = &[
+    "SelectMusic_Btn_Diff.ojs",
+    "SelectMusic_Btn_Label.ojs",
+    "SelectMusic_Btn_Title.ojs",
+    "SelectMusic_Btn_Artist.ojs",
+    "SelectMusic_Btn_Down.ojs",
+    "SelectMusic_Btn_Rank.ojs",
+    "SelectMusic_RemoveAll.ojs",
+    "SelectMusic_RemoveBox.ojs",
+    "MShop_MMY_Color.ojs",
+];
+
+/// Row bodies whose frame follows the chart, not a filter state (#349).
+/// `SelectMusic_Diff.ojs` stores E/N/H in frames 0..2; one frame per
+/// row replaces the earlier single state painted on every row.
+pub const SELECT_ROW_DIFFICULTY_SPRITE: &str = "SelectMusic_Diff.ojs";
+
 /// Bodies the song-select sheet stages but does not paint at open
 /// (ticket #272 staged them hidden; #285 makes them paint-gated).
 /// Two families sit against the visible song-select panel:

@@ -40,7 +40,7 @@ const ROW_LEVEL_TEXT_ID: &str = "IDC_TEXT_DSMUSIC_TXT_DIFF";
 /// The spriteless row hit-targets (`EXTEND1..10`): one per visible row,
 /// top to bottom. Their look is the backdrop's, so they carry no
 /// sprite — only geometry.
-const ROW_BAND_ID_PREFIX: &str = "IDC_BUTTON_DSMUSIC_EXTEND";
+pub(crate) const ROW_BAND_ID_PREFIX: &str = "IDC_BUTTON_DSMUSIC_EXTEND";
 
 /// Caption ink (white, the exe's dialog text tone).
 pub(crate) fn select_ink() -> u32 {

@@ -45,7 +45,7 @@ use super::paint::{
     WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
-use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots};
+use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
@@ -6067,6 +6067,12 @@ impl ScreenGame {
         if crate::staging::SELECT_MUSIC_LEVEL_SPRITES.contains(&sprite) {
             return self.select_mode == SelectMusicMode::SongSelect;
         }
+        // The result tab's header, check boxes and row tags are baked
+        // into `Dialog_SelectMusic.ojs`; their bound state bodies would
+        // double the labels and add bright underlines (#349).
+        if crate::staging::SELECT_MUSIC_RESULT_TAB_BAKED_SPRITES.contains(&sprite) {
+            return false;
+        }
         if crate::staging::SELECT_MUSIC_PAINT_GATED_SPRITES.contains(&sprite) {
             return self.select_help
                 == match sprite {
@@ -6079,17 +6085,45 @@ impl ScreenGame {
         true
     }
 
+    /// Whether this is a level-column face the sheet backdrop already
+    /// bakes and that no filter chose: painting its bright frame would
+    /// cover the baked grey button (#349).
+    fn is_unselected_level_face(placement: &ScenePlacement, active_filter_ids: &[&str]) -> bool {
+        placement
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| crate::staging::SELECT_MUSIC_LEVEL_SPRITES.contains(&sprite))
+            && !active_filter_ids.contains(&placement.id.as_str())
+    }
+
+    /// One row clone's band number, zero based (`EXTEND1` -> 0).
+    /// Only row clones own a difficulty letter; other bodies keep the
+    /// filter-state frame rule.
+    fn select_row_index(placement: &ScenePlacement) -> Option<usize> {
+        if placement.role != crate::avatar::PlacementRole::Clone {
+            return None;
+        }
+        placement
+            .id
+            .strip_prefix(ROW_BAND_ID_PREFIX)?
+            .parse::<usize>()
+            .ok()?
+            .checked_sub(1)
+    }
+
     /// One state frame of a staged song-dialog body, if it stores its
     /// button faces as sprite-55 frames. The exe's image control swaps
     /// frames; stacking them lets the dark state cover the lit art.
-    /// Inactive bodies paint frame 0; each column's chosen filter body
-    /// paints its last (selected) frame. Bodies that genuinely stack
-    /// layers keep the all-layers arm (`None`).
+    /// A row's difficulty letter follows its chart slot (E/N/H);
+    /// inactive button bodies paint frame 0 and each column's chosen
+    /// filter body paints its last (selected) frame. Bodies that
+    /// genuinely stack layers keep the all-layers arm (`None`).
     fn select_sprite_frame(
         &self,
         placement: &ScenePlacement,
         figures: &HashMap<String, AvatarFigure>,
         active_filter_ids: &[&str],
+        visible_rows: &[SelectMusicRow<'_>],
     ) -> Option<usize> {
         let sprite = placement.sprite.as_deref()?;
         let figure = figures.get(sprite)?;
@@ -6100,6 +6134,10 @@ impl ScreenGame {
             return None;
         }
         let last = figure.len() - 1;
+        if sprite == crate::staging::SELECT_ROW_DIFFICULTY_SPRITE {
+            let band = Self::select_row_index(placement)?;
+            return visible_rows.get(band).map(|row| row.slot.min(last));
+        }
         let selected = active_filter_ids.contains(&placement.id.as_str());
         Some(if selected { last } else { 0 })
     }
@@ -6121,11 +6159,19 @@ impl ScreenGame {
             .into_iter()
             .filter_map(select_filter_button_id)
             .collect();
+        let rows = self.select_rows();
+        let page_start = self.select_page.saturating_mul(SELECT_VISIBLE_ROWS);
+        let visible_rows = rows.get(page_start..).unwrap_or(&[]);
         art.paint_backdrop_live_selected(
             frame,
             Screen::Waiting,
-            |placement| self.select_sprite_visible(placement),
-            |placement| self.select_sprite_frame(placement, &art.figures, &active_filter_ids),
+            |placement| {
+                self.select_sprite_visible(placement)
+                    && !Self::is_unselected_level_face(placement, &active_filter_ids)
+            },
+            |placement| {
+                self.select_sprite_frame(placement, &art.figures, &active_filter_ids, visible_rows)
+            },
         );
     }
 
@@ -14822,7 +14868,7 @@ mod game_tests {
     fn gated_select_art() -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
         const GATED: [(&str, &str); 4] = [
             (
-                "IDC_IMAGE_DSMUSIC_STEP1_ALL",
+                "IDC_BUTTON_DSMUSIC_STEP1_ALL",
                 "SelectMusic_Btn_Step1_all.ojs",
             ),
             ("IDC_IMAGE_DSMUSIC_RANDOM1_BG", "SelectMusic_Random1_BG.ojs"),

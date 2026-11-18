@@ -1501,7 +1501,7 @@ mod tests {
     use o2jam_shell::avatar::PlacementRole;
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_placement_layer,
-        paint_scene_figures, playing_member_selected, PlayingArtMode,
+        paint_scene_figures, paint_scene_figures_selected, playing_member_selected, PlayingArtMode,
     };
     use o2jam_shell::avatar::{scene_block, scene_sprite_names};
     use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
@@ -2983,6 +2983,17 @@ mod tests {
         }
     }
 
+    /// Native framebuffer indices inside one staged rect.
+    fn rect_pixels(rect: o2jam_render::Rect) -> Vec<usize> {
+        let right = rect.x + i32::try_from(rect.w).expect("width fits i32");
+        let bottom = rect.y + i32::try_from(rect.h).expect("height fits i32");
+        (rect.y..bottom)
+            .flat_map(move |y| {
+                (rect.x..right).map(move |x| usize::try_from(y * 800 + x).expect("native index"))
+            })
+            .collect()
+    }
+
     /// The scripted walk from splash into Playing, as `capture_all`
     /// drives it. The last Confirm is the S7 Loading→Playing gate:
     /// it is armed the way the live lane stages song prep.
@@ -4228,6 +4239,132 @@ mod tests {
                 mismatched, 0,
                 "{sprite} must paint frame 0, not the stack of states"
             );
+        }
+    }
+
+    /// Every body whose face the sheet backdrop already bakes must stay
+    /// out of the result-tab frame. The level column's five buttons are
+    /// baked at `(24,118)…(118,263)`; only the chosen column's dark
+    /// frame paints over them. An inactive bright frame covers the
+    /// baked label and is the owner's symptom 1.
+    #[test]
+    fn unselected_level_buttons_leave_the_baked_faces_visible() {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, actual) = painted_select_music_frame(&archive);
+        let backdrop = art
+            .placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Dialog_SelectMusic.ojs"))
+            .expect("sheet backdrop stages");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            paint_scene_figures(frame, std::slice::from_ref(backdrop), &art.figures);
+        });
+        let chosen = o2jam_shell::staging::SELECT_MUSIC_LEVEL_SPRITES
+            .first()
+            .copied();
+        for sprite in o2jam_shell::staging::SELECT_MUSIC_LEVEL_SPRITES {
+            if Some(*sprite) == chosen {
+                continue;
+            }
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| placed.sprite.as_deref() == Some(sprite))
+                .unwrap_or_else(|| panic!("{sprite} stages"));
+            let mismatched = rect_pixels(placed.rect)
+                .into_iter()
+                .filter(|at| actual[*at] != expected[*at])
+                .count();
+            assert_eq!(mismatched, 0, "{sprite} must leave the baked face visible");
+        }
+    }
+
+    /// The result tab's header labels, check boxes and row tags are
+    /// baked into `Dialog_SelectMusic.ojs`. Repainting their playlist
+    /// state faces here doubles the labels and underlines (owner's
+    /// symptom 2). Only the level sort's live frame stays on top.
+    #[test]
+    fn result_tab_leaves_baked_header_and_row_tags_visible() {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, actual) = painted_select_music_frame(&archive);
+        let backdrop = art
+            .placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Dialog_SelectMusic.ojs"))
+            .expect("sheet backdrop stages");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            paint_scene_figures(frame, std::slice::from_ref(backdrop), &art.figures);
+            let kept: Vec<_> = art
+                .placements
+                .iter()
+                .filter(|placed| {
+                    matches!(
+                        placed.sprite.as_deref(),
+                        Some("SelectMusic_CheckBox.ojs")
+                            | Some("SelectMusic_CheckBoxAll_BG.ojs")
+                            | Some("SelectMusic_RemoveAll_BG.ojs")
+                    )
+                })
+                .cloned()
+                .collect();
+            paint_scene_figures_selected(frame, &kept, &art.figures, |_| true, |_| Some(0));
+        });
+        let hidden = [
+            "SelectMusic_Btn_Diff.ojs",
+            "SelectMusic_Btn_Label.ojs",
+            "SelectMusic_Btn_Title.ojs",
+            "SelectMusic_Btn_Artist.ojs",
+            "SelectMusic_Btn_Down.ojs",
+            "SelectMusic_Btn_Rank.ojs",
+            "SelectMusic_RemoveAll.ojs",
+            "SelectMusic_RemoveBox.ojs",
+            "MShop_MMY_Color.ojs",
+        ];
+        for sprite in hidden {
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| placed.sprite.as_deref() == Some(sprite))
+                .unwrap_or_else(|| panic!("{sprite} stages"));
+            let mismatched = rect_pixels(placed.rect)
+                .into_iter()
+                .filter(|at| actual[*at] != expected[*at])
+                .count();
+            assert_eq!(mismatched, 0, "{sprite} must leave the baked art visible");
+        }
+    }
+
+    /// The three letters of one song's chart entries come from the
+    /// three stored frames of `SelectMusic_Diff.ojs` (E/N/H). Painting
+    /// one state for the whole column shows E on every row.
+    #[test]
+    fn three_chart_rows_paint_their_own_difficulty_letter_frame() {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, actual) = painted_select_music_frame(&archive);
+        let mut diff_rows: Vec<_> = art
+            .placements
+            .iter()
+            .filter(|placed| placed.sprite.as_deref() == Some("SelectMusic_Diff.ojs"))
+            .collect();
+        diff_rows.sort_by_key(|placed| placed.rect.y);
+        assert!(diff_rows.len() >= 3, "three visible difficulty rows stage");
+        for (row, placed) in diff_rows.into_iter().take(3).enumerate() {
+            let mut expected = native_probe();
+            paint_probe(&mut expected, |frame| {
+                paint_placement_layer(frame, placed, &art.figures, row, true, None);
+            });
+            assert_pixels_came_from_font(&actual, &expected, &format!("row {row} letter"));
         }
     }
 
