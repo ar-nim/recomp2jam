@@ -95,7 +95,17 @@ chrome `0x13200038` is always hidden (`docs/parity/room.md`, #169).
 carries no tutorial control". Shipped `ControlList_Interface.txt` line
 148 names `IDC_BUTTON_SROOM_FIRSTSTEP 0X13200032
 "Room_FirstStep.ojs"`; its rect is `(660,1)-(720,33)` (`GLOSSARY.md`
-FIRSTSTEP). The chrome exists. The link from FIRSTSTEP to
-`CStateTutorial` stays OPEN, as does the dimmed Planet TUTORIAL plate
-`0x19201006` (`docs/planet.md`). #317 records the correction and the
-revised Tutorial entry next step.
+FIRSTSTEP). The chrome exists. The link from FIRSTSTEP to `CStateTutorial` is now
+PINNED, not OPEN: qualified pack `~/scratch/side-scenes/b7-tutorial/`
+(manifest sha256 `064bec85c998dbeb5d9073f312ef949d490a4f8a2cc9d62adfccdb0c1183272d`;
+`screenshots/tutorial.png` sha256
+`612830b57103ce808b6f28739ce9bf71018223d84701516681c1a8ced10e77b8`)
+records the live FIRSTSTEP click, and static pin `S-PLAY-B3`
+(`docs/captures/static-play/pins.md`) names the chain `0x4902bb` →
+`0x495110` (chart globals + `ChangeState(0xb)`) → ctor `0x4f07f0`.
+Our Room control installs those globals on entry; the only stale side
+of this contradiction is the #34 note above. The dimmed Planet
+TUTORIAL plate `0x19201006` is disabled at construction and its click
+selects a channel family; it has NO tutorial dispatch, so its next
+step stays `PLANET_TUTORIAL_PLATE_NEXT_STEP` (`docs/planet.md`). #317
+records the original correction.

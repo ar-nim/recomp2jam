@@ -35,6 +35,12 @@ Mappings (recorded, not filed): stories 8/9/11/20 chart-judgement and cue
 timing → **#326** (Playing evidence wedge); stories 10/17 → **#245/#249/#250**
 (capture tooling); story 19's stale doc note is novel and is filed.
 
+Post-audit disposition: #358 replaced `TUTORIAL_ENTRY_NEXT_STEP` with
+`PLANET_TUTORIAL_PLATE_NEXT_STEP` and wired the Room FIRSTSTEP helper
+globals; story 19's stale parity note is rewritten, and story 13's
+condition is refuted by `S-PLAY-B3`. The Planet plate entry stays
+BLOCKED (and is statically dead); chart/audio joins stay under #326.
+
 BLOCKED for live lane: Planet TUTORIAL plate entry sweep; Tutorial.ojm cue
 moment and BGM re-cue; key-effect press sweep in tutorial; qualified exit
 capture; both-entry qualified sweep (Planet half); Loading-gate coexistence.

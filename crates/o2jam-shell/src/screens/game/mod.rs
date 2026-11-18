@@ -61,18 +61,19 @@ use super::side::{
     PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
     SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
     SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
-    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
-    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
-    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
-    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
-    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
-    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    ShopGood, SideScreen, TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
+    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
+    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
+    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
+    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
+    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
     SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -143,7 +144,7 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 /// memory without limit (PERF-07: `usize`, never `as`).
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
 
-use RoomControlAction::{Back, Create, Options, Side};
+use RoomControlAction::{Back, Create, Options, Side, TutorialEntry};
 
 /// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +157,9 @@ enum RoomControlAction {
     Options,
     /// Visit the side screen the control already names.
     Side(SideScreen),
+    /// Enter tutorial through the exe-pinned FIRSTSTEP helper: the
+    /// side state plus the chart globals `0x495110` writes first.
+    TutorialEntry,
     /// No evidenced target yet: the router records the press and the
     /// evidence step that would wire it. Never a silent drop.
     Unwired {
@@ -223,12 +227,14 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     // The four controls whose target already ships in the shell, plus
     // the tutorial entry: the room top-right `FIRSTSTEP` chrome
     // (`Room_FirstStep.ojs`, hover rect 660,1-718,32 per `docs/hover.md`)
-    // visits the guided-play side screen (`CStateTutorial`). What the
-    // exe runs on tutorial entry stays OPEN behind
-    // `TUTORIAL_ENTRY_NEXT_STEP` (`docs/parity/tutorial.md` Input row).
+    // follows the exe's pinned `0x4902bb` → `0x495110` →
+    // `ChangeState(0xb)` chain (`S-PLAY-B3`,
+    // docs/captures/static-play/pins.md): chart globals plus the
+    // `CStateTutorial` side state. The Planet plate is dead in the
+    // exe and stays OPEN under `PLANET_TUTORIAL_PLATE_NEXT_STEP`.
     routed(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", Side(SideScreen::Shop)),
     routed(0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", Side(SideScreen::MyRoom)),
-    routed(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", Side(SideScreen::Tutorial)),
+    routed(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", TutorialEntry),
     routed(0x1320_0037, "IDC_BUTTON_SROOM_MUSICSHOP", Side(SideScreen::MusicShop)),
     // `MYBAND` opens the ranking board: the band standings board the tree
     // ships is `SideScreen::Lanking` (the room has no band view). The
@@ -722,6 +728,11 @@ pub struct ScreenGame {
     chart_notes: u32,
     side: Option<SideScreen>,
     side_origin: Option<Screen>,
+    /// Chart globals installed by the FIRSTSTEP entry helper
+    /// (`S-PLAY-B3`), `None` until that pinned control answers. The
+    /// values are exe globals, so leaving a side visit does not clear
+    /// them; no exit writer is pinned.
+    tutorial_chart_globals: Option<TutorialChartGlobals>,
     /// Lanking board state (the catalog, sort, pages, board, and
     /// pick; #139 cluster 2): every `lanking_*` word lives here;
     /// the hash fold reads it for the six hashed words.
@@ -1023,6 +1034,7 @@ impl ScreenGame {
             chart_notes: 0,
             side: None,
             side_origin: None,
+            tutorial_chart_globals: None,
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
@@ -2780,6 +2792,15 @@ impl ScreenGame {
             RoomControlAction::Side(side) => {
                 self.visit_side(side);
             }
+            // Room control `0x13200032` follows the exe chain
+            // `0x4902bb` → `0x495110` → `ChangeState(0xb)`: set the
+            // pinned tutorial globals before entering the side state,
+            // never on a rejected visit. Geometry is the staged rect.
+            RoomControlAction::TutorialEntry => {
+                if self.visit_side(SideScreen::Tutorial) {
+                    self.tutorial_chart_globals = Some(TUTORIAL_CHART_GLOBALS);
+                }
+            }
             // No evidenced target: record the press and its next
             // evidence step — never a silent drop.
             RoomControlAction::Unwired { next_step } => {
@@ -3930,6 +3951,13 @@ impl ScreenGame {
     #[must_use]
     pub fn side(&self) -> Option<SideScreen> {
         self.side
+    }
+
+    /// Chart globals written by the pinned Room FIRSTSTEP entry
+    /// (`S-PLAY-B3`), `None` until that control answers.
+    #[must_use]
+    pub const fn tutorial_chart_globals(&self) -> Option<TutorialChartGlobals> {
+        self.tutorial_chart_globals
     }
 
     /// Stage real side art: `.bnd` placements plus figures loaded
@@ -21053,11 +21081,12 @@ mod game_tests {
     fn staged_firststep_button_enters_the_tutorial_flow() {
         // Ticket #34: the room top-right `FIRSTSTEP` chrome
         // (`0x13200032`, `Room_FirstStep.ojs`, hover rect 660,1-718,32
-        // per `docs/hover.md`) answers by visiting the tutorial side
-        // screen (`CStateTutorial`); the lobby holds underneath and
-        // BACK returns to it. What the exe runs on tutorial entry
-        // stays OPEN behind `TUTORIAL_ENTRY_NEXT_STEP` (guarded by
-        // `tutorial_entry_path_names_its_next_step`).
+        // per `docs/hover.md`) visits the tutorial side state
+        // (`CStateTutorial`) through the pinned `S-PLAY-B3` helper;
+        // the lobby holds underneath and BACK returns to it. The
+        // chart globals are pinned by
+        // `firststep_click_from_boot_staged_room_sets_the_pinned_tutorial_globals`;
+        // only the dead Planet plate stays OPEN.
         let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
         game.ingest_snapshot(&InputSnapshot::click_at(
             ROOM_CONTROL_TEST_CLICK.0,
@@ -21072,10 +21101,30 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_click_from_boot_staged_room_sets_the_pinned_tutorial_globals() {
+        // Live chain: ScreenGame boot → Planet → Channel → Room
+        // (`room_lobby_with_control`) → click of staged FIRSTSTEP chrome
+        // `0x13200032` → tutorial side state. The exe's Room dispatcher
+        // `0x4902bb` calls helper `0x495110`, which writes the chart
+        // globals below before `ChangeState(0xb)` (`S-PLAY-B3`,
+        // docs/captures/static-play/pins.md). B7 input log click
+        // `(689,16)` with `cue=click:room-firststep` opens the same scene
+        // (manifest `064bec85…3272d`, frame `612830b5…e77b8`).
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        assert_eq!(game.tutorial_chart_globals(), None);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.tutorial_chart_globals(), Some(TUTORIAL_CHART_GLOBALS));
+    }
+
+    #[test]
     fn staged_room_control_without_a_target_records_a_labelled_noop() {
         // Ticket #34: `QUICKJOIN` stands in for the staged controls
-        // with no evidenced target yet (`FIRSTSTEP` now visits the
-        // tutorial side screen) — the click must be recorded, never
+        // with no evidenced target yet (`FIRSTSTEP` now enters the
+        // pinned tutorial state) — the click must be recorded, never
         // silently dropped.
         let mut game = room_lobby_with_control(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN");
         game.ingest_snapshot(&InputSnapshot::click_at(

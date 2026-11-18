@@ -4048,10 +4048,53 @@ pub fn payment_side_notice() -> String {
     format!("{PAYMENT_UNWIRED_NOTICE} {PAYMENT_PAGE} {GIFT_PAGE}")
 }
 
-/// Next evidence step for the untraced tutorial entry path (no
-/// dossier offset names the `CStateTutorial` entry dispatch): the
-/// path stays OPEN until the rig names the button that opens it.
-pub const TUTORIAL_ENTRY_NEXT_STEP: &str = "SendInput sweep of the lobby emblem buttons per the ~/scratch/planet-verify/ recipe plus a REA trace of the CStateTutorial entry dispatch";
+/// Next evidence step for the dimmed Planet TUTORIAL plate, the only
+/// tutorial entry arm still OPEN. Static pin `S-PLAY-B3`
+/// (`docs/captures/static-play/pins.md`) shows the plate is disabled at
+/// construction and its click path only selects a channel family:
+/// Room FIRSTSTEP is pinned by live click and needs no sweep.
+pub const PLANET_TUTORIAL_PLATE_NEXT_STEP: &str = "SendInput sweep of the dimmed Planet TUTORIAL plate 0x19201006 in a qualified rig, plus a memory read of its channel-family selection (S-PLAY-B3: no tutorial dispatch exists there)";
+
+/// Chart globals written by the exe's tutorial entry helper
+/// `0x495110` (file `0x94110`, `S-PLAY-B3` in
+/// `docs/captures/static-play/pins.md`): the Room FIRSTSTEP dispatcher
+/// `0x4902bb` calls this helper before `ChangeState(0xb)`.
+/// The first six names follow the pinned meanings in
+/// `docs/stage-bga.md` and `docs/gameplay.md`; the last two keep their
+/// addresses because no evidence names their semantics yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TutorialChartGlobals {
+    /// Selected-song id at `0x7789d8` (8888, the tutorial chart).
+    pub song_id: u32,
+    /// Stage value at `0x7789dc`.
+    pub stage: u32,
+    /// Click-effect variant at `0x7789e0`.
+    pub click_effect_variant: u32,
+    /// Room modifier byte at `0x7789e4`.
+    pub modifier_byte: u8,
+    /// Difficulty byte at `0x7789e7`.
+    pub difficulty_byte: u8,
+    /// Speed byte at `0x7789e9`.
+    pub speed_byte: u8,
+    /// Session word at `0x7789ec`; semantics OPEN.
+    pub session_word_7789ec: u32,
+    /// Session word at `0x7789f4`; semantics OPEN.
+    pub session_word_7789f4: u32,
+}
+
+/// Exact word values written by helper `0x495110` at file offsets
+/// `0x94137`–`0x941b2` (`S-PLAY-B3`). The exe is the oracle: the
+/// qualified B7 pack names the live FIRSTSTEP click that reaches it.
+pub const TUTORIAL_CHART_GLOBALS: TutorialChartGlobals = TutorialChartGlobals {
+    song_id: 0x22b8,
+    stage: 1,
+    click_effect_variant: 1,
+    modifier_byte: 2,
+    difficulty_byte: 0,
+    speed_byte: 1,
+    session_word_7789ec: 1,
+    session_word_7789f4: 1,
+};
 
 /// Live wallet balances for the payment/result displays, fed only by
 /// decoded wire data: the 5029 two-word refresh (`SyncCashPointResponse`)
@@ -6643,14 +6686,13 @@ mod side_tests {
     }
 
     #[test]
-    fn tutorial_entry_path_names_its_next_step() {
-        // No dossier offset names the `CStateTutorial` entry, so
-        // the path stays OPEN with a named rig next step.
-        assert!(!TUTORIAL_ENTRY_NEXT_STEP.is_empty());
-        assert!(
-            TUTORIAL_ENTRY_NEXT_STEP.contains("SendInput"),
-            "{TUTORIAL_ENTRY_NEXT_STEP}"
-        );
+    fn planet_tutorial_plate_next_step_names_only_the_dead_plate() {
+        // `S-PLAY-B3` pins Room FIRSTSTEP; only the dimmed Planet
+        // TUTORIAL plate (`0x19201006`) still lacks a live click sweep.
+        let step = PLANET_TUTORIAL_PLATE_NEXT_STEP;
+        assert!(step.contains("SendInput"), "{step}");
+        assert!(step.contains("0x19201006"), "{step}");
+        assert!(!step.contains("FIRSTSTEP"), "{step}");
     }
 
     #[test]

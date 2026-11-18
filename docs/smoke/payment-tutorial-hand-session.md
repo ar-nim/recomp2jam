@@ -48,11 +48,16 @@ stays black. Tutorial paints its staged backdrop alone
    paths; no host, session, or web bridge is pinned. Next step:
    live gateway replay through the billing endpoints naming the
    host/session join, then queue through the session bridge.
-2. **Tutorial entry path is OPEN.** No dossier offset names the
-   `CStateTutorial` entry dispatch (`TUTORIAL_ENTRY_NEXT_STEP`).
-   Next step: SendInput sweep of the lobby emblem buttons per the
-   `~/scratch/planet-verify/` recipe plus a REA trace of the entry
-   dispatch.
+2. **Tutorial entry path is PINNED from Room FIRSTSTEP.** Qualified
+   pack `~/scratch/side-scenes/b7-tutorial/` (manifest sha256
+   `064bec85c998dbeb5d9073f312ef949d490a4f8a2cc9d62adfccdb0c1183272d`)
+   records the live click; static pin `S-PLAY-B3` in
+   `docs/captures/static-play/pins.md` names `0x4902bb` → `0x495110`
+   (chart globals + `ChangeState(0xb)`) → `CStateTutorial` ctor
+   `0x4f07f0`. Our FIRSTSTEP route installs those globals. The dimmed
+   Planet TUTORIAL plate has no dispatch: the remaining next step is
+   `PLANET_TUTORIAL_PLATE_NEXT_STEP`, a live click sweep of that plate
+   only (and the still-OPEN chart/audio join under #326).
 3. **Notice placement is ours-by-design.** Largest staged rect is
    the stand-in anchor; the exe's web-view layout rect is unpinned.
    Next step: rig capture of the live billing view mount.
