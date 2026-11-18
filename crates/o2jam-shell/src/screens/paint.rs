@@ -57,7 +57,7 @@ use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
     rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
-    KeyMode, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
+    KeyMode, MemberRole, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
@@ -3798,6 +3798,50 @@ pub struct WaitingLevel {
     pub speed: u8,
 }
 
+/// Full-canvas sheet behind the Waiting seats. `State_Waiting.ojs`
+/// carries two 800x600 records: record 0 is the eight-card grid, record
+/// 1 the two-card VS sheet (decoded from the pinned Interface archive).
+/// The exe's image control sets one record; stacking both is what paints
+/// the VS sheet over the top cards in the 0.749 A/B.
+const WAITING_BACKDROP_SPRITE: &str = "State_Waiting.ojs";
+const WAITING_PLAIN_RECORD: usize = 0;
+const WAITING_VERSUS_RECORD: usize = 1;
+
+/// Waiting select-overlay controls from `State_Waiting` (`ControlList`
+/// codes, paired to `State_Waiting.bnd` by ordinal). The exe resets all
+/// of them to frame 0 at base-ready: popup `0x16500074`, other-show
+/// `0x16500073`, wait-text `0x16500067`, its animation `0x16500068`, and
+/// the orange select arrow `0x16500070` (waiting setup `0x4aac80`,
+/// state update `0x4ae350`, MUSELECT handler `0x4ac280`). Only the
+/// role-2 (Challenger) branch arms the popup.
+const WAITING_SELECT_OVERLAY_CODES: [u32; 5] = [
+    0x1650_0074,
+    0x1650_0073,
+    0x1650_0067,
+    0x1650_0068,
+    0x1650_0070,
+];
+
+/// Paint the one backdrop record the exe's image control selected.
+/// Bound staging puts the full-canvas placement first, so this paints
+/// before the remaining scene figures; the generic pass below skips it.
+fn paint_waiting_backdrop(frame: &mut Frame<'_>, art: &SceneArt, role: MemberRole) {
+    let Some(placed) = art
+        .placements
+        .iter()
+        .find(|placed| placed.sprite.as_deref() == Some(WAITING_BACKDROP_SPRITE))
+    else {
+        return;
+    };
+    let record = if matches!(role, MemberRole::Champion | MemberRole::Challenger) {
+        WAITING_VERSUS_RECORD
+    } else {
+        WAITING_PLAIN_RECORD
+    };
+    let shares_body = shared_sprite_names(&art.placements).contains(WAITING_BACKDROP_SPRITE);
+    paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
+}
+
 /// Paint staged waiting art (team buttons, avatar covers) with the
 /// live seats, ready dots, and pinned captions on top: staged
 /// placements anchor every region (covers, team grid, READY, skills,
@@ -3811,6 +3855,13 @@ pub struct WaitingLevel {
 /// `worn_figures_staged` suppresses the baked sketch of
 /// `Wait_Cover_Avatar.ojs`; the 7.55 capture shows item-composed
 /// figures instead of that placeholder (issue #336).
+///
+/// `member_role` mirrors the exe's word at VA `0x77ee86` (D10). At a
+/// normal base-ready room the word is 3 (Spectator — live winedbg read
+/// 2026-11-18, `~/scratch/p343-wine-role4`), so the image control paints
+/// only record 0 of `State_Waiting.ojs` (the eight light-blue cards)
+/// and none of the Challenger-only select overlay. Champion/Challenger
+/// (1/2) select record 1, the VS sheet; only Challenger arms the popup.
 pub fn paint_waiting_scene(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
@@ -3818,16 +3869,21 @@ pub fn paint_waiting_scene(
     captions: &WaitingCaptions<'_>,
     confirm_armed: bool,
     worn_figures_staged: bool,
+    member_role: MemberRole,
 ) {
     let seats = staged_seats(room);
     // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
     // `room.member_id == 0`. See [`waiting_control_armed_for_role`].
     let is_room_master = room.member_id == 0;
+    paint_waiting_backdrop(frame, art, member_role);
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
-        waiting_seat_clone_live(placed, &seats)
+        placed.sprite.as_deref() != Some(WAITING_BACKDROP_SPRITE)
+            && waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
             && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
+            && !(member_role != MemberRole::Challenger
+                && WAITING_SELECT_OVERLAY_CODES.contains(&placed.code))
     });
     // The confirm face keeps the backdrop's stacking slot: it painted in
     // the backdrop pass before it selected its own record.
@@ -7412,6 +7468,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             false,
             false,
+            MemberRole::Spectator,
         );
         buf[10 * 800 + 10]
     }
@@ -7506,6 +7563,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             confirm_armed,
             false,
+            MemberRole::Spectator,
         );
         buf[10 * 800 + 10]
     }
@@ -8605,6 +8663,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             false,
             false,
+            MemberRole::Spectator,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
@@ -11560,6 +11619,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             false,
             false,
+            MemberRole::Spectator,
         );
         let red = pack_xrgb(255, 0, 0);
         // Empty seat 2 keeps its staged art pixel: no live line.
@@ -11570,6 +11630,121 @@ mod paint_tests {
         assert_ne!(buf[200 * 800 + 10], red, "live line covers art");
         assert!(has_ink_near(&buf, art_title_ink()));
         assert_eq!(buf[0], 0, "covers no longer stack at the frame corner");
+    }
+
+    /// Synthetic two-record Waiting art for #343: record 0 is the
+    /// plain card grid, record 1 the VS sheet, and the popup control
+    /// paints at its bnd rect. The exe's image control sets one record;
+    /// stacking both paints the VS sheet over the top cards.
+    const WAITING_TEST_PLAIN: u16 = 0x04A1;
+    const WAITING_TEST_VERSUS: u16 = 0x001F;
+    const WAITING_TEST_POPUP: u16 = 0x7C00;
+
+    fn waiting_role_art() -> SceneArt {
+        let layer = |word: u16| FigureLayer {
+            image: Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        };
+        let mut backdrop = AvatarFigure::default();
+        backdrop.push_layer(layer(WAITING_TEST_PLAIN));
+        backdrop.push_layer(layer(WAITING_TEST_VERSUS));
+        let mut popup_figure = AvatarFigure::default();
+        popup_figure.push_layer(layer(WAITING_TEST_POPUP));
+        SceneArt {
+            placements: vec![
+                waiting_probe(
+                    "IDC_BACK_SWAIT_1",
+                    Some("State_Waiting.ojs"),
+                    (100, 100, 104, 104),
+                ),
+                waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (10, 200, 151, 375)),
+                ScenePlacement {
+                    code: 0x1650_0074,
+                    ..waiting_probe(
+                        "IDC_IMAGE_SWAIT_MUSIC_SELECT_POPUP",
+                        Some("Waiting_Music_Select_Popup.ojs"),
+                        (200, 200, 204, 204),
+                    )
+                },
+            ],
+            figures: HashMap::from([
+                ("State_Waiting.ojs".to_owned(), backdrop),
+                ("Waiting_Music_Select_Popup.ojs".to_owned(), popup_figure),
+            ]),
+        }
+    }
+
+    fn painted_waiting_role(role: MemberRole) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &waiting_role_art(),
+            &WaitingCaptions::default(),
+            false,
+            false,
+            role,
+        );
+        buf
+    }
+
+    fn waiting_test_ink(word: u16) -> u32 {
+        let expand =
+            |channel: u16| u8::try_from((channel << 3) | (channel >> 2)).expect("five-bit channel");
+        pack_xrgb(
+            expand((word >> 10) & 31),
+            expand((word >> 5) & 31),
+            expand(word & 31),
+        )
+    }
+
+    /// #343 red guard: a two-record `State_Waiting.ojs` backdrop
+    /// must paint record 0 (the eight light-blue cards) at base-ready,
+    /// and the Challenger-only popup must stay unpainted.
+    #[test]
+    fn base_ready_waits_on_the_plain_backdrop_without_a_select_popup() {
+        let buf = painted_waiting_role(MemberRole::Spectator);
+        assert_eq!(
+            buf[100 * 800 + 100],
+            waiting_test_ink(WAITING_TEST_PLAIN),
+            "plain seat card"
+        );
+        assert_eq!(buf[200 * 800 + 200], 0, "no Challenger popup");
+    }
+
+    /// The exe arms the VS sheet and popup in its MemberRole 2 branch
+    /// (waiting setup `0x4aac80`, state update `0x4ae350`).
+    #[test]
+    fn challenger_waits_on_the_versus_sheet_with_the_select_popup() {
+        let buf = painted_waiting_role(MemberRole::Challenger);
+        assert_eq!(
+            buf[100 * 800 + 100],
+            waiting_test_ink(WAITING_TEST_VERSUS),
+            "Challenger VS sheet"
+        );
+        assert_eq!(
+            buf[200 * 800 + 200],
+            waiting_test_ink(WAITING_TEST_POPUP),
+            "Challenger popup"
+        );
+    }
+
+    /// Champion selects the VS sheet but never arms the Challenger popup.
+    #[test]
+    fn champion_waits_on_the_versus_sheet_without_the_select_popup() {
+        let buf = painted_waiting_role(MemberRole::Champion);
+        assert_eq!(
+            buf[100 * 800 + 100],
+            waiting_test_ink(WAITING_TEST_VERSUS),
+            "Champion VS sheet"
+        );
+        assert_eq!(buf[200 * 800 + 200], 0, "no Challenger popup");
     }
 
     /// Verbatim `State_Waiting.bnd` rects for one region probe (local
@@ -12390,6 +12565,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             false,
             true,
+            MemberRole::Spectator,
         );
         assert_eq!(
             buf[290 * 800 + 130],
@@ -13205,6 +13381,7 @@ mod paint_tests {
             &WaitingCaptions::default(),
             false,
             false,
+            MemberRole::Spectator,
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
@@ -13264,6 +13441,7 @@ mod paint_tests {
                 &WaitingCaptions::default(),
                 false,
                 false,
+                MemberRole::Spectator,
             );
             buf
         };

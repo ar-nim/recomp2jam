@@ -86,7 +86,7 @@ use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicP
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
-    Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
+    MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -737,6 +737,11 @@ pub struct ScreenGame {
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
     select_music_art: Option<SceneArt>,
+    /// Local seat role mirrored from the exe's word at VA `0x77ee86`
+    /// (#343). A normal base-ready room reads 3 (Spectator); no relay
+    /// role packet feeds this word on the live boot yet, so the default
+    /// keeps the plain eight-card backdrop and hides the select overlay.
+    waiting_member_role: MemberRole,
     /// Cached copy of the last staged song-select dialog art so the
     /// MUSELECT open trigger can reopen it after an OK close (#266).
     select_music_art_cache: Option<SceneArt>,
@@ -1167,6 +1172,7 @@ impl ScreenGame {
             song_cover: None,
             skill_counts: [0, 0, 0],
             select_music_art: None,
+            waiting_member_role: MemberRole::Spectator,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
             select_mode: SelectMusicMode::SongSelect,
@@ -1739,6 +1745,22 @@ impl ScreenGame {
     #[must_use]
     pub fn select_music_dialog_open(&self) -> bool {
         self.select_music_art.is_some()
+    }
+
+    /// Local seat role behind the Waiting art variant (#343). The exe
+    /// stores it in a word at VA `0x77ee86`; a live base-ready read gives
+    /// `3` (Spectator), which selects the plain backdrop and no popup.
+    #[must_use]
+    pub fn waiting_member_role(&self) -> MemberRole {
+        self.waiting_member_role
+    }
+
+    /// Stage the exe's role word for the next Waiting paint (#343).
+    /// Champion/Challenger select the VS backdrop; Challenger alone
+    /// arms the select-music popup.
+    pub fn set_waiting_member_role(&mut self, role: MemberRole) -> &mut Self {
+        self.waiting_member_role = role;
+        self
     }
 
     /// Whether the song-select dialog art is cached (available for
@@ -6242,6 +6264,7 @@ impl ScreenGame {
                     &captions,
                     self.waiting_confirm_armed(),
                     self.has_staged_waiting_figure(),
+                    self.waiting_member_role,
                 );
                 paint_waiting_seat_avatars(
                     frame,
