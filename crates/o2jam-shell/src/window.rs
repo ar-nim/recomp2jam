@@ -12,19 +12,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use super::{
-    menu_of, CaptureState, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH,
-};
+use super::{menu_of, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
-/// Trace-capture state owned by the handler: paint counting, last
-/// screen/content fingerprints, and the last dumped paint.
-struct CaptureSink {
-    state: CaptureState,
-    paint: u64,
-    last_screen: &'static str,
-    last_content_hash: u64,
-    last_dump_paint: u64,
-}
+mod capture;
+
+use capture::CaptureAdapter;
 
 /// Event-loop state: shell plus its softbuffer surface.
 pub struct WindowHandler {
@@ -33,7 +25,7 @@ pub struct WindowHandler {
     surface_size: Option<(u32, u32)>,
     paint_error: Option<anyhow::Error>,
     cursor: Option<(f64, f64)>,
-    capture: Option<CaptureSink>,
+    capture: Option<CaptureAdapter>,
     /// Queued discrete edges since the last freeze: winit events are
     /// OS transport only (ADR-0013), so every decoded edge waits here
     /// for the frame boundary instead of reaching the game directly.
@@ -55,13 +47,7 @@ impl WindowHandler {
     /// Wrap a shell; no window or surface yet. A capture plan on the
     /// shell becomes the trace sink (frame dumps + applied-event log).
     pub fn new(mut shell: Shell) -> Self {
-        let capture = shell.capture.take().map(|state| CaptureSink {
-            state,
-            paint: 0,
-            last_screen: "",
-            last_content_hash: 0,
-            last_dump_paint: 0,
-        });
+        let capture = shell.capture.take().map(CaptureAdapter::new);
         Self {
             shell,
             surface: None,
@@ -296,28 +282,10 @@ impl WindowHandler {
         snapshot.set_left_held(self.left_held);
         snapshot.set_sequence(self.snapshot_sequence);
         self.snapshot_sequence = self.snapshot_sequence.saturating_add(1);
-        // Judged-strike log (ticket #76): each lane-down edge entering
-        // the snapshot is the judged strike's entry into the judgement
-        // arm, stamped at frame delivery. Logged before the drain so the
-        // line order matches the edge order in the snapshot.
-        // Collect lane-down edges first to avoid borrow conflicts.
-        let judged_lanes: Vec<usize> = self
-            .pending_edges
-            .iter()
-            .filter_map(|e| match e {
-                InputEdge::Lane { lane, down: true } => Some(*lane),
-                _ => None,
-            })
-            .collect();
-        if !judged_lanes.is_empty() {
-            if let Some(capture) = self.capture.as_mut() {
-                let wall_ms = capture.state.started.elapsed().as_millis();
-                if let Some(log) = capture.state.log.as_mut() {
-                    for lane in judged_lanes {
-                        Self::append_log_line(log, format_args!("judged {wall_ms} lane {lane}"));
-                    }
-                }
-            }
+        // The adapter stamps judged strikes from the pending edges before
+        // this frame's one drain (ADR-0013); it borrows, never consumes.
+        if let Some(capture) = self.capture.as_mut() {
+            capture.record_judged_before_drain(&self.pending_edges);
         }
         for edge in self.pending_edges.drain(..) {
             snapshot.push_edge(edge);
@@ -351,90 +319,23 @@ impl WindowHandler {
         self.shell.game.delete_text();
     }
 
-    /// Append one applied-event line to the capture log (no-op
-    /// without a log): the trace harness matches these against the
-    /// injected trace events.
+    /// Forward one applied-event line to the capture adapter (no-op
+    /// when this run has no capture plan).
     fn log_event(&mut self, event: &str) {
-        let Some(capture) = self.capture.as_mut() else {
-            return;
-        };
-        let wall_ms = capture.state.started.elapsed().as_millis();
-        if let Some(log) = capture.state.log.as_mut() {
-            Self::append_log_line(log, format_args!("event {wall_ms} {event}"));
+        if let Some(capture) = self.capture.as_mut() {
+            capture.record_event(event);
         }
     }
 
-    /// Write one log line (newline-terminated, as the one-line-per-
-    /// event contract promises) and flush it straight to disk: a
-    /// concurrent reader (`tail`, the replay driver) sees each routed
-    /// event without waiting for the buffer to fill. Log writes only —
-    /// the paint path pays nothing beyond the lines already written.
-    fn append_log_line(log: &mut std::io::BufWriter<std::fs::File>, line: std::fmt::Arguments<'_>) {
-        use std::io::Write;
-        let _ = log.write_fmt(line);
-        let _ = log.write_all(b"\n");
-        let _ = log.flush();
-    }
-
-    /// FNV-1a over the backbuffer words: the content fingerprint
-    /// gating frame dumps.
-    fn content_hash(pixels: &[u32]) -> u64 {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for word in pixels {
-            for shift in (0..32).step_by(8) {
-                hash ^= u64::from((*word >> shift) as u8);
-                hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
-            }
-        }
-        hash
-    }
-
-    /// Record one painted frame in the capture log and dump it when
-    /// the plan says so: on a screen change or content change after
-    /// `min_paint_gap` paints, or on the heartbeat interval either
-    /// way. Evidence volume stays bounded during Playing scroll.
+    /// Hand one painted frame to the capture adapter. The adapter owns
+    /// the log line, content fingerprint and dump gate.
     fn capture_frame(&mut self) {
         let Some(capture) = self.capture.as_mut() else {
             return;
         };
-        capture.paint = capture.paint.saturating_add(1);
-        let content = Self::content_hash(&self.shell.pixels);
         let screen = self.shell.game.screen_name();
-        let wall_ms = capture.state.started.elapsed().as_millis();
-        let state = self.shell.game.state_hash();
-        if let Some(log) = capture.state.log.as_mut() {
-            Self::append_log_line(
-                log,
-                format_args!(
-                    "frame {0} wall_ms={wall_ms} screen={screen} state={state:016x} content={content:016x}",
-                    capture.paint
-                ),
-            );
-        }
-        let since_dump = capture.paint.saturating_sub(capture.last_dump_paint);
-        let screen_changed = screen != capture.last_screen;
-        let content_changed = content != capture.last_content_hash;
-        let due = (screen_changed
-            || (content_changed && since_dump >= capture.state.min_paint_gap))
-            || since_dump >= capture.state.heartbeat_paints;
-        capture.last_screen = screen;
-        capture.last_content_hash = content;
-        if !due {
-            return;
-        }
-        capture.last_dump_paint = capture.paint;
-        // A plan armed for the input log alone carries an empty dir: skip
-        // dumps, keep counting.
-        if capture.state.dir.as_os_str().is_empty() {
-            return;
-        }
-        let rgb = xrgb_to_rgb(&self.shell.pixels);
-        let png = o2jam_render::png::encode_png(DEFAULT_WIDTH, DEFAULT_HEIGHT, &rgb);
-        let name = format!("frame-{:06}-{screen}.png", capture.paint);
-        let path = capture.state.dir.join(name);
-        if let Err(source) = std::fs::write(&path, png) {
-            tracing::warn!(%source, "frame dump failed");
-        }
+        let state_hash = self.shell.game.state_hash();
+        capture.record_frame(&self.shell.pixels, screen, state_hash);
     }
 
     /// Take a stored paint failure, if any.
@@ -445,17 +346,6 @@ impl WindowHandler {
 
 /// Letterbox bar color: black bars around the aspect-fit image.
 pub const LETTERBOX: u32 = 0x000000;
-
-/// Strip XRGB backbuffer words down to RGB triplets for PNG dumps.
-fn xrgb_to_rgb(buf: &[u32]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(buf.len() * 3);
-    for pixel in buf {
-        rgb.push((pixel >> 16) as u8);
-        rgb.push((pixel >> 8) as u8);
-        rgb.push(*pixel as u8);
-    }
-    rgb
-}
 
 /// Validated present geometry: the centered uniform-scale draw rect
 /// of the native backbuffer inside the window buffer.
@@ -862,100 +752,6 @@ mod tests {
         let (mut handler, probe) = probed_handler();
         handler.route_text("hello");
         assert_eq!(probe.borrow().texts, vec!["hello".to_owned()]);
-    }
-
-    #[test]
-    fn capture_log_records_events_frames_and_dumps() {
-        let dir = std::env::temp_dir().join(format!("recomp2jam-capture-{}", std::process::id()));
-        // The caller owns the output root (the replay driver creates
-        // --out first); the shell only creates the frames directory.
-        std::fs::create_dir_all(&dir).expect("output root");
-        let log_path = dir.join("input.log");
-        let probe = Rc::new(RefCell::new(InputProbe::default()));
-        let shell = Shell::new(Box::new(probe.clone())).with_capture(super::super::CapturePlan {
-            dir: dir.join("frames"),
-            min_paint_gap: 1,
-            heartbeat_paints: 2,
-            input_log: Some(log_path.clone()),
-        });
-        let mut handler = WindowHandler::new(shell);
-        handler.route_key(KeyCode::KeyS, true);
-        handler.route_mouse_edge(true, 100.0, 200.0);
-        handler.route_mouse_edge(false, 100.0, 200.0);
-        handler.shell.paint_backbuffer();
-        handler.capture_frame();
-        handler.shell.paint_backbuffer();
-        handler.capture_frame();
-        // Flush the log by dropping the handler, then read it back.
-        let frames_dir = dir.join("frames");
-        drop(handler);
-        let text = std::fs::read_to_string(&log_path).expect("input log written");
-        assert!(
-            text.contains("key-down KeyS"),
-            "log has the routed key: {text}"
-        );
-        assert!(text.contains("frame 1 "), "log has the first paint: {text}");
-        assert!(
-            text.contains("frame 2 "),
-            "log has the second paint: {text}"
-        );
-        let dumps: Vec<_> = std::fs::read_dir(&frames_dir)
-            .expect("frames dumped")
-            .flatten()
-            .collect();
-        assert!(!dumps.is_empty(), "at least one frame captured");
-        for dump in &dumps {
-            assert!(dump.file_name().to_string_lossy().ends_with("-unknown.png"));
-        }
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn capture_log_records_judged_strikes_on_delivery() {
-        let dir = std::env::temp_dir().join(format!("recomp2jam-judged-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("output root");
-        let log_path = dir.join("input.log");
-        let probe = Rc::new(RefCell::new(InputProbe::default()));
-        let shell = Shell::new(Box::new(probe.clone())).with_capture(super::super::CapturePlan {
-            dir: dir.join("frames"),
-            min_paint_gap: 1,
-            heartbeat_paints: 2,
-            input_log: Some(log_path.clone()),
-        });
-        let mut handler = WindowHandler::new(shell);
-        handler.route_key(KeyCode::KeyS, true);
-        handler.deliver_snapshot();
-        drop(handler);
-        let text = std::fs::read_to_string(&log_path).expect("input log written");
-        assert!(text.contains("key-down KeyS"), "key line: {text}");
-        assert!(text.contains("judged "), "judged line: {text}");
-        assert!(text.contains("lane 0"), "lane number: {text}");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn capture_log_flushes_each_line_for_concurrent_readers() {
-        let dir = std::env::temp_dir().join(format!("recomp2jam-flush-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("output root");
-        let log_path = dir.join("input.log");
-        let probe = Rc::new(RefCell::new(InputProbe::default()));
-        let shell = Shell::new(Box::new(probe)).with_capture(super::super::CapturePlan {
-            dir: dir.join("frames"),
-            min_paint_gap: 1,
-            heartbeat_paints: 2,
-            input_log: Some(log_path.clone()),
-        });
-        let mut handler = WindowHandler::new(shell);
-        handler.route_key(KeyCode::KeyS, true);
-        // Read while the handler (and its writer) is still alive: a
-        // concurrent tail must see the routed key without a drop.
-        let text = std::fs::read_to_string(&log_path).expect("input log written");
-        assert!(
-            text.contains("key-down KeyS"),
-            "routed key visible before the writer drops: {text}"
-        );
-        drop(handler);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
