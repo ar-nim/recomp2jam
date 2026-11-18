@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"name": "base-ready", "commands": [], "shot": "base-ready.png"},
+    {"name": "member-downloading", "commands": ["music-list=100,200", "music-state=4", "sync-member=0"], "await_opcode": 4037, "shot": "member-downloading.png"},
+    {"name": "gate-dclick-probe", "commands": [], "dclick": [140, 140], "shot": "gate-dclick-probe.png"},
+    {"name": "gate-closed", "commands": ["update-slot=2"], "await_opcode": 3009, "shot": "gate-closed.png"},
+    {"name": "back-to-base", "commands": ["update-slot=2", "music-state=0", "sync-member=0"], "await_opcode": 4037, "shot": "back-to-base.png"},
+    {"name": "guest-ready", "action": "guest-ready", "shot": "guest-ready.png"},
+    {"name": "song-start", "action": "song-start", "commands": ["start"], "shot": "loading.png"}
+  ]
+}

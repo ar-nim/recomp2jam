@@ -127,8 +127,35 @@ scored region.
 
 ## Example results and fallback
 
-The #334 native run is under `~/scratch/native-ab-334/pack/` with hashes in
-its `artifact-manifest.json`. All five scenes failed the skill-default gate;
-per-region numbers are in `region-metrics.json`. The #329/#332 downsampled
-media remains available as a fallback, but any report using it must state the
-two different filters and the hidden sub-2-pixel placement error.
+**Stale but pinned:** the #334 native run under
+`~/scratch/native-ab-334/pack/` (hash-pinned in closed #334's record) is kept
+for provenance. Do not delete it. Its five scenes all failed the skill-default
+gate, but it predates #339's matched-state method and #343's waiting fix, so
+do not cite its numbers as current parity. Per-region numbers remain in that
+pack's `region-metrics.json`. The #329/#332 downsampled media remains
+available as a fallback, but any report using it must state the two different
+filters and the hidden sub-2-pixel placement error.
+
+## Current example: #346 matched-scenario baseline
+
+The current reference numbers are `docs/captures/t346/region-metrics.json`
+from `~/scratch/p346/pack/`, built from one matched replay on one Memoryer
+(`docs/captures/t346/proof.json`, `raw-proof.json`, `plan.json`, `trace.json`).
+The same wire/server state ran on both legs; containment was `route=sink`,
+`on_default_sink=0`, `preboot_breach=0`. All scenes still FAIL the default
+worst-region gate (SSIM ≥ 0.95, PSNR ≥ 35 dB). Weighted SSIM, old → new:
+
+| Scene | Weighted SSIM | Worst scored region | Residual |
+|---|---|---|---|
+| planet | 0.793 → 0.793 | 0.729 `emblem_strip` | unchanged from #334 |
+| channel | 0.690 → 0.872 | 0.606 `row_bars` | row-bar art |
+| room | 0.728 → 0.915 | 0.875 `peer_avatar` | peer plate art |
+| waiting | 0.240 → 0.912 | 0.878 `seat_grid_left` | #343 fixed right seats; left-seat art remains |
+| loading | 0.185 → 0.156 | 0.032 `logo_plate` | Rust stays on Waiting pixels after matched start |
+
+Waiting states also have matched verdicts: download 0.880, gate-closed 0.705
+(`seat_grid_right_top`), back-to-base 0.878. Full per-scene numbers, proof
+filters, and the false-start investigation are in
+`docs/captures/t346/findings.md`. Copy the still pairs byte-for-byte into a
+local pack and run `scripts/native_ab_regions.py --pack <pack>`; no capture
+bytes enter the repository.

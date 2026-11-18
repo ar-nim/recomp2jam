@@ -1,0 +1,1766 @@
+{
+  "schema": "ab334-native-region-metrics-v1",
+  "region_map": "/home/arnim/scratch/p346/pack/regions-v1-native.json",
+  "region_map_sha256": "13a31672ae8677755135729143d33c2e71bfae6a5b067b98c773c119aa497ec4",
+  "thresholds_sha256": "469b66b1bc75173494f62034af88045647605be946da08aae8647efebfa4b6c2",
+  "thresholds": {
+    "ssim_min": 0.95,
+    "psnr_min": 35.0
+  },
+  "substrate": "unscaled native 800x600 RGB PNG pairs; ffmpeg crop filter only",
+  "comparability": "#332 used 400x300 frames with different filters per side and a libx264 yuv420p substrate; deltas are method and scenario changes",
+  "legacy_downsampled_baseline": {
+    "planet": [
+      0.751759,
+      20.465
+    ],
+    "channel": [
+      0.674972,
+      14.839
+    ],
+    "room": [
+      0.772145,
+      20.514
+    ],
+    "waiting": [
+      0.361756,
+      12.976
+    ],
+    "loading": [
+      0.335887,
+      11.419
+    ]
+  },
+  "ffmpeg_version": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "gate_rule": "scene passes only when every scored gameplay region meets BOTH thresholds",
+  "scenes": {
+    "planet": {
+      "full_frame_validation": {
+        "ssim": 0.728192,
+        "psnr": 13.959486
+      },
+      "regions": [
+        {
+          "name": "emblem_strip",
+          "rect": [
+            0,
+            0,
+            800,
+            152
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Five mode buttons and their pinned bnd rects; heat is on emblem bodies/labels but placement is the gameplay control surface.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.729063,
+          "ssim_source": "All",
+          "psnr": 16.616024,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "23090ec0179c474b4cd7f1d185cf196abce6966b49ee2b0923440eac51741687",
+            "rust": "e05b68782ac085f3437b99a2d6ad82e87715d81baef62cd00191fe394b6a9a22",
+            "heat": "bd6094596e7d0f926aef8ca75b5e6277462e4965eb8474e450dd28496484fe1b",
+            "diff": "590eaaae0a132b0cfb2ecfb3bc9f744f69d2010cf6c65e6de0d6cffd7c1a94fd"
+          }
+        },
+        {
+          "name": "promo_banner",
+          "rect": [
+            40,
+            152,
+            720,
+            148
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Heat follows Korean event-banner glyphs over the same banner art; modern rasterizer decision makes glyph pixels presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.673932,
+          "ssim_source": "All",
+          "psnr": 12.656361,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "997f7eb96710fa4499b6754e0de3037d59ee12b02413b95298528b12550eefce",
+            "rust": "bb42c167caa3aa167fb7305f53f3506b1a42ecdbb63f5b5d0d23fbe5cba09b4d",
+            "heat": "84d8b471ca94d5b5658cd1a402ca994610607c03be6f9ec307ac204ae5a6e710",
+            "diff": "61c3dc97bda23a03446a9faf56c51c110754c697d61a02f6c1cc5fd58b695cf9"
+          }
+        },
+        {
+          "name": "mode_caption",
+          "rect": [
+            240,
+            300,
+            560,
+            52
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Thin caption line above the mode plates; heat is entirely glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.330928,
+          "ssim_source": "All",
+          "psnr": 8.401641,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "894eee553cb3ad3fced6145b5916b29e84bafbb66b6c8b82e5baa2eaf213c6fb",
+            "rust": "a51796ec5aba6fd9358527ae0fb8c3183f98d52414c9bb606518bdc7a9910526",
+            "heat": "f8645fd64ce7b4c6cedfb2065675de1b1661ab4e1a67e2189d10914d1f281ceb",
+            "diff": "08ea9ac9ab47405e437ece22c5e224621cb6128ecdbfd9dd62001ef9828209e3"
+          }
+        },
+        {
+          "name": "mode_button_panel",
+          "rect": [
+            240,
+            352,
+            560,
+            88
+          ],
+          "class": "mixed",
+          "score": false,
+          "reason": "Button plates/background art and baked Korean button labels are inseparable at 400x300; not confidently classifiable from the crop.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.547767,
+          "ssim_source": "All",
+          "psnr": 9.854131,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "582068d01a6c6232f60d015b0bbd427ffa2dc56f94a6dbf6462da0b6165fcae0",
+            "rust": "977db644e2f2f0b20689b9020563e9f16b7d6ab0ebbf203a6898f6000936c002",
+            "heat": "5108a30664e4b9a110817318756012ea3afd260a4cb14911c11700ca4043174b",
+            "diff": "0be6dfde90c4e76754b9eeee6af4ad9d1d4d51f0355e2e32cda1efb385dcaed7"
+          }
+        },
+        {
+          "name": "board_chrome",
+          "rect": [
+            40,
+            440,
+            720,
+            128
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Board rim, inner panel edge and pager arrows; geometry/layout region, not glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.878071,
+          "ssim_source": "All",
+          "psnr": 20.807228,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "5b3d29aa50abe8062e2c2f4b3b9e9b5c1276c968055429e13f819f57dee4ad0f",
+            "rust": "307a7a3c109f51c2cdb7a2401c9855c18ff47f82768dfa6ba3e38358204ec3ec",
+            "heat": "0c69a8e00f4104564fa74a08e06e37f268c720502e2aef958ddba20f694b787e",
+            "diff": "f646331bd191d5ee60aaaacb0047da2c920ed6568bd5989920cda1c375091f2e"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Heat is on the MENU caption and small status text/icons; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.9574,
+          "ssim_source": "All",
+          "psnr": 23.005035,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "d2404ea417e38fd76c673493d8994f2c37173e86b5b4cbe379f4bc9835218745",
+            "rust": "f3048e0e083c80343644a6d045de15db019112e17cf26762a4a27886d0ffc495",
+            "heat": "f150688d0dd8b6457257d2572a8f69fc6ddb1c4f75d72cc065698f39c4a60bb1",
+            "diff": "ec2b308477d5db9d5bcb84756614f1f0d71c9a6cf21ee31fcdf3d448b1b842b8"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 2,
+        "min_ssim": 0.729063,
+        "min_psnr": 16.616024,
+        "area_weighted_ssim": 0.7933059700598803,
+        "area_weighted_psnr_from_mse": 17.96434093555947,
+        "scored_pixels": 213760,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": 0.751759,
+        "psnr": 20.465
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-planet.png",
+      "contact_sheet_sha256": "9c975f517fbe9137f78a998d178c5397d46fab84b31d85647ba249615b89cbe8"
+    },
+    "channel": {
+      "full_frame_validation": {
+        "ssim": 0.870772,
+        "psnr": 20.147388
+      },
+      "regions": [
+        {
+          "name": "emblem_strip",
+          "rect": [
+            0,
+            0,
+            800,
+            152
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Same five mode-button plates as planet; pinned rect surface.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.941182,
+          "ssim_source": "All",
+          "psnr": 24.677322,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "7c3f16ab652297c196cb0f3de9072f23e160835b9c8d1d30c4bbea76aa29522f",
+            "rust": "04bddf135a8dd82ffd192cda3dd0ce0a41f512c9447fd5bba1822be0454c41d7",
+            "heat": "c79e357062f78b537dccddf639ab9b9238763397f4cd89c1b29be3a24e2033a1",
+            "diff": "88a9e72c031fb51c90d58150641fb42aeebd796852fc20d9c0c59938ab0d0f88"
+          }
+        },
+        {
+          "name": "dialog_title_text",
+          "rect": [
+            200,
+            152,
+            320,
+            40
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "The Channel caption and its glow dominate the crop; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999896,
+          "ssim_source": "All",
+          "psnr": 46.481082,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "72f734c62dfb265f5cef30bfc9f9e60acc41fc802e7da265d2de215fa14c3f0f",
+            "rust": "d466394d1015b6249083d13c0bbe2857d7f0345269a2ed08236fbdad8943d38f",
+            "heat": "15eda205f6421c3bc473c51d12939f650fdc9ddcbb2f247f4637df819c6c000d",
+            "diff": "608255c8f669f8b2d28c95138f4fcc8f219165d1e187f7692f404d2569d0029e"
+          }
+        },
+        {
+          "name": "dialog_close_button",
+          "rect": [
+            540,
+            152,
+            52,
+            40
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bnd-pinned X close plate (native 541,151-589,189); button geometry, not text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999896,
+          "ssim_source": "All",
+          "psnr": 49.377408,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "11a29a2905be382d96b763a569b02fdd3398ad36788984b82bc8a96714f98741",
+            "rust": "1a7f0f48560c82b8644ed711c18e67ea8b72642a17c5a0e9fa89d4ca3b837377",
+            "heat": "ddeb677ada5f44479c46a6157706a368966859a925608ff1980c714de41ce987",
+            "diff": "75efb51ec7ea332ebac529673cbdf8db8181d3d5a17aaf9421e77f3636f88ef3"
+          }
+        },
+        {
+          "name": "row_labels",
+          "rect": [
+            208,
+            220,
+            40,
+            240
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chn.01..Chn.04 captions; glyph ink excluded.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.635534,
+          "ssim_source": "All",
+          "psnr": 16.835609,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "7581666ce64acfb2b4cbcf45948a5db37863ae8ea8934e790de88cb75311bc63",
+            "rust": "bfada9d07e42d7a6bf6eab74930b87fcb59fc3213340200e9a37689186dc0ebd",
+            "heat": "96a3cd397b9bfce581821ea0da4d98ef1416a44db1204438904617db056811ef",
+            "diff": "7192ca29b93d5236949edcfa77d0ad7c15edbbbeaf5faf912bb132db4c0528dc"
+          }
+        },
+        {
+          "name": "row_bars",
+          "rect": [
+            248,
+            220,
+            264,
+            240
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Four channel row bars and highlight bands inside the bnd-pinned viewport slots.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.606146,
+          "ssim_source": "All",
+          "psnr": 14.998601,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ee6681cf5be487c04f035b3d6f92e4a6d8b9ba29e4740366fbd09838fbd7c52c",
+            "rust": "94239642e9bb6f2586018180bf3d1dcc765b483af0a2b4419a1aa3c6fee5af64",
+            "heat": "9fec11e9d094545c7c15a17c8bd47cec373ef69c3182c9e4b46ccbd90c563f49",
+            "diff": "4d652689fc5da1f7bf4b048d0c5046cb846c36d52dd1ab21cb6f4b107c059320"
+          }
+        },
+        {
+          "name": "row_counts",
+          "rect": [
+            520,
+            220,
+            52,
+            240
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Connection-count digits and CLOSE chips; presentation numbers.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.567051,
+          "ssim_source": "All",
+          "psnr": 13.279212,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "cdc881a382781e1443267cf81c7cc2802c1dc235c93586001376e1bee39ec4d3",
+            "rust": "94e05cb7fc93836eda722c1f519a52332e6cb2179155876a718c5ec761224a56",
+            "heat": "ecd1292324fd4169377d68a45b5bedb9e6c7260520628392eccb311b834ab618",
+            "diff": "ca6d8b5f60c27ea5b0c81afe22e3202119094bf0cf04d992a51ea59c5ceeb72d"
+          }
+        },
+        {
+          "name": "scroll_track",
+          "rect": [
+            572,
+            212,
+            24,
+            220
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bnd-pinned scroll column (native 573,213-594,429); geometry.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.99967,
+          "ssim_source": "All",
+          "psnr": 51.612103,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "3ce5ba506a517e05d03c2c65d6fa9b1da5b67e1c85aaaf9f6ae953ee95a28e6e",
+            "rust": "4cf4cf6af2918185526f6ce6680e37b1e5c2acb4c27b13577cc00cd3c56117e4",
+            "heat": "3ccf2ff7e8bd93f435e54ce32bb83a7f913c04ef49e9be7e1878b9f647854843",
+            "diff": "cef5081a9f148862970115c700bd7799d183a301023c425f5070ce1fb8a4d371"
+          }
+        },
+        {
+          "name": "left_flank_art",
+          "rect": [
+            0,
+            152,
+            200,
+            416
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Board background art beside the dialog (album art vs avatar art); artwork is a scored gameplay-region surface.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.871279,
+          "ssim_source": "All",
+          "psnr": 20.777931,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "30ada36317826a2a00ecf1c88bc4a592cc9fcc3749d8f41a19b33696fbe390bf",
+            "rust": "b8cd1ae178daaea7d94d26d58da77f3c88f31cf9b8979f639f164f810e4fb377",
+            "heat": "f11fd53d27630393af13c5c99e0f089961d58aed72ffcee3e3910869274a6f83",
+            "diff": "48c3eda86c7083964360316cf128ca89551269687f2e3e38dc513ab5b607791e"
+          }
+        },
+        {
+          "name": "right_flank_art",
+          "rect": [
+            600,
+            152,
+            200,
+            416
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Mirror of the left flank; artwork difference, not glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.903726,
+          "ssim_source": "All",
+          "psnr": 23.605384,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "1d5a9140dc4999e6be9a53b5b6d4d7669b3da00b4817a88fc69e5650e1b18da6",
+            "rust": "703927a8113b8afb11293ef13769f06997acdf86d0d1da6d8e72e00e8c7fc9dd",
+            "heat": "8cfc423c1d31d0e7e00337868a6dd4560d3b565dbdf4ff19341f70a477a1521c",
+            "diff": "949a0fe19aa7e30f068d77148ea195fc5024ad59bd25e14a80eb550693899512"
+          }
+        },
+        {
+          "name": "dialog_footer",
+          "rect": [
+            200,
+            460,
+            400,
+            108
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Dialog bottom plate and pager strip; the Rust solid cyan band is a geometry/art difference.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.98207,
+          "ssim_source": "All",
+          "psnr": 27.912647,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "4430424fe932ccdca7198691013e5201ff8b90be49a182b64dabf4874ff0f22a",
+            "rust": "a21e3723a331beac14d46ffb45d11318744479e8785bf5f356038a04c570d3dd",
+            "heat": "0f29f74442050a02cea05ef150ea3e6c7559932bfcb85e23ffce3cd0e4002d60",
+            "diff": "8b1ca8fdab9e452659f841bec8e3440bf539f4b3449ca0d7220f84ed10ca8a3c"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU caption line; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.9574,
+          "ssim_source": "All",
+          "psnr": 23.005035,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "d2404ea417e38fd76c673493d8994f2c37173e86b5b4cbe379f4bc9835218745",
+            "rust": "f3048e0e083c80343644a6d045de15db019112e17cf26762a4a27886d0ffc495",
+            "heat": "4ff8d22135f846c3b768b402cca42ceb282fe8f9c094b29c8499eb7833add2dd",
+            "diff": "ec2b308477d5db9d5bcb84756614f1f0d71c9a6cf21ee31fcdf3d448b1b842b8"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 7,
+        "min_ssim": 0.606146,
+        "min_psnr": 14.998601,
+        "area_weighted_ssim": 0.8716088351910828,
+        "area_weighted_psnr_from_mse": 20.543201281168614,
+        "scored_pixels": 401920,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": 0.674972,
+        "psnr": 14.839
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-channel.png",
+      "contact_sheet_sha256": "682c65cef1393f7128535d176fe66e5a95fe64e903242f5a7b4c522e4948b20b"
+    },
+    "room": {
+      "full_frame_validation": {
+        "ssim": 0.891509,
+        "psnr": 19.429794
+      },
+      "regions": [
+        {
+          "name": "top_tabs",
+          "rect": [
+            0,
+            0,
+            800,
+            92
+          ],
+          "class": "mixed",
+          "score": false,
+          "reason": "Tab plates carry baked labels and server counts; crop cannot separate tab geometry from glyphs at 400x300.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.767005,
+          "ssim_source": "All",
+          "psnr": 15.404767,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "e3fd30c7bdba418bdec213ea10572249cc46b5281f541e11c4daebd06c29b6b6",
+            "rust": "8666397564d8cf828cb8f8f06cd716394bd4a4406058d27fd5470ad2e010ec5f",
+            "heat": "cabf785fc6c1032e2df866ae3c8eea2cc744cee1b7a50ccf4e81044721386af7",
+            "diff": "9868866eded6e495a935fdb21805811eab54fb1ebd81b7adac6daba27ff1c935"
+          }
+        },
+        {
+          "name": "room_panels_left",
+          "rect": [
+            0,
+            92,
+            304,
+            324
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Two-column room-panel grid (bound State_Room rects) with pinned row origins; server-fed captions are inside but the region is the panel surface.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.904316,
+          "ssim_source": "All",
+          "psnr": 18.63045,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "e686f0a959bd9a2947e4d2cf0fe98dedec6430db78c131cf435d06a32c7cf5c5",
+            "rust": "19eea0be615a67e2ae3e69e5319bef352cf810cc0fefa17eafa2ee9dae6ad367",
+            "heat": "4a2d21a29718a876f21f157d42642ac0a16275770525a37883681dc33ccea0b3",
+            "diff": "f93cf74a42149ab4481902a6cd6fa5cc01155f2b9062512107238245c5170974"
+          }
+        },
+        {
+          "name": "room_panels_right",
+          "rect": [
+            304,
+            92,
+            304,
+            324
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Second panel column; same caveat as left.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.934513,
+          "ssim_source": "All",
+          "psnr": 21.290062,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "7b5dc8b77f46edc4365ed464877ac79508d6f64ccfe5baf42b301df9e311092f",
+            "rust": "2b332d67f3f6396c28408592dfae0cba641f70347f7abd5b4c9926fb319fd0cc",
+            "heat": "438ceb9a8315c1ccf71f55d7304b587970ff21998f5352ca83a71350f12c99da",
+            "diff": "8ea90b7f0f5674a8c7d64cef52a4e96a1a447e78e7619405b1168e40012e042d"
+          }
+        },
+        {
+          "name": "peer_avatar",
+          "rect": [
+            612,
+            92,
+            188,
+            128
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Avatar portrait plate at the pinned seat; artwork surface, no glyph reliance.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.875261,
+          "ssim_source": "All",
+          "psnr": 21.016515,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "8e1c5e1e60fad020f729fdee3a0fa16f5f261a2775a9c69368047ebeecfc2e5b",
+            "rust": "9b53a65c2ead02125f9d9054e5c22f7067091a47807143e5a841741a27b79dec",
+            "heat": "25d398c1901614532249289265fe0641fd74781eea97b750ce1c27317abc660d",
+            "diff": "de094f4d5160eac8cb2b63404e1e384c1ba8974453a4b08855fed1f795161f29"
+          }
+        },
+        {
+          "name": "peer_stats",
+          "rect": [
+            612,
+            220,
+            188,
+            196
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Level/skill/rank readouts; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.943301,
+          "ssim_source": "All",
+          "psnr": 25.455413,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "6f8fd572916a484248236344694b66bd66d74401b07dedc9e792b044de12ec77",
+            "rust": "dcd82871e76252418163fe2a912a81ffaa59301b181828454e8928e962ab85b3",
+            "heat": "75dac11983fb4c2504f83af132f04639afbaf16c5541f98784bbab69e1407243",
+            "diff": "4b5cee4d31e61f9ffb6e2557e6064cde5ce4507dc6914fcdbfbbc8d61a5311c4"
+          }
+        },
+        {
+          "name": "bottom_chat_buttons",
+          "rect": [
+            0,
+            416,
+            800,
+            152
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chat lines and labelled action buttons; glyph content dominates the heat.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.898404,
+          "ssim_source": "All",
+          "psnr": 23.413079,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "91153663df06db216205d03225564dd70f0ba1ff12f3ad6157c448a2d07c19b2",
+            "rust": "332acefc5a106e36d2bb7739cfc316f57409babee594da6c811fd0d8adad0a12",
+            "heat": "02078bdd9f5c544557e7f0f630e9f4bed7e8bf418eedd667dcc8afbf166052c8",
+            "diff": "76ac1201c4f4b35ddb0a86a69b899ea5bdbd795568b59177406acfff5c13bf84"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU/status text; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.909794,
+          "ssim_source": "All",
+          "psnr": 17.833014,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "d325d1740574e5265fede1d102e0e3f6488c481634901a9aff6d4c2afcd0aff8",
+            "rust": "a79b2a3d83bbbbe286ed16c5f83f2fc07dfb25d71b05aa7387842e6b9d21f9f3",
+            "heat": "7dd5e9293b3a525a7d46b00224066bde568cd953c87ecb3abeda5f2764e923a9",
+            "diff": "0f6e45275ccc6dbba57eda33356eb39ba18e9a0d8658d1a0477e948a60cdd37f"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 3,
+        "min_ssim": 0.875261,
+        "min_psnr": 18.63045,
+        "area_weighted_ssim": 0.9146079811812392,
+        "area_weighted_psnr_from_mse": 19.88021514790201,
+        "scored_pixels": 221056,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": 0.772145,
+        "psnr": 20.514
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-room.png",
+      "contact_sheet_sha256": "6f37c9ef1e234a454ab1e41ef366c22429129ed66b96d28cef43ea66a49c8bfb"
+    },
+    "waiting": {
+      "full_frame_validation": {
+        "ssim": 0.890681,
+        "psnr": 17.852734
+      },
+      "regions": [
+        {
+          "name": "top_header",
+          "rect": [
+            0,
+            0,
+            800,
+            64
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Song/title/version captions and green status band; presentation text dominates.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.809921,
+          "ssim_source": "All",
+          "psnr": 15.409301,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "c5db7d223d7df142d5a600e1679c529412fb89af08f1f57c6322a6617670a82a",
+            "rust": "475f254e526a64a45543ee7309bfe18937a313f74f675028c12f67542f5611ff",
+            "heat": "5609dd2bd1cb091123bc849e7565395e7ebb235ca17633c778ac432dd73a9c8f",
+            "diff": "6c1654a270038723033d866cbc522df18e4b4a7f75ee089864020e5376826f87"
+          }
+        },
+        {
+          "name": "seat_grid_left",
+          "rect": [
+            0,
+            64,
+            380,
+            400
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left four seats, avatar plates and seat frames; gameplay seat grid geometry.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.8783,
+          "ssim_source": "All",
+          "psnr": 16.958975,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "5efcdcdbfd6a5b0aab15f16b98e35def6fc7b830dc663ae5efc712ea158a2fd9",
+            "rust": "f9ae8cdf3a6761dd8ccfae7ae0456de1912bdc719abae8e52cf122a7038fb408",
+            "heat": "ef4d2b9ab8544983abfdd375795b30421a30bbf25b72cd93cddc90272c863162",
+            "diff": "ef4d2b9ab8544983abfdd375795b30421a30bbf25b72cd93cddc90272c863162"
+          }
+        },
+        {
+          "name": "seat_grid_right_top",
+          "rect": [
+            380,
+            64,
+            224,
+            136
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Top-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999834,
+          "ssim_source": "All",
+          "psnr": 47.791129,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "e26f0102c208e03024a973f48c7dbae9b994d2de542166de028a480b1f92c7b6",
+            "rust": "a81b6473b41c2ec580aad21d095d0b1bb06750d2215db3edc53c68604006a2b0",
+            "heat": "2e91af486b2706c26af2eb5646a6b56f8f616a17c8d1fd756128b178747396ab",
+            "diff": "e2a9008f2b7b587b0f2015fcf00993ace680d21760a84e6c30139420db7e2362"
+          }
+        },
+        {
+          "name": "center_modal",
+          "rect": [
+            380,
+            200,
+            224,
+            140
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Blue notice dialog; message glyphs are presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999891,
+          "ssim_source": "All",
+          "psnr": 47.048668,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "8172007866a98f72b1ca999cf903c1889f3a7ac5c7a687ec54461c4c1aa0b731",
+            "rust": "a5636e5ca79a7a991bcf243d2dab33eb5a17dcabee986383062d5be0a1aab042",
+            "heat": "2677772ccf28d06a65441cb6c526806ca0309e2582dd9aea19ebc2ef5365ebed",
+            "diff": "a27eecdeb82ed065c1482779e4e2739fcf660379a20ea76d75dd41ad9c773b51"
+          }
+        },
+        {
+          "name": "seat_grid_right_bottom",
+          "rect": [
+            380,
+            340,
+            224,
+            124
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bottom-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.998403,
+          "ssim_source": "All",
+          "psnr": 36.366046,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "933d64e7ba614b8ce8484a5c58aede94ac2bbee830af99bcae425d8d83235840",
+            "rust": "4f9ba02859817cfbc6d2541a78007e7c6bb7b4d737adbdf8af2e5df867106622",
+            "heat": "8d4ca6c5f0fca97f31791580e9f63b33ec056ef3ccd068481707b464f9fffea0",
+            "diff": "5492d1c605334a34832819682326c1274ceff1f2f986e46b7814229838c09dd0"
+          }
+        },
+        {
+          "name": "right_panel",
+          "rect": [
+            604,
+            64,
+            196,
+            400
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "READY/START captions, team slots and stat readouts; server text presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.911009,
+          "ssim_source": "All",
+          "psnr": 19.482427,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "4504b363c57c4cc4246687ad7d0a239724664482938b240beebb38af86410e31",
+            "rust": "bc48c1f52d1839e760d7b1b0b0bba06495983aaaf43b05fd7d8a2b05b2671ee1",
+            "heat": "8d07443ac5cbeb821b2523a40114167eb6930ac6bca2c034221ba818b18a87b1",
+            "diff": "b79ab90dd36e5117a666b419813a2c8856e82a7f8c04721bd87e166937eb3df3"
+          }
+        },
+        {
+          "name": "bottom_chat",
+          "rect": [
+            0,
+            464,
+            800,
+            104
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chat/list rows dominate the heat; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.830229,
+          "ssim_source": "All",
+          "psnr": 16.364031,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ef7e8dd2b41fcba513609fe6ca629a1e619781e196288af61b54b680e325bda8",
+            "rust": "8ad11a85a5772cfb3533dd0009414f8d38e1f16a7e63c0e574c33a2a3ed876f5",
+            "heat": "3201864e8202cc3fde4bff45e9f03e1502839454983a6305880bdf7ea634c52e",
+            "diff": "381aaace5f0ffd02c7c81f2d76e06f14c09724c396ac0c731a5b96f4b9012b7f"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU/status text; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.882605,
+          "ssim_source": "All",
+          "psnr": 16.903982,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "a2fa805f9a798b8ed271345fd1090bfcc473cae88a45c49bcd853f414cf5d9e0",
+            "rust": "4ed31dd2ead014d64e594aeb161c8539c859f8766ff1f16a5a97721e4b42f126",
+            "heat": "123fb5878b5fa2f27bfc8281e1c278eb979ad6b3c03c73d1bf81f117ae77f4f7",
+            "diff": "7ec976df2aff37473f762b227f3853b2669e0c2fc909c1091d136b3ce7ec5456"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 3,
+        "min_ssim": 0.8783,
+        "min_psnr": 16.958975,
+        "area_weighted_ssim": 0.911777895281583,
+        "area_weighted_psnr_from_mse": 18.35788792631327,
+        "scored_pixels": 210240,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": 0.361756,
+        "psnr": 12.976
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-waiting.png",
+      "contact_sheet_sha256": "a4a10d19dea41d31cbab37607eb3bfc1b59d2a604762279d67dbd91938981786"
+    },
+    "loading": {
+      "full_frame_validation": {
+        "ssim": 0.156679,
+        "psnr": 8.203751
+      },
+      "regions": [
+        {
+          "name": "cover_art_left_core",
+          "rect": [
+            0,
+            0,
+            200,
+            600
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left half of the artwork-only cover (girl figure); no placeholder text in this band.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.169672,
+          "ssim_source": "All",
+          "psnr": 9.054191,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "5515ba0dcb32381237067269c4c0071ba430b086cda2d4585db103d1f30fdc7c",
+            "rust": "3d6fe1a269fb616888312db4cfad7a7e381f3b210d964709d39a463cf6bbe300",
+            "heat": "d8e6f80dc3a24bf7aa634b21b52523cfd01a7d57dd5eb4831abcd74ba875f379",
+            "diff": "99b7d7d61c4b28d2fa0e5eb2b83e6f8b8edb8a556c174048f7a1b23095949ca9"
+          }
+        },
+        {
+          "name": "cover_art_upper_mid",
+          "rect": [
+            200,
+            0,
+            200,
+            272
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Upper middle cover art above the placeholder bar; artwork surface, no glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.182676,
+          "ssim_source": "All",
+          "psnr": 8.34652,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "cdf6e0f995c05b36e938a939f37e738beedee576aa013b815d5c3285c26edfe3",
+            "rust": "8116f6a5f1dc2f7190dc0615724f0034303514ff1f47fb9c67332b8855faef1a",
+            "heat": "a1c5fa052721d1f15f51ee8a9a14c10c5a56e4e6f87d2092f5f9e08851d31dcf",
+            "diff": "601e708d35dece80e24e5ddc9b1f8e80f31dd409f42c22456707da6f4317bced"
+          }
+        },
+        {
+          "name": "cover_art_lower_mid",
+          "rect": [
+            200,
+            360,
+            200,
+            240
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Lower middle cover art below the placeholder text; artwork surface, no glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.170018,
+          "ssim_source": "All",
+          "psnr": 7.858965,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "9741f35135d646c6d0e957f2022c57b0dadf120f53117ea70d6986f9805c68ef",
+            "rust": "65c22e64567dd05f150e33d52f9d24b242ddd5fdc1023536076704c2feefa7b7",
+            "heat": "d5dae16310de2224395e84575e21c5f660a0ee6a5cc6f63b381d8c6d6e6bcbe4",
+            "diff": "894b96bf23d6a67cb1e6e2b11a96cfe4a74c77125ba2af15d0943e4fcc68a467"
+          }
+        },
+        {
+          "name": "logo_plate",
+          "rect": [
+            680,
+            0,
+            120,
+            72
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Top-right O2JAM logo plate; lettering is logo artwork, not body text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.031752,
+          "ssim_source": "All",
+          "psnr": 6.238857,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "55937495c8873cca8fcca625de9064a2284322c4a7a0c80ae13fbf9963fc7ab7",
+            "rust": "0c1f027f45b50a521400575adac7c79d864178b49b314d0b134f684b82531731",
+            "heat": "d8378723dca9a7590b85029b2f2197487de704b67927dc58b0778b436cf17c1a",
+            "diff": "9d63d40840f81c2ed3c878501d9a10395b4c52e4a8f5baa77411878efd905f9d"
+          }
+        },
+        {
+          "name": "avatar_art",
+          "rect": [
+            720,
+            72,
+            80,
+            108
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Avatar figure below the logo; artwork surface, no body text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.074566,
+          "ssim_source": "All",
+          "psnr": 8.000045,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "90a5571ff9cb8552c814cd6a6b4e49d088102cac987b1afe0c019a5c398d42e9",
+            "rust": "e03a366cf87190a6858d9f8f87268e8ce93c7dd5b2f33da0af044857a6763ff9",
+            "heat": "f4bdb87c9a4561d2b6f59a263a4754eec481c1dcc10dc215b9ef98a2d6744e66",
+            "diff": "e5fe8359c4d7e64588a1a51a612ee6e72e7dc88dbed3980eaf6baeca7a218813"
+          }
+        },
+        {
+          "name": "credits_box",
+          "rect": [
+            620,
+            80,
+            100,
+            100
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Rust O2JAM credits card; glyph block, excluded by owner decision.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.032478,
+          "ssim_source": "All",
+          "psnr": 7.04902,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "069db94e065502a2e1261cc88b55a90d8613de6653728791dec2f0f978d7959b",
+            "rust": "6e9668a5391372a3900d3ccec7ca97911a6436d1144a7c9e9a8fe4c2e5d60730",
+            "heat": "af22a1b0c2cd363fc9205e5e021da93227e0e06795569121bd0adbdf0f8032c6",
+            "diff": "7975a5e8384d0e6e7edeff836196aa89e31c4b87a8d3da8258612a9e41318e0d"
+          }
+        },
+        {
+          "name": "progress_bar",
+          "rect": [
+            200,
+            272,
+            320,
+            28
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Green progress bar HUD geometry; narrow band holds no glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.313253,
+          "ssim_source": "All",
+          "psnr": 9.927608,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ce0aee44f1bf1358dbe2a24278d77f314cf4d6542cd9f26e75fbfa9aa3929eb7",
+            "rust": "f6aa14bec9207adcb68b3cba64b2778f8b907c1935b15cbcaa2d280ce642b1e4",
+            "heat": "0b04f81c5a26653ae7cc871a1ceaff3e813d6e85ea788579fefa0bb95fd6cc97",
+            "diff": "d1d1451fad3d64fd3f0bb3938de93e548b564f39630e30f651a32eb18868295c"
+          }
+        },
+        {
+          "name": "placeholder_text",
+          "rect": [
+            200,
+            300,
+            320,
+            60
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "First - Band placeholder caption; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.330933,
+          "ssim_source": "All",
+          "psnr": 10.240751,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "a2159963e43dd501227f2615366e3e77ad55ae707f042660c9214301642ad441",
+            "rust": "78ecf8dbdcdd83681445ae7577a1cfd01dbed93d614210a312c240e2564b5e30",
+            "heat": "3adbd67f900fc6d9cd61c0b866a4e62ec83ba1ad1cf13b49662422ce37307114",
+            "diff": "f69848a855ec4b288dbffb7a717d5a387420f63cac5e015e05a8f73f2368ddab"
+          }
+        },
+        {
+          "name": "landscape_left",
+          "rect": [
+            400,
+            380,
+            160,
+            220
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left part of the lower landscape/theme artwork; no credits glyphs.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.123778,
+          "ssim_source": "All",
+          "psnr": 7.569526,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "fc4b6824c529ce9d3652188437e496c595999dfed8946c5ae8e496a44752a290",
+            "rust": "bc8b76a110b9eaec9b6153b668fae8ec7a676724887c1d2827c30095fa2590a2",
+            "heat": "e570573ee7e077428e39dd6f179a9873533c725f3c7846eb561ede52b6f6d310",
+            "diff": "5d522d171e17d25f0f3926314043c3e4e8fd2113ad1e235b931de84dcb6d41cb"
+          }
+        },
+        {
+          "name": "landscape_upper_right",
+          "rect": [
+            560,
+            380,
+            240,
+            100
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Upper-right landscape art above the credits block; no glyph ink.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.058597,
+          "ssim_source": "All",
+          "psnr": 7.416477,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "c3727413fc726f3a951376868465fe06f4fbc0e6936e97367a6edb8005e2a48a",
+            "rust": "b616c9d03471e92686d492ee80006ceebf9afafae2cac47a1e088afb52899ac3",
+            "heat": "f14116feec402a3f1c0c8481b7b71b0ebe95f5068f2b4fb2f3c61d8596838878",
+            "diff": "cb0f04c684319c3fe4dfca73078dc98f8a4608bc3e673728db2a9d08380bb95a"
+          }
+        },
+        {
+          "name": "credits_footer",
+          "rect": [
+            560,
+            480,
+            240,
+            120
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Artist/remix credits block in the reference frame; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.022718,
+          "ssim_source": "All",
+          "psnr": 4.964162,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "bfe90af307f90e1d84f4f2225b68315625374cd20e83e718a620cc29b94f13cd",
+            "rust": "760ecad04109a9c2137f11f28f02d79c7f44b80c09679ad2b2bacd7212d3a8f8",
+            "heat": "f42797e6834e41252da0916ba4e11773d287ebc0063ad0f1c07bcd5f8d215b8c",
+            "diff": "2aa7171b79142930eb8b8622104e476a3c605f60bbfc4ac63da135329d9311b3"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 8,
+        "min_ssim": 0.031752,
+        "min_psnr": 6.238857,
+        "area_weighted_ssim": 0.15575534823284823,
+        "area_weighted_psnr_from_mse": 8.295089602295867,
+        "scored_pixels": 307840,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": 0.335887,
+        "psnr": 11.419
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-loading.png",
+      "contact_sheet_sha256": "ebeb5e9284d43f205de258997b71e1a895fc5d568da18ce720fdb7e277ec7732"
+    },
+    "waiting-download": {
+      "full_frame_validation": {
+        "ssim": 0.891266,
+        "psnr": 17.872679
+      },
+      "regions": [
+        {
+          "name": "top_header",
+          "rect": [
+            0,
+            0,
+            800,
+            64
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Song/title/version captions and green status band; presentation text dominates.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.809921,
+          "ssim_source": "All",
+          "psnr": 15.409301,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "c5db7d223d7df142d5a600e1679c529412fb89af08f1f57c6322a6617670a82a",
+            "rust": "475f254e526a64a45543ee7309bfe18937a313f74f675028c12f67542f5611ff",
+            "heat": "5609dd2bd1cb091123bc849e7565395e7ebb235ca17633c778ac432dd73a9c8f",
+            "diff": "6c1654a270038723033d866cbc522df18e4b4a7f75ee089864020e5376826f87"
+          }
+        },
+        {
+          "name": "seat_grid_left",
+          "rect": [
+            0,
+            64,
+            380,
+            400
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left four seats, avatar plates and seat frames; gameplay seat grid geometry.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.880165,
+          "ssim_source": "All",
+          "psnr": 17.01043,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "6a9b217c6dfc9f437ab22eea04c219d156eb024d89a83d974ab9c33c24871230",
+            "rust": "86f885365f54c1e058f006297aa231a77306eb184bee74d305f15cf2b8d10d54",
+            "heat": "b8acfc4ab51d8b1d63e622b1c6e4e2e89810d94e9b178eca0485eaf64c875a1f",
+            "diff": "b8acfc4ab51d8b1d63e622b1c6e4e2e89810d94e9b178eca0485eaf64c875a1f"
+          }
+        },
+        {
+          "name": "seat_grid_right_top",
+          "rect": [
+            380,
+            64,
+            224,
+            136
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Top-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999834,
+          "ssim_source": "All",
+          "psnr": 47.791129,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "e26f0102c208e03024a973f48c7dbae9b994d2de542166de028a480b1f92c7b6",
+            "rust": "a81b6473b41c2ec580aad21d095d0b1bb06750d2215db3edc53c68604006a2b0",
+            "heat": "2e91af486b2706c26af2eb5646a6b56f8f616a17c8d1fd756128b178747396ab",
+            "diff": "e2a9008f2b7b587b0f2015fcf00993ace680d21760a84e6c30139420db7e2362"
+          }
+        },
+        {
+          "name": "center_modal",
+          "rect": [
+            380,
+            200,
+            224,
+            140
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Blue notice dialog; message glyphs are presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999891,
+          "ssim_source": "All",
+          "psnr": 47.048668,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "8172007866a98f72b1ca999cf903c1889f3a7ac5c7a687ec54461c4c1aa0b731",
+            "rust": "a5636e5ca79a7a991bcf243d2dab33eb5a17dcabee986383062d5be0a1aab042",
+            "heat": "2677772ccf28d06a65441cb6c526806ca0309e2582dd9aea19ebc2ef5365ebed",
+            "diff": "a27eecdeb82ed065c1482779e4e2739fcf660379a20ea76d75dd41ad9c773b51"
+          }
+        },
+        {
+          "name": "seat_grid_right_bottom",
+          "rect": [
+            380,
+            340,
+            224,
+            124
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bottom-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.998403,
+          "ssim_source": "All",
+          "psnr": 36.366046,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "933d64e7ba614b8ce8484a5c58aede94ac2bbee830af99bcae425d8d83235840",
+            "rust": "4f9ba02859817cfbc6d2541a78007e7c6bb7b4d737adbdf8af2e5df867106622",
+            "heat": "8d4ca6c5f0fca97f31791580e9f63b33ec056ef3ccd068481707b464f9fffea0",
+            "diff": "5492d1c605334a34832819682326c1274ceff1f2f986e46b7814229838c09dd0"
+          }
+        },
+        {
+          "name": "right_panel",
+          "rect": [
+            604,
+            64,
+            196,
+            400
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "READY/START captions, team slots and stat readouts; server text presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.911009,
+          "ssim_source": "All",
+          "psnr": 19.482427,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "4504b363c57c4cc4246687ad7d0a239724664482938b240beebb38af86410e31",
+            "rust": "bc48c1f52d1839e760d7b1b0b0bba06495983aaaf43b05fd7d8a2b05b2671ee1",
+            "heat": "8d07443ac5cbeb821b2523a40114167eb6930ac6bca2c034221ba818b18a87b1",
+            "diff": "b79ab90dd36e5117a666b419813a2c8856e82a7f8c04721bd87e166937eb3df3"
+          }
+        },
+        {
+          "name": "bottom_chat",
+          "rect": [
+            0,
+            464,
+            800,
+            104
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chat/list rows dominate the heat; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.830229,
+          "ssim_source": "All",
+          "psnr": 16.364031,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ef7e8dd2b41fcba513609fe6ca629a1e619781e196288af61b54b680e325bda8",
+            "rust": "8ad11a85a5772cfb3533dd0009414f8d38e1f16a7e63c0e574c33a2a3ed876f5",
+            "heat": "3201864e8202cc3fde4bff45e9f03e1502839454983a6305880bdf7ea634c52e",
+            "diff": "381aaace5f0ffd02c7c81f2d76e06f14c09724c396ac0c731a5b96f4b9012b7f"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU/status text; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.882605,
+          "ssim_source": "All",
+          "psnr": 16.903982,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "a2fa805f9a798b8ed271345fd1090bfcc473cae88a45c49bcd853f414cf5d9e0",
+            "rust": "4ed31dd2ead014d64e594aeb161c8539c859f8766ff1f16a5a97721e4b42f126",
+            "heat": "123fb5878b5fa2f27bfc8281e1c278eb979ad6b3c03c73d1bf81f117ae77f4f7",
+            "diff": "7ec976df2aff37473f762b227f3853b2669e0c2fc909c1091d136b3ce7ec5456"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 3,
+        "min_ssim": 0.880165,
+        "min_psnr": 17.01043,
+        "area_weighted_ssim": 0.9131262590563166,
+        "area_weighted_psnr_from_mse": 18.409226203512674,
+        "scored_pixels": 210240,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": null,
+        "psnr": null,
+        "reason": "no #332 downsampled baseline for this matched state"
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-waiting-download.png",
+      "contact_sheet_sha256": "3cad8b2b97cb9f7254376d7e57172fdf76e4b2f4b5ed2ba062c9a6597a29e361"
+    },
+    "waiting-gate": {
+      "full_frame_validation": {
+        "ssim": 0.843168,
+        "psnr": 16.421828
+      },
+      "regions": [
+        {
+          "name": "top_header",
+          "rect": [
+            0,
+            0,
+            800,
+            64
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Song/title/version captions and green status band; presentation text dominates.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.781368,
+          "ssim_source": "All",
+          "psnr": 15.01295,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "b320efb899acc3a131b6c4d807c1a5432eed07a77c9f31f586095decda9c1b09",
+            "rust": "475f254e526a64a45543ee7309bfe18937a313f74f675028c12f67542f5611ff",
+            "heat": "cad20121d345f3e15b3808493fdf427db04d410580f34658246065aeae9c9991",
+            "diff": "22b0437eb2635110251defab9bea6bf68116a9c6a7743a15b96a92d0df93a77c"
+          }
+        },
+        {
+          "name": "seat_grid_left",
+          "rect": [
+            0,
+            64,
+            380,
+            400
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left four seats, avatar plates and seat frames; gameplay seat grid geometry.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.813935,
+          "ssim_source": "All",
+          "psnr": 15.283109,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "55bdb215d633f35059cc48a29b8da1e55e50c5a30788a30a6f96fa4a87ab6fbc",
+            "rust": "aaaa04fcc2a415e47b3dd32d8fc32c24dda71fe76dda616a78911d66129508a9",
+            "heat": "c66a77390fd33b91f3892ce3dbd4ec05ef5a288b16a0e954596dc16c50af3ff4",
+            "diff": "e392e7e79ec4d0459990e573ac99e6cd96860fb679f48df1c942ce7caf307e97"
+          }
+        },
+        {
+          "name": "seat_grid_right_top",
+          "rect": [
+            380,
+            64,
+            224,
+            136
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Top-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.704766,
+          "ssim_source": "All",
+          "psnr": 15.005715,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "0a2d68f4c4c78267fb6f2d130f06cb8d360df8b7a9b87e201f564b455d1b1d77",
+            "rust": "a81b6473b41c2ec580aad21d095d0b1bb06750d2215db3edc53c68604006a2b0",
+            "heat": "4f76e9c6a430ca27a609bb483ed5ba16505e247331f9f2d36500fc6e5e364347",
+            "diff": "c7dbb9c346420e7262095d75ebc2d17fc02d05f63c6b60604a39c02b76cf98fe"
+          }
+        },
+        {
+          "name": "center_modal",
+          "rect": [
+            380,
+            200,
+            224,
+            140
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Blue notice dialog; message glyphs are presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.945057,
+          "ssim_source": "All",
+          "psnr": 17.740203,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "cda3ca1c873d14612146d939d8124ca3003a99fb053119acd310c36c15baf788",
+            "rust": "a5636e5ca79a7a991bcf243d2dab33eb5a17dcabee986383062d5be0a1aab042",
+            "heat": "e39454e557089567701e1b4110c3e2f7cd2bb39f14f961177946815231e4347a",
+            "diff": "b60165c00aee2436aca529f656dc9ddf725c77cba531c1a553bd7553c962ce69"
+          }
+        },
+        {
+          "name": "seat_grid_right_bottom",
+          "rect": [
+            380,
+            340,
+            224,
+            124
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bottom-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.998403,
+          "ssim_source": "All",
+          "psnr": 36.366046,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "933d64e7ba614b8ce8484a5c58aede94ac2bbee830af99bcae425d8d83235840",
+            "rust": "4f9ba02859817cfbc6d2541a78007e7c6bb7b4d737adbdf8af2e5df867106622",
+            "heat": "49e63be65945c27fe584910d0768baec6f9bd37cdbf0b6dc1560c8ea36a02984",
+            "diff": "5492d1c605334a34832819682326c1274ceff1f2f986e46b7814229838c09dd0"
+          }
+        },
+        {
+          "name": "right_panel",
+          "rect": [
+            604,
+            64,
+            196,
+            400
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "READY/START captions, team slots and stat readouts; server text presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.911009,
+          "ssim_source": "All",
+          "psnr": 19.482427,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "4504b363c57c4cc4246687ad7d0a239724664482938b240beebb38af86410e31",
+            "rust": "bc48c1f52d1839e760d7b1b0b0bba06495983aaaf43b05fd7d8a2b05b2671ee1",
+            "heat": "bd4ebed56516f4f2bd5610c5e7c87a05bccaaf0fe56f6cb79a7481d861f704e8",
+            "diff": "b79ab90dd36e5117a666b419813a2c8856e82a7f8c04721bd87e166937eb3df3"
+          }
+        },
+        {
+          "name": "bottom_chat",
+          "rect": [
+            0,
+            464,
+            800,
+            104
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chat/list rows dominate the heat; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.830229,
+          "ssim_source": "All",
+          "psnr": 16.364031,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ef7e8dd2b41fcba513609fe6ca629a1e619781e196288af61b54b680e325bda8",
+            "rust": "8ad11a85a5772cfb3533dd0009414f8d38e1f16a7e63c0e574c33a2a3ed876f5",
+            "heat": "5fdbb12324549573db4a20571d63360b7848713827aa5a5a957fc92cc0d80630",
+            "diff": "381aaace5f0ffd02c7c81f2d76e06f14c09724c396ac0c731a5b96f4b9012b7f"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU/status text; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.882605,
+          "ssim_source": "All",
+          "psnr": 16.903982,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "a2fa805f9a798b8ed271345fd1090bfcc473cae88a45c49bcd853f414cf5d9e0",
+            "rust": "4ed31dd2ead014d64e594aeb161c8539c859f8766ff1f16a5a97721e4b42f126",
+            "heat": "0b94ccf905115a7faa3f13ce91647f5c88b6e04e9e58d22f21e6eda5303ad620",
+            "diff": "7ec976df2aff37473f762b227f3853b2669e0c2fc909c1091d136b3ce7ec5456"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 3,
+        "min_ssim": 0.704766,
+        "min_psnr": 15.005715,
+        "area_weighted_ssim": 0.8224874103500762,
+        "area_weighted_psnr_from_mse": 15.845834501067465,
+        "scored_pixels": 210240,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": null,
+        "psnr": null,
+        "reason": "no #332 downsampled baseline for this matched state"
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-waiting-gate.png",
+      "contact_sheet_sha256": "52dcef1cc0b2b643127992b6e9fdb9989d38ecafb8bdb732f9653580f8f92b58"
+    },
+    "waiting-back": {
+      "full_frame_validation": {
+        "ssim": 0.890582,
+        "psnr": 17.872002
+      },
+      "regions": [
+        {
+          "name": "top_header",
+          "rect": [
+            0,
+            0,
+            800,
+            64
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Song/title/version captions and green status band; presentation text dominates.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.809921,
+          "ssim_source": "All",
+          "psnr": 15.409301,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "c5db7d223d7df142d5a600e1679c529412fb89af08f1f57c6322a6617670a82a",
+            "rust": "475f254e526a64a45543ee7309bfe18937a313f74f675028c12f67542f5611ff",
+            "heat": "5609dd2bd1cb091123bc849e7565395e7ebb235ca17633c778ac432dd73a9c8f",
+            "diff": "6c1654a270038723033d866cbc522df18e4b4a7f75ee089864020e5376826f87"
+          }
+        },
+        {
+          "name": "seat_grid_left",
+          "rect": [
+            0,
+            64,
+            380,
+            400
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Left four seats, avatar plates and seat frames; gameplay seat grid geometry.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.878345,
+          "ssim_source": "All",
+          "psnr": 17.015115,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "df259d163b1190f93ee3718d2a2ebc91e4eacb242f46976ab125ebc6413a9914",
+            "rust": "aaaa04fcc2a415e47b3dd32d8fc32c24dda71fe76dda616a78911d66129508a9",
+            "heat": "196b9834e613f0db0939d6b99ea4b30bbc7460764304c753f6a3f0d5ad6a4d69",
+            "diff": "196b9834e613f0db0939d6b99ea4b30bbc7460764304c753f6a3f0d5ad6a4d69"
+          }
+        },
+        {
+          "name": "seat_grid_right_top",
+          "rect": [
+            380,
+            64,
+            224,
+            136
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Top-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999834,
+          "ssim_source": "All",
+          "psnr": 47.791129,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "e26f0102c208e03024a973f48c7dbae9b994d2de542166de028a480b1f92c7b6",
+            "rust": "a81b6473b41c2ec580aad21d095d0b1bb06750d2215db3edc53c68604006a2b0",
+            "heat": "2e91af486b2706c26af2eb5646a6b56f8f616a17c8d1fd756128b178747396ab",
+            "diff": "e2a9008f2b7b587b0f2015fcf00993ace680d21760a84e6c30139420db7e2362"
+          }
+        },
+        {
+          "name": "center_modal",
+          "rect": [
+            380,
+            200,
+            224,
+            140
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Blue notice dialog; message glyphs are presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.999891,
+          "ssim_source": "All",
+          "psnr": 47.048668,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "8172007866a98f72b1ca999cf903c1889f3a7ac5c7a687ec54461c4c1aa0b731",
+            "rust": "a5636e5ca79a7a991bcf243d2dab33eb5a17dcabee986383062d5be0a1aab042",
+            "heat": "2677772ccf28d06a65441cb6c526806ca0309e2582dd9aea19ebc2ef5365ebed",
+            "diff": "a27eecdeb82ed065c1482779e4e2739fcf660379a20ea76d75dd41ad9c773b51"
+          }
+        },
+        {
+          "name": "seat_grid_right_bottom",
+          "rect": [
+            380,
+            340,
+            224,
+            124
+          ],
+          "class": "gameplay",
+          "score": true,
+          "reason": "Bottom-right seats, separated from the center modal.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.998403,
+          "ssim_source": "All",
+          "psnr": 36.366046,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "933d64e7ba614b8ce8484a5c58aede94ac2bbee830af99bcae425d8d83235840",
+            "rust": "4f9ba02859817cfbc6d2541a78007e7c6bb7b4d737adbdf8af2e5df867106622",
+            "heat": "8d4ca6c5f0fca97f31791580e9f63b33ec056ef3ccd068481707b464f9fffea0",
+            "diff": "5492d1c605334a34832819682326c1274ceff1f2f986e46b7814229838c09dd0"
+          }
+        },
+        {
+          "name": "right_panel",
+          "rect": [
+            604,
+            64,
+            196,
+            400
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "READY/START captions, team slots and stat readouts; server text presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.911009,
+          "ssim_source": "All",
+          "psnr": 19.482427,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "4504b363c57c4cc4246687ad7d0a239724664482938b240beebb38af86410e31",
+            "rust": "bc48c1f52d1839e760d7b1b0b0bba06495983aaaf43b05fd7d8a2b05b2671ee1",
+            "heat": "8d07443ac5cbeb821b2523a40114167eb6930ac6bca2c034221ba818b18a87b1",
+            "diff": "b79ab90dd36e5117a666b419813a2c8856e82a7f8c04721bd87e166937eb3df3"
+          }
+        },
+        {
+          "name": "bottom_chat",
+          "rect": [
+            0,
+            464,
+            800,
+            104
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "Chat/list rows dominate the heat; presentation text.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.830229,
+          "ssim_source": "All",
+          "psnr": 16.364031,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "ef7e8dd2b41fcba513609fe6ca629a1e619781e196288af61b54b680e325bda8",
+            "rust": "8ad11a85a5772cfb3533dd0009414f8d38e1f16a7e63c0e574c33a2a3ed876f5",
+            "heat": "3201864e8202cc3fde4bff45e9f03e1502839454983a6305880bdf7ea634c52e",
+            "diff": "381aaace5f0ffd02c7c81f2d76e06f14c09724c396ac0c731a5b96f4b9012b7f"
+          }
+        },
+        {
+          "name": "bottom_bar",
+          "rect": [
+            0,
+            568,
+            800,
+            32
+          ],
+          "class": "text",
+          "score": false,
+          "reason": "MENU/status text; presentation.",
+          "rect_origin": "regions-v1.json rect x2 (no re-derivation)",
+          "ssim": 0.880768,
+          "ssim_source": "All",
+          "psnr": 16.866854,
+          "psnr_source": "average",
+          "crops_sha256": {
+            "ref": "d13908a2a976461732a146f4a5a2226d3f2ec1d841cb459abeee77ceae5c6bc2",
+            "rust": "4ed31dd2ead014d64e594aeb161c8539c859f8766ff1f16a5a97721e4b42f126",
+            "heat": "783ab03a7804f7be3f5bab0b3b02e67afc47a131b56041ab9a92e157cb485e4c",
+            "diff": "f0bf82386af6e5684cdcdea293a456de4b4ba9a702a28b8a243c06ea8324356e"
+          }
+        }
+      ],
+      "gameplay_gate": {
+        "scored_regions": 3,
+        "min_ssim": 0.878345,
+        "min_psnr": 17.015115,
+        "area_weighted_ssim": 0.9118104295281582,
+        "area_weighted_psnr_from_mse": 18.413900507157337,
+        "scored_pixels": 210240,
+        "all_scored_regions_pass": false
+      },
+      "legacy_downsampled_weighted": {
+        "ssim": null,
+        "psnr": null,
+        "reason": "no #332 downsampled baseline for this matched state"
+      },
+      "contact_sheet": "/home/arnim/scratch/p346/pack/regions/region-map-native-waiting-back.png",
+      "contact_sheet_sha256": "3f01b3f6101b9a68ed0723fef3b04dbfe1ad4f35a5ea92b47df363b376617d60"
+    }
+  }
+}
