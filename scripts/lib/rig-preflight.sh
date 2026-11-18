@@ -228,7 +228,7 @@ rig_check_install_root() {
     return "$RIG_E_DATA"
   fi
   if [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; then
-    rig_fail "$RIG_E_DATA" "install-root" "$root unreadable — link the game data first (ln -s /path/to/install-root <repo>/install-root)"
+    rig_fail "$RIG_E_DATA" "install-root" "$root unreadable — claim a pool slot first (scripts/worktree-setup.sh; symlinks into ~/scratch/install-data)"
     return "$RIG_E_DATA"
   fi
   return 0

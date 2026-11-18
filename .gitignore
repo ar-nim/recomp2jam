@@ -67,5 +67,8 @@ Thumbs.db
 # Env
 .env
 
-# gate-check temporary hidden install-root
+# worktree's claimed slot in the persistent install-data pool
+.worktree-data-slot
+
+# gate-check temporary hidden install-root (slot symlink)
 .install-root.gate-hidden

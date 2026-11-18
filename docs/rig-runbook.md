@@ -333,6 +333,11 @@ and cleanup failures keep the evidence instead of deleting it.
   binary, and writes `env.sh`. Stop with `scripts/rig-run.sh stop
   <out-dir>`; status with `status`. Wayland mode uses
   `scripts/rig-run.sh wayland <socket> <out-dir> -- <binary>`.
+- Game data: `scripts/worktree-setup.sh` claims one of four persistent slots
+  in `~/scratch/install-data`, refreshes it from the main checkout, and
+  symlinks `install-root/`/`extracted/` there. Slots are never shared, so
+  `gate-check.sh` renaming this checkout's symlink hides only this run;
+  release with `scripts/worktree-release.sh` (slot data stays on disk).
 - Displays: Xvfb is the workbench. Agent rig work always runs headless
   and invisible; nothing ever lands on the live seat unless the owner
   needs eyes on it. A seat run means a normal window the owner can

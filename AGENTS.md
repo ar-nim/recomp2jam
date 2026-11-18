@@ -20,9 +20,13 @@ Pick one branch:
   gameplay behavior in `docs/gameplay.md`.
 - Game data → local-only under `install-root/` + `extracted/`
   (git-ignored); layout in `docs/install-layout.md`, status in
-  `docs/progress.md`. Fresh worktree? Symlink `install-root/` first:
-  archives resolve from the build dir, so without it the client
-  silently paints fallbacks (guard: `scripts/verify-shots.sh`).
+  `docs/progress.md`. Fresh worktree? Run `scripts/worktree-setup.sh`:
+  it claims one of four persistent slots in `~/scratch/install-data`,
+  refreshes it from the main checkout, and symlinks `install-root/` and
+  `extracted/` to that slot. No two worktrees share a data dir, so a hidden
+  arm cannot flake another run; release with `scripts/worktree-release.sh`.
+  Archives resolve from the build dir, so without them the client silently
+  paints fallbacks (guard: `scripts/verify-shots.sh`).
 - Rig procedure → `docs/rig-runbook.md` (single home for rig lore).
 - Implementing → invoke `/skill:clean-code` and hold its 10/10:
   intent-revealing names, small functions, scenario-named tests.

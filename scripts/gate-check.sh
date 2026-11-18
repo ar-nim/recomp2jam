@@ -10,6 +10,10 @@
 #   5. git push origin main
 #   6. git rev-parse equality (main == origin/main)
 #
+# worktree-setup.sh links install-root into this worktree's own pool slot.
+# Step 4's mv renames that symlink inside this checkout only; the slot and
+# other worktrees are untouched. The EXIT trap restores the link.
+#
 # Usage: scripts/gate-check.sh [--no-push|--dry-run]
 #   --no-push / --dry-run : skip the push + verify step (for local proof runs).
 #   GATE_CHECK_NO_PUSH=1   : same, via environment.
@@ -46,6 +50,7 @@ cargo test --workspace
 
 step "cargo test --workspace (install-root hidden)"
 if [ "$present_root_existed" -eq 1 ]; then
+    # Slot symlink: this rename stays inside $REPO_ROOT.
     HIDDEN_BACKUP="$REPO_ROOT/.install-root.gate-hidden"
     mv "$REPO_ROOT/install-root" "$HIDDEN_BACKUP"
 fi
