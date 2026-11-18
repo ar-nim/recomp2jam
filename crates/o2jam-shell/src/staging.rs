@@ -312,13 +312,14 @@ impl Dialog {
         }
     }
 
-    /// Bodies the sheet declares but opens hidden (see
-    /// [`SELECT_MUSIC_HIDDEN_AT_OPEN`]): placements keep their rects
-    /// while no figure loads, so the slot paints nothing.
+    /// Bodies the sheet declares but the opening frame does not
+    /// paint. The song dialog stages all of them; the painter gates
+    /// the two mode panels and the three help sheets through
+    /// [`SELECT_MUSIC_PAINT_GATED_SPRITES`] (#285).
     #[must_use]
     pub const fn hidden_sprites(self) -> &'static [&'static str] {
         match self {
-            Dialog::SelectMusic => SELECT_MUSIC_HIDDEN_AT_OPEN,
+            Dialog::SelectMusic => &[],
             Dialog::ChannelInfo
             | Dialog::PlanetOption
             | Dialog::PlanetOptionSound
@@ -470,8 +471,9 @@ pub const BYNAME_TABLE: &[ByNameRow] = &[
     },
 ];
 
-/// Bodies the song-select sheet declares but opens hidden (ticket
-/// #272). Two families sit against the visible song-select panel:
+/// Bodies the song-select sheet stages but does not paint at open
+/// (ticket #272 staged them hidden; #285 makes them paint-gated).
+/// Two families sit against the visible song-select panel:
 ///
 /// - the random panel (`SelectMusic_Random1_BG.ojs` and its five
 ///   `SelectMusic_Btn_Random1_*` buttons) pairs the *same* `.bnd` rects
@@ -490,8 +492,9 @@ pub const BYNAME_TABLE: &[ByNameRow] = &[
 /// (next evidence: the exe handlers behind the panel-switch codes
 /// `0x2720001A`/`0x2720001B`, and behind
 /// `IDC_BUTTON_DSMUSIC_LABELQUESTION 0x27200053` /
-/// `IDC_BUTTON_DSMUSIC_SEARCHQUESTION 0x27200055` for the guides).
-pub const SELECT_MUSIC_HIDDEN_AT_OPEN: &[&str] = &[
+/// `IDC_BUTTON_DSMUSIC_SEARCHQUESTION 0x27200055` for the guides
+/// (VA `0x441a00`, helper VA `0x44f800`).
+pub const SELECT_MUSIC_PAINT_GATED_SPRITES: &[&str] = &[
     "SelectMusic_Random1_BG.ojs",
     "SelectMusic_Btn_Random1_all.ojs",
     "SelectMusic_Btn_Random1_Easy.ojs",
@@ -502,6 +505,32 @@ pub const SELECT_MUSIC_HIDDEN_AT_OPEN: &[&str] = &[
     "SelectMusic_SearchGuidImg.ojs",
     "SelectMusic_ListGuidImg.ojs",
 ];
+
+/// Random-panel bodies: painted only while the random-mode switch
+/// (`0x2720001B`) is live (VA `0x44f9a7`).
+pub const SELECT_MUSIC_RANDOM_SPRITES: &[&str] = &[
+    "SelectMusic_Random1_BG.ojs",
+    "SelectMusic_Btn_Random1_all.ojs",
+    "SelectMusic_Btn_Random1_Easy.ojs",
+    "SelectMusic_Btn_Random1_Intermediate.ojs",
+    "SelectMusic_Btn_Random1_High.ojs",
+    "SelectMusic_Btn_Random1_Highest.ojs",
+];
+
+/// Level-column bodies: the panel the `MUISCSELECT` arm restores
+/// (VA `0x44fdc0`), hidden while the random panel is live.
+pub const SELECT_MUSIC_LEVEL_SPRITES: &[&str] = &[
+    "SelectMusic_Btn_Step1_all.ojs",
+    "SelectMusic_Btn_Step1_Easy.ojs",
+    "SelectMusic_Btn_Step1_Intermediate.ojs",
+    "SelectMusic_Btn_Step1_High.ojs",
+    "SelectMusic_Btn_Step1_Highest.ojs",
+];
+
+/// Help-sheet bodies: one at a time, none at open (VA `0x441a00`).
+pub const SELECT_MUSIC_LABEL_GUIDE: &str = "SelectMusic_LabelGuidImg.ojs";
+pub const SELECT_MUSIC_SEARCH_GUIDE: &str = "SelectMusic_SearchGuidImg.ojs";
+pub const SELECT_MUSIC_LIST_GUIDE: &str = "SelectMusic_ListGuidImg.ojs";
 
 /// Control-list entry holding every Interface Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";

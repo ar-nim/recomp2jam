@@ -1,6 +1,7 @@
 //! [`ScreenGame`]: the window's game loop, owning the [`ScreenFlow`]
 //! and walking screens on input.
 
+mod channel;
 mod lanking;
 mod musicshop;
 mod planet;
@@ -9,6 +10,7 @@ mod waiting;
 
 use std::collections::HashMap;
 
+use self::channel::{ChannelPress, ChannelScene};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::planet::PlanetBoardState;
@@ -23,10 +25,8 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_channel_chat,
-    paint_channel_list, paint_channel_scene, paint_dialog_scene, paint_lanking_board,
+    battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
+    list_row_hit, paint_avi_scene, paint_channel_chat, paint_dialog_scene, paint_lanking_board,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
     paint_myroom_data, paint_myroom_figure, paint_myroom_scene, paint_payment_notice,
@@ -37,24 +37,25 @@ use super::paint::{
     paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
     paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, ChannelScroll,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
-    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
-use super::select_paint::{paint_select_text, SelectTextSlots};
+use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots};
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
-    password_action_at, payment_side_notice, planet_action_at, select_filter_choice_at,
-    select_music_rows, select_music_songs_with_labels, select_row_hit, shop_action_at,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
-    SelectMusicFilter, SelectMusicRow, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood,
-    SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    password_action_at, payment_side_notice, planet_action_at, select_chrome_action_at,
+    select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
+    shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
+    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    RoomDialog, SelectChromeAction, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
     OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -64,9 +65,10 @@ use super::side::{
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS,
 };
-use crate::music_download::MusicDownload;
+use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
@@ -521,8 +523,8 @@ pub const WAITING_START_NOT_READY_NOTICE: &str = "Some players are not ready.";
 pub const WAITING_START_TEAMS_NOTICE: &str = "The teams do not match.";
 /// Download-in-progress notice (VA `0x6459e8`): the pinned text for
 /// "a transfer is running, wait for it". The exe shows the download bar
-/// (`Wait_Downloding.ojs`, §4) at this moment instead; the bar lands in
-/// slice 4, so this class stands in until then.
+/// (`Wait_Downloding.ojs`, §4) at this moment instead; its sheet
+/// geometry stays OPEN, so this class stands in until then.
 pub const WAITING_START_DOWNLOAD_NOTICE: &str =
     "The song is downloading. Press OK after it completes.";
 
@@ -608,21 +610,13 @@ pub struct ScreenGame {
     avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
-    channels: Vec<ChannelState>,
+    /// Channel rows, highlight, scrolled list top, and drag capture
+    /// (#259 scene cluster): every row word lives behind the scene
+    /// seam; queries, presses, and drag motion go through its methods.
+    channel_scene: ChannelScene,
     /// Channel rows held behind the relay-unavailable notice until
     /// its OK is pressed (#244). Empty except while that modal is up.
     relay_down_pending_channels: Vec<ChannelState>,
-    highlight: usize,
-    /// Channel list-top offset (the scrolled origin): the
-    /// `CDChannelInfo+0x184` analog. The scroll arrows step this
-    /// offset (`0x50ebf0`→`0x50ec20` mutates the scrollbar's own
-    /// position and forwards the delta to the list, handlers
-    /// `0x4749a0`/`0x4749f0`); the highlight/selection is never
-    /// touched on that path (ticket #130). Row clicks map
-    /// slot-through-top (`code + top`); Up/Down keys never touch the
-    /// highlight or the top (rig-pinned no-ops, ticket #189).
-    channel_top: usize,
-    channel_drag: bool,
     /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -752,6 +746,20 @@ pub struct ScreenGame {
     /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
     /// ctor sentinels.
     select_filter: SelectMusicFilter,
+    /// Which selection panel the song dialog paints (#285). The
+    /// opening frame uses the song panel (VA `0x44f8a0`).
+    select_mode: SelectMusicMode,
+    /// Which help sheet the `?` buttons show (#285); none at open.
+    select_help: SelectHelpSheet,
+    /// Zero-based result page the pager shows (#285).
+    select_page: usize,
+    /// Column the next search applies to (exe field `+0x188`).
+    select_search_field: SelectSearchField,
+    /// Text typed into the dialog's search edit box.
+    select_search_draft: String,
+    /// Applied search query: the field and text the last SERACH press
+    /// submitted. `None` until then, so typing alone never narrows.
+    select_search_query: Option<(SelectSearchField, String)>,
     /// Local music seat from the install's `Music` folder scan
     /// (`docs/music-availability.md` §1): which catalog songs have a
     /// chart file on disk. `None` while no scan ran (no local
@@ -1125,10 +1133,7 @@ impl ScreenGame {
             avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
             avatar: None,
-            channels: Vec::new(),
-            highlight: 0,
-            channel_top: 0,
-            channel_drag: false,
+            channel_scene: ChannelScene::default(),
             pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
@@ -1164,6 +1169,12 @@ impl ScreenGame {
             select_music_art: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
+            select_mode: SelectMusicMode::SongSelect,
+            select_help: SelectHelpSheet::None,
+            select_page: 0,
+            select_search_field: SelectSearchField::Title,
+            select_search_draft: String::new(),
+            select_search_query: None,
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
@@ -1519,7 +1530,7 @@ impl ScreenGame {
     /// relay-down notice holds them pending.
     #[must_use]
     pub fn channel_rows(&self) -> &[ChannelState] {
-        &self.channels
+        self.channel_scene.rows()
     }
 
     /// Channels from the last online list (empty offline). Refreshing
@@ -1527,13 +1538,9 @@ impl ScreenGame {
     /// list's 2013/2014/2016/2019/2029 packets only, never carried
     /// across lists.
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
-        self.channels = channels;
-        self.highlight = 0;
-        // The exe zeroes the list top beside the populate (the
-        // `+0x184 = 0` + scrollbar `+0xb8 = 0` joint reset, file
-        // `0x747ba`): a fresh list always opens unscrolled.
-        self.channel_top = 0;
-        self.channel_drag = false;
+        self.channel_scene.set_rows(channels);
+        // The chat draft is shared with the Room lobby, so it stays
+        // owned here and is reset beside the new list (ticket #259).
         self.channel_chat = LobbyChatPanel::default();
         self
     }
@@ -1548,7 +1555,7 @@ impl ScreenGame {
         if self.flow.current() == Screen::Avi {
             self.enter(Screen::Planet);
         }
-        self.channels.clear();
+        self.channel_scene.clear_rows();
         self.relay_down_pending_channels = channels;
         self.planet_board.open_modal(PlanetModal::RelayDown);
         self
@@ -2769,14 +2776,39 @@ impl ScreenGame {
     /// Kick the room song's download (the exe's `StartMusicDownload`,
     /// VA `0x4bb1e0`): enqueue it and mark the download running, so a
     /// START press only re-arms the face until the transfer completes.
-    /// `true` when the queue took the song; the transfer itself is
-    /// slice 4, so nothing leaves the machine yet.
+    /// `true` when the queue took the song; the per-frame transfer
+    /// pump fetches it from the configured source (§4).
     pub fn begin_music_download(&mut self, song_id: u16) -> bool {
         let queued = self.music_download.enqueue(song_id);
         if queued {
             self.note_waiting_download();
         }
         queued
+    }
+
+    /// Point the download engine at its `Music\` folder and fetch
+    /// source. The session uses the install folder; a guard uses a
+    /// throwaway pair of folders so no game data is touched.
+    pub fn set_music_download_dirs(
+        &mut self,
+        music_dir: std::path::PathBuf,
+        source_dir: Option<std::path::PathBuf>,
+    ) -> &mut Self {
+        self.music_download.set_transfer_dirs(music_dir, source_dir);
+        self
+    }
+
+    /// Advance the queued transfers and stage each promoted chart's
+    /// availability back into the catalog (§4). The session reports the
+    /// returned completions on the wire.
+    #[must_use]
+    pub fn pump_music_downloads(&mut self) -> Vec<MusicDownloadCompletion> {
+        let completions = self.music_download.pump();
+        if !completions.is_empty() {
+            let music_dir = self.music_download.music_dir().to_path_buf();
+            self.set_installed_music(crate::music_install::installed_music_in(&music_dir));
+        }
+        completions
     }
 
     /// Stage the download-in-progress notice: a transfer stands (or the
@@ -2788,8 +2820,8 @@ impl ScreenGame {
         self
     }
 
-    /// Drop one finished transfer from the queue (slice 4's pump owns
-    /// the call; the last drop clears the running flag).
+    /// Drop one finished transfer from the queue (the pump owns the
+    /// call; the last drop clears the running flag).
     pub fn finish_music_download(&mut self, song_id: u16) -> &mut Self {
         self.music_download.finish(song_id);
         self
@@ -2831,10 +2863,7 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel || self.side.is_some() {
             return None;
         }
-        let (x, y) = self.pointer?;
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let slot = channel_row_hit(x, y, shown)?;
-        (top + slot < self.channels.len()).then_some(top + slot)
+        self.channel_scene.hovered(self.pointer)
     }
 
     /// Highlighted channel row (the keyboard Confirm target;
@@ -2845,7 +2874,7 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel {
             return None;
         }
-        self.channels.get(self.highlight).copied()
+        self.channel_scene.highlighted()
     }
 
     /// Channel row whose enter face covers (`x`, `y`) (the mouse
@@ -2859,29 +2888,9 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel {
             return None;
         }
-        if channel_dialog_x_hit(x, y) || channel_scroll_hit(x, y).is_some() {
-            return None;
-        }
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let slot = channel_row_hit(x, y, shown)?;
-        let index = top + slot;
-        if index >= self.channels.len() {
-            return None;
-        }
-        if !channel_face_hit(x, y, slot) {
-            return None;
-        }
-        let channel = self.channels.get(index)?;
-        if !channel.active {
-            return None;
-        }
-        // A slash draft consumes the click instead of entering
-        // (the click path takes it); peek here so the query stays
-        // side-effect free.
-        if self.channel_slash_command() != SlashCommand::Empty {
-            return None;
-        }
-        self.channels.get(index).copied()
+        // The draft stays owned here; the query only peeks at it.
+        let draft_busy = self.channel_slash_command() != SlashCommand::Empty;
+        self.channel_scene.enter_at(x, y, draft_busy)
     }
 
     /// Board control under the pointer, through the same staged
@@ -2902,60 +2911,20 @@ impl ScreenGame {
         planet_action_at(placements, x, y)
     }
 
-    /// Channel dialog click: the bnd-pinned X button rect
-    /// (541,151)-(589,189) closes the dialog back to the bare planet
-    /// board (verified native close click (577,171); `docs/planet.md`),
-    /// otherwise a click inside a pinned row rect highlights the
-    /// entry and advances like Confirm while the draft is action-free
-    /// (slash drafts consume the click instead of starting).
-    /// Step the channel list-top offset one row toward `scroll`,
-    /// clamped to `[0, len - shown]`: the scroll-arrow path. The exe
-    /// scrollbar owns its position (`this+0xb8`, clamped
-    /// `[0, max-page]` in `0x50ec20`, file `0x10ec20`) and the arrow
-    /// zones (mouse arm `0x50e8d0`, files `0x10ea1a`/`0x10ea6b`)
-    /// step it by `∓1` through `0x50ebf0` (file `0x10ebf0`),
-    /// forwarding each delta to the list top (`CDChannelInfo+0x184`,
-    /// handlers `0x4749a0`/`0x4749f0`); the highlight is never
-    /// touched on that path. Observed with GNU objdump 2.47 slices
-    /// plus Python 3.14.10 byte scans over the read-only 7.55 copy.
-    fn step_channel_list(&mut self, scroll: ChannelScroll) {
-        let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
-        match scroll {
-            ChannelScroll::Up => {
-                self.channel_top = self.channel_top.saturating_sub(1);
-            }
-            ChannelScroll::Down => {
-                self.channel_top = (self.channel_top + 1).min(max_top);
-            }
-        }
-    }
-
+    /// Channel dialog click: the scene resolves the X close, the
+    /// scroll arrows, the row highlight, and the enter-face target
+    /// (#259). This seam still owns the flow steps and the shared
+    /// slash draft: a face click landing while a draft holds it is
+    /// reported back so the draft is consumed exactly once.
     fn click_channel_row(&mut self, x: i32, y: i32) {
-        if channel_dialog_x_hit(x, y) {
-            self.enter(Screen::Planet);
-            return;
-        }
-        // Scroll-column arrows scroll the list top (`step_channel_list`);
-        // the bar body between them answers nothing to a click.
-        if let Some(scroll) = channel_scroll_hit(x, y) {
-            self.step_channel_list(scroll);
-            return;
-        }
-        // Viewport-relative bands: the visible slot maps back through
-        // the stored list top (see `channel_viewport_from_top`).
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let Some(slot) = channel_row_hit(x, y, shown) else {
-            return;
-        };
-        let index = top + slot;
-        self.highlight = index;
-        // Only the Korean-text enter face enters Room (ticket #56);
-        // a body click moves the highlight and leaves the dialog up.
-        if channel_face_hit(x, y, slot)
-            && self.take_channel_slash() == SlashCommand::Empty
-            && self.channels.get(index).map(|c| c.active).unwrap_or(false)
-        {
-            self.enter(Screen::Room);
+        let draft_busy = self.channel_slash_command() != SlashCommand::Empty;
+        match self.channel_scene.press(x, y, draft_busy) {
+            ChannelPress::Close => self.enter(Screen::Planet),
+            ChannelPress::Enter => self.enter(Screen::Room),
+            ChannelPress::ConsumeDraft => {
+                let _ = self.take_channel_slash();
+            }
+            ChannelPress::Noop => {}
         }
     }
 
@@ -3187,9 +3156,7 @@ impl ScreenGame {
         if self.waiting.is_none() {
             return false;
         }
-        let row = select_music_rows(&self.catalog_songs, self.select_filter)
-            .get(index)
-            .copied();
+        let row = self.select_rows().get(index).copied();
         let Some(row) = row else {
             return false;
         };
@@ -3209,20 +3176,19 @@ impl ScreenGame {
     /// song through [`Self::pick_select_music_row`]. Only the room
     /// master sees the dialog (paint gates it) and only masters pick
     /// — the `MUSELECT 0x16200003` click handler drops non-master
-    /// clicks (file `0xb2622`). The three filter columns narrow the
-    /// table first (ticket #273, [`Self::click_select_filter`]). The
-    /// rest of the chrome (pager, search, chosung) has no evidenced
-    /// click behavior, so it stays display-only and BACK stays
-    /// reachable. The OK button is the other evidenced exception
-    /// (ticket #232): with a staged pick it confirms and closes the
-    /// dialog so START can proceed. `true` consumed.
+    /// clicks (file `0xb2622`). The filter columns (#273), OK (#232),
+    /// mode switch, help sheets, pager and search (#285,
+    /// [`Self::click_select_chrome`]) each answer on their staged
+    /// `.bnd` rect; other chrome stays display-only and BACK stays
+    /// reachable. `true` consumed.
     fn click_select_music(&mut self, x: i32, y: i32) -> bool {
         if !self.is_room_master() || self.select_music_art.is_none() {
             return false;
         }
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let rows = self.select_rows();
         if let Some(index) = select_row_hit(x, y, rows.len()) {
-            return self.pick_select_music_row(index);
+            let page_row = self.select_page.saturating_mul(SELECT_VISIBLE_ROWS);
+            return self.pick_select_music_row(page_row.saturating_add(index));
         }
         // Dialog OK confirms the staged pick (ticket #232): the
         // BND-paired OK button (Dialog_SelectMusic.bnd rect [1])
@@ -3240,7 +3206,85 @@ impl ScreenGame {
                 return true;
             }
         }
+        if self.click_select_chrome(x, y) {
+            return true;
+        }
         self.click_select_filter(x, y)
+    }
+
+    /// Search-result rows the dialog currently shows: the three
+    /// filter columns first (#273), then the submitted search query
+    /// (#285). Typing alone never narrows the table — the SERACH
+    /// button submits the draft, as in the exe's search arm.
+    fn select_rows(&self) -> Vec<SelectMusicRow<'_>> {
+        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let Some((field, query)) = self.select_search_query.as_ref() else {
+            return rows;
+        };
+        if query.trim().is_empty() {
+            return rows;
+        }
+        let needle = query.trim().to_lowercase();
+        rows.into_iter()
+            .filter(|row| {
+                let text = match field {
+                    SelectSearchField::Title => &row.song.title,
+                    SelectSearchField::Artist => &row.song.artist,
+                };
+                text.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    /// Chrome actions of the song dialog (#285, `docs/select-chrome.md`).
+    /// Every hit test reads a staged `.bnd` rect, never a literal.
+    /// `true` consumed.
+    fn click_select_chrome(&mut self, x: i32, y: i32) -> bool {
+        let Some(action) = self
+            .select_music_art
+            .as_ref()
+            .and_then(|art| select_chrome_action_at(&art.placements, x, y))
+        else {
+            return false;
+        };
+        match action {
+            SelectChromeAction::Mode(mode) => {
+                self.select_mode = mode;
+                self.select_help = SelectHelpSheet::None;
+            }
+            SelectChromeAction::Help(sheet) => self.select_help = sheet,
+            SelectChromeAction::Reorder(_) => {
+                // Exe arms VA `0x43e8bd`/`0x43e8f9` reorder a *playlist*
+                // row; the result tab disables both buttons (VA
+                // `0x43e52d`/`0x43e550`), which is the tab we stage.
+            }
+            SelectChromeAction::Page(step) => {
+                let pages = self
+                    .select_rows()
+                    .len()
+                    .div_ceil(SELECT_VISIBLE_ROWS)
+                    .max(1);
+                self.select_page = match step {
+                    SelectPagerStep::Previous => self.select_page.saturating_sub(1),
+                    SelectPagerStep::Next => (self.select_page + 1).min(pages - 1),
+                };
+            }
+            SelectChromeAction::SearchField(field) => self.select_search_field = field,
+            SelectChromeAction::Search => {
+                let query = self.select_search_draft.trim().to_owned();
+                self.select_search_query =
+                    (!query.is_empty()).then_some((self.select_search_field, query));
+                self.select_page = 0;
+            }
+            SelectChromeAction::SearchIndex(_index) => {
+                // Chosung key grid: the `+0x680` keyed filter rebuild
+                // (VA `0x444630`, key names at VA `0x6454d8`) is its own
+                // slice; the inventory pins every button in
+                // `docs/select-chrome.md`. No invented key here.
+                return false;
+            }
+        }
+        true
     }
 
     /// Song-dialog filter columns (ticket #273): a click on a
@@ -3266,6 +3310,49 @@ impl ScreenGame {
     #[must_use]
     pub fn select_filter(&self) -> SelectMusicFilter {
         self.select_filter
+    }
+
+    /// Live selection panel (`SongSelect` on open).
+    #[must_use]
+    pub fn select_mode(&self) -> SelectMusicMode {
+        self.select_mode
+    }
+
+    /// Help sheet currently painted (`None` on open).
+    #[must_use]
+    pub fn select_help_sheet(&self) -> SelectHelpSheet {
+        self.select_help
+    }
+
+    /// Zero-based result page the pager shows.
+    #[must_use]
+    pub fn select_page(&self) -> usize {
+        self.select_page
+    }
+
+    /// Column the next SERACH press applies to.
+    #[must_use]
+    pub fn select_search_field(&self) -> SelectSearchField {
+        self.select_search_field
+    }
+
+    /// Text currently in the dialog's search edit box.
+    #[must_use]
+    pub fn select_search_draft(&self) -> &str {
+        &self.select_search_draft
+    }
+
+    /// Append one typed character to the dialog's search edit box.
+    /// The open dialog owns keyboard text; chat waits until it closes.
+    pub fn push_select_search_char(&mut self, typed: char) {
+        if !typed.is_control() {
+            self.select_search_draft.push(typed);
+        }
+    }
+
+    /// Erase the last search-draft character (Backspace).
+    pub fn delete_select_search_char(&mut self) {
+        self.select_search_draft.pop();
     }
     /// Whether a click hits a staged Waiting confirm button
     /// (START/READY ids only; art-less clicks land nowhere — no pinned
@@ -3314,7 +3401,7 @@ impl ScreenGame {
             if self.select_music_art.is_none() {
                 // A reopened dialog starts unfiltered, like the exe's
                 // ctor sentinels (VAs `0x43d324`/`0x43d331`/`0x43d33e`).
-                self.select_filter = SelectMusicFilter::ALL;
+                self.reset_select_chrome();
                 if let Some(cached) = self.select_music_art_cache.clone() {
                     self.select_music_art = Some(cached);
                 } else {
@@ -3703,10 +3790,23 @@ impl ScreenGame {
             placements,
             figures,
         };
-        self.select_filter = SelectMusicFilter::ALL;
+        self.reset_select_chrome();
         self.select_music_art_cache = Some(art.clone());
         self.select_music_art = Some(art);
         self
+    }
+
+    /// Opening state of the song dialog's chrome: song panel, no help
+    /// sheet, first page, empty search draft (exe ctor VAs
+    /// `0x43d324`/`0x43d331`/`0x43d33e` plus the empty edit box).
+    fn reset_select_chrome(&mut self) {
+        self.select_filter = SelectMusicFilter::ALL;
+        self.select_mode = SelectMusicMode::SongSelect;
+        self.select_help = SelectHelpSheet::None;
+        self.select_page = 0;
+        self.select_search_field = SelectSearchField::Title;
+        self.select_search_draft.clear();
+        self.select_search_query = None;
     }
 
     /// Staged select-music catalog songs (catalog order, dead slots
@@ -4202,11 +4302,7 @@ impl ScreenGame {
         // Channel scrollbar drag arm (#174): press on the bar body
         // (track between the two arrows) sets the drag capture;
         // arrows still click-step via click_dispatch.
-        if self.flow.current() == Screen::Channel
-            && (573..=593).contains(&x)
-            && (233..=364).contains(&y)
-        {
-            self.channel_drag = true;
+        if self.flow.current() == Screen::Channel && self.channel_scene.arm_drag(x, y) {
             return;
         }
         // Every other scene keeps its down-dispatch (no press-split
@@ -4224,7 +4320,7 @@ impl ScreenGame {
             self.planet_pointer_up(x, y);
         }
         if self.flow.current() == Screen::Channel {
-            self.channel_drag = false;
+            self.channel_scene.end_drag();
         }
     }
 
@@ -5960,28 +6056,28 @@ impl ScreenGame {
     /// 2013/2014/2019 rows paint below the list in both cases; empty
     /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
-        match (self.scene_art(Screen::Channel), self.channels.is_empty()) {
-            (Some(art), false) => {
-                paint_channel_scene(
-                    frame,
-                    &self.channels,
-                    self.channel_top,
-                    self.highlight,
+        match (
+            self.scene_art(Screen::Channel),
+            self.channel_scene.rows().is_empty(),
+        ) {
+            (Some(art), false) => self.channel_scene.paint(
+                frame,
+                Some(art),
+                self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
                     art,
-                    self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
-                        art,
-                        promo_index: self.planet_board.planet_promo_carousel.index(),
-                    }),
-                    self.hovered_channel_row(),
-                );
-            }
+                    promo_index: self.planet_board.planet_promo_carousel.index(),
+                }),
+                self.hovered_channel_row(),
+            ),
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
-            (None, false) => {
-                paint_channel_list(frame, &self.channels, self.channel_top, self.highlight)
-            }
+            (None, false) => self.channel_scene.paint(frame, None, None, None),
             (None, true) => paint_screen(frame, Screen::Channel),
         }
-        paint_channel_chat(frame, self.channel_chat.history(), self.channels.len());
+        paint_channel_chat(
+            frame,
+            self.channel_chat.history(),
+            self.channel_scene.rows().len(),
+        );
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -6200,23 +6296,57 @@ impl ScreenGame {
             return;
         };
         let slots = SelectTextSlots::from_placements(&art.placements);
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
-        paint_select_text(
-            frame,
-            &slots,
-            &rows,
-            self.selected_music,
-            self.select_music_notice,
-        );
+        let rows = self.select_rows();
+        let page_start = self.select_page.saturating_mul(SELECT_VISIBLE_ROWS);
+        let visible = rows.get(page_start..).unwrap_or(&[]);
+        let search_banner = self
+            .select_search_query
+            .as_ref()
+            .map(|(field, query)| super::side::select_search_status(*field, query));
+        let status = self.select_music_notice.or(search_banner.as_deref());
+        let live = SelectTextLive {
+            page: self.select_page,
+            status,
+        };
+        paint_select_text(frame, &slots, visible, self.selected_music, live);
+    }
+
+    /// Which staged bodies the current song-dialog frame paints (#285).
+    /// The mode switch shows one of the two level-column families; the
+    /// `?` buttons show at most one help sheet. Every rect still comes
+    /// from `.bnd` staging.
+    fn select_sprite_visible(&self, placement: &ScenePlacement) -> bool {
+        let Some(sprite) = placement.sprite.as_deref() else {
+            return true;
+        };
+        if crate::staging::SELECT_MUSIC_RANDOM_SPRITES.contains(&sprite) {
+            return self.select_mode == SelectMusicMode::Random;
+        }
+        if crate::staging::SELECT_MUSIC_LEVEL_SPRITES.contains(&sprite) {
+            return self.select_mode == SelectMusicMode::SongSelect;
+        }
+        if crate::staging::SELECT_MUSIC_PAINT_GATED_SPRITES.contains(&sprite) {
+            return self.select_help
+                == match sprite {
+                    crate::staging::SELECT_MUSIC_LABEL_GUIDE => SelectHelpSheet::Label,
+                    crate::staging::SELECT_MUSIC_SEARCH_GUIDE => SelectHelpSheet::Search,
+                    crate::staging::SELECT_MUSIC_LIST_GUIDE => SelectHelpSheet::List,
+                    _ => SelectHelpSheet::None,
+                };
+        }
+        true
     }
 
     /// Layer staged song-select dialog figures over the waiting seats.
-    /// Placements without a loaded figure paint nothing.
+    /// Placements without a loaded figure or gated out by the current
+    /// mode/help state paint nothing.
     fn paint_select_music_art(&self, frame: &mut Frame<'_>) {
         let Some(art) = self.select_music_art.as_ref() else {
             return;
         };
-        art.paint_overlay(frame);
+        art.paint_backdrop_live(frame, Screen::Waiting, |placement| {
+            self.select_sprite_visible(placement)
+        });
     }
 
     /// Loading gate: staged art, then title–artist. The OPEN progress
@@ -6548,7 +6678,9 @@ impl GameLoop for ScreenGame {
 
     fn text_input(&mut self, text: &str) {
         for typed in text.chars() {
-            if self.flow.current() == Screen::Waiting {
+            if self.select_music_dialog_open() {
+                self.push_select_search_char(typed);
+            } else if self.flow.current() == Screen::Waiting {
                 self.push_chat_char(typed);
             } else {
                 self.push_lobby_char(typed);
@@ -6557,7 +6689,9 @@ impl GameLoop for ScreenGame {
     }
 
     fn delete_text(&mut self) {
-        if self.flow.current() == Screen::Waiting {
+        if self.select_music_dialog_open() {
+            self.delete_select_search_char();
+        } else if self.flow.current() == Screen::Waiting {
             self.delete_chat_char();
         } else {
             self.delete_lobby_char();
@@ -6570,14 +6704,8 @@ impl GameLoop for ScreenGame {
         // arrival order through the press/release helpers.
         if let Some((x, y)) = snapshot.pointer() {
             self.pointer = Some((x, y));
-            if self.flow.current() == Screen::Channel && self.channel_drag {
-                let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
-                let track_top = 233i32;
-                let track_bot_origin = 364i32;
-                let frac = ((y.clamp(track_top, track_bot_origin) - track_top) as f32
-                    / (track_bot_origin - track_top) as f32)
-                    .clamp(0.0, 1.0);
-                self.channel_top = (frac * max_top as f32).round() as usize;
+            if self.flow.current() == Screen::Channel {
+                self.channel_scene.drag_to(y);
             }
         }
         for edge in snapshot.edges() {
@@ -7336,26 +7464,26 @@ mod game_tests {
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         // Keys never disturb an armed selection or a scrolled top either.
         game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.top, 1);
         for _ in 0..4 {
             game.menu_key(MenuKey::Down, true);
             game.menu_key(MenuKey::Up, true);
         }
-        assert_eq!(game.highlight, 2);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 2);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
         // Empty list never moves.
         let mut bare = ScreenGame::new();
         bare.lane_key(0, true);
         bare.click_planet(136, 88);
         bare.menu_key(MenuKey::Down, true);
-        assert_eq!(bare.highlight, 0);
+        assert_eq!(bare.channel_scene.highlight, 0);
     }
 
     #[test]
@@ -7369,10 +7497,10 @@ mod game_tests {
         // Ticket #189: Up/Down are rig-pinned no-ops, so the highlight
         // Confirm enters stays where the dialog opened it (row 0).
         game.menu_key(MenuKey::Down, true);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
     }
 
     fn waiting_game_with_button(id: &str, rect: Rect) -> ScreenGame {
@@ -7416,7 +7544,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -7431,7 +7559,7 @@ mod game_tests {
         game.click_planet(136, 88);
         assert_eq!(game.channel_enter_at(524, 297), None);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 297));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7444,7 +7572,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -7748,10 +7876,10 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 290));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7763,7 +7891,7 @@ mod game_tests {
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         game.ingest_snapshot(&InputSnapshot::click_at(700, 152));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7778,13 +7906,13 @@ mod game_tests {
         game.click_planet(136, 88);
         // y = 240 sits inside row 0's band (224-275).
         game.ingest_snapshot(&InputSnapshot::click_at(583, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(100, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(700, 290));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7806,8 +7934,8 @@ mod game_tests {
         // the list-top offset while the highlight stays put.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7818,8 +7946,8 @@ mod game_tests {
         // clamps at 0 and the highlight stays put.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7832,16 +7960,16 @@ mod game_tests {
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7853,9 +7981,9 @@ mod game_tests {
         // to the slot, files `0x7459a`/`0x74678`).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.top, 1);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7870,13 +7998,13 @@ mod game_tests {
         // carried selection rides a mouse row click instead of key steps.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.top, 1);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.set_channels(six_channels());
-        assert_eq!(game.channel_top, 0);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
     }
 
     #[test]
@@ -7928,8 +8056,8 @@ mod game_tests {
         // The dialog carries no pager readout (NO PAGER).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 320));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7940,11 +8068,14 @@ mod game_tests {
         // OPEN scale over track y233-409).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
-        assert!(game.channel_drag, "press on bar body sets drag capture");
+        assert!(
+            game.channel_scene.dragging,
+            "press on bar body sets drag capture"
+        );
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
         assert_eq!(
-            game.channel_top, 2,
+            game.channel_scene.top, 2,
             "motion drags the list top to the bottom"
         );
         assert_eq!(game.screen(), Screen::Channel);
@@ -7971,7 +8102,10 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 364));
-        assert_eq!(game.channel_top, 3, "motion to track bottom sets top 3");
+        assert_eq!(
+            game.channel_scene.top, 3,
+            "motion to track bottom sets top 3"
+        );
     }
 
     #[test]
@@ -7980,12 +8114,15 @@ mod game_tests {
         // release no longer moves the list top.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
-        assert!(game.channel_drag);
+        assert!(game.channel_scene.dragging);
         game.ingest_snapshot(&InputSnapshot::release_at(583, 320));
-        assert!(!game.channel_drag, "release clears drag capture");
-        let before = game.channel_top;
+        assert!(!game.channel_scene.dragging, "release clears drag capture");
+        let before = game.channel_scene.top;
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
-        assert_eq!(game.channel_top, before, "motion after release is ignored");
+        assert_eq!(
+            game.channel_scene.top, before,
+            "motion after release is ignored"
+        );
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7995,7 +8132,10 @@ mod game_tests {
         // and never arms the bar-body drag capture.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 419));
-        assert!(!game.channel_drag, "arrow press does not capture drag");
+        assert!(
+            !game.channel_scene.dragging,
+            "arrow press does not capture drag"
+        );
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8011,7 +8151,7 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 240));
         assert_eq!(game.hovered_channel_row(), None);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8027,11 +8167,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 400));
         assert_eq!(game.hovered_channel_row(), Some(5));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -11324,49 +11464,6 @@ mod game_tests {
         assert_eq!(game.take_gift_list_request(), None);
     }
 
-    /// Highlighted channel row (the keyboard Confirm target).
-    #[test]
-    fn highlighted_channel_names_the_confirm_target() {
-        let mut game = ScreenGame::new();
-        assert_eq!(game.highlighted_channel(), None);
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        assert_eq!(game.screen(), Screen::Channel);
-        assert_eq!(
-            game.highlighted_channel().map(|row| row.channel_id),
-            Some(2)
-        );
-        // Ticket #189: Up/Down are rig-pinned no-ops, so the Confirm
-        // target stays on the opening row (id 2), never advancing to 9.
-        game.menu_key(MenuKey::Down, true);
-        assert_eq!(
-            game.highlighted_channel().map(|row| row.channel_id),
-            Some(2)
-        );
-    }
-
-    /// Mouse entry target: only an enter-face click names its row.
-    #[test]
-    fn channel_enter_at_names_only_face_clicks() {
-        let mut game = ScreenGame::new();
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        // Row 0 enter face (ticket #56: (502,236)-(546,257)).
-        assert_eq!(
-            game.channel_enter_at(524, 246).map(|row| row.channel_id),
-            Some(2)
-        );
-        // Row bodies highlight only, never enter.
-        assert_eq!(game.channel_enter_at(300, 240), None);
-        assert_eq!(game.channel_enter_at(300, 290), None);
-        // Off the rows entirely.
-        assert_eq!(game.channel_enter_at(10, 10), None);
-        // The X chrome closes instead of entering.
-        assert_eq!(game.channel_enter_at(577, 171), None);
-    }
-
     /// Minimal sprite55 body (mirrors the avatar-figure builders): a
     /// 1x1 red pixel with a black colorkey.
     fn worn_test_sprite() -> Vec<u8> {
@@ -13994,76 +14091,6 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_rows_ink_at_measured_native_tops() {
-        // Row-text anchors on a native frame, scaled like staged
-        // placements elsewhere. Re-measured 2026-11-11 with the
-        // pinned `Ch. NN` fallback label (#93): the Gulimche 'C'
-        // glyph tops sit 8 px above the old digit-led stand-in
-        // (224+50·index was 232+50·index).
-        let mut game = ScreenGame::new();
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        assert_eq!(game.screen(), Screen::Channel);
-        let mut buf = vec![0u32; 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert!(white_near(&buf, 800, 600, (200, 224)));
-        assert_eq!(buf[240 * 800 + 230], pack_xrgb(19, 20, 21));
-        assert_eq!(buf[229 * 800 + 350], pack_xrgb(230, 227, 230));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (502, 236),
-            (24, 12),
-            pack_xrgb(150, 148, 151)
-        ));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (200, 282),
-            (64, 9),
-            pack_xrgb(0x70, 0x70, 0x70)
-        ));
-    }
-
-    #[test]
-    fn channel_row_hit_maps_the_exe_pinned_rects() {
-        // Exe-pinned slot rects (CStatePlanet dialog+0x94):
-        // (216,224,572,275), (216,275,572,324), (216,324,572,375),
-        // (216,375,572,436) — left/top inclusive, right/bottom
-        // exclusive. x = 300 sits inside every band's x range.
-        assert_eq!(channel_row_hit(300, 224, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 274, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 275, 10), Some(1));
-        assert_eq!(channel_row_hit(300, 282, 10), Some(1));
-        assert_eq!(channel_row_hit(300, 375, 10), Some(3));
-        assert_eq!(channel_row_hit(300, 435, 10), Some(3));
-        assert_eq!(channel_row_hit(300, 436, 10), None);
-        assert_eq!(channel_row_hit(300, 100, 10), None);
-        assert_eq!(channel_row_hit(300, 732, 10), None);
-        assert_eq!(channel_row_hit(300, 240, 0), None);
-        // Issue #29: the y band alone is not a hit — x must sit
-        // inside the pinned rect too. The scroll track (x573-593)
-        // and the dialog margins share the bands' y range.
-        assert_eq!(channel_row_hit(583, 240, 10), None);
-        assert_eq!(channel_row_hit(100, 240, 10), None);
-        assert_eq!(channel_row_hit(700, 290, 10), None);
-        assert_eq!(channel_row_hit(216, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(571, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(572, 240, 10), None);
-    }
-
-    #[test]
     fn bound_room_panels_paint_numbered_rows() {
         // Live Room stages bound panels yet shows no row ink: narrow
         // whether the panel path drops rows when data is present.
@@ -14147,11 +14174,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         // Ticket #56: the face of visible slot 0 enters; the
         // viewport maps it back to row 2.
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -14970,6 +14997,325 @@ mod game_tests {
         assert_eq!(game.apply_room_team_changed(&wide), None);
     }
 
+    /// Synthetic `.bnd` placements for one chrome control each. The
+    /// ids and hit tests are the real ones; the fixture rects keep the
+    /// guards independent of installed game data (CI arm).
+    fn select_chrome_placements() -> Vec<ScenePlacement> {
+        const IDS: [&str; 11] = [
+            "IDC_BUTTON_DSMUSIC_MUISCSELECT",
+            "IDC_BUTTON_DSMUSIC_RANDOMSELECT",
+            "IDC_BUTTON_DSMUSIC_LABELQUESTION",
+            "IDC_BUTTON_DSMUSIC_SEARCHQUESTION",
+            "IDC_BUTTON_DSMUSIC_LEFT",
+            "IDC_BUTTON_DSMUSIC_RIGHT",
+            "IDC_BUTTON_DSMUSIC_UP",
+            "IDC_BUTTON_DSMUSIC_DOWN",
+            "IDC_BUTTON_DSMUSIC_SEARCH_TITLE",
+            "IDC_BUTTON_DSMUSIC_SEARCH_ARTIST",
+            "IDC_BUTTON_DSMUSIC_SERACH",
+        ];
+        IDS.iter()
+            .enumerate()
+            .map(|(index, id)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 20,
+                    y: 20 + i32::try_from(index * 30).unwrap_or(0),
+                    w: 30,
+                    h: 20,
+                },
+            })
+            .collect()
+    }
+
+    /// Click a synthetic chrome placement by its inventory index.
+    fn click_chrome(game: &mut ScreenGame, index: usize) {
+        let y = 20 + i32::try_from(index * 30).unwrap_or(0);
+        game.ingest_snapshot(&InputSnapshot::click_at(35, y + 10));
+    }
+
+    /// Gated sprite bodies at unique origins, one solid pixel each, so
+    /// a paint guard can tell which family the dialog shows.
+    fn gated_select_art() -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
+        const GATED: [(&str, &str); 4] = [
+            (
+                "IDC_IMAGE_DSMUSIC_STEP1_ALL",
+                "SelectMusic_Btn_Step1_all.ojs",
+            ),
+            ("IDC_IMAGE_DSMUSIC_RANDOM1_BG", "SelectMusic_Random1_BG.ojs"),
+            (
+                "IDC_IMAGE_DSMUSIC_LABELGUIDIMG",
+                "SelectMusic_LabelGuidImg.ojs",
+            ),
+            (
+                "IDC_IMAGE_DSMUSIC_SEARCHGUIDIMG",
+                "SelectMusic_SearchGuidImg.ojs",
+            ),
+        ];
+        let colors: [[u8; 2]; 4] = [[0x00, 0x1F], [0xE0, 0x00], [0xF8, 0x00], [0x00, 0xF8]];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (index, ((id, sprite), color)) in GATED.iter().zip(colors).enumerate() {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: Some((*sprite).to_owned()),
+                rect: Rect {
+                    x: 20 + i32::try_from(index * 30).unwrap_or(0),
+                    y: 420,
+                    w: 12,
+                    h: 12,
+                },
+            });
+            figures.insert((*sprite).to_owned(), solid_test_figure(color));
+        }
+        (placements, figures)
+    }
+
+    #[test]
+    fn a_mode_switch_click_paints_the_random_panel_instead_of_the_level_buttons() {
+        // docs/select-chrome.md, live chain: `main.rs::run_play` ->
+        // `stage_session_catalog` -> MUSELECT -> `load_select_music_scene`
+        // -> `click_waiting` -> `click_select_music` ->
+        // `click_select_chrome` -> `paint_select_music_art` ->
+        // `SceneArt::paint_backdrop_live`. The rects are a synthetic
+        // stand-in for the bound `.bnd` slots (seam: no game data).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let (gated, figures) = gated_select_art();
+        placements.extend(gated);
+        game.load_select_music_scene(placements, figures);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(ink_near(
+            &before,
+            800,
+            600,
+            (20, 420),
+            (12, 12),
+            pack_xrgb(0x00, 0xC0, 0x00)
+        ));
+        assert_eq!(game.select_mode(), SelectMusicMode::SongSelect);
+
+        click_chrome(&mut game, 1);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_mode(), SelectMusicMode::Random);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (50, 420),
+            (12, 12),
+            pack_xrgb(0x00, 57, 0x00)
+        ));
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (20, 420),
+            (12, 12),
+            pack_xrgb(0x00, 0xC0, 0x00)
+        ));
+    }
+
+    #[test]
+    fn a_help_button_click_shows_its_guide_sheet_and_hides_the_other() {
+        // Same live chain as the mode guard; the help arms are VA
+        // `0x441a06`/`0x441a0f` and helper VA `0x44f800`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let (gated, figures) = gated_select_art();
+        placements.extend(gated);
+        game.load_select_music_scene(placements, figures);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::None);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &before,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+
+        click_chrome(&mut game, 2);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Label);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+        click_chrome(&mut game, 3);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Search);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (110, 420),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+    }
+
+    #[test]
+    fn a_pager_press_moves_the_result_page_and_inks_the_new_caption() {
+        // Live chain: MUSELECT -> `load_select_music_scene` ->
+        // `click_select_music` -> `click_select_chrome` -> `select_rows`
+        // -> `paint_select_music_text` -> `select_pager_caption`. The
+        // LEFT/RIGHT arms are VA `0x43e303`/`0x43e3e3` in the pager
+        // jump table, clamped by `dialog+0x6b4`/`+0x6b8`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+        assert_eq!(game.select_page(), 0);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+
+        click_chrome(&mut game, 5);
+        assert_eq!(game.select_page(), 1);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &before,
+                800,
+                Rect {
+                    x: 669,
+                    y: 390,
+                    w: 54,
+                    h: 13
+                }
+            ),
+            rect_pixels(
+                &after,
+                800,
+                Rect {
+                    x: 669,
+                    y: 390,
+                    w: 54,
+                    h: 13
+                }
+            ),
+            "the pager caption follows the page"
+        );
+        click_chrome(&mut game, 4);
+        assert_eq!(game.select_page(), 0);
+        for _ in 0..12 {
+            click_chrome(&mut game, 5);
+        }
+        assert_eq!(game.select_page(), 4, "the pager clamps at the last page");
+    }
+
+    #[test]
+    fn a_search_submit_narrows_the_table_by_title_or_artist() {
+        // Same chain as the pager guard; SEARCH_TITLE/ARTIST set the
+        // field (`+0x188`, VAs `0x43e92f`/`0x43e957`) and the SERACH
+        // button submits the typed draft (VA `0x44195e`).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+        let blank = paint_waiting_frame(&mut game, 800, 600);
+        game.text_input("Title03");
+        game.text_input("x");
+        game.delete_text();
+        assert_eq!(game.select_search_draft(), "Title03");
+        assert_eq!(
+            select_music_rows(game.select_songs(), game.select_filter()).len(),
+            45
+        );
+        click_chrome(&mut game, 10);
+        assert_eq!(game.select_filter(), SelectMusicFilter::ALL);
+        assert_eq!(game.select_page(), 0);
+
+        click_chrome(&mut game, 8);
+        assert_eq!(game.select_search_field(), SelectSearchField::Title);
+        click_chrome(&mut game, 10);
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &buf,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            rect_pixels(
+                &blank,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            "the search banner inks the status line"
+        );
+        click_chrome(&mut game, 9);
+        game.text_input("Other");
+        click_chrome(&mut game, 10);
+        assert_eq!(game.select_search_field(), SelectSearchField::Artist);
+        // The draft appended to "Title03" is "Title03Other", so no
+        // row matches: the artist column replaces the search target,
+        // not the text (the edit box is one draft in the exe).
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &frame,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            rect_pixels(
+                &buf,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            )
+        );
+    }
+
     #[test]
     fn picked_select_row_highlights_its_title() {
         // The committed row reads back on the table: only its title
@@ -15077,6 +15423,55 @@ mod game_tests {
             Some(757),
             "the refused row leaves the staged song alone"
         );
+    }
+
+    #[test]
+    fn a_promoted_chart_makes_its_dialog_row_selectable_again() {
+        // Live chain: `session::OnlineSession::poll_music_downloads` ->
+        // `ScreenGame::pump_music_downloads` -> `MusicDownload::pump`
+        // (Temp promote) -> `ScreenGame::set_installed_music` -> the
+        // same MUSELECT -> `click_select_music` ->
+        // `pick_select_music_row` path the refusal guard walks. The
+        // folders and chart bytes are synthetic (CI-safe).
+        let root = std::env::temp_dir().join("recomp2jam-promote-selectable");
+        let source = root.join("source");
+        let music = root.join("Music");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&source).expect("source dir");
+        std::fs::create_dir_all(&music).expect("music dir");
+        std::fs::write(source.join("o2ma770.ojn"), b"synthetic").expect("source chart");
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game.set_music_download_dirs(music.clone(), Some(source));
+        game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+        let blob = lanking_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        walk_to_waiting(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.select_music_notice(),
+            Some(SELECT_NOT_DOWNLOADED_NOTICE),
+            "the missing chart refuses the row before the transfer"
+        );
+        assert!(!game.has_pending_music_send());
+
+        assert!(game.begin_music_download(770));
+        let completions = game.pump_music_downloads();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].file_name, "o2ma770.ojn");
+        assert!(music.join("o2ma770.ojn").exists());
+        assert!(!game.music_download().is_running());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.take_music_send().map(|pick| pick.music_id),
+            Some(770),
+            "the promoted chart makes the row pickable"
+        );
+        assert_eq!(game.select_music_notice(), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -20758,12 +21153,12 @@ mod game_tests {
         game.open_relay_down_dialog(channels.clone());
         assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
         assert!(
-            game.channels.is_empty(),
+            game.channel_rows().is_empty(),
             "the dialog owns input before the channel list loads"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(400, 365));
         assert_eq!(game.planet_modal(), None, "OK dismisses the dialog");
-        assert_eq!(game.channels, channels, "OK reveals the staged list");
+        assert_eq!(game.channel_rows(), channels, "OK reveals the staged list");
         assert_eq!(game.screen(), Screen::Channel, "exe's post-dialog state");
     }
 }

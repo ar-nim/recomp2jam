@@ -4105,13 +4105,12 @@ mod tests {
     }
 
     #[test]
-    fn song_dialog_mode_and_help_families_stay_hidden_at_stage_time() {
+    fn song_dialog_mode_and_help_families_stage_for_paint_gating() {
         // Live chain: `live_art::stage_select_dialog_art` ->
-        // `stage_dialog` -> `Dialog::hidden_sprites`. The sheet still
-        // names every gated body (the block proof below), so a dropped
-        // gate re-stages the random panel over the level column and the
-        // guide sheets over the table — the pinned reference
-        // `reference-musicselect-4x3.png` shows neither.
+        // `stage_dialog` -> `Dialog::hidden_sprites`. #285 stages all
+        // gated bodies but paints only the active family; #272's
+        // reference frame has song-select mode and no guide sheet.
+        // The block proof below pins that every gated body is named.
         let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
@@ -4127,14 +4126,14 @@ mod tests {
         let art = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default())
             .art
             .expect("select-music dialog stages");
-        for hidden in o2jam_shell::staging::SELECT_MUSIC_HIDDEN_AT_OPEN {
+        for gated in o2jam_shell::staging::SELECT_MUSIC_PAINT_GATED_SPRITES {
             assert!(
-                named.iter().any(|name| name == hidden),
-                "{hidden} must stay named by the block"
+                named.iter().any(|name| name == gated),
+                "{gated} must stay named by the block"
             );
             assert!(
-                !art.figures.contains_key(*hidden),
-                "{hidden} must stage hidden"
+                art.figures.contains_key(*gated),
+                "{gated} must stage for its switch/guide arm"
             );
         }
     }

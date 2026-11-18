@@ -159,9 +159,9 @@ use o2jam_net::{
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
     DownloadProgressChanged, Event, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
     GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, SetRoomArena, SetRoomMusic,
-    StartGame, SubmitScore, SyncMemberMusicStateEvent, UpdateMusicState, WaitingMusicChanged,
-    WireMessage,
+    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, SetDownloadProgress,
+    SetRoomArena, SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent,
+    SyncMusicDownload, UpdateMusicState, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand, StartGateVerdict, StartRequest};
 use o2jam_shell::screens::SideScreen;
@@ -240,6 +240,13 @@ const SESSION_POLL_HEARTBEAT: Duration = Duration::from_millis(250);
 /// exe's waiting scenes ignore the id (it maps to their default arm);
 /// the refusal is what this read honours.
 const START_BROADCAST_COMMAND: u16 = 4011;
+
+/// Optional local mirror of the exe's music FTP host: a folder holding
+/// `o2ma<id>.ojn` charts. Our transport adapter (not an exe setting);
+/// without it the transfer engine stays idle and the real FTP client
+/// remains OPEN (`docs/music-availability.md` §4). Set before boot so
+/// [`OnlineSession::new`] can point the queued downloads at it.
+const MUSIC_SOURCE_ENV: &str = "O2JAM_MUSIC_SOURCE";
 /// 4011 `StartResult::Success` (Memoryer `StartGameEventData`).
 const START_RESULT_SUCCESS: i32 = 0;
 
@@ -544,6 +551,8 @@ impl OnlineSession {
     /// Pair a game with its gateway transport.
     #[must_use]
     pub fn new(game: ScreenGame, gateway: GatewayConnection) -> Self {
+        let mut game = game;
+        configure_music_source(&mut game, std::env::var_os(MUSIC_SOURCE_ENV));
         Self {
             game,
             gateway,
@@ -2760,6 +2769,41 @@ impl OnlineSession {
         }
     }
 
+    /// Report each promoted chart the shell finished this frame: `4038`
+    /// progress (100 %), then `5012` completion (§4's promote leg).
+    /// A fetch still in flight sends nothing and retries next paint.
+    fn poll_music_downloads(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            return;
+        }
+        let member_id = self
+            .joined_room
+            .as_ref()
+            .map(|room| room.member_id)
+            .unwrap_or(0);
+        for completion in self.game.pump_music_downloads() {
+            let progress = SetDownloadProgress {
+                progress: 100,
+                member_id,
+            };
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
+            {
+                tracing::warn!(%source, "download progress send failed");
+            }
+            let announce = SyncMusicDownload {
+                music_id: completion.song_id,
+            };
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::SyncMusicDownload.id(), &announce.encode_body())
+            {
+                tracing::warn!(%source, "music download announce failed");
+            }
+        }
+    }
+
     /// Fold one 4037 frame into its waiting seat: one member's music
     /// state (§2, handler VA `0x559990`, the state landing in the
     /// seat's `+0x217c`), then run the exe's retry arm
@@ -2825,8 +2869,9 @@ impl OnlineSession {
 
     /// The download kick (`docs/music-availability.md` §4): enqueue the
     /// room song and mark the download running, so the START control
-    /// only re-arms its face until the transfer lands. The transfer is
-    /// slice 4; nothing leaves the machine here.
+    /// only re-arms its face until the transfer lands. The per-frame
+    /// pump advances the queue; with no fetch source configured it
+    /// stays queued (§4).
     fn kick_room_song_download(&mut self) {
         let Some(song_id) = self.game.room_music_id() else {
             tracing::warn!("download kick without a staged room song");
@@ -3348,10 +3393,24 @@ impl GameLoop for OnlineSession {
         } else {
             self.poll_lobby_chat();
             self.poll_waiting_chat();
+            self.poll_music_downloads();
         }
         self.poll_tally();
         self.flush_result_wire();
     }
+}
+
+/// Point the transfer engine at the configured local mirror. No
+/// configured source leaves the queue idle: an install without a
+/// mirror never invents a chart file (§4).
+fn configure_music_source(game: &mut ScreenGame, source: Option<std::ffi::OsString>) {
+    let Some(source) = source else {
+        return;
+    };
+    game.set_music_download_dirs(
+        o2jam_shell::music_install::install_music_dir(),
+        Some(std::path::PathBuf::from(source)),
+    );
 }
 
 /// Saturate the hold bonus onto the tick's `i32` tail (PERF-07:
@@ -5629,6 +5688,54 @@ mod session_tests {
         }
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn a_promoted_song_download_reports_progress_completion_and_becomes_ready() {
+        // docs/music-availability.md §4, live chain: `main.rs::run_play`
+        // -> `assemble_online_session` -> `OnlineSession::paint` (Waiting)
+        // -> `poll_music_downloads` -> `ScreenGame::pump_music_downloads`
+        // -> `MusicDownload::pump` (Temp promote) -> `4038`/`5012`.
+        // The source is a synthetic local mirror; no game data or FTP
+        // network is read, and both folders are throwaway.
+        let root = std::env::temp_dir().join("recomp2jam-download-session");
+        let source = root.join("source");
+        let music = root.join("Music");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&source).expect("source dir");
+        std::fs::create_dir_all(&music).expect("music dir");
+        std::fs::write(source.join("o2ma757.ojn"), b"synthetic").expect("source chart");
+
+        let (mut session, server) = joined_waiting_session(startable_room(), |mut stream| {
+            let progress = read_frame(&mut stream);
+            assert_eq!(progress.id, Request::SetDownloadProgress.id());
+            assert_eq!(progress.payload, [100, 0]);
+            let done = read_frame(&mut stream);
+            assert_eq!(done.id, Request::SyncMusicDownload.id());
+            assert_eq!(done.payload, 757u16.to_le_bytes());
+            assert_quiet(&mut stream);
+        });
+        session
+            .game
+            .set_music_download_dirs(music.clone(), Some(source));
+        session
+            .game
+            .set_installed_music(Some(o2jam_file::installed_music(Vec::<String>::new())));
+        assert!(session.game.begin_music_download(757));
+        assert_eq!(session.game.music_state_for(757), MusicState::NoMusic);
+        assert!(!music.join("o2ma757.ojn").exists());
+        for _ in 0..50 {
+            if !session.game.music_download().is_running() {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert!(music.join("o2ma757.ojn").exists(), "chart promoted");
+        assert!(!music.join("Temp").join("o2ma757.ojn").exists());
+        assert_eq!(session.game.music_state_for(757), MusicState::Ready);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

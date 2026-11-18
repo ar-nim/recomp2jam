@@ -137,17 +137,29 @@ fn slot_on_band(band: Rect, template: Rect) -> Rect {
     }
 }
 
+/// Live captions the game stages for one paint (#285): the result
+/// page and an optional status override (a refused pick's notice or
+/// the current search banner).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SelectTextLive<'a> {
+    /// Zero-based page the pager caption names.
+    pub page: usize,
+    /// Text replacing the default search banner, if any.
+    pub status: Option<&'a str>,
+}
+
 /// Paint the dialog's live text over the staged art: tab counts, status
 /// line, pager, then one line per staged row (title, artist, level).
 ///
-/// `notice` replaces the status line while a refused pick's caption is
-/// up (the pinned not-downloaded notice, §3).
+/// `live.status` replaces the status line while a refused pick's
+/// caption is up (the pinned not-downloaded notice, §3), or while a
+/// search is staged. `live.page` is the pager's current page (#285).
 pub(crate) fn paint_select_text(
     frame: &mut Frame<'_>,
     slots: &SelectTextSlots,
     rows: &[SelectMusicRow<'_>],
     picked: Option<SetRoomMusic>,
-    notice: Option<&str>,
+    live: SelectTextLive<'_>,
 ) {
     paint_slot(
         frame,
@@ -164,13 +176,13 @@ pub(crate) fn paint_select_text(
     paint_slot(
         frame,
         slots.status,
-        notice.unwrap_or(select_status_line()),
+        live.status.unwrap_or(select_status_line()),
         select_ink(),
     );
     paint_slot(
         frame,
         slots.pager,
-        &select_pager_caption(rows.len()),
+        &select_pager_caption(rows.len(), live.page),
         select_ink(),
     );
     for (slot, row) in slots.rows.iter().zip(rows) {
@@ -442,7 +454,7 @@ mod tests {
             &slots,
             &rows,
             None,
-            None,
+            SelectTextLive::default(),
         );
         let tabs = Rect {
             x: 356,
