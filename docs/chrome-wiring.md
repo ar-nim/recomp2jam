@@ -70,7 +70,8 @@ Guards: `shop_chrome_sweep_presses_every_staged_control`, `shop_preview_selects_
 | Bag page digits (`LPAGECNT`/`RPAGECNT`) | land nowhere (paint targets; L = current / R = total is ASSUMED) | display-only, labeled stand-in — next: rig capture of a bag-page turn |
 | `ITEMCOMMENT` | lands nowhere (paint target; preview name inks here, ASSUMED) | display-only, labeled stand-in — next: rig capture of a preview press |
 | `ITEMGEM` ×8, `CHECKGEM`/`CHECKMONEY` | staged but blank — the gem/won split of the single parsed price word is unpinned | labeled no-ops — next: file→entry price mapping + rig capture at known prices |
-| `ITEMSHOW` ×8, `MYBAGITEM` ×10 icons | land nowhere (icon paint needs sprite staging, OPEN) | display-only, labeled stand-in — next: sprite-slot→icon mapping |
+| `ITEMSHOW` ×8 | slot-0 shop portrait from `Itemdata_Korea.dat`, painted at the staged 109x81 rects (#363) | live `set_avatar_source` → `paint_shop_item_icons`; `shop_item_cards_paint_slot_zero_portraits_at_staged_itemshow_rects` |
+| `MYBAGITEM` ×10 icons | land nowhere (small slot-1 icon mapping OPEN) | display-only, labeled stand-in — next: slot-1 → 73x57 bag cell mapping |
 | GIRL/BOY, SET/FASHION/ACCESSORY/BEAUTY/INSTRUMENT, SUBMENU ×6, EXTMENU opener + 12 filters | never stage in the live dump (203 placements) — land nowhere by absence | labeled no-ops — next: SendInput sweep if they ever stage |
 | `BAGSORT`, `PLANET_UP`/`DOWN`, `ITEMGIFT` ×8, `GIFTITEM` | stage but record nothing (sort/gift semantics unpinned) | labeled no-ops — next: rig capture / gift send pins (#178 stories 20-21) |
 | TOP100 | absent — no item-shop arm (#181 verdict: music-shop-only `0x1A20007D`); never dispatches here | mis-scoped #178 story 10 → music shop #179 |

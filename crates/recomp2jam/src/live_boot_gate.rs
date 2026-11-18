@@ -371,6 +371,10 @@ mod live_boot_gate_tests {
             "default live boot stages the shop catalog"
         );
         assert!(
+            game.shop_item_portrait_count() > 0,
+            "default live boot resolves slot-0 shop portraits for the goods cards (#363)"
+        );
+        assert!(
             !game.music_shop_visible_rows().is_empty(),
             "default live boot stages the music-shop board from the installed song catalog"
         );

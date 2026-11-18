@@ -819,6 +819,35 @@ fn compose_worn_rows<'a>(
     composed
 }
 
+/// Large shop-portrait filename of one item row (slot 0 of its sprite
+/// table). `None` when the row declares no icon; the two icon slots are
+/// never worn ([`pick_wear_sprites`] starts at slot 2).
+#[must_use]
+pub fn shop_portrait_name(row: &o2jam_file::AvatarItemRow) -> Option<&str> {
+    let (_, name) = row.sprites.get(SHOP_PORTRAIT_SLOT)?;
+    (!name.is_empty()).then_some(name.as_str())
+}
+
+/// Shop portraits for every catalog row that resolves, keyed by item id
+/// so the painter can follow the catalog across pages. One archive parse
+/// serves all rows; unresolved rows simply have no entry.
+#[must_use]
+pub fn load_shop_portraits(archive: &[u8], table: &AvatarItemTable) -> HashMap<u32, AvatarFigure> {
+    let Ok(entries) = o2jam_file::parse_opi(archive) else {
+        return HashMap::new();
+    };
+    table
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let filename = shop_portrait_name(row)?;
+            let entry = find_opi_entry(&entries, &archive_name(filename))?;
+            let figure = sprite55_figure(opi_entry_body(archive, entry).ok()?)?;
+            (!figure.is_empty()).then_some((row.item_id, figure))
+        })
+        .collect()
+}
+
 /// Find one avatar-shop row by id (file order; `None` when unknown).
 /// Single-lookup companion to the bulk map inside [`load_worn_figure`];
 /// side screens list equipment through it.
@@ -2107,6 +2136,11 @@ fn push_fragment(fragments: &mut Vec<Rect>, left: i64, top: i64, right: i64, bot
 /// Shop-portrait slots leading every item row's sprite table (never
 /// worn, `docs/file-formats/opi.md`).
 const ITEM_ICON_SLOTS: usize = 2;
+/// Large shop portrait of the two icon slots. `State_ItemShop.bnd` pairs
+/// `ITEMSHOW1..8` with 109x81 rects and the small `MYBAGITEM1..10` with
+/// 73x57 rects; the installed table's slot 0 holds the 109x81-size family,
+/// so slot 0 is the goods-card source (#363). Slot 1 stays the bag source.
+const SHOP_PORTRAIT_SLOT: usize = 0;
 /// Five pose variants per part block, each declaring one male and one
 /// female slot.
 const PART_VARIANT_SLOTS: usize = 5;

@@ -142,6 +142,41 @@ room slot).
   (probed nowhere — the 5001 entry list is GLOBAL-sized, so the
   client cannot decode the landing; never invented).
 
+## Ticket #363 (goods-card portraits)
+
+Exe b8 (`~/scratch/side-scenes/b8-cash/manifest.json`, manifest
+`f9d4a695…3f8b`, exe `83a04541…c823b`,
+`artifacts/screenshots/itemshop.png` `0c561c66…93ee8`) paints a figure
+on each of the four visible goods cards. Our base shot
+(`a61c1236…bd15`) left the same cells flat grey.
+
+Source pin: `Itemdata_Korea.dat` rows carry two shop-portrait sprite
+slots in front of the 40 worn-part slots (`docs/file-formats/opi.md`,
+`docs/equip.md`). `State_ItemShop.bnd` (2982 B, 186 rects, ordinal
+`(code & 0xFFF)-1` pairing) gives `ITEMSHOW1..8` (`0x14600035..3C`)
+109x81 rects and `MYBAGITEM1..10` (`0x1460003D..46`) 73x57 rects.
+A local survey of the installed `avatar.opa` (1541 rows, 7133 entries)
+finds slot 0 dominated by 109x81 / 73x57 bodies and slot 1 by 73x57
+/ 30x30 bodies, so slot 0 is the large goods-card portrait and slot 1
+the small bag icon. No separate icon archive exists (zero `Shop*` /
+`Icon*` entry names). Table filename `.oji` resolves to an `.ojs`
+sprite-55 body in the same archive; no copyrighted bytes are committed.
+
+Landed: `set_avatar_source` decodes slot 0 once per row into
+`shop_item_portraits` (item-id keyed); `paint_side(Shop)` paints them
+at the staged `ITEMSHOW` rects before the text overlay
+(`paint_shop_item_icons`). Missing slot, missing archive entry, or
+unstaged rect paints nothing. Guards:
+`shop_item_cards_paint_slot_zero_portraits_at_staged_itemshow_rects`
+(paint, synthetic per-row ink) and the extended live-path guard
+`live_boot_default_stages_shop_catalog` (install-root skip).
+
+Residual: the qualified exe pack uses a catalog/account state we cannot
+match locally (prices/names differ), so no matched-state pixel hash is
+claimed. Next evidence step: a rig capture of the same catalog ids with
+matched `avatar.opa` before any 1:1 hash comparison. `MYBAGITEM` icons
+(slot 1) stay OPEN; `ITEMGEM` cells stay OPEN (#178 story 23).
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.

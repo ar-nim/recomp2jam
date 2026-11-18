@@ -20,8 +20,8 @@ use self::planet::PlanetBoardState;
 use self::shop::ShopState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
-    avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
-    AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_shop_portraits, load_worn_figure, ojn_cover_figure, AvatarFigure,
+    ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
 use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
@@ -36,14 +36,14 @@ use super::paint::{
     paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
     paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
     paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
+    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -733,6 +733,9 @@ pub struct ScreenGame {
     /// figure, or the try-on preview while one stages. `None` paints
     /// the staged art alone (never an invented figure).
     shop_avatar: Option<AvatarFigure>,
+    /// Per-item goods portraits from the archive's slot-0 shop icon,
+    /// keyed by item id so paged rows paint their own art (#363).
+    shop_item_portraits: HashMap<u32, AvatarFigure>,
     /// Last staged shop gift press ([`ShopGiftNoop`]); `None` until a
     /// gift button answers.
     shop_gift_noop: Option<ShopGiftNoop>,
@@ -1017,6 +1020,7 @@ impl ScreenGame {
             shop: ShopState::default(),
             wallet: WalletState::default(),
             shop_avatar: None,
+            shop_item_portraits: HashMap::new(),
             shop_gift_noop: None,
             music_shop: MusicShopState::default(),
             side_placements: Vec::new(),
@@ -4639,6 +4643,7 @@ impl ScreenGame {
         // stage it here so the live board is never empty after the
         // avatar archive lands.
         self.shop.set_catalog(&table);
+        self.shop_item_portraits = load_shop_portraits(&archive, &table);
         self.myroom_items = Some(table.clone());
         self.avatar_source = Some((archive, table));
         self.restage_waiting_figures();
@@ -5342,6 +5347,14 @@ impl ScreenGame {
         self.shop_avatar.is_some()
     }
 
+    /// Number of catalog rows whose slot-0 shop portrait resolved from
+    /// the staged `avatar.opa` (#363). Zero means the goods cards fall
+    /// back to the bare art even when names and prices ink.
+    #[must_use]
+    pub fn shop_item_portrait_count(&self) -> usize {
+        self.shop_item_portraits.len()
+    }
+
     /// Equipment the avatar pane stacks from: the fetched hero set
     /// with the previewed item swapped into its exe-derived slot
     /// (same [`myroom_equip_slot`] rule the equip commit uses).
@@ -5588,10 +5601,16 @@ impl ScreenGame {
         }
         // The shop overlay inks goods, prices, both wallet cells,
         // the cart with its checkout totals, both pager readouts,
-        // and the avatar pane (equipped or preview figure on the
-        // paint clock) into staged rects; without staged goods it
-        // paints nothing.
+        // each good's staged portrait, and the avatar pane (equipped
+        // or preview figure on the paint clock) into staged rects;
+        // without staged goods it paints nothing.
         if self.side == Some(SideScreen::Shop) {
+            paint_shop_item_icons(
+                frame,
+                &self.side_placements,
+                &self.shop_visible_goods(),
+                &self.shop_item_portraits,
+            );
             paint_shop_board(
                 frame,
                 &self.side_placements,
@@ -16446,6 +16465,81 @@ mod game_tests {
         assert_eq!(game.shop_visible_goods().len(), 2);
         assert_eq!(game.shop_visible_goods()[0].item_id, 1);
         assert_eq!(game.shop_visible_goods()[1].item_id, 2);
+    }
+
+    #[test]
+    fn shop_item_cards_paint_slot_zero_portraits_at_staged_itemshow_rects() {
+        // Live caller chain (paint guard, #363):
+        //   main.rs::run_play -> setup_online / offline arm
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> stage_shop_item_icons -> visit_side(Shop) -> paint_side
+        //   -> paint_shop_item_icons -> staged ITEMSHOW rect.
+        // Sprite source: Itemdata_Korea.dat row sprite slot 0 (large shop
+        // portrait), matched to the 109x81 ITEMSHOW rects in
+        // State_ItemShop.bnd; slot 1 is the small MYBAGITEM portrait.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let row = |item_id: u32, icon: &str| o2jam_file::AvatarItemRow {
+            item_id,
+            item_type: 2,
+            price: 4500,
+            params: [0; 4],
+            flags: (0, 0),
+            name: format!("Good{item_id:02}"),
+            description: String::new(),
+            sprites: vec![(1, icon.to_owned())],
+        };
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![row(1, "icon1.oji"), row(2, "icon2.oji")],
+        };
+        let archive = worn_test_archive(&[
+            ("icon1.ojs", &worn_test_sprite()),
+            ("icon2.ojs", &worn_test_green_sprite()),
+        ]);
+        game.set_avatar_source(archive, table);
+        let placements: Vec<ScenePlacement> = (0..2u32)
+            .map(|slot| ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: SHOP_ITEMSHOW_FIRST_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 100 + slot as i32 * 120,
+                    y: 50,
+                    w: 109,
+                    h: 81,
+                },
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_side(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let card_ink = |slot: usize| {
+            let left = 100 + slot * 120;
+            let mut ink = None;
+            for y in 50..131 {
+                for x in left..left + 109 {
+                    let pixel = buf[y * 800 + x];
+                    if pixel != 0 {
+                        ink = Some(pixel);
+                    }
+                }
+            }
+            ink
+        };
+        let first = card_ink(0);
+        let second = card_ink(1);
+        assert!(first.is_some(), "first ITEMSHOW rect paints its icon");
+        assert!(second.is_some(), "second ITEMSHOW rect paints its icon");
+        assert_ne!(first, second, "each visible good paints its own art");
     }
 
     #[test]

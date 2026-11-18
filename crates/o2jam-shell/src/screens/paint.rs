@@ -51,8 +51,8 @@ use super::side::{
     MYROOM_SLOT_FIRST_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
     RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
     SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-    SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1548,6 +1548,30 @@ pub fn paint_shop_avatar(
     if let (Some(figure), Some(slot)) = (figure, shop_template_rect(placements, SHOP_AVATAR_CODE)) {
         let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
         figure.paint_visible_centered(frame, &slot, frame.w, frame.h, now_ms);
+    }
+}
+
+/// Per-row item portraits over the staged shop art: slot 0 of each
+/// visible catalog good's `Itemdata_Korea.dat` row, painted at the staged
+/// `ITEMSHOW1..8` rects (#363). Geometry rides the `.bnd` rects; a
+/// good without a decoded portrait, or a row without a staged rect,
+/// simply paints nothing in that cell.
+pub fn paint_shop_item_icons(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    goods: &[ShopGood],
+    portraits: &std::collections::HashMap<u32, AvatarFigure>,
+) {
+    for (slot, good) in goods.iter().enumerate().take(SHOP_ITEM_ROWS) {
+        let Some(portrait) = portraits.get(&good.item_id) else {
+            continue;
+        };
+        let code = SHOP_ITEMSHOW_FIRST_CODE + u32::try_from(slot).unwrap_or(u32::MAX);
+        let Some(rect) = shop_template_rect(placements, code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&rect, frame.w, frame.h);
+        portrait.paint_visible_centered(frame, &rect, frame.w, frame.h, 0);
     }
 }
 
