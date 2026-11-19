@@ -125,6 +125,9 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
 `options_exit_closes_without_saving`,
 `options_default_restores_the_exe_defaults_per_tab`,
 `longnote_mode_snapshots_at_playing_entry`,
-`key_strikes_play_at_the_game_effect_gain`,
+`key_strikes_play_at_the_game_effect_gain` (unity → one step → mute,
+  live chain: `main.rs::run_online` → `run_windowed_session` →
+  `window::InputHandler::route_key` → `GameLoop::lane_key` →
+  `ScreenGame::strike_at` → `pump_sounds` → `AudioBackend::play_key`),
 `scene_bgm_cue_scales_with_the_bgmusic_volume`,
 `option_tabs_stage_all_three_sheets_when_archives_present`.

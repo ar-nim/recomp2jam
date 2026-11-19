@@ -16338,7 +16338,13 @@ mod game_tests {
         )]);
         let mut game = ScreenGame::new();
         game.with_audio(Box::new(probe), bank);
-        game.load_chart(vec![(2, 5000, 7), (2, 6000, 7)]);
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::lane_key ->
+        // ScreenGame::strike_at -> pump_sounds ->
+        // AudioBackend::play_key. The Sound tab edits the same GameEffect
+        // value the strike mixer reads, so a stepped slider changes the
+        // next strike gain without a scene change.
+        game.load_chart(vec![(2, 5000, 7), (2, 6000, 7), (2, 7000, 7)]);
         for next in [
             Screen::Planet,
             Screen::Channel,
@@ -16352,12 +16358,21 @@ mod game_tests {
         game.strike_at(2, 5000);
         assert_eq!(gains.borrow().len(), 1);
         assert!((gains.borrow()[0] - 1.0).abs() < 1e-6);
+        game.options_mut().step_game_effect(false);
+        let stepped_gain = f32::from(255 - crate::options::SOUND_SLIDER_STEP) / 255.0;
+        game.strike_at(2, 6000);
+        assert_eq!(gains.borrow().len(), 2);
+        assert!(
+            (gains.borrow()[1] - stepped_gain).abs() < 1e-6,
+            "one slider step scales the next strike: {:?}",
+            gains.borrow()
+        );
         for _ in 0..64 {
             game.options_mut().step_game_effect(false);
         }
-        game.strike_at(2, 6000);
-        assert_eq!(gains.borrow().len(), 2);
-        assert!(gains.borrow()[1].abs() < 1e-6, "muted effect stays silent");
+        game.strike_at(2, 7000);
+        assert_eq!(gains.borrow().len(), 3);
+        assert!(gains.borrow()[2].abs() < 1e-6, "muted effect stays silent");
     }
 
     #[test]
