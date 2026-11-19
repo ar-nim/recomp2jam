@@ -120,3 +120,29 @@ So the roster half of the story is evidenced on both clients with the
 matching wire frame. The peer's worn figure is a separate residual: #570
 owns the red status icon where the peer body sits. No qualified exe pack
 exists for this leg; the exe display rule stays OPEN per #312.
+
+## #414 native two-Confirm drive (2026-11-20)
+
+One native-client run with a pass-through gateway tap (`15020 -> 15010`,
+`--claim none`; no exe frame is claimed). Pack
+`~/scratch/waiting-414/afk01/` (`rig-afk`, display :150, private null sink,
+`route=sink`, `on_default_sink=0`, `preboot_breach=0` in `audio/manifest`):
+
+- scene sequence `planet → channel → planet → channel → room → waiting →
+  loading → playing` (`artifacts/scene-sequence.txt` sha256
+  `d5ad2bf9fc63d33605991040074c2d3537c2457457df6bd27376f12ee56c3791`);
+  the extra planet/channel pair is the NORMAL-mode popup dismissal leg.
+  `frame-000026-playing.png` sha256
+  `e05c0812148827b4636068aa6f0444758a8acb50e499db3255b404d89f58fbbd`
+  shows the Highway and HUD in Playing.
+- wire slice `~/scratch/waiting-414/wire-chain.log` sha256
+  `ec05197952acfd09c3456d0d28c5eecb801d0630c762edf6cd80d5a1552ee312`:
+  `C2S 4000 len=4` → `S2C 4001`, `C2S 4002` → `S2C 4003`,
+  `C2S 4030` → `S2C 4031` (02:43:04), then `C2S 4010` → `S2C 4011`
+  (02:43:22), `C2S 4012 len=5` → `S2C 4013`, followed by 4014/4015 and
+  2007. This is the two-Confirm chain from t280 and
+  `scripts/planet-to-waiting.sh`, now in one native run that reaches
+  Playing.
+
+This is a native-drive pin only. No qualified exe frame covers the
+sequence; the exe comparison stays OPEN per #312.
