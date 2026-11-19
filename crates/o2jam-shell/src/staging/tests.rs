@@ -1189,6 +1189,83 @@ fn messenger_sheet_rows_stage_the_pinned_rect_counts() {
     }
 }
 
+/// Spec #315 story 13: each Messenger sheet's `BOUND` block authors
+/// children relative to its frame rect, so staging must add the parsed
+/// frame origin to every child without moving the frame itself.
+#[test]
+fn messenger_sheet_children_stage_at_the_parsed_parent_origin() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_interface_scenes -> stage_messenger_sheets ->
+    // staging::stage_messenger_sheet -> stage_bound_row -> parse_bnd.
+    // The guard compares that result with the same bound arm before the
+    // parent offset is applied; no mounted sheet is claimed. Archives
+    // absent -> skip cleanly (CI has no game data).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    for sheet in MESSENGER_SHEETS {
+        let row = StageRow {
+            state: State::Planet,
+            block: Some(sheet.block_name()),
+            archive: StagingArchive::Interface,
+            arm: PlacementArm::Bound,
+            extra_sprites: &[],
+        };
+        let raw = stage_bound_row(&interface, &row, StageContext::default())
+            .art
+            .unwrap_or_else(|| panic!("{} did not stage raw rects", sheet.block_name()));
+        let staged = stage_messenger_sheet(&interface, sheet, StageContext::default())
+            .art
+            .unwrap_or_else(|| panic!("{} did not stage sheet rects", sheet.block_name()));
+        let frame = raw
+            .placements
+            .iter()
+            .find(|placed| {
+                placed
+                    .sprite
+                    .as_deref()
+                    .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+            })
+            .unwrap_or_else(|| panic!("{} has no frame placement", sheet.block_name()));
+        assert_eq!(
+            staged.placements.len(),
+            raw.placements.len(),
+            "{} placement count",
+            sheet.block_name()
+        );
+        let mut children = 0;
+        for (before, after) in raw.placements.iter().zip(&staged.placements) {
+            let is_frame =
+                before.sprite.as_deref() == frame.sprite.as_deref() && before.rect == frame.rect;
+            let expected = if is_frame {
+                before.rect
+            } else {
+                children += 1;
+                Rect {
+                    x: before.rect.x + frame.rect.x,
+                    y: before.rect.y + frame.rect.y,
+                    ..before.rect
+                }
+            };
+            assert_eq!(
+                after.rect,
+                expected,
+                "{} child {:?} must sit at its parent origin",
+                sheet.block_name(),
+                before.id
+            );
+        }
+        assert!(
+            children > 0,
+            "{} has children to offset",
+            sheet.block_name()
+        );
+    }
+}
+
 #[test]
 fn install_loader_reads_archives_from_given_root() {
     let root = test_scratch_root("reads");
