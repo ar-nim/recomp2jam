@@ -25,7 +25,7 @@ scratch; only hashes and text enter the repo.
 | `~/scratch/p343-ab/proof-final.json` | `20fbe17060cea3d3da16a059b74de06a724b6bb41ee6ae2caf947b3ccfc8cff6` | matched exe/Rust channel-entry wire and server slice (`wire_sequence_equal=true`); `1002/1003/1004/1005/2000/2001/2002/2003/2010/2011/2024` cadence |
 | `~/scratch/p376-live`, `#376` close comment | rig script `28dce0ba36be52e9d046efb234011415e199b131dc5d95dbef19ad94235b6723`; peer row `frame-000127-room.png` `8dd6a9b39e4ba565ef2118be01ef3326c4af48d8a033b244325061080866a9d9`; fix `35a9348` plus template-row fix | 2005 RoomCreated reaches a peer already in Room; empty channel paints empty list; both clients share one server |
 | `~/scratch/p379-wire-probe.log`, `#379` (OPEN) | `b07d63f81db0a0c883fdee3a83c78151d0624dac12e0bd6e2c9531f06b3f832f` (master 3004), `8e8735de7307d17d5a0a7de98dfc9b5109b95a2b9a15c0870996b973dddbac50` (joiner 3003) | owner 2026-11-19: master sees no joining peer; wire shows the join, our client does not stage it; fix parked |
-| WAVE 1 `~/scratch/story-matrix-live/`, `#380` (OPEN) | tap `e326e3f7eaae0cd88dfa9e8735d7554c5c73dd6fc7b376017dbb28ffb5d2834a`; observer `d4fa3dc6ff6dada19acbd7ced46eaeb7e21cb7743b07a74865445aea463ad680` | `S2C 2007 len=8 hex=00000000` on last disconnect and the vanished row; our room stays listed, fix still OPEN |
+| WAVE 1 `~/scratch/story-matrix-live/`, `#380` (closed after fix) | tap `e326e3f7eaae0cd88dfa9e8735d7554c5c73dd6fc7b376017dbb28ffb5d2834a`; observer `d4fa3dc6ff6dada19acbd7ced46eaeb7e21cb7743b07a74865445aea463ad680` | `S2C 2007 len=8 hex=00000000` on last disconnect and the vanished row; our room stayed listed at capture time; fix `9b5f539` later merged |
 | `~/scratch/story-channel-relay-down/run2..run4` (wave-2 lane) | planet `417a1aa126a76f1b2bd804965acc2e78ab5e409a77d0fd899931fd650cf7a4dc`; channel `deee19d96cf9d3e098b76168160ca9941b9029153683c3b943106357be4e0afd`; root framebuffer `0bae3412f1d1b0852922a8b866ed25fe118e43b9404598f4b6b3de58c0abc903`; client log `37dbdaf21c1df8e4d8e442e153311f372189542332626c4af82155d1b9cb480d` | our relay-down sheet paints over a BLACK canvas; exe popup `baf781b8…` shows board+dialog behind it. Boundary placement is correct (clean Planet). Graded OPEN-FIX; no boot spent here |
 | `#375`, `#364`, `#368`, `#370` close comments | fixes `8de4d28`, `4261cd3`, `5dc287a`, p370 pair; region pair `aa318f6a…` | hands default 30/31/35 is a Waiting kit story; #364 was a pointer-state input gap (exe arrow (401,366)); #368 a painter gap; #370 fixed whole population segments. Cross-state cells, not Planet paint claims |
 | **this lane** `~/scratch/story-planet-live/boot1` | manifest `392dedef4316bc5479fd59052e2a69663f252597b3d8aaf0f7aa1e2584c25012`; provenance `caf9699da5f14f7382f2ace2f4b74c1ba4537534ab1035aad5b13542bfda5296`; citation `d135105a2dbf68f024be1502371429ea4b3a63c134717676baf05b42ef3b0fe5`; planet frame `235f53521171be4f1d4c725d16143332fa47b66813f9e1c5b8e8b09fe68ddc21`; `cadence/analysis.json` `95a162e37154bb0c4fda6eb2bf17ec9d5ebefe6c0f619186b012d34c4d72fc1f`; `cadence2/analysis.json` `86aad31ec4e9cfa69cbf47b003811f9325b328d92e05bfd8ee5d68783ca59166`; `cadence2/timing.csv` `83d66145d728c252127b8b91a1b3695e2865edbacbf916aac743f175cc38c339`; state PNGs `67acf7b1d5f530cd91130ca3e0168c2b2b3200192b8e2d04b4dbcc7ddb417d76`, `1b539fa50a6c2b5431c8b2935224dacfda16b1001e29d7ffdaa989679a544b00`, `dc84fefdf7a038ab39f56dfed60100d93222c7af57a12476974dfde9cfcbb294` | qualified exe promo dwell: 12 s timeline (118 samples) steady gaps 3056.5/2957.9/3052.9 ms, median 3005.43 ms; 10 s timeline (98 samples) gaps 2954.9/3056.5 ms. Three banner records cycle: NEW MUSIC vinyl → NEW ITEM bunny/cats → NEW ITEM Halloween five cells → NEW MUSIC. Fills the timed-cadence cell t240 could not |
@@ -61,8 +61,8 @@ claim, never as the claim itself.
 | **QUEST-PLATE-REST** (self:solo rest/hover/press on FREE/DRUM rects) | EVIDENCED — `<rest, hover, press>` → QUEST/TUTORIAL plates stay dim and byte-identical; authoring names are not runtime semantics → #137 pin in `docs/planet.md`, hover sweep rows `0x19201005/06` (0 changed px) | EVIDENCED — `<master press>` → no light, no family select, no dialog → `docs/planet.md` "permanent rejection (P0)" | EVIDENCED — `<guest press>` → same static plates → #137 pin | EVIDENCED — `<dialog up>` → plates remain dim behind the sheet → pack hash `235f5352…dc21`, `docs/parity/planet.md` Composition | NA-DESIGN — decorative plates have no server family and no wire field; next step is none (static pin closed) |
 | **FAMILY-PICK** (self:master emblem click, board) | NA-DESIGN — no gateway family offline; design seam is the offline board without a channel list | EVIDENCED — `<EASY click (136,88)>` → orange border hugs picked badge; NORMAL switches family and reconnects → live pin `~/scratch/planet-verify/findings.md`, border bbox x102-191/y49-116 | EVIDENCED — `<guest click>` → same family selection; no role gate → `~/scratch/planet-verify/findings.md`, #376 guest flow | EVIDENCED — `<NORMAL after switch>` → rows blank when the test server lists only family [0] → live pin `~/scratch/planet-verify/findings.md` | EVIDENCED — `<1004 family>` → `03EC Enter channel [0/00]`, `1005` success → wire pin p343 proof `20fbe170…cff6`, Memoryer server slice in that proof |
 | **CHANNEL-DIALOG-ENTER** (self:master lit-emblem click) | NA-DESIGN — offline boot has no gateway dialog; design seam is the `1002/1003` chain | EVIDENCED — `<EASY aim (136,88)>` → `parent+0xF64` becomes 1, sheet over the same `CStatePlanet` → t240 `drive.log` hash `23581486…d496`, p343 proof | EVIDENCED — `<guest lit emblem>` → same dialog phase; no role-specific sheet → t240 qualified exe drive | EVIDENCED — `<enter>` → MENU band and emblem strip stay visible behind the sheet → pack hash `ea5cc6d6…c563` (t240), dossier `docs/planet.md` | EVIDENCED — `<1002→1003, 1004→1005, 2000→2003, 2010→2011/2024>` → rows and login staged → wire pin p343 proof, `docs/net-protocol.md` |
-| **DIALOG-X-RETURN** (self:peer X click (577,171)) | NA-DESIGN — no gateway dialog offline | EVIDENCED — `<X>` → bare Planet board, flag `parent+0xF64=0`, same state object → live memory pin `~/scratch/planet-verify/findings.md` | EVIDENCED — `<X>` → dialog closes to the board; no room entry → t240 X pin `docs/parity/channel.md` | EVIDENCED — `<X>` → `CStatePlanet` stays mounted, dialog phase cleared → live memory pin `docs/parity/channel.md` | GAP — `<X>` → whether 2021 is sent on this path is unpinned; OPEN — scripted TCP tap of the X click and compare with the 2021 leave pin in `docs/net-protocol.md` |
-| **PROMO-AUTO-TICK** (#167/P2, self:server timer on boot board) | GAP — no gateway-free timed frame series; OPEN — one offline boot dwell of 12 s with the same crop and manifest | LIVE-FILLED — `<boot board dwell>` → three banner records cycle with steady gaps 3056.5/2957.9/3052.9 ms (median 3005.43 ms) → pack citation `d135105a…fe5`, `cadence/analysis.json` `95a162e3…fc1f` | GAP — no guest-account dwell; OPEN — repeat SP-PLANET-PROMO-01 with uid 2 and the same two timelines | GAP — no timed series with the dialog raised; OPEN — 12 s dwell after a confirmed `parent+0xF64=1` phase | NA-DESIGN — rotation local `this+0x90` flag, no wire field |
+| **DIALOG-X-RETURN** (self:peer X click (577,171)) | NA-DESIGN — no gateway dialog offline | EVIDENCED — `<X>` → bare Planet board, flag `parent+0xF64=0`, same state object → live memory pin `~/scratch/planet-verify/findings.md` | EVIDENCED — `<X>` → dialog closes to the board; no room entry → t240 X pin `docs/parity/channel.md` | EVIDENCED — `<X>` → `CStatePlanet` stays mounted, dialog phase cleared → live memory pin `docs/parity/channel.md` | EVIDENCED — `<X>` → no 2021/2022 after the X click; the qualified exe tap ends 10 s later with no logout frame → X-close pack wire `3a2e300eeb5f525f339e0f359f2af73ed8d735f918c1631940310f59b0926490`, citation `665333cb…971bf`; 2021 is the separate channel-logout pin (`docs/net-protocol.md:168`) |
+| **PROMO-AUTO-TICK** (#167/P2, self:server timer on boot board) | EVIDENCED — the wave-3 qualified exe boot never authorized a gateway session (popup probe `max_blue=0.011`, no dialog) and still cycled three banner records with 3056.5/2957.9/3052.9 ms gaps → pack citation `d135105a…fe5`, `cadence/analysis.json` `95a162e3…fc1f`; the same gateway-free series is the solo witness | LIVE-FILLED — `<boot board dwell>` → three banner records cycle with steady gaps 3056.5/2957.9/3052.9 ms (median 3005.43 ms) → pack citation `d135105a…fe5`, `cadence/analysis.json` `95a162e3…fc1f` | EVIDENCED — `<guest uid 2 board dwell>` → board frame `235f5352…dc21` (byte-identical to the tester board), gaps 2955.6/3053.6/2956.2 ms (median 2955.86 ms) → boot-4 `cadence/analysis.json` `2d400d91…e43c72`, pack citation `64494d32…57b0` | EVIDENCED — `<one OK, dialog raised>` → Channel frame `5decbf06…39e`, dialog-up gaps 2975.7/2966.4/3066.1 ms (median 2971.02 ms), three dated banner states repeat → boot-4 `cadence-dialog/analysis.json` `837561ab…2cf1`, `phase-dialog.log` `e053b717…3de0` | NA-DESIGN — rotation local `this+0x90` flag, no wire field |
 | **PROMO-CONTENT-RIBBON** (P9, self:solo board rest) | EVIDENCED — `<rest>` → five dated cells (1일 / 1일+이벤트 / 7일 / 30일 / 90일) and NEW ITEM ribbon on the Halloween record → planet frame `235f5352…dc21`, this lane's state PNG `dc84fefd…b294` | EVIDENCED — `<tester board>` → same five cells and ribbon → pack citation `d135105a…fe5` | EVIDENCED — `<guest board>` → same staged sheet; actor-independent art → planet frame `235f5352…dc21` | EVIDENCED — `<dialog over board>` → banner remains behind the sheet → t240 planet/channel pair | NA-DESIGN — event cells are archive art, not a wire field |
 | **PROMO-LEFT-RIGHT** (self:solo arrow click) | EVIDENCED — `<LEFT/RIGHT>` → index steps with wrap (1↔max), refresh sets frame `dialog+0x84` → static pin VA `0x48e0eb`/`0x48e13c`, `docs/planet.md` | EVIDENCED — `<master arrow click>` → same wrap rule; banner frame follows index → dossier pin, guards in `docs/parity/planet.md` | EVIDENCED — `<guest arrow click>` → same wrap; no role gate → dossier pin | EVIDENCED — `<carousel word change>` → channel flanks follow the selected frame (#342) → metrics `98361ecd…b188` | NA-DESIGN — no opcode carries a local carousel index |
 | **PROMO-PLAYSTOP** (self:solo PLAYSTOP click) | EVIDENCED — `<PLAYSTOP>` → toggles `this+0x90` with no repaint; hover uses record 1 → static pin VA `0x48e190`, `docs/hover.md` | EVIDENCED — `<master click>` → rotation flag toggles; banner stays until next tick → dossier pin | EVIDENCED — `<guest click>` → same toggle → dossier pin | EVIDENCED — `<stopped flag>` → channel flanks hold the selected frame → #342 pin `98361ecd…b188` | NA-DESIGN — local rotation flag, no wire field |
@@ -72,16 +72,19 @@ claim, never as the claim itself.
 | **EXIT-DISC** (self:solo exit click) | EVIDENCED — `<exit (750,561)-(788,599)>` → quit-confirm MESSAGE `게임을 종료하시겠습니까?` with OK/CANCEL → live capture `exit-state.png`, `docs/planet.md` | EVIDENCED — `<master exit>` → same confirm; no role gate → `docs/planet.md` | EVIDENCED — `<guest exit>` → same confirm → `docs/planet.md` | EVIDENCED — `<confirm up>` → modal covers board, board hover cleared → `docs/hover.md` modal rule | NA-DESIGN — local process exit, no opcode |
 | **BGM-CUE** (self:server cue, no local click) | EVIDENCED — `<cue record 9>` → `Music/Planet.ojm` starts; repeat cue does not restart the track → `docs/parity/planet.md` Timing, #27 lineage | EVIDENCED — `<dialog opens>` → shared cue latches, BGM keeps playing → guard `emblem_round_trip_keeps_the_shared_board_track_running` | EVIDENCED — `<guest dialog>` → same latched cue; no role gate → `docs/parity/planet.md` | EVIDENCED — `<channel phase>` → no second cue push because dialog lives in `CStatePlanet` → `docs/parity/planet.md` Timing | NA-DESIGN — cue record is local audio state, not a Memoryer frame |
 | **RELAY-PLAIN-BOOT** (#348, environment relay down) | NA-DESIGN — no gateway session, so no relay probe | EVIDENCED — `<relay down, boot>` → exe board clean; our Planet frame clean too → pack hash `417a1aa1…c9d4`, #348 close-state boundary | EVIDENCED — `<guest boot>` → clean board before Channel; no role gate → #348 boundary pin | EVIDENCED — `<boot dwell>` → no notice until Channel entry → channel lane boot logs, #348 | EVIDENCED — `<boot with endpoints down>` → no relay-notice frame at Planet; negative pin #348/#244 |
-| **RELAY-NOTICE-CHANNEL** (#348, environment relay down) | NA-DESIGN — no gateway session, so no relay probe | EVIDENCED — `<Channel entry>` → exe one-OK NORMAL-mode sheet over board+dialog → popup frame `baf781b8…1cbf`, t240 `drive.log` OK (400,365) then `03EA` | EVIDENCED — `<guest entry>` → notice before any room entry; OK reveals rows → t240 drive, #244 pin | OPEN-FIX — `<Channel entry, relay down>` → exe sheet shows board+dialog (`baf781b8…`); our sheet paints over a BLACK canvas (`deee19d9…`, root `0bae3412…`) → divergence parked by #348 | GAP — `<relay down>` → 1003 hold timing vs popup unpinned; OPEN — scripted TCP tap from boot to Channel with the endpoints down |
+| **RELAY-NOTICE-CHANNEL** (#348, environment relay down) | NA-DESIGN — no gateway session, so no relay probe | EVIDENCED — `<Channel entry>` → exe one-OK NORMAL-mode sheet over board+dialog → popup frame `baf781b8…1cbf`, t240 `drive.log` OK (400,365) then `03EA` | EVIDENCED — `<guest entry>` → notice before any room entry; OK reveals rows → t240 drive, #244 pin | OPEN-FIX — `<Channel entry, relay down>` → exe sheet shows board+dialog (`baf781b8…`); our sheet paints over a BLACK canvas (`deee19d9…`, root `0bae3412…`) → divergence parked by #348 | EVIDENCED — `<relay down>` → 1000/1001/1002/1003 at 15:37:32, popup blue 0.986 at :33, OK at :34/:37, popup gone at :39; no gateway frame between 1003 and popup → boot-2 tap `a33fc8d1…8913`, drive `b1948c23…6150`, citation `30d1b061…90c7` |
 | **BOARD-CHAT** (negative pin, self:master/peer) | NA-DESIGN — `STATE_PLANET` ControlList has no chat control; seam is the offline board | NA-DESIGN — no board chat; room chat is a Waiting/Room state → `STATE_PLANET` block walk in `docs/planet.md` | NA-DESIGN — no board chat for a guest either; same seam | NA-DESIGN — Channel dialog rows are not a chat feed; seam is the channel-list sheet | NA-DESIGN — 3011/3012/3013 chat frames are Room/Waiting family; no Planet chat cell |
-| **CROSS-ROOM-LIST** (#376/#380, self:server room events) | NA-DESIGN — no gateway room list offline | EVIDENCED — `<2005 RoomCreated>` → host's row stages; no board paint → #376 fix `35a9348`, close comment | EVIDENCED — `<2005 fan-out>` → peer's list shows the created row → frame `8dd6a9b3…e9d9` (cross-state, not a Planet pixel) | LIVE-FILLED — `<last disconnect>` → observer sees the row vanish → WAVE 1 observer `d4fa3dc6…ad680`; #380 fix still OPEN | LIVE-FILLED — `<last disconnect>` → `S2C 2007 len=8 hex=00000000` → WAVE 1 tap `e326e3f7…2834a`; #380 fix still OPEN |
-| **CROSS-MEMBER-KIT** (#379/#375, self:peer join) | NA-DESIGN — no room seat or worn figure at the board | OPEN-FIX — `<0BBA join>` → master still sees no joining seat → owner observation #379, wire `b07d63f8…832f`; #375 default hands fixed by `8de4d28` is a Waiting-kit story, not board paint | EVIDENCED — `<3003 answer>` → joiner sees master seated; default hands 30/31/35 → wire `8e8735de…4ac50`, #375 close comment | NA-DESIGN — board observer cannot see room seats; seam is the Room/Waiting state boundary | EVIDENCED — `<0BBA>` → 3004 (103 B) to master, 3003 (180 B) to joiner → wire pin p379 logs; #375 kit is local data, not a wire field |
+| **CROSS-ROOM-LIST** (#376/#380, self:server room events) | NA-DESIGN — no gateway room list offline | EVIDENCED — `<2005 RoomCreated>` → host's row stages; no board paint → #376 fix `35a9348`, close comment | EVIDENCED — `<2005 fan-out>` → peer's list shows the created row → frame `8dd6a9b3…e9d9` (cross-state, not a Planet pixel) | LIVE-FILLED — `<last disconnect>` → observer sees the row vanish → WAVE 1 observer `d4fa3dc6…ad680`; #380 fixed by `9b5f539` | LIVE-FILLED — `<last disconnect>` → `S2C 2007 len=8 hex=00000000` → WAVE 1 tap `e326e3f7…2834a`; #380 fixed by `9b5f539` |
+| **CROSS-MEMBER-KIT** (#379/#375, self:peer join) | NA-DESIGN — no room seat or worn figure at the board | EVIDENCED — cross-state; `<0BBA join>` → master seats the joining peer; #379 CLOSED with fix `75c81be` merged as `51c8d95`, live taps `d66d693d…01ca7` / `1c9dbcdb…8e119`; #375 default hands fixed by `8de4d28` is a Waiting-kit story, not board paint | EVIDENCED — `<3003 answer>` → joiner sees master seated; default hands 30/31/35 → wire `8e8735de…4ac50`, #375 close comment | NA-DESIGN — board observer cannot see room seats; seam is the Room/Waiting state boundary | EVIDENCED — `<0BBA>` → 3004 (103 B) to master, 3003 (180 B) to joiner → wire pin p379 logs; #375 kit is local data, not a wire field |
 | **CROSS-POINTER-PANEL-FILL** (#364/#368/#370, self:server matched A/B) | NA-DESIGN — Channel/Room states, not the board | EVIDENCED — `<matched legs>` → #364 was a pointer-state input gap (exe arrow (401,366)); #368 a painter gap; #370 whole population segments → close comments, fixes `4261cd3`/`5dc287a` | EVIDENCED — `<same wire, same pointer>` → row bar and selected panel land on the exe's row/panel → matched proof `0a1862bf…f5533`, #364/#368 close pins | EVIDENCED — `<1003 population>` → `ceil(pop*10/cap)` whole segments → p370 proxy log, metrics `aa318f6a…14dd` | EVIDENCED — `<matched wire/server>` → bodies equal in both legs; no "scenario delta" dismissal → p343 proof `20fbe170…cff6`, p361 proof `0a1862bf…f5533` |
 
-Counts: **120 cells** — 81 EVIDENCED, 5 GAP, 3 LIVE-FILLED, 2 OPEN-FIX,
-29 NA-DESIGN. Every GAP names its next evidence step. A cell is a story
-candidate, not a closure: closing still needs the live caller chain and the
-project gates.
+Counts: **120 cells** — 87 EVIDENCED, 0 GAP, 3 LIVE-FILLED, 1 OPEN-FIX,
+29 NA-DESIGN. The wave-1 batch closed all five former GAP cells with
+qualified exe packs (X-close, relay timing, solo/peer/dialog promo dwells)
+and regraded the #379 cross-state OPEN-FIX cell after the fix merged. The
+remaining OPEN-FIX cell is the #348 backdrop. A cell is a story candidate,
+not a closure: closing still needs the live caller chain and the project
+gates.
 
 ## 3. Scenario script format (simulation)
 
@@ -96,13 +99,13 @@ project gates.
 | `checkpoint` | CP01 planet frame `235f5352…dc21`; CP02 `drive.log` `e82b1264…c44` (`max_blue` 0.011, `cue=server:03EA` but screen still planet); CP03 `cadence/analysis.json` `95a162e3…fc1f` + `timing.csv` `1b8004ef…e23e`; CP04 `cadence2/analysis.json` `86aad31e…9166` + `timing.csv` `83d66145…c339` + three state PNGs; CP05 empty PID file, sink unloaded. No wire tap; no observer poll line. |
 | `outcome` | When the prospective master dwells on the boot Planet board, the promo panel advances through three banner records with 3056.5 / 2957.9 / 3052.9 ms between steady states (median 3005.43 ms in the 12 s run; 2954.9 / 3056.5 ms in the 10 s rerun), matching the static 3000 ms tick pin at VA `0x48e3b0` (pack citation `d135105a…fe5`, dossier `docs/planet.md`). |
 
-### Planned chains for the remaining gaps (no boots spent here)
+### Wave-1 chain dispositions
 
-| `scenario_id` | Chain | Cells it must fill |
+| `scenario_id` | Chain | Disposition |
 |---|---|---|
-| `SP-PLANET-OFFLINE-02` | One offline/guest boot → 12 s promo dwell → repeat with the Channel dialog confirmed raised (`parent+0xF64=1`) | PROMO-AUTO-TICK × solo/peer/channel (3 `GAP`) |
-| `SP-PLANET-XWIRE-04` | Board → emblem → Channel dialog → X close, with a scripted TCP tap of the 2021/2022 boundary | DIALOG-X-RETURN × server (1 `GAP`) |
-| `SP-PLANET-RELAY-05` | Relay endpoints down → boot → Channel entry with a socket tap from boot to OK, paired with the wave-2 frame pair | RELAY-NOTICE-CHANNEL × server (1 `GAP`) |
+| `SP-PLANET-OFFLINE-02` | One offline/guest boot → 12 s promo dwell → repeat with the Channel dialog confirmed raised | Filled by boot 4 (guest uid 2, board and dialog arms); solo stays pinned by the wave-3 gateway-free boot 1 |
+| `SP-PLANET-XWIRE-04` | Board → emblem → Channel dialog → X close with a wire tap | Filled by the qualified `story-dialogs-live/boot2-xclose` pack; no 2021/2022 |
+| `SP-PLANET-RELAY-05` | Relay down → boot → Channel entry with a socket tap from boot to OK | Filled by close-cp boot 2; 1003 → popup → OK timing in one pack |
 
 Expected-outcome sentence pattern: "When `<actor>` `<action>` in `<state>`,
 `<observer>`'s `<observable>` is `<observed outcome>` (pack `<full sha256>`,
@@ -117,34 +120,39 @@ later conformance failures become bugs, not story edits.
 | 1, 2026-11-19 05:24 UTC | `:160` / `rig_null_3555562` | `M` = `tester`, uid 1 | boot → Planet only (easy-emblem click did not open the dialog) | none | CP01–CP05 above | PASS: `run-manifest.sh verify` 0, `rig-audio.sh verify` 0, `rig-provenance.sh cite --claim exe` 0; owned sink unloaded, no owned process left |
 | attempt 0 | — | — | — | — | — | Sampling stdout redirection failed before `cadence/` existed; no client launched, no cell filled |
 | sampling redo | same boot | same | same | none | second 10 s timeline after fixing the BGRA→RGB crop conversion | No new boot; raw crop hashes from both timelines are in the qualified pack |
+| close-cp boot 3 (diagnostic) | `:167` / `rig_null_3946864` | guest uid 2 | boot → board dwell | none | black board frame, crop timeline cycles | Not cited: board frame grabbed before paint; no pack emitted |
+| close-cp boot 4 | `:168` / `rig_null_3959654` | guest uid 2 | boot → board dwell → emblem → one OK → Channel dialog dwell | none (no wire claim) | planet `235f5352…dc21`, channel `5decbf06…39e`, `cadence/analysis.json` `2d400d91…e43c72`, `cadence-dialog/analysis.json` `837561ab…2cf1`, `phase-dialog.log` `e053b717…3de0` | PASS: manifest/audio/cite 0; peak 0.0 dBFS, `route=sink`, `on_default_sink=0`, `preboot_breach=0`; OK dismissed once |
 
-1 boot used (limit 4). No NORMAL-mode popup was present at the failed
-transition (driver probe `max_blue=0.011`), so there was none to dismiss;
-the qualified t240 drive pins the OK (400,365) dismissal for any later
-dialog transition.
+Wave-3 lane used 1 of its own 4 boots; the wave-1 close-cp batch used 4 of
+its own 6 (two other boots are the channel-lane legs pinned in #289). No
+NORMAL-mode popup was present at the wave-3 failed transition (driver probe
+`max_blue=0.011`); boot 4 dismisses the one that appeared with a single OK
+at (400,365), matching the t240 pin.
 
 ## 4. Gap-to-story hand-off
 
-Ranking by player visibility × reachability, with the next evidence step:
+Wave-1 disposition of that ranking:
 
-1. PROMO-AUTO-TICK × solo/peer/channel (`GAP`): offline and dialog-up time
-   series. Step: SP-PLANET-OFFLINE-02, one bounded boot per arm, same crop.
-2. RELAY-NOTICE-CHANNEL × server (`GAP`): 1003 hold vs popup. Step:
-   SP-PLANET-RELAY-05 socket tap; backdrop itself is `OPEN-FIX` on #348.
-3. DIALOG-X-RETURN × server (`GAP`): 2021 on X. Step: SP-PLANET-XWIRE-04.
-4. RELAY backdrop (`OPEN-FIX`, #348): pack pair already in hand; fix parked
-   by owner, no new boot.
-5. CROSS-MEMBER-KIT × master (`OPEN-FIX`, #379): wire proof in hand, fix
-   parked; #375 hands fix is a separate cross-state story.
-6. CROSS-ROOM-LIST × channel/server (LIVE-FILLED wire, #380 fix OPEN): no
-   new Planet boot; reuse WAVE 1 tap.
+1. PROMO-AUTO-TICK × solo/peer/channel: CLOSED. The guest board and
+   dialog-up arms share boot 4's qualified pack; solo keeps boot 1's
+   gateway-free pack.
+2. RELAY-NOTICE-CHANNEL × server: CLOSED by boot 2's 1003→popup→OK tap;
+   the backdrop remains `OPEN-FIX` on #348.
+3. DIALOG-X-RETURN × server: CLOSED by the reused X-close exe pack.
+4. RELAY backdrop (`OPEN-FIX`, #348): still parked by the owner; no code
+   changed in this lane.
+5. CROSS-MEMBER-KIT × master: fix `75c81be` merged (`51c8d95`), #379 CLOSED;
+   the cell is EVIDENCED by the live p379 taps.
+6. CROSS-ROOM-LIST × channel/server: #380 fix `9b5f539` merged (`51c8d95`);
+   no new Planet boot, wire proof is in hand.
 7. Morning fixes #361/#373/#342/#359/#364/#368/#370/#376/#375: explicit
    matrix cells; their stories are recorded in the #288 body hand-off below,
    not re-filed.
 
 Stories added to the #288 body under `## Multi-actor stories` follow the
 checklist form `- [ ] As <actor>, I want <exe-observed outcome>, so <consequence>. — evidence: <class>; verify: <step>`.
-Only one tracker body edit was made, and the body was read back after it.
+The wave-1 close-cp batch made a second scoped body edit and read it back
+(body length 12,323 bytes); no other tracker body changed in this lane.
 Closing a story still needs the live caller chain and the project gates.
 
 ## 5. Cross-cell contradictions and limits
@@ -160,10 +168,16 @@ Closing a story still needs the live caller chain and the project gates.
   exe paint claim; no wire, server, or two-client claim comes from it. The
   deviation is recorded rather than hidden. Memoryer PID and epoch were
   unchanged; no restart or signal.
-- **Dialog transition deviated**: the driver's easy-emblem click did not
-  paint the Channel dialog (`cue=server:03EA` but screen still planet), so
-  the dialog-up promo half stays `GAP`. The driver probed blue twice
-  (0.185 then 0.011); no NORMAL-mode popup was up to dismiss.
+- **Wave-3 dialog transition deviated**: the driver's easy-emblem click did
+  not paint the Channel dialog (`cue=server:03EA` but screen still planet),
+  so the wave-3 lane could not fill the dialog-up promo half. The driver
+  probed blue twice (0.185 then 0.011); no NORMAL-mode popup was up. Close-cp
+  boot 4 did reach the dialog: one OK at (400,365) cleared the popup and the
+  dialog-up cadence is pinned in `cadence-dialog/analysis.json`.
+- **Wave-1 boot 3 was a failed diagnostic**: the board frame was grabbed
+  immediately after boot and is all black (`label=unknown`). The crop
+  timeline still cycles (gaps 2856.0/3064.9 ms), but no pack or cell claim
+  comes from that leg; boot 4 repeated the guest arm with a paint wait.
 - **Authoring names vs runtime semantics**: `docs/planet.md` caption table
   maps `0x1940000A` to `튜토리얼` and `0x1940000B` to `퀘스트`, while the
   live rect pairing puts QUEST on the DRUM rect and TUTORIAL on the FREE
