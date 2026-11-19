@@ -429,6 +429,23 @@ mod tests {
     }
 
     #[test]
+    fn live_5029_body_decodes_gem_626_and_zero_cash_point() {
+        // Live Memoryer body `7202000000000000` from
+        // `uid2-server.jsonl` (`96bb62ce…25009b`) and the tapped BACK
+        // wire `94b2ea8f…a2508`: the exe paints `G 626 / W 0`.
+        let response =
+            SyncCashPointResponse::decode_body(&[0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                .unwrap();
+        assert_eq!(
+            response,
+            SyncCashPointResponse {
+                gem: 626,
+                cash_point: 0,
+            }
+        );
+    }
+
+    #[test]
     fn sync_cash_point_response_round_trips_through_frame() {
         let response = SyncCashPointResponse {
             gem: -1,

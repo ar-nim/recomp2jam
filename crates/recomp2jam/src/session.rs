@@ -155,6 +155,7 @@ use o2jam_net::shop::{
     EquipItem, EquipItemResponse, ExitShop, SellItemResponse, SyncItemPurchase,
     SyncItemPurchaseReply, SyncMusicPurchase, SyncMusicPurchaseResponse,
 };
+use o2jam_net::wallet::{SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
     AcquireMusic, AcquireMusicRequest, ChannelLogin, ChannelLoginResponse, ChannelLoginResult,
@@ -519,6 +520,10 @@ pub struct OnlineSession {
     /// Live item-shop buy (`None` while no BUYITEM commit is in
     /// flight; the per-frame [`Self::poll_shop_buy`] owns it).
     shop_buy_attempt: Option<ShopBuyAttempt>,
+    /// A 5028 wallet refresh was sent after BACK and its 5029 answer
+    /// is still expected. Gates the read-side drain so unrelated
+    /// lobby/waiting frames keep their own polls.
+    wallet_refresh_expected: bool,
     /// Live song-shop buy (`None` while no buy commit is in
     /// flight; the per-frame [`Self::poll_music_buy`] owns it).
     music_buy_attempt: Option<MusicBuyAttempt>,
@@ -602,6 +607,7 @@ impl OnlineSession {
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
+            wallet_refresh_expected: false,
             music_buy_attempt: None,
             gift_list_attempt: None,
             gift_claim_attempt: None,
@@ -2318,7 +2324,47 @@ impl OnlineSession {
         }
         if let Err(source) = self.gateway.send_frame(ExitShop::COMMAND, &[]) {
             tracing::warn!(%source, "shop exit send failed after BACK");
+            return;
         }
+        // The tap emits 5028 next; Memoryer answers with the 5029
+        // wallet snapshot that repaints both shop and MyRoom.
+        if let Err(source) = self.gateway.send_frame(SyncCashPoint::COMMAND, &[]) {
+            tracing::warn!(%source, "wallet refresh send failed after BACK");
+        } else {
+            self.wallet_refresh_expected = true;
+        }
+    }
+
+    /// Drain the wallet answer that follows BACK (5028 → 5029),
+    /// and any other 5029 snapshot from the gateway. The body is two
+    /// words: gem and cash point, the same slots the 5001 prefix and
+    /// post-list wallets refresh.
+    fn poll_wallet_answer(&mut self) {
+        if !self.wallet_refresh_expected {
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "wallet refresh", |session| loop {
+            match session.gateway.next_frame() {
+                Ok(frame) if frame.id == SyncCashPointResponse::COMMAND => {
+                    match SyncCashPointResponse::decode_body(&frame.payload) {
+                        Ok(response) => session.game.apply_shop_cash_point(&response),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable wallet answer")
+                        }
+                    }
+                    session.wallet_refresh_expected = false;
+                    break;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-wallet frame in wallet drain");
+                }
+                Err(_) => {
+                    session.wallet_refresh_expected = false;
+                    break;
+                }
+            }
+        });
     }
 
     fn flush_shop_buy(&mut self) {
@@ -3506,6 +3552,7 @@ impl OnlineSession {
         self.flush_exit_shop();
         self.poll_attempts();
         self.poll_sell_response();
+        self.poll_wallet_answer();
         if self.game.screen() == Screen::Room {
             self.poll_room_user_list_fuse();
         }
@@ -4473,6 +4520,64 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn wallet_refresh_reads_the_live_626_over_zero_5029_body() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_wallet_answer ->
+        //   SyncCashPointResponse::decode_body ->
+        //   ScreenGame::apply_shop_cash_point -> WalletState::apply_cash_point.
+        // The BACK tap's wire `94b2ea8f…a2508` carries `5029` body
+        // `7202000000000000` (gem 626, cash point 0); the exe paints
+        // `G 626 / W 0` in the same frame. Tier 2 scripted gateway.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let exit = read_frame(&mut stream);
+            assert_eq!(exit.id, 5007);
+            stream
+                .write_all(&encode_frame(
+                    5029,
+                    &[0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                ))
+                .unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(757, 580);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+
+        assert_eq!(session.game.shop_gem_caption(), "GEM 626");
+        assert_eq!(session.game.wallet().cash_point, Some(0));
+    }
+
+    #[test]
     fn item_shop_back_sends_the_empty_5007_exit() {
         // Live caller chain:
         //   OnlineSession::paint -> poll_wire -> flush_exit_shop ->
@@ -4488,6 +4593,9 @@ pub(super) mod session_tests {
             let exit = read_frame(&mut stream);
             assert_eq!(exit.id, 5007);
             assert!(exit.payload.is_empty(), "5007 carries an empty body");
+            let refresh = read_frame(&mut stream);
+            assert_eq!(refresh.id, 5028);
+            assert!(refresh.payload.is_empty(), "5028 carries an empty body");
         });
 
         let mut game = ScreenGame::new();
