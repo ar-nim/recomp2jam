@@ -21846,6 +21846,38 @@ mod game_tests {
     }
 
     #[test]
+    fn planet_tutorial_plate_click_stays_click_silent_under_static_dead_verdict() {
+        // Ticket #471: live chain boot → Waiting → Planet side → the
+        // dimmed TUTORIAL plate `0x19201006` at its `docs/planet.md:84`
+        // rect `(614,32)-(713,144)`. Static pin `S-PLAY-B3` shows both
+        // plates are disabled at construction (`0x48df50`–`0x48df8b`)
+        // and handler `0x48e280` only picks a channel family: no
+        // `CStateTutorial` dispatch exists there. Only FIRSTSTEP is a
+        // qualified entry; a plate press must not mount the chart.
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SPLANET_TUTORIAL".to_owned(),
+                code: 0x1920_1006,
+                sprite: None,
+                rect: Rect {
+                    x: 614,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Planet));
+        game.ingest_snapshot(&InputSnapshot::click_at(663, 88));
+        assert_eq!(game.side(), Some(SideScreen::Planet));
+        assert_eq!(game.tutorial_chart_globals(), None);
+    }
+
+    #[test]
     fn firststep_click_from_boot_staged_room_sets_the_pinned_tutorial_globals() {
         // Live chain: ScreenGame boot → Planet → Channel → Room
         // (`room_lobby_with_control`) → click of staged FIRSTSTEP chrome
