@@ -23,6 +23,7 @@ enter the repo.
 | #363 / #369 / live-4 gesture (cross-state fix ledger) | #363 `007c38c` dossier `ev_0df48…fd20d`; #369 `007c38c`, live-4 citation `a0e0fd08ef2d917d36be9e590dabce7ebebb1ca69b4214cfb3be87dba633c4a1`; STATUS `b095a915…`, return `c838e437…` | Item art and MyRoom panel faces are explicit cells in #178 / #180; they explain the Room→side-screen entry path but pin no Music Shop pixel. |
 | `docs/musicshop.md`, `docs/parity/musicshop.md`, `docs/shop-buy.md`, `docs/net-protocol.md`, journey audit `179-music-shop.md` | exe hash above; 138 `State_MShop.bnd` rects; sort codes `0x1A201010..15`, right-rank sorts `0x1A200016..18`, TOP100 `0x1A20007D..84` (#181), 5010 send switch file `0xa4df0` index 8, opcode 5012 file/offset pin, 5011 untraced | Static pins only. 5011/5012 reply shapes and 5010 live ride stay OPEN; no guard counts as exe evidence. |
 | MyRoom wave-3 gap list (`docs/captures/journey-audit/180-myroom-story-matrix.md`) | E-W/E-G: 5001/5003/5017/5018/5023/5024 | Cross-reference: shared wire family graded once with the #178 matrix; both legs tapped with no such frame. |
+| `~/scratch/evidence-shops/gifted-boot/exe/wire/scripted-gateway.jsonl` + SHOP-EVIDENCE inventory (cross-spec) | wire `94b2ea8f994e597ff4619ba2e6f0e434988ce7f2a5d6d1aa8ec2c88f404a2508`; `shop-back.png` `ff5227209f837efde5b9244335cecbf503eeff29b270` | Item Shop BACK tap emits `C2S 5007 ExitShop` empty. The opcode is shared by both side shops (`docs/net-protocol.md` §4a), so this grades the 5007 server cell once; the Music Shop BACK *frame* is still missing. |
 
 ## 2. Matrix (21 actions × 5 observer actors = 105 cells)
 
@@ -50,12 +51,14 @@ observation that does not exist yet. Every GAP names a next step below.
 | **DOWNLOAD-PANEL** (self:local download sheet) | NA-DESIGN — no download offline | GAP — OPEN — `E-M` | EVIDENCED — `<entry>` → lower-right download sheet with current/total speed and remaining-time cells (idle `KB/s` and `남은시간`); `964be986…`, `4debf1f0…`; static codes `0x1A20000E..0F`, texts `0x1A400019..021` | NA-DESIGN — private sheet | NA-DESIGN — panel presence is staged art, not a wire field |
 | **DOWNLOAD-5012** (self:server 5012 completion) | NA-DESIGN — no FTP flow offline | GAP — OPEN — `E-M` | GAP — no exe 5012 request/notice frame from the shop; the post-start FTP pump is a different state; OPEN — `E-W-5012` | NA-DESIGN — private download state | GAP — opcode 5012 is static only; no live body; OPEN — `E-W-5012` |
 | **CASH-FILLUP** (self:local CASHFILLUP control) | NA-DESIGN — no billing session offline | GAP — OPEN — `E-M` | GAP — no qualified Music Shop cash-fillup press frame. Cross-state: #362's Item Shop charge plate and p362b's `live_boot_charge_plate_snapshot_click_paints_chrome` are the pinned charge path, not a Music Shop pixel; OPEN — `E-T` | NA-DESIGN — local billing sheet | NA-DESIGN — no wire frame for the fillup click |
-| **BACK-RETURN** (self:local BACK `(757,580)`) | NA-DESIGN — no lobby offline | GAP — OPEN — `E-M` | GAP — no exe Music Shop BACK frame (boot 1 and 3 end in the shop); OPEN — `E-B` | NA-DESIGN — local transition | GAP — 5007 ExitShop not seen in either tap; OPEN — `E-B` with tap |
+| **BACK-RETURN** (self:local BACK `(757,580)`) | NA-DESIGN — no lobby offline | GAP — OPEN — `E-M` | GAP — no exe Music Shop BACK frame (boot 1 and 3 end in the shop); OPEN — `E-B` | NA-DESIGN — local transition | LIVE-FILLED — cross-spec tap from the #178 SHOP-EVIDENCE boot: Item Shop BACK emits `C2S 5007` empty and a following `5028/5029`; wire `94b2ea8f…a2508`, frame `ff522720…ef29b270`. Graded once for the shared opcode; no Music Shop press frame yet |
 | **BUY-TO-SELECT** (self:server-owned song after buy) | NA-DESIGN — no select offline | GAP — OPEN — `E-M` | GAP — no exe buy→song-select capture; our scripted state join is not an exe pin; OPEN — `E-W-5011` + select capture | NA-DESIGN — private song list | GAP — no ownership broadcast tied to a shop buy; OPEN — `E-W-5011` |
 | **VISITOR-VIEW-OTHERS-SHOP** (other:master/peer) | NA-DESIGN — no session | NA-DESIGN — no visitor opcode; design seam is the local side screen | NA-DESIGN — same boundary; no observer enters another player's shop | NA-DESIGN — no channel row for a side screen | NA-DESIGN — no visitor request in the 5000 family; graded NA-DESIGN, never a passed story |
 
-Counts: **105 cells** — 9 EVIDENCED, 43 GAP, 2 LIVE-FILLED, 0 OPEN-FIX,
-51 NA-DESIGN. Every GAP names a step below. A cell is a story candidate, not
+Counts: **105 cells** — 9 EVIDENCED, 42 GAP, 3 LIVE-FILLED, 0 OPEN-FIX,
+51 NA-DESIGN. Every GAP names a step below. The 2026-11-19 SHOP-EVIDENCE
+leg pinned the shared `5007 ExitShop` wire from an Item Shop BACK tap; the
+Music Shop peer cell stays GAP because no Music Shop BACK frame was captured. A cell is a story candidate, not
 a closure.
 
 Next-step ids (shared with #178 and #180 matrices):
