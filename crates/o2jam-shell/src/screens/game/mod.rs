@@ -74,6 +74,7 @@ use super::side::{
     TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
+use crate::screens::messenger::MessengerHost;
 use crate::staging::MessengerSheet;
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
@@ -247,7 +248,13 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
     unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
     unwired(0x1320_003D, "IDC_BUTTON_SROOM_CONFERENCE", HANDLER_STEP),
-    unwired(0x1320_0048, "IDC_BUTTON_SROOM_MESSENGER", HANDLER_STEP),
+    // The host code lives in the Messenger family declaration; the
+    // press itself stays unwired until an exe Room pack pins it (#629).
+    unwired(
+        MessengerHost::Room.control_code(),
+        "IDC_BUTTON_SROOM_MESSENGER",
+        HANDLER_STEP
+    ),
     // The block spells this code `0x1320C04B` (the `0xC0` nibble rides in
     // the low word), unlike its neighbours.
     unwired(0x1320_C04B, "IDC_BUTTON_SROOM_WATINGVIEW", HANDLER_STEP),
@@ -9180,6 +9187,63 @@ mod game_tests {
     }
 
     #[test]
+    fn room_messenger_hover_repaints_the_pinned_body_frame() {
+        // Spec #315 story M3: the Room MESSENGER button hover repaints
+        // `Btn_Messenger.ojs` frame 0 on rect `627,571-662,590`.
+        // EXE pins `docs/hover.md:120` (hover frame fd9a61c9…20d vs
+        // rest 35b4d5d4…868, 434 changed px); the sweep is a frame
+        // pin, not a fresh capture claim. Live chain: boot -> Channel
+        // -> Room -> pointer snapshot -> `hovered_room_control` ->
+        // `paint_room` -> `paint_room_scene_with_hover` ->
+        // `paint_room_hover` frame 0. Synthetic two-frame body keeps
+        // the guard data-independent (CI has no archives).
+        use crate::screens::messenger::MessengerHost;
+        let code = MessengerHost::Room.control_code();
+        assert_eq!(code, 0x1320_0048, "pinned Room MESSENGER code");
+        let rect = Rect {
+            x: 627,
+            y: 571,
+            w: 35,
+            h: 19,
+        };
+        let mut game = room_lobby_with_placements(vec![(code, "IDC_BUTTON_SROOM_MESSENGER", rect)]);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_MESSENGER".to_owned(),
+                code,
+                sprite: Some("Btn_Messenger.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([(
+                "Btn_Messenger.ojs".to_owned(),
+                chrome_two_layer_figure(35, 19),
+            )]),
+        );
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 644, 580), rest);
+        game.ingest_snapshot(&InputSnapshot::motion_to(644, 580));
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(code),
+            "the pinned rect names the MESSENGER chrome"
+        );
+        assert_eq!(
+            room_pixel(&mut game, 644, 580),
+            hover,
+            "hover repaints frame 0"
+        );
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+        assert_eq!(
+            room_pixel(&mut game, 644, 580),
+            rest,
+            "unhover restores rest"
+        );
+    }
+
+    #[test]
     fn hovered_room_button_repaints_on_an_empty_room_list() {
         // The exe arms chrome hover on an empty live room — every
         // `docs/hover.md` sweep row shows the six empty row panels
@@ -13055,6 +13119,67 @@ mod game_tests {
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);
+    }
+
+    #[test]
+    fn messenger_host_press_paths_name_the_pinned_arm_and_the_open_arms() {
+        // Spec #315 story 16: the five host MESSENGER codes are pinned
+        // by the shipped ControlList. Only the MyRoom arm has a
+        // qualified exe press pack (B8: one-OK liveness sheet); the
+        // other four stay labeled `N-HOST` gaps, never inferred from
+        // the shared sheet family or from a filename.
+        // Live caller chain (pinned arm): boot -> Waiting -> MyRoom
+        // side -> staged MESSENGER code -> click_dispatch ->
+        // MyRoomAction::MessengerLiveness -> messenger_liveness_open.
+        use super::super::side::MYROOM_MESSENGER_CODE;
+        use crate::screens::messenger::MESSENGER_HOSTS;
+        let expected = [
+            (MessengerHost::Room, 0x1320_0048u32),
+            (MessengerHost::Shop, 0x1420_00B8),
+            (MessengerHost::MyRoom, 0x1520_006D),
+            (MessengerHost::Waiting, 0x1620_006A),
+            (MessengerHost::MusicShop, 0x1A20_0088),
+        ];
+        assert_eq!(MESSENGER_HOSTS.len(), expected.len());
+        for (host, (declared, code)) in MESSENGER_HOSTS.into_iter().zip(expected) {
+            assert_eq!(host, declared, "host order in the declaration");
+            assert_eq!(host.control_code(), code, "{host:?} ControlList code");
+            assert_eq!(
+                host.exe_response_pin().is_some(),
+                host == MessengerHost::MyRoom,
+                "{host:?} must not claim an unpinned response"
+            );
+            if host != MessengerHost::MyRoom {
+                assert!(
+                    host.next_evidence().contains("N-HOST"),
+                    "{host:?} names its capture step"
+                );
+            }
+        }
+        assert_eq!(MessengerHost::MyRoom.control_code(), MYROOM_MESSENGER_CODE);
+        assert_eq!(
+            MessengerHost::MyRoom.exe_response_pin(),
+            Some("B8 one-OK liveness sheet")
+        );
+
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(
+                MessengerHost::MyRoom.control_code(),
+                627,
+                571,
+            )],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // side entry, not the press
+        assert!(!game.messenger_liveness_open(), "no sheet before the press");
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(
+            game.messenger_liveness_open(),
+            "the pinned MyRoom arm opens the liveness sheet"
+        );
     }
 
     #[test]
@@ -17227,6 +17352,76 @@ mod game_tests {
         assert_eq!(game.scene_bgm_selection(), None, "lanking cues silence");
         assert!(game.leave_side());
         assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
+    }
+
+    #[test]
+    fn messenger_sheet_keeps_the_host_bgm_while_it_blocks_host_clicks() {
+        // Spec #315 story 20, messenger side: the qualified B8 sheet
+        // paints over MyRoom (#479). Our client keeps the host's cue
+        // running while the sheet owns clicks; no new dialogue cue is
+        // invented (#301). The exe has no before/after audio pair yet
+        // (`N-AUDIO`), so this is a client-side coexistence invariant,
+        // not an exe audio pin.
+        // Live chain: main.rs::run_play -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> MyRoomAction::MessengerLiveness
+        // -> paint_relay_down_dialog; audio rides the single
+        // `apply_bgm_cue` seam on side entry and side leave.
+        use super::super::side::{MYROOM_BACK_CODE, MYROOM_MESSENGER_CODE};
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(CueLog {
+                inner: o2jam_audio::NullBackend::new(),
+                pushes: Rc::clone(&pushes),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[5, 6, 8, 9]));
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_MESSENGER_CODE, 627, 571),
+                myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // entry fetch, not the press
+        let host_pushes = pushes.borrow().clone();
+        let host_cue = game.scene_bgm_selection();
+        assert_eq!(host_cue.map(|cue| cue.record), Some(5), "MyRoom cue");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(game.messenger_liveness_open(), "B8 liveness sheet opens");
+        assert_eq!(
+            *pushes.borrow(),
+            host_pushes,
+            "opening the sheet must not cut the host cue"
+        );
+        assert_eq!(game.scene_bgm_selection(), host_cue, "same latched track");
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(game.side(), Some(SideScreen::MyRoom));
+
+        // A host button under the sheet cannot take the click, and so
+        // cannot re-cue the scene. OK closes; the same button works
+        // again and re-cues the Waiting lobby.
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 20));
+        assert!(game.messenger_liveness_open(), "host click stays blocked");
+        assert_eq!(*pushes.borrow(), host_pushes, "blocked click cues nothing");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.messenger_liveness_open(), "OK clears the sheet");
+        assert_eq!(
+            *pushes.borrow(),
+            host_pushes,
+            "closing the sheet cues nothing"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 20));
+        assert_eq!(game.side(), None, "host BACK works after OK");
+        assert_eq!(
+            pushes.borrow().last().copied(),
+            Some(6),
+            "returning to Waiting re-cues record 6"
+        );
     }
 
     fn lanking_record(song_id: u32, bpm: f32, title: &str, artist: &str) -> Vec<u8> {

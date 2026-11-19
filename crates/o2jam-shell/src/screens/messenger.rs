@@ -7,6 +7,70 @@
 //! action frame, and no send opcode. This module therefore names the
 //! five buttons without inventing a semantic action or a wire shape.
 
+/// One lobby hosting the Messenger control family. The five codes
+/// come from the spec #315 evidence map; only MyRoom has a qualified
+/// exe press pack, so the other four name a capture step instead of
+/// a response (tickets #629/#646/#648/#650/#652).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessengerHost {
+    /// Room board (`IDC_BUTTON_SROOM_MESSENGER`).
+    Room,
+    /// Item Shop board.
+    Shop,
+    /// Avatar MyRoom side screen (the B8 press pack).
+    MyRoom,
+    /// Waiting room board.
+    Waiting,
+    /// Music Shop board.
+    MusicShop,
+}
+
+impl MessengerHost {
+    /// `ControlList` control code pinned by the spec evidence map.
+    #[must_use]
+    pub const fn control_code(self) -> u32 {
+        match self {
+            Self::Room => 0x1320_0048,
+            Self::Shop => 0x1420_00B8,
+            Self::MyRoom => super::side::MYROOM_MESSENGER_CODE,
+            Self::Waiting => 0x1620_006A,
+            Self::MusicShop => 0x1A20_0088,
+        }
+    }
+
+    /// The one exe-observed response to this host's press, if any.
+    /// `None` is an evidence gap, never a dead verdict.
+    #[must_use]
+    pub const fn exe_response_pin(self) -> Option<&'static str> {
+        match self {
+            Self::MyRoom => Some("B8 one-OK liveness sheet"),
+            Self::Room | Self::Shop | Self::Waiting | Self::MusicShop => None,
+        }
+    }
+
+    /// Next evidence step for an unpinned host arm. The pinned arm
+    /// keeps the pack name instead, so a guard can tell them apart.
+    #[must_use]
+    pub const fn next_evidence(self) -> &'static str {
+        match self {
+            Self::Room | Self::Shop | Self::Waiting | Self::MusicShop => {
+                "N-HOST: qualified exe press frame and input log on this host board"
+            }
+            Self::MyRoom => "B8 pack f9d4a695...f8b pins the liveness sheet",
+        }
+    }
+}
+
+/// All five host controls in spec order. Four arms stay OPEN (`N-HOST`),
+/// so this table names codes and evidence, not live dispatch.
+pub const MESSENGER_HOSTS: [MessengerHost; 5] = [
+    MessengerHost::Room,
+    MessengerHost::Shop,
+    MessengerHost::MyRoom,
+    MessengerHost::Waiting,
+    MessengerHost::MusicShop,
+];
+
 /// `DIALOG_MESSENGER_MAIN` block: 77 parsed rects.
 pub const MESSENGER_MAIN_BLOCK: &str = "DIALOG_MESSENGER_MAIN";
 /// `DIALOG_MESSENGER_FRIENDADD` block: 6 parsed rects.
@@ -19,6 +83,24 @@ pub const MESSENGER_NOTE_BLOCK: &str = "DIALOG_MESSENGER_NOTE";
 pub const MESSENGER_POPUPMENU_BLOCK: &str = "DIALOG_MESSENGER_POPUPMENU";
 /// `DIALOG_MESSENGER_INFORMATION` block: 5 parsed rects.
 pub const MESSENGER_INFORMATION_BLOCK: &str = "DIALOG_MESSENGER_INFORMATION";
+
+/// `IDC_BUTTON_MESSENGER_NOTE_SEND` in `DIALOG_MESSENGER_NOTE`
+/// (`0x89200007` in the shipped ControlList). The Note sheet stages
+/// its 13 rects, but no qualified pack mounts it or shows a SEND
+/// reply body, so the control stays a labeled no-op.
+pub const NOTE_SEND_CODE: u32 = 0x8920_0007;
+
+/// Why SEND sends nothing: the next step is one tapped exe SEND press
+/// naming its opcode and body (`N-WIRE`), then the P0 replacement
+/// (`N-P0`). Until then no send shape is invented.
+const NOTE_SEND_NOOP_LABEL: &str = "IDC_BUTTON_MESSENGER_NOTE_SEND: no exe send pin; no wire";
+
+/// Resolve the NOTE SEND control to its labeled no-op. `None` for
+/// every other Note code (e.g. CANCEL), which has no no-op verdict.
+#[must_use]
+pub fn note_noop_label(code: u32) -> Option<&'static str> {
+    (code == NOTE_SEND_CODE).then_some(NOTE_SEND_NOOP_LABEL)
+}
 
 /// The five `IDC_BUTTON_MESSENGER_POPUPMENU0n` codes in ControlList
 /// order. The shipped names number the buttons but say nothing about
@@ -54,6 +136,23 @@ pub fn popup_menu_noop_label(code: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_send_stays_a_labeled_noop_without_an_exe_send_pin() {
+        // seam: the whole claim is the no-op contract — the 13-rect
+        // Note sheet stages, but the qualified packs never mount it
+        // or show a SEND action frame (`N-WIRE`, then `N-P0`), so no
+        // send opcode or body exists to reach from boot.
+        let label = note_noop_label(NOTE_SEND_CODE).expect("SEND has a no-op label");
+        assert!(label.contains("IDC_BUTTON_MESSENGER_NOTE_SEND"), "{label}");
+        assert!(label.contains("no exe send pin"), "{label}");
+        assert!(label.contains("no wire"), "{label}");
+        assert_eq!(
+            note_noop_label(0x8920_0008),
+            None,
+            "CANCEL is not the SEND control"
+        );
+    }
 
     #[test]
     fn popup_menu_buttons_stay_labeled_noops_off_the_pinned_sheet() {

@@ -944,15 +944,18 @@ fn resolve_bound_row(
 
 /// Stage one Messenger sheet through the same bound-row path every
 /// dialog uses. No dialog row is needed: the sheet's own `BOUND` block
-/// and `.bnd` are the geometry source (ADR-0003). Paint wiring stays
-/// off — the exe never mounts these sheets in the pinned packs.
+/// and `.bnd` are the geometry source (ADR-0003). The frame placement
+/// keeps its parsed origin; every child rect is authored relative to
+/// that frame and is staged at `frame + child` (spec #315 story 13).
+/// Paint wiring stays off — the exe never mounts these sheets in the
+/// pinned packs.
 #[must_use]
 pub fn stage_messenger_sheet(
     archive: &[u8],
     sheet: MessengerSheet,
     ctx: StageContext,
 ) -> StageReport {
-    stage_bound_row(
+    let mut report = stage_bound_row(
         archive,
         &StageRow {
             state: State::Planet,
@@ -962,7 +965,40 @@ pub fn stage_messenger_sheet(
             extra_sprites: &[],
         },
         ctx,
-    )
+    );
+    if let Some(art) = report.art.as_mut() {
+        stage_at_parent_origin(art);
+    }
+    report
+}
+
+/// True for the sheet's frame placement: the bound `Dialog_*` body
+/// whose rect is the parent origin (the same rule `dialog_origin` uses
+/// when painting a staged dialog sheet).
+fn is_sheet_frame(placed: &ScenePlacement) -> bool {
+    placed
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+}
+
+/// Move one sheet's children from parent-local `.bnd` rects to canvas
+/// rects, leaving the frame at its parsed origin. The origin comes
+/// only from the staged frame placement — no literal sheet position.
+fn stage_at_parent_origin(art: &mut StagedArt) {
+    let Some(frame) = art
+        .placements
+        .iter()
+        .find(|placed| is_sheet_frame(placed))
+        .map(|placed| placed.rect)
+    else {
+        return;
+    };
+    for placed in &mut art.placements {
+        if !is_sheet_frame(placed) {
+            placed.rect = at_parent_origin(placed.rect, frame);
+        }
+    }
 }
 
 /// Stage one bound row: the Block paired with its `.bnd`, plus the
