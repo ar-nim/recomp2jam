@@ -6763,6 +6763,126 @@ pub(super) mod session_tests {
         assert_eq!(session.game.room_music_id(), Some(900));
     }
 
+    /// Two-song catalog for the #535 echo guard: the picked song 758
+    /// runs at 180 BPM while the room still echoes song 757 at 124.
+    fn two_tempo_catalog_blob() -> Vec<u8> {
+        let record = |id: u32, bpm: f32, title: &[u8; 5]| {
+            let mut bytes = vec![0u8; 300];
+            bytes[8..11].copy_from_slice(b"ojn");
+            bytes[4..8].copy_from_slice(&id.to_le_bytes());
+            bytes[20..24].copy_from_slice(&bpm.to_le_bytes());
+            bytes[112..117].copy_from_slice(title);
+            bytes
+        };
+        let mut catalog = record(757, 124.0, b"First");
+        catalog.extend_from_slice(&record(758, 180.0, b"Secon"));
+        catalog
+    }
+
+    /// Caption rects for the #535 echo guard: one cover opens the
+    /// staged waiting paint path, BPM and SPEED_NUM carry the ink.
+    fn waiting_caption_placements() -> Vec<o2jam_shell::avatar::ScenePlacement> {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        let placement = |id: &str, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        vec![
+            placement("IDC_IMAGE_SWAIT_COVERAVATAR1", 28, 53, 141, 175),
+            placement("IDC_TEXT_SWAIT_BPM", 620, 60, 60, 20),
+            placement("IDC_IMAGE_SWAIT_SPEED_NUM", 681, 378, 54, 35),
+        ]
+    }
+
+    #[test]
+    fn a_4001_room_echo_keeps_the_staged_pick_on_bpm_and_speed_captions() {
+        // Ticket #535 live chain: `main.rs::run_play` -> `OnlineSession::paint`
+        // (Waiting) -> `poll_waiting_chat` -> `drain_waiting_chat` ->
+        // `apply_waiting_music_changed` -> `ScreenGame::set_room_music` ->
+        // `paint_at` -> `paint_waiting` -> `paint_waiting_staged` ->
+        // `paint_waiting_bpm` / `paint_waiting_speed`. A staged pick
+        // (758, 180 BPM, speed 6) must survive an echo naming song 757.
+        let catalog = two_tempo_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&catalog).unwrap();
+        let placements = waiting_caption_placements();
+
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let echo = WaitingMusicChanged {
+                music_id: 757,
+                difficulty: 0,
+                speed: 2,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            let state = read_frame(&mut stream);
+            assert_eq!(state.id, Request::UpdateMusicState.id());
+            assert_quiet(&mut stream);
+        });
+        session.set_installed_music(Some(o2jam_file::installed_music(Vec::<String>::new())));
+        session.set_song_catalog(&entries);
+        session
+            .game_mut()
+            .set_selected_music(o2jam_net::SetRoomMusic {
+                music_id: 758,
+                difficulty: 2,
+                speed: 6,
+            });
+        let figures = std::collections::HashMap::new();
+        session
+            .game_mut()
+            .load_scene(Screen::Waiting, placements.clone(), figures.clone());
+
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(757)
+        });
+        server.join().unwrap();
+
+        // A room that already echoes the pick's song and speed is the
+        // reference: both caption rects must carry identical pixels.
+        let mut reference = ScreenGame::new();
+        reference.menu_key(MenuKey::Back, true);
+        reference.click_planet(136, 88);
+        reference.menu_key(MenuKey::Confirm, true);
+        let mut room = joined_snapshot();
+        room.music_id = 758;
+        room.speed = 6;
+        reference.set_joined_room(room);
+        reference.menu_key(MenuKey::Confirm, true);
+        assert_eq!(reference.screen(), Screen::Waiting);
+        reference.set_song_catalog(&entries);
+        reference.load_scene(Screen::Waiting, placements.clone(), figures);
+
+        let mut actual_buf = vec![0u32; 800 * 600];
+        let mut reference_buf = vec![0u32; 800 * 600];
+        session.game.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut actual_buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        reference.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut reference_buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for placement in placements {
+            assert_eq!(
+                o2jam_render::pixels_in_rect(&actual_buf, 800, placement.rect),
+                o2jam_render::pixels_in_rect(&reference_buf, 800, placement.rect),
+                "{} must carry the staged pick after the 4001 echo",
+                placement.id
+            );
+        }
+    }
+
     #[test]
     fn a_member_leaving_the_game_and_a_skill_change_reannounce_the_music_state() {
         // §2: the exe's 4022 (VA `0x4ab658`), 4024 (`0x4ab90c`) and 4058

@@ -1354,6 +1354,26 @@ mod live_art_tests {
             .unwrap_or(0)
     }
 
+    /// True while a pixel index lies inside one staged rect.
+    fn rect_contains(rect: o2jam_render::Rect, x: usize, y: usize) -> bool {
+        let (Ok(px), Ok(py)) = (i32::try_from(x), i32::try_from(y)) else {
+            return false;
+        };
+        rect.x <= px
+            && px < rect.x.saturating_add(i32::try_from(rect.w).unwrap_or(0))
+            && rect.y <= py
+            && py < rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(0))
+    }
+
+    /// Native rect of one staged Waiting caption, read from placements.
+    fn staged_caption_rect(game: &ScreenGame, id: &str) -> o2jam_render::Rect {
+        game.scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == id)
+            .map(|placed| placed.rect)
+            .unwrap_or_else(|| panic!("{id} placement missing from staged Waiting art"))
+    }
+
     #[test]
     fn live_waiting_pick_inks_nothing_below_the_seat_grid() {
         // Live chain: main.rs::run_play -> setup_online ->
@@ -1386,13 +1406,29 @@ mod live_art_tests {
             w: u32::try_from(width).unwrap_or(0),
             h: grid_bottom,
         };
+        let bpm = staged_caption_rect(&picked, "IDC_TEXT_SWAIT_BPM");
+        // The detail painter puts a scrim at (x-4, y-2) around its ink.
+        let bpm_with_scrim = o2jam_render::Rect {
+            x: bpm.x - 4,
+            y: bpm.y - 2,
+            w: bpm.w + 8,
+            h: bpm.h + 11,
+        };
         let bare_frame = painted_pixels(&mut bare, 0);
         let picked_frame = painted_pixels(&mut picked, 0);
         let changed =
             o2jam_render::first_change_outside(&bare_frame, &picked_frame, width, seat_grid);
+        // #535: the pick's BPM caption sits below the covers, so it
+        // may ink there; every other pixel below the grid stays put.
+        let (x, y) = changed.expect("the pick inks its BPM caption below the grid");
         assert!(
-            changed.is_none(),
-            "the pick must not ink the chat band: first pixel changed below the seat grid: {changed:?}"
+            rect_contains(bpm_with_scrim, x, y),
+            "the pick inked outside the seat grid and BPM caption: {changed:?}"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&bare_frame, width, bpm),
+            o2jam_render::pixels_in_rect(&picked_frame, width, bpm),
+            "the BPM caption must follow the staged pick"
         );
     }
 
