@@ -633,6 +633,30 @@ pub(crate) fn paint_room_detail_line(frame: &mut Frame<'_>, x: i32, y: i32, text
     draw_text(frame, x, y, text, ink);
 }
 
+/// Padlock body of the row template (`IDC_IMAGE_SROOM_PASSWORD`,
+/// `0x1350002C`): the real sprite has one 15x16 image, so frame 1
+/// paints the padlock and flag 0 leaves the site untouched (exe row
+/// fill `0x126872`–`0x12687d`, docs/room-enums.md).
+pub const ROOM_PASSWORD_SPRITE: &str = "Room_Password.ojs";
+
+/// Whether a staged password clone belongs to a locked live row. The
+/// one-image body must not paint for flag 0; an unowned placement is
+/// chrome and keeps its normal paint.
+fn password_clone_is_locked(
+    placed: &ScenePlacement,
+    panels: &[&str],
+    rooms: &[RoomListEntry],
+) -> bool {
+    if placed.role != PlacementRole::Clone || placed.sprite.as_deref() != Some(ROOM_PASSWORD_SPRITE)
+    {
+        return true;
+    }
+    let Some(index) = panels.iter().position(|panel| *panel == placed.id) else {
+        return true;
+    };
+    rooms.get(index).is_some_and(|room| room.has_password)
+}
+
 /// Lobby row-state icon body (`SET 0x11` row template, child 12):
 /// frame = the raw state byte (icon site `0x1268ae`), so frames 0/1/2
 /// drive its images (docs/room-enums.md).
@@ -933,7 +957,9 @@ pub fn paint_room_scene_with_hover(
 ) {
     let panels = room_panel_instances(&art.placements);
     art.paint_backdrop_live(frame, Screen::Room, |placed| {
-        room_chrome_visible(placed.code) && clone_instance_live(placed, &panels, rooms.len())
+        room_chrome_visible(placed.code)
+            && clone_instance_live(placed, &panels, rooms.len())
+            && password_clone_is_locked(placed, &panels, rooms)
     });
     paint_room_row_icons(frame, art, rooms);
     paint_room_details(frame, rooms, highlight, Some(art));

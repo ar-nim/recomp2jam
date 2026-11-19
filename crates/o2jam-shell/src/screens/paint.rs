@@ -3151,7 +3151,7 @@ pub use self::result::{
 pub(crate) use self::room::*;
 pub use self::room::{
     paint_room_scene, paint_room_scene_with_hover, paint_room_user_panel, ROOM_HOVER_SPRITE,
-    ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE, ROOM_STATE_SPRITE,
+    ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE, ROOM_PASSWORD_SPRITE, ROOM_STATE_SPRITE,
 };
 pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
 pub use self::waiting::{
@@ -5007,6 +5007,85 @@ mod paint_tests {
             premium: false,
             room_type: 0,
         }]
+    }
+
+    /// One staged row panel plus its password clone: the live room
+    /// painter paints the clone's sole body layer at the clone rect.
+    fn room_password_art() -> SceneArt {
+        let panel = |id: &str, x: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0x1301_201B,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 82,
+                w: 288,
+                h: 91,
+            },
+        };
+        let padlock = |id: &str, x: i32| ScenePlacement {
+            role: PlacementRole::Clone,
+            id: id.to_owned(),
+            code: 0x1350_002C,
+            sprite: Some(ROOM_PASSWORD_SPRITE.to_owned()),
+            rect: Rect {
+                x,
+                y: 140,
+                w: 15,
+                h: 16,
+            },
+        };
+        SceneArt {
+            placements: vec![
+                panel("IDC_BUTTON_SROOM_EXBUTTON1", 26),
+                panel("IDC_BUTTON_SROOM_EXBUTTON2", 317),
+                padlock("IDC_BUTTON_SROOM_EXBUTTON1", 200),
+                padlock("IDC_BUTTON_SROOM_EXBUTTON2", 500),
+            ],
+            figures: HashMap::from([(ROOM_PASSWORD_SPRITE.to_owned(), red_figure())]),
+        }
+    }
+
+    #[test]
+    fn unlocked_room_row_hides_the_padlock_but_locked_room_row_shows_it() {
+        // #700: the exe's flag=0 row (frame 30cac4c5..., 2005 count 1)
+        // has no padlock; flag=1 stages the one-image body. Both arms
+        // run through ScreenGame::paint_room → paint_room_scene_with_hover;
+        // staged art drives that same painter without a live server.
+        let unlocked = RoomListEntry {
+            number: 1,
+            has_password: false,
+            ..two_rooms()[0].clone()
+        };
+        let locked = RoomListEntry {
+            number: 2,
+            has_password: true,
+            ..unlocked.clone()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_scene_with_hover(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[unlocked, locked],
+            0,
+            &room_password_art(),
+            None,
+            None,
+        );
+        assert_eq!(
+            buf[140 * 800 + 200],
+            0,
+            "unlocked flag leaves the padlock site unpainted"
+        );
+        assert_eq!(
+            buf[140 * 800 + 500],
+            pack_xrgb(255, 0, 0),
+            "locked flag paints the padlock body"
+        );
     }
 
     #[test]
