@@ -1362,6 +1362,38 @@ mod tests {
     }
 
     #[test]
+    fn live_sell_pair_pins_request_refund_and_failure() {
+        // Live Memoryer legs `96bb62ce…25009b` (uid 2) and
+        // `9c9af74a…50d67` (invalid slot): the request is two words;
+        // success answers with a result word plus the gem refund, and
+        // failure answers with the result word alone.
+        let request = SellItem {
+            selection: 0,
+            entry: 376,
+        };
+        assert_eq!(
+            request.encode(),
+            vec![0x0C, 0x00, 0x8A, 0x13, 0x00, 0x00, 0x00, 0x00, 0x78, 0x01, 0x00, 0x00]
+        );
+        let refund = SellItemResponse::decode_body(&hex_bytes("0000000022390000")).unwrap();
+        assert_eq!(
+            refund,
+            SellItemResponse {
+                result: 0,
+                gem: Some(14626),
+            }
+        );
+        let failure = SellItemResponse::decode_body(&hex_bytes("01000000")).unwrap();
+        assert_eq!(
+            failure,
+            SellItemResponse {
+                result: 1,
+                gem: None,
+            }
+        );
+    }
+
+    #[test]
     fn sync_item_purchase_encodes_bare_frame() {
         assert_eq!(SyncItemPurchase.encode(), vec![0x04, 0x00, 0x88, 0x13]);
     }

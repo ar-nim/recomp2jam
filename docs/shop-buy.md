@@ -35,7 +35,10 @@ and the invalid sell answers 5002 with `01000000` (no refund word).
 and leaves the same 152-byte shape: there is no 5001 verdict field.
 `SyncItemPurchaseReply::decode_live_152` pins this observed shape;
 item-landing pixels stay OPEN because the exe sizes the bag list from
-the global `0x77cce4`.
+the global `0x77cce4`. The 5003 read-side fold runs on the Shop side
+when no attempt is in flight: a success refund updates the shared gem
+slot and an error word leaves it alone. The shell has no sell press
+pin yet, so no 5002 send is invented.
 
 Packet helpers used as evidence vocabulary: the fixed-size
 packet reader (`0x555d20`: copy `len` bytes from the packet
