@@ -198,6 +198,35 @@ mod live_boot_gate_tests {
         (port, server)
     }
 
+    /// Record the frame clock at every banner change in a window.
+    /// The paint seam is the same one the windowed heartbeat drives,
+    /// so the returned instants are the client's own advance times.
+    fn promo_changes_between(
+        game: &mut o2jam_shell::ScreenGame,
+        from_ms: u64,
+        until_ms: u64,
+    ) -> Vec<(u64, u32)> {
+        let mut changes = Vec::new();
+        let mut shown = game.planet_promo_index();
+        let mut buf = vec![0u32; 16 * 12];
+        for now_ms in (from_ms..=until_ms).step_by(50) {
+            game.paint_at(
+                &mut RenderFrame {
+                    buf: &mut buf,
+                    w: 16,
+                    h: 12,
+                },
+                now_ms,
+            );
+            let next = game.planet_promo_index();
+            if next != shown {
+                changes.push((now_ms, next));
+                shown = next;
+            }
+        }
+        changes
+    }
+
     /// Waiting room with no wire peers: the self seat still restages
     /// from the fetched hero when the avatar source lands.
     fn self_only_room() -> JoinedRoom {
@@ -1517,6 +1546,78 @@ mod live_boot_gate_tests {
         game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
         assert_eq!(game.planet_modal(), None, "OK clears the blue sheet");
         assert_eq!(game.channel_rows(), [row]);
+    }
+
+    /// Ticket #409: conformance of the client's three-record cycle
+    /// against the exe's pinned bare-board and dialog windows. Live
+    /// chain: `main.rs::run_online` -> `setup_online` ->
+    /// `assemble_online_session` -> `OnlineSession::stage_live_art`
+    /// -> `ScreenGame::paint_at` -> `tick_planet_promo_at` ->
+    /// `PlanetBoardState::tick_promo_clocked`.
+    /// Solo gaps `3056.5/2957.9/3052.9` (citation `d135105a…4ef3b0fe`);
+    /// guest/dialog gaps `2955.6/3053.6/2956.2` and
+    /// `2975.7/2966.4/3066.1` (boot-4 manifest `78e0617b…7c3ba9de8`).
+    #[test]
+    fn promo_cadence_conforms_on_solo_guest_and_dialog_arms() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        // The exe's slowest and fastest three-gap samples bound the
+        // 100 ms-poll cadence on every arm; our clock steps at 3000 ms.
+        const MIN_EXE_GAP_MS: u64 = 2_955;
+        const MAX_EXE_GAP_MS: u64 = 3_067;
+
+        for user in ["solo", "guest"] {
+            let (port, server) = spawn_boot_gateway();
+            let (report, gateway) =
+                connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+            let mut game = o2jam_shell::ScreenGame::new();
+            stage_online_identity(&mut game, report.character.as_ref());
+            let mut session =
+                assemble_online_session(game, gateway, Some(user), None, None, None).unwrap();
+            server.join().unwrap();
+            let game = session.game_mut();
+            game.menu_key(o2jam_shell::MenuKey::Back, true);
+            assert_eq!(game.screen(), Screen::Planet, "{user} reaches the board");
+
+            let changes = promo_changes_between(game, 0, 9_500);
+            assert_eq!(changes.len(), 3, "{user}: three record changes");
+            let shown: Vec<u32> = changes.iter().map(|(_, index)| *index).collect();
+            assert_eq!(shown, [2, 3, 1], "{user}: three-record cycle");
+            let instants: Vec<u64> = changes.iter().map(|(ms, _)| *ms).collect();
+            let gaps: Vec<u64> = instants.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            assert_eq!(gaps.len(), 2, "{user}: two measured gaps");
+            assert!(
+                gaps.iter()
+                    .all(|gap| (MIN_EXE_GAP_MS..=MAX_EXE_GAP_MS).contains(gap)),
+                "{user}: cadence inside the exe envelope, got {gaps:?}"
+            );
+        }
+
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("dialog"), None, None, None).unwrap();
+        server.join().unwrap();
+        let game = session.game_mut();
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
+        game.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        assert_eq!(
+            game.screen(),
+            Screen::Channel,
+            "dialog raised over the board"
+        );
+
+        let held = promo_changes_between(game, 0, 9_500);
+        assert!(held.is_empty(), "the dialog arm holds the banner");
+        game.enter_screen(Screen::Planet);
+        let resumed = promo_changes_between(game, 9_500, 12_500);
+        assert_eq!(resumed.len(), 1, "return resumes one tick, not a backlog");
+        assert_eq!(resumed[0].1, 2, "the cycle resumes on the next record");
     }
 
     /// Same boot chain, relay-up arm: no notice, the existing
