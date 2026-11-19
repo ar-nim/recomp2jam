@@ -74,6 +74,7 @@ use super::side::{
     TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
+use crate::screens::messenger::MessengerHost;
 use crate::staging::MessengerSheet;
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
@@ -247,7 +248,13 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
     unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
     unwired(0x1320_003D, "IDC_BUTTON_SROOM_CONFERENCE", HANDLER_STEP),
-    unwired(0x1320_0048, "IDC_BUTTON_SROOM_MESSENGER", HANDLER_STEP),
+    // The host code lives in the Messenger family declaration; the
+    // press itself stays unwired until an exe Room pack pins it (#629).
+    unwired(
+        MessengerHost::Room.control_code(),
+        "IDC_BUTTON_SROOM_MESSENGER",
+        HANDLER_STEP
+    ),
     // The block spells this code `0x1320C04B` (the `0xC0` nibble rides in
     // the low word), unlike its neighbours.
     unwired(0x1320_C04B, "IDC_BUTTON_SROOM_WATINGVIEW", HANDLER_STEP),
@@ -12974,6 +12981,67 @@ mod game_tests {
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);
+    }
+
+    #[test]
+    fn messenger_host_press_paths_name_the_pinned_arm_and_the_open_arms() {
+        // Spec #315 story 16: the five host MESSENGER codes are pinned
+        // by the shipped ControlList. Only the MyRoom arm has a
+        // qualified exe press pack (B8: one-OK liveness sheet); the
+        // other four stay labeled `N-HOST` gaps, never inferred from
+        // the shared sheet family or from a filename.
+        // Live caller chain (pinned arm): boot -> Waiting -> MyRoom
+        // side -> staged MESSENGER code -> click_dispatch ->
+        // MyRoomAction::MessengerLiveness -> messenger_liveness_open.
+        use super::super::side::MYROOM_MESSENGER_CODE;
+        use crate::screens::messenger::MESSENGER_HOSTS;
+        let expected = [
+            (MessengerHost::Room, 0x1320_0048u32),
+            (MessengerHost::Shop, 0x1420_00B8),
+            (MessengerHost::MyRoom, 0x1520_006D),
+            (MessengerHost::Waiting, 0x1620_006A),
+            (MessengerHost::MusicShop, 0x1A20_0088),
+        ];
+        assert_eq!(MESSENGER_HOSTS.len(), expected.len());
+        for (host, (declared, code)) in MESSENGER_HOSTS.into_iter().zip(expected) {
+            assert_eq!(host, declared, "host order in the declaration");
+            assert_eq!(host.control_code(), code, "{host:?} ControlList code");
+            assert_eq!(
+                host.exe_response_pin().is_some(),
+                host == MessengerHost::MyRoom,
+                "{host:?} must not claim an unpinned response"
+            );
+            if host != MessengerHost::MyRoom {
+                assert!(
+                    host.next_evidence().contains("N-HOST"),
+                    "{host:?} names its capture step"
+                );
+            }
+        }
+        assert_eq!(MessengerHost::MyRoom.control_code(), MYROOM_MESSENGER_CODE);
+        assert_eq!(
+            MessengerHost::MyRoom.exe_response_pin(),
+            Some("B8 one-OK liveness sheet")
+        );
+
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(
+                MessengerHost::MyRoom.control_code(),
+                627,
+                571,
+            )],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // side entry, not the press
+        assert!(!game.messenger_liveness_open(), "no sheet before the press");
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(
+            game.messenger_liveness_open(),
+            "the pinned MyRoom arm opens the liveness sheet"
+        );
     }
 
     #[test]
