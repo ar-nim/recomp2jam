@@ -3,7 +3,7 @@ use crate::avatar::{
     is_playing_backdrop_sprite, playing_backdrop_sprite, playing_member_frame,
     PLAYING_BACKDROP_CODE,
 };
-use crate::screens::side::CASH_CHARGE_WEB_CODE;
+use crate::screens::side::{CASH_CHARGE_WEB_CODE, TUTORIAL_RECEPTOR_SPRITES};
 
 #[test]
 fn states_key_by_their_block_names() {
@@ -171,10 +171,9 @@ fn full_canvas_rows_name_their_archive_and_extras() {
         "the interface stub names no bodies; the backdrop ships in Playing1"
     );
     assert_eq!(tutorial.archive, StagingArchive::Playing);
-    assert_eq!(
-        tutorial.extra_sprites,
-        &["Playing_TutorialBG.ojs", "Guide_Text.ojs", "Guide_Ani.ojs",] as &[&str]
-    );
+    let mut tutorial_names = vec!["Playing_TutorialBG.ojs", "Guide_Text.ojs", "Guide_Ani.ojs"];
+    tutorial_names.extend(TUTORIAL_RECEPTOR_SPRITES);
+    assert_eq!(tutorial.extra_sprites, tutorial_names.as_slice());
 }
 
 #[test]
@@ -319,6 +318,37 @@ fn loading_stages_its_named_body_with_no_block() {
 }
 
 #[test]
+fn tutorial_stages_all_seven_receptor_kits_from_the_archive() {
+    // Stage VA `0x4dd290` (file `0xdd3e6`) resolves seven
+    // `KeyEffect_Tutorial_%d.ojs` bodies, one per lane. Synthetic sprites
+    // stand in for archive bytes; the real row-487 anchors are pinned by
+    // the install-guarded painter guard in the shots walk.
+    let kit = sprite55_blob(2, 2, &[11; 8]);
+    let mut entries: Vec<(&str, &[u8])> = TUTORIAL_RECEPTOR_SPRITES
+        .iter()
+        .map(|name| (*name, kit.as_slice()))
+        .collect();
+    entries.extend([
+        ("Playing_TutorialBG.ojs", kit.as_slice()),
+        ("Guide_Text.ojs", kit.as_slice()),
+        ("Guide_Ani.ojs", kit.as_slice()),
+    ]);
+    let archive = o2jam_file::test_archive::build_archive(&entries);
+    let report = stage_state(&archive, State::Tutorial, StageContext::default());
+    assert!(report.misses.is_empty(), "all seven kits resolve");
+    let art = report.art.expect("seven kits stage");
+    for name in TUTORIAL_RECEPTOR_SPRITES {
+        assert!(art.figures.contains_key(name), "{name} stages");
+        assert!(
+            art.placements
+                .iter()
+                .any(|placed| placed.sprite.as_deref() == Some(name)),
+            "{name} has a placement"
+        );
+    }
+}
+
+#[test]
 fn tutorial_stages_backdrop_and_both_guide_bodies_with_no_block() {
     // Block-less full-canvas row: the B7 frame's backdrop, instruction
     // bubble (`1/13`) and coach come from three parsed records. Synthetic
@@ -333,9 +363,13 @@ fn tutorial_stages_backdrop_and_both_guide_bodies_with_no_block() {
         ("Guide_Ani.ojs", &coach),
     ]);
     let report = stage_state(&archive, State::Tutorial, StageContext::default());
-    assert!(report.misses.is_empty(), "no block, no bind, no miss");
+    assert_eq!(
+        report.misses.len(),
+        7,
+        "only this fixture's seven kit bodies are missing"
+    );
     let art = report.art.expect("tutorial stages with synthetic bytes");
-    assert_eq!(art.placements.len(), 3);
+    assert_eq!(art.placements.len(), 3 + TUTORIAL_RECEPTOR_SPRITES.len());
     for name in ["Playing_TutorialBG.ojs", "Guide_Text.ojs", "Guide_Ani.ojs"] {
         assert!(art.figures.contains_key(name), "{name} stages");
         assert!(

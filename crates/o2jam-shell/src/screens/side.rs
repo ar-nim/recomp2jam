@@ -12,6 +12,7 @@ use super::super::avatar::{
     paint_scene_figures, paint_scene_figures_live, paint_scene_figures_selected, scene_block,
     scene_sprite_names, AvatarFigure, ScenePlacement,
 };
+use super::super::playing::{RECEPTOR_FRAME_MS, TUTORIAL_FRAMES_PER_LANE};
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{
@@ -77,6 +78,33 @@ pub const CASH_CHARGE_WEB_CODE: u32 = 0x8350_0002;
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
 
+/// The seven `KeyEffect_Tutorial_%d.ojs` receptor bodies staged by
+/// Tutorial's kit arm (stage VA `0x4dd290`, file `0xdd3e6`), in lane
+/// order. Each body carries five frames at its parsed row-487 anchor.
+pub const TUTORIAL_RECEPTOR_SPRITES: [&str; 7] = [
+    "KeyEffect_Tutorial_1.ojs",
+    "KeyEffect_Tutorial_2.ojs",
+    "KeyEffect_Tutorial_3.ojs",
+    "KeyEffect_Tutorial_4.ojs",
+    "KeyEffect_Tutorial_5.ojs",
+    "KeyEffect_Tutorial_6.ojs",
+    "KeyEffect_Tutorial_7.ojs",
+];
+
+/// Bottom-right exit chrome of the tutorial: `Playing_Exit.ojs` at
+/// its parsed record anchor `(751,554)`, 42x42 (`docs/opi-pattern.md:54`).
+/// The qualified boot1 press `(777,567)` lands inside it and returns
+/// the Room board without a modal (`ed1bf56e…7b46`).
+pub const TUTORIAL_EXIT_SPRITE: &str = "Playing_Exit.ojs";
+/// Fallback hit rect when the exit body is not staged: the same
+/// parsed anchor, never an invented point.
+pub const TUTORIAL_EXIT_HIT_RECT: Rect = Rect {
+    x: 751,
+    y: 554,
+    w: 42,
+    h: 42,
+};
+
 /// First-page instruction bubble (`Guide_Text.ojs` record 0, anchor
 /// `(374,297)`, 322x156). The body stores 13 full pages; record 0 bakes
 /// the Korean lesson text and the `1/13` counter seen in the B7 exe
@@ -89,6 +117,63 @@ pub const TUTORIAL_INSTRUCTION_SPRITE: &str = "Guide_Text.ojs";
 /// their cadence is OPEN, so the exe-visible frame 0 is the only one
 /// painted.
 pub const TUTORIAL_COACH_SPRITE: &str = "Guide_Ani.ojs";
+
+/// Lit tutorial kit lanes. Each press starts a five-frame cap/glow
+/// animation; an up (or a scene exit) restores the rest frame. The
+/// tutorial's tally stays untouched: these are key lights, not
+/// judgements (qualified boot2 key frames keep COOL/BAD/GOOD/MISS 0).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TutorialKeyLights {
+    pressed_at_ms: [Option<u64>; 7],
+}
+
+impl TutorialKeyLights {
+    /// Arm one lane's press animation.
+    pub fn press(&mut self, lane: usize, now_ms: u64) {
+        if let Some(started) = self.pressed_at_ms.get_mut(lane) {
+            *started = Some(now_ms);
+        }
+    }
+
+    /// Clear one lane on release.
+    pub fn release(&mut self, lane: usize) {
+        if let Some(started) = self.pressed_at_ms.get_mut(lane) {
+            *started = None;
+        }
+    }
+
+    /// Clear every lane when the tutorial closes.
+    pub fn clear(&mut self) {
+        self.pressed_at_ms = [None; 7];
+    }
+
+    /// Which of a lane's five kit frames to show now: rest (0) until
+    /// pressed, then one frame per pinned 45 ms receptor step.
+    #[must_use]
+    pub fn frame_index(&self, lane: usize, now_ms: u64) -> usize {
+        let Some(started) = self.pressed_at_ms.get(lane).copied().flatten() else {
+            return 0;
+        };
+        let step = 1 + now_ms.saturating_sub(started) / RECEPTOR_FRAME_MS;
+        usize::try_from(step)
+            .ok()
+            .filter(|index| *index < TUTORIAL_FRAMES_PER_LANE)
+            .unwrap_or(0)
+    }
+}
+
+/// Lane carried by a `KeyEffect_Tutorial_%d.ojs` body name (1-based
+/// in the exe), or `None` for any other staged sprite.
+#[must_use]
+pub fn tutorial_key_lane(sprite: &str) -> Option<usize> {
+    let number = sprite
+        .strip_prefix("KeyEffect_Tutorial_")?
+        .strip_suffix(".ojs")?
+        .parse::<u8>()
+        .ok()?;
+    let lane = usize::from(number.checked_sub(1)?);
+    (lane < 7).then_some(lane)
+}
 
 /// Side views from lifecycle §12 (state IDs in
 /// `ControlList_Interface.txt`; counts in `docs/file-formats/opi.md`).
@@ -4490,14 +4575,17 @@ pub fn paint_side_scene_live(
 }
 
 /// Tutorial side painter: the full-canvas backdrop keeps its stacked
-/// art, while the two guide bodies show only the exe-visible frame 0.
-/// An image control swaps one surface per view; stacking all 13 text
-/// pages would cover `1/13` with page 13 (B7 frame hash
-/// `612830b5…e77b8`). Geometry stays the parsed record anchors.
+/// art, the two guide bodies show only the exe-visible frame 0, and
+/// each of the seven kit bodies shows its rest frame or its current
+/// key-light frame. An image control swaps one surface per view;
+/// stacking all 13 text pages would cover `1/13` with page 13 (B7
+/// frame hash `612830b5…e77b8`). Geometry stays the parsed anchors.
 pub fn paint_tutorial_scene(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     figures: &HashMap<String, AvatarFigure>,
+    key_lights: &TutorialKeyLights,
+    now_ms: u64,
 ) {
     paint_scene_figures_selected(
         frame,
@@ -4506,7 +4594,10 @@ pub fn paint_tutorial_scene(
         |_| true,
         |placed| match placed.sprite.as_deref() {
             Some(TUTORIAL_INSTRUCTION_SPRITE | TUTORIAL_COACH_SPRITE) => Some(0),
-            _ => None,
+            Some(sprite) => {
+                tutorial_key_lane(sprite).map(|lane| key_lights.frame_index(lane, now_ms))
+            }
+            None => None,
         },
     );
 }

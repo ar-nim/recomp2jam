@@ -23,7 +23,7 @@ use crate::screens::side::{
     PlanetOptionTab, SideScreen, CASH_CHARGE_DIALOG_BLOCK, CHANNEL_INFO_DIALOG_BLOCK,
     CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK,
     SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
-    TUTORIAL_INSTRUCTION_SPRITE,
+    TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -264,11 +264,20 @@ pub const STAGE_TABLE: &[StageRow] = &[
         arm: PlacementArm::FullCanvas,
         // B7 exe frame `612830b5…e77b8`: backdrop, frame-0 lesson
         // bubble (with `1/13`) and frame-0 coach are all in this scene.
-        // Their record anchors stage them; the painter picks frame 0.
+        // The lane kit arm `0x4dd290` adds seven receptor bodies at row
+        // 487. Their record anchors stage them; the painter selects one
+        // frame per body (key light) instead of stacking them.
         extra_sprites: &[
             TUTORIAL_BACKGROUND_SPRITE,
             TUTORIAL_INSTRUCTION_SPRITE,
             TUTORIAL_COACH_SPRITE,
+            TUTORIAL_RECEPTOR_SPRITES[0],
+            TUTORIAL_RECEPTOR_SPRITES[1],
+            TUTORIAL_RECEPTOR_SPRITES[2],
+            TUTORIAL_RECEPTOR_SPRITES[3],
+            TUTORIAL_RECEPTOR_SPRITES[4],
+            TUTORIAL_RECEPTOR_SPRITES[5],
+            TUTORIAL_RECEPTOR_SPRITES[6],
         ],
     },
 ];

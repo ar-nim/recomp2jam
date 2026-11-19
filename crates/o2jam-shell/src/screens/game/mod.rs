@@ -67,10 +67,10 @@ use super::side::{
     PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
     SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
     SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
-    TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    TUTORIAL_CHART_GLOBALS,
+    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -691,6 +691,10 @@ pub struct ScreenGame {
     /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
     /// the type-100 dismissal queue (#367).
     room_no_response: RoomNoResponseFuse,
+    /// One-OK liveness sheet over MyRoom after a MESSENGER press
+    /// (qualified B8 pack). It owns clicks until its OK is pressed;
+    /// the Messenger main sheet stays unwired (P0).
+    messenger_liveness_open: bool,
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -736,6 +740,10 @@ pub struct ScreenGame {
     /// values are exe globals, so leaving a side visit does not clear
     /// them; no exit writer is pinned.
     tutorial_chart_globals: Option<TutorialChartGlobals>,
+    /// Visual key-cap/glow lights for the Tutorial's seven kit bodies.
+    /// No judgement or score state: the boot2 key frames keep every
+    /// tally at zero.
+    tutorial_key_lights: TutorialKeyLights,
     /// Lanking board state (the catalog, sort, pages, board, and
     /// pick; #139 cluster 2): every `lanking_*` word lives here;
     /// the hash fold reads it for the six hashed words.
@@ -1023,6 +1031,7 @@ impl ScreenGame {
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
+            messenger_liveness_open: false,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1039,6 +1048,7 @@ impl ScreenGame {
             side: None,
             side_origin: None,
             tutorial_chart_globals: None,
+            tutorial_key_lights: TutorialKeyLights::default(),
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
@@ -1511,6 +1521,12 @@ impl ScreenGame {
     #[must_use]
     pub const fn room_no_response_dialog_open(&self) -> bool {
         self.room_no_response.sheet_open()
+    }
+
+    /// Whether the pinned Messenger liveness sheet owns input.
+    #[must_use]
+    pub const fn messenger_liveness_open(&self) -> bool {
+        self.messenger_liveness_open
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -4254,6 +4270,14 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.messenger_liveness_open {
+            // The one-OK sheet owns every click until OK; it sends
+            // no wire (Memoryer has no messenger endpoint).
+            if self.information_ok_hit(x, y) {
+                self.messenger_liveness_open = false;
+            }
+            return;
+        }
         if self.room_no_response_dialog_open() {
             if self.information_ok_hit(x, y) {
                 self.post_room_no_response_dismissal();
@@ -4303,12 +4327,35 @@ impl ScreenGame {
         }
     }
 
+    /// Tutorial exit hit test: use the staged `Playing_Exit.ojs` rect
+    /// when the art is present, otherwise the same anchor from the
+    /// archive pin. The qualified boot1 press `(777,567)` lands here.
+    fn tutorial_exit_hit(&self, x: i32, y: i32) -> bool {
+        let rect = self
+            .side_placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some(TUTORIAL_EXIT_SPRITE))
+            .map_or(TUTORIAL_EXIT_HIT_RECT, |placed| placed.rect);
+        let offset_x = i64::from(x) - i64::from(rect.x);
+        let offset_y = i64::from(y) - i64::from(rect.y);
+        offset_x >= 0
+            && offset_x < i64::from(rect.w)
+            && offset_y >= 0
+            && offset_y < i64::from(rect.h)
+    }
+
     /// The open side screen answers its named controls at staged
     /// rects (lanking: sorts, pagers, row picks; shop: row toggles,
-    /// buys, pagers, sorts; my room: the side overlay); every other
-    /// side screen stays click-silent. Returns whether the click was
-    /// consumed.
+    /// buys, pagers, sorts; my room: the side overlay; tutorial: the
+    /// bottom-right exit); every other side screen stays click-silent.
+    /// Returns whether the click was consumed.
     fn click_side_screen(&mut self, x: i32, y: i32) -> bool {
+        if self.side == Some(SideScreen::Tutorial) {
+            if self.tutorial_exit_hit(x, y) {
+                let _ = self.leave_side();
+            }
+            return true;
+        }
         if self.side == Some(SideScreen::Lanking) {
             self.click_lanking(x, y);
             return true;
@@ -4977,6 +5024,7 @@ impl ScreenGame {
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+            MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }
@@ -5145,6 +5193,9 @@ impl ScreenGame {
         self.side = Some(side);
         self.mount_staged_side_art(side);
         self.apply_bgm_cue(side.bgm_cue());
+        if side == SideScreen::Tutorial {
+            self.tutorial_key_lights.clear();
+        }
         if side == SideScreen::MyRoom {
             // Entry gift-list fetch (5017): the wire shape is
             // exe-pinned (`docs/gifts.md`); queueing it on entry is
@@ -5217,6 +5268,10 @@ impl ScreenGame {
         if !can_return_side(side, origin) {
             return false;
         }
+        if side == SideScreen::Tutorial {
+            self.tutorial_key_lights.clear();
+        }
+        self.messenger_liveness_open = false;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -5844,7 +5899,13 @@ impl ScreenGame {
                 myroom_panel_kept(placed, panel)
             });
         } else if self.side == Some(SideScreen::Tutorial) {
-            paint_tutorial_scene(frame, &self.side_placements, &self.side_figures);
+            paint_tutorial_scene(
+                frame,
+                &self.side_placements,
+                &self.side_figures,
+                &self.tutorial_key_lights,
+                now_ms,
+            );
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -5935,6 +5996,11 @@ impl ScreenGame {
                 now_ms,
             );
             self.paint_myroom_overlay(frame, &self.side_placements, &self.side_figures);
+        }
+        if self.messenger_liveness_open {
+            // Same staged Information sheet and Information origin as
+            // the relay notice; the B8 pack pins one OK and no wire.
+            paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
         }
     }
 
@@ -6778,6 +6844,17 @@ impl GameLoop for ScreenGame {
     }
 
     fn lane_key(&mut self, lane: usize, down: bool) {
+        if self.side == Some(SideScreen::Tutorial) {
+            // Tutorial keys light their own cap and glow; they never
+            // reach the Playing strike path or any judgement tally.
+            if down {
+                let pressed_at_ms = self.now_ms();
+                self.tutorial_key_lights.press(lane, pressed_at_ms);
+            } else {
+                self.tutorial_key_lights.release(lane);
+            }
+            return;
+        }
         if !down {
             return;
         }
@@ -12740,6 +12817,59 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_messenger_press_opens_the_pinned_liveness_sheet_and_ok_clears_it() {
+        // Qualified B8 pack `f9d4a695…` pins MyRoom press `(644,580)`
+        // → one-OK Information sheet, OK `(400,368)` clears it and host
+        // navigation proceeds; b6 is byte-identical on the sheet.
+        // Live chain: boot → Waiting → MyRoom side → staged MESSENGER
+        // button → sheet → OK. No send is queued: Memoryer has no
+        // messenger endpoint (environment fact, closed #345).
+        use super::super::side::MYROOM_MESSENGER_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_MESSENGER_CODE, 627, 571)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // entry fetch, not the press
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let before = paint(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(game.messenger_liveness_open(), "the pinned sheet opens");
+        let after = paint(&mut game);
+        let ok_rect = crate::screens::paint::information_ok_fallback_rect();
+        let ok_w = i32::try_from(ok_rect.w).expect("OK rect width fits");
+        let ok_h = i32::try_from(ok_rect.h).expect("OK rect height fits");
+        let inked = |buf: &[u32]| -> usize {
+            (ok_rect.y..ok_rect.y + ok_h)
+                .flat_map(|row| (ok_rect.x..ok_rect.x + ok_w).map(move |column| (row, column)))
+                .filter(|(row, column)| buf[*row as usize * 800 + *column as usize] != 0)
+                .count()
+        };
+        assert!(inked(&after) > inked(&before), "one-OK sheet paints ink");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(200, 200));
+        assert!(game.messenger_liveness_open(), "host clicks are blocked");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.messenger_liveness_open(), "OK clears the sheet");
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.take_gift_list_request(), None);
+    }
+
+    #[test]
     fn myroom_p0_controls_answer_nothing_and_queue_no_wire() {
         // Live caller chain:
         //   main.rs::run_play -> OnlineSession::ingest_snapshot
@@ -12749,15 +12879,14 @@ mod game_tests {
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
-            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_MESSENGER_CODE,
-            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
-            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
+            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_NOTICEBOARD_CODE,
+            MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE, MYROOM_VACATE_CODE,
+            MYROOM_WEBAVATAR_CODE,
         };
         for code in [
             MYROOM_WEBAVATAR_CODE,
             MYROOM_CONFERENCE_CODE,
             MYROOM_BAGSORT_CODE,
-            MYROOM_MESSENGER_CODE,
         ] {
             assert_eq!(
                 myroom_action_for_code(code),
@@ -21846,6 +21975,84 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_tutorial_exit_click_returns_to_room_and_recues_its_bgm() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial → bottom-right exit press → opening Room.
+        // Boot1 input log `cee8b7d5…1913` clicks `(777,567)`; the next
+        // frame `ed1bf56e…7b46` is the Room board with no modal.
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        let mut bank = vec![None; 10];
+        bank[2] = Some(o2jam_audio::PcmSamples {
+            samples: vec![3; 441],
+            sample_rate: 44_100,
+            channels: 1,
+        });
+        game.stage_scene_bgm(bank);
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: None,
+                rect: ROOM_CONTROL_TEST_RECT,
+            }],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None, "exit leaves the side visit");
+        assert_eq!(game.screen(), Screen::Room, "opening lobby returns");
+        assert_eq!(game.planet_modal(), None, "no modal on return");
+        assert_eq!(game.scene_bgm_selection().map(|cue| cue.record), Some(3));
+    }
+
+    #[test]
+    fn planet_tutorial_plate_click_stays_click_silent_under_static_dead_verdict() {
+        // Ticket #471: live chain boot → Waiting → Planet side → the
+        // dimmed TUTORIAL plate `0x19201006` at its `docs/planet.md:84`
+        // rect `(614,32)-(713,144)`. Static pin `S-PLAY-B3` shows both
+        // plates are disabled at construction (`0x48df50`–`0x48df8b`)
+        // and handler `0x48e280` only picks a channel family: no
+        // `CStateTutorial` dispatch exists there. Only FIRSTSTEP is a
+        // qualified entry; a plate press must not mount the chart.
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SPLANET_TUTORIAL".to_owned(),
+                code: 0x1920_1006,
+                sprite: None,
+                rect: Rect {
+                    x: 614,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Planet));
+        game.ingest_snapshot(&InputSnapshot::click_at(663, 88));
+        assert_eq!(game.side(), Some(SideScreen::Planet));
+        assert_eq!(game.tutorial_chart_globals(), None);
+    }
+
+    #[test]
     fn firststep_click_from_boot_staged_room_sets_the_pinned_tutorial_globals() {
         // Live chain: ScreenGame boot → Planet → Channel → Room
         // (`room_lobby_with_control`) → click of staged FIRSTSTEP chrome
@@ -21915,6 +22122,97 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[298 * 800 + 375], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn firststep_tutorial_lane_press_lights_only_its_own_cap_with_no_judgement() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial → lane-key press → painter. Boot2 pack
+        // `989abc137caec5cb429d98d1b0e19c094032fc1c900a350c423f6ae0e82c088f`
+        // pins one lit cap per lane key with all judgement tallies at 0
+        // (frames `28d1ca44…1a`, `be76f41d…3a`, `d662b505…3e`). The
+        // seven kit bodies stage at their own parsed row-487 anchors.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let lit_words = [0x7C00u16, 0x03E0, 0x001F, 0x7C1F, 0x7FE0, 0x07FF, 0x681F];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (lane, lit_word) in lit_words.iter().enumerate() {
+            let name = format!("KeyEffect_Tutorial_{}.ojs", lane + 1);
+            let mut figure = AvatarFigure::default();
+            for frame in 0..5 {
+                let word = if frame == 0 { 0x7FFFu16 } else { *lit_word };
+                let pixels = [word.to_le_bytes(); 16].concat();
+                figure.push_layer(crate::avatar::FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                    dx: 100 + (lane as i32) * 20,
+                    dy: 487,
+                    colorkey: 0x0000,
+                });
+            }
+            placements.push(ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(name.clone()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            });
+            figures.insert(name, figure);
+        }
+        game.load_tutorial_scene(placements, figures);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let rest = paint(&mut game);
+        let cap_pixel = |buf: &[u32], lane: usize| buf[488 * 800 + 101 + lane * 20];
+        for lane in 0..7 {
+            assert_eq!(cap_pixel(&rest, lane), pack_xrgb(255, 255, 255));
+        }
+
+        for lit_lane in 0..7 {
+            game.lane_key(lit_lane, true);
+            let pressed = paint(&mut game);
+            assert_ne!(
+                cap_pixel(&pressed, lit_lane),
+                cap_pixel(&rest, lit_lane),
+                "lane {lit_lane} cap lights"
+            );
+            for other_lane in (0..7).filter(|lane| *lane != lit_lane) {
+                assert_eq!(
+                    cap_pixel(&pressed, other_lane),
+                    cap_pixel(&rest, other_lane),
+                    "lane {other_lane} stays rest"
+                );
+            }
+            assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
+
+            game.lane_key(lit_lane, false);
+            let released = paint(&mut game);
+            assert_eq!(
+                cap_pixel(&released, lit_lane),
+                cap_pixel(&rest, lit_lane),
+                "key up clears the cap"
+            );
+        }
     }
 
     #[test]

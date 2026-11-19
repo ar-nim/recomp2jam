@@ -634,7 +634,74 @@ mod tests {
     }
 
     use super::*;
+    use o2jam_game::{build_level_chart, CoolStreak, Judgement, PillStock, Score, Sequencer};
     use o2jam_shell::InputSnapshot;
+
+    /// The tutorial's own chart drives the rated sink without a key
+    /// press: B22 pins autoplay BGM markers to the rating-event sink
+    /// (`docs/claims/30-gameplay.md`, ev `292d6cf2…`); `S-PLAY-B3`
+    /// pins FIRSTSTEP's song id 8888. Live chain: boot → Planet →
+    /// Channel → Room with its real `.bnd` chrome → FIRSTSTEP click →
+    /// Tutorial → `Tutorial.ojn` load → `Sequencer` → scoring. Only
+    /// the Room state is staged, so this guard does not add the
+    /// full-walk load that races the fake-gateway tests in parallel.
+    /// Install-guarded: no game data leaves the seam unclaimed.
+    #[test]
+    fn firststep_tutorial_chart_autoplay_judges_every_note_without_key_input() {
+        let chart_path = install_root().join("O2Jam/Music/Tutorial.ojn");
+        if !chart_path.is_file() {
+            println!("skip: missing install chart");
+            return;
+        }
+        let installed = o2jam_shell::staging::read_install_archives(&install_root());
+        let Some(interface) = installed.interface else {
+            println!("skip: missing interface archive");
+            return;
+        };
+        let mut game = ScreenGame::new();
+        if let Some(art) = o2jam_shell::staging::stage_state(
+            &interface,
+            o2jam_shell::staging::State::Room,
+            o2jam_shell::staging::StageContext::default(),
+        )
+        .art
+        {
+            game.load_scene(Screen::Room, art.placements, art.figures);
+        }
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        // B7 pin: FIRSTSTEP rect `(660,1)-(720,33)`, click `(689,16)`.
+        game.ingest_snapshot(&InputSnapshot::click_at(689, 16));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        let globals = game.tutorial_chart_globals().expect("FIRSTSTEP globals");
+        assert_eq!(globals.song_id, 8888);
+
+        let bytes = std::fs::read(&chart_path).expect("read Tutorial.ojn");
+        let prepared = crate::loading::prepare_chart(&bytes, 0).expect("walk chart");
+        assert_eq!(prepared.song_id, 8888, "the pinned chart is song 8888");
+        let events = o2jam_file::parse_ojn_level_events(&bytes, 0).expect("walk the Easy slice");
+        let chart = build_level_chart(prepared.bpm, &events);
+        let mut sequencer = Sequencer::new(&chart);
+        let mut score = Score::default();
+        let mut pills = PillStock::default();
+        let mut streak = CoolStreak::default();
+        let due_count = sequencer.len();
+        assert_eq!(due_count, 51, "Tutorial Easy carries 51 note payloads");
+        let mut now_ms = 0;
+        while !sequencer.is_empty() {
+            for strike in sequencer.pop_due(now_ms) {
+                let _ = strike;
+                streak.note(Judgement::Cool, &mut pills);
+                score.apply_rated(Judgement::Cool, &mut pills);
+            }
+            now_ms += 5;
+        }
+        assert_eq!(score.counts.iter().sum::<u32>() as usize, due_count);
+        assert_eq!(score.counts[0] as usize, due_count, "every note rated Cool");
+        assert!(score.points > 0, "autoplay produced a score");
+    }
 
     /// Screens the walk must show, in player order.
     const E2E_SCREEN_PATH: [&str; 8] = [
