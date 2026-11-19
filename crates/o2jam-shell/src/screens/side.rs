@@ -794,6 +794,13 @@ pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
 /// ride (#179 story 17).
+/// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
+/// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
+/// exe press frame names a result (matrix `E-T`), so they stay
+/// inert until a capture pins the behavior (#413).
+pub const MSHOP_SEARCH_EDIT_CODE: u32 = 0x1A30_007B;
+pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
+pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
 /// return is pinned by the bnd arm; the 5007 ExitShop send stays
@@ -5654,6 +5661,17 @@ mod side_tests {
         // list, and search/TOP100 stay unevidenced: all land nowhere.
         assert_eq!(music_shop_action_at(&placements, 311, 85), None);
         assert_eq!(music_shop_action_at(&placements, 519, 315), None);
+    }
+
+    #[test]
+    fn music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist() {
+        // The search edit/button and CASHFILLUP rects are visible in
+        // the qualified entry frame, but no press result was captured
+        // (`E-T`). No sort, buy, or navigation may be guessed for
+        // them; the Item Shop charge plate is a different spec.
+        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_EDIT_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE), None);
     }
 
     #[test]

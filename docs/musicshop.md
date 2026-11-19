@@ -139,3 +139,12 @@ the shop-side 5012 send site is OPEN, so no request is guessed.
 Guard `music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned`
 pins both rects as inert. The room-song FTP pump's 5012 completion
 (`music_download.rs`) is a different state and is not claimed here.
+
+## Search and CASHFILLUP (#413)
+
+The search edit/button (`0x1A30007B`/`0x1A20007C`) and CASHFILLUP
+(`0x1A200009`) stage with the entry frame but dispatch nothing:
+no qualified press frame exists for either (`E-T`). Guard
+`music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist`
+pins that state. #362's charge plate belongs to the Item Shop and
+is not a Music Shop pixel.
