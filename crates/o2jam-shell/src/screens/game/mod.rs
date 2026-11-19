@@ -7298,6 +7298,7 @@ mod game_tests {
         OPTION_KEY_3KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_SOUND_BG_MUSIC_DOWN,
         OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
     };
+    use super::waiting::{RESULT_RETRY_BACKDROP_FRAME_SHA256S, RESULT_RETRY_MANIFEST_SHA256};
     use super::*;
     use crate::avatar::PlacementRole;
     use crate::avatar::{AvatarFigure, FigureLayer};
@@ -19770,6 +19771,34 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(game.take_result_retry().is_some());
         assert!(game.take_result_retry().is_none(), "one take sends once");
+    }
+
+    #[test]
+    fn solo_result_retry_posts_a_second_start_game_with_exe_backdrop_pin() {
+        // #418 refutation: the qualified boot-3 manifest shows a second
+        // `C2S 4010` and MyRoom pixels at +0.3/+1/+3 s, not a Waiting
+        // seat grid. The shell's local arm stays as-is; this guard pins
+        // the wire event and the exe frames behind the story correction.
+        assert_eq!(
+            RESULT_RETRY_MANIFEST_SHA256,
+            "96b37640e15536e66379cbb3e688ad714636df794207aa37a08553014afed01d"
+        );
+        assert_eq!(RESULT_RETRY_BACKDROP_FRAME_SHA256S.len(), 3);
+        for frame in RESULT_RETRY_BACKDROP_FRAME_SHA256S {
+            assert_eq!(frame.len(), 64);
+        }
+        let mut game = ScreenGame::new();
+        stage_result_button(&mut game, RESULT_RETRY_ID, RESULT_RETRY_RECT);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(666, 581));
+        let retry = game.take_result_retry().expect("RETRY queues 4010");
+        assert!(
+            o2jam_net::WireMessage::encode_body(&retry).is_empty(),
+            "0xfaa is empty"
+        );
+        assert!(game.take_result_retry().is_none(), "one take sends once");
+        assert!(game.take_result_back().is_none(), "no invented BACK frame");
     }
 
     #[test]

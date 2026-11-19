@@ -89,3 +89,15 @@ follow-up, not a reason to leave the record empty. Still OPEN with named
 next steps: the value globals `0x77ee42/44/46/48` have no proven writer
 (`docs/cresult-anchors.md` item 3 — next step REA trace of the register-held
 store), and 4040 rank bytes stay out of scope (#310).
+
+## 2026-11-20 — #418: RETRY story corrected against the exe
+
+The checked #294 story said RETRY re-enters Waiting for the same song.
+Qualified boot 3 (`96b37640…`) refutes the pixel half: the click posts a
+second empty `C2S 4010`, and the +0.3/+1/+3 s frames (`4a89faa5…`,
+`74e6a2ae…`, `c2ad594a…`) show the personal-room backdrop, not the
+Waiting seat grid. The story now names the wire event and the exe frames;
+battle RETRY with a ready sibling stays OPEN (#668). Guard
+`solo_result_retry_posts_a_second_start_game_with_exe_backdrop_pin`
+pins the second 4010 and the qualified hashes. The shell's local arm is
+unchanged by this correction — no new Waiting capture is claimed.
