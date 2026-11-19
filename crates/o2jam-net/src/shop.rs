@@ -1032,6 +1032,20 @@ mod tests {
     }
 
     #[test]
+    fn purchase_reply_rejects_a_fabricated_failure_word() {
+        // #390's old premise asked for a verdict word in 5001. The
+        // live body ends after the free-pass word, so appending a
+        // result word is a different frame and must not decode.
+        let mut body = vec![0u8; SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN + 4];
+        body[..4].copy_from_slice(&17i32.to_le_bytes());
+        body[152..156].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            SyncItemPurchaseReply::decode_live_152(&body),
+            Err(Error::TrailingBytes(4))
+        );
+    }
+
+    #[test]
     fn purchase_reply_rejects_wrong_lengths_and_nonempty_lists() {
         assert_eq!(
             SyncItemPurchaseReply::decode_live_152(&[0u8; 151]),

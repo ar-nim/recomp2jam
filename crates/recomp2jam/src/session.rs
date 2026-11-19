@@ -4336,15 +4336,76 @@ pub(super) mod session_tests {
         assert_eq!(session.game.shop_gem_caption(), "GEM 626");
     }
 
-    /// Insufficient-funds arm stays OPEN: no distinct 5001 failure
-    /// reply is evidenced in `docs/shop-buy.md` (the 5001 handler
-    /// returns wallet words on every reply, with no result code), so
-    /// there is no separate failure shape to script. Probe bytes for
-    /// the success reply used above: 152 B, first word `gem=626` LE,
-    /// wallets zero, trailing word `2912127`.
     #[test]
-    #[ignore = "OPEN #194: no distinct 5001 insufficient-funds reply evidenced; probe bytes 152B gem=626 tail=2912127"]
-    fn shop_buy_insufficient_funds_arm_open() {}
+    fn low_gem_reply_completes_without_a_failure_verdict() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_attempts ->
+        //   poll_shop_buy -> drain_shop_buy -> SyncItemPurchaseReply::
+        //   decode_live_152 -> ScreenGame::apply_shop_purchase_reply.
+        // SCRIPTED-GATEWAY `buy-low-gem.jsonl` (`f6f3177f…957e2`):
+        // the 5001 first word is rewritten to gem 17; the 152-byte body
+        // has no result field, so the reply completes with the smaller
+        // wallet instead of a painted failure notice. The notice itself
+        // belongs to the web payment flow and stays OPEN.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BUYITEM_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[..4].copy_from_slice(&17i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BUYITEM_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 17");
+        server.join().unwrap();
+
+        assert_eq!(session.game.shop_gem_caption(), "GEM 17");
+        assert!(session.game.shop_cart().is_empty());
+    }
 
     #[test]
     fn wallet_single_source_refreshes_shop_and_myroom_after_item_buy() {

@@ -33,6 +33,10 @@ wallet words, empty i32-counted attributive list and free-pass tail —
 and the invalid sell answers 5002 with `01000000` (no refund word).
 `buy-low-gem.jsonl` `f6f3177f…957e2` rewrites the 5001 first word to 17
 and leaves the same 152-byte shape: there is no 5001 verdict field.
+This refutes the old "insufficient-gems verdict in 5001" premise
+(stories #178/6 and /35): our client completes the smaller wallet with
+no invented notice. Any player-visible low-balance notice belongs to
+the web payment flow (`docs/net-protocol.md` §4a) and stays OPEN.
 `SyncItemPurchaseReply::decode_live_152` pins this observed shape;
 item-landing pixels stay OPEN because the exe sizes the bag list from
 the global `0x77cce4`. The tapped BACK sends `5028` next, answered by
