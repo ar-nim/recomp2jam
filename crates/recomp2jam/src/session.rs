@@ -8286,6 +8286,19 @@ pub(super) mod session_tests {
         "00000000000000000000000000000000000000000000000000010000000000"
     );
 
+    /// Evidence-room leg (`~/scratch/evidence-room/row-state-3/rust-master/
+    /// wire/room-stage.log`, 02:53:32): 3004 with 13 music ids. The wire
+    /// log caps the hex at 256 chars; the last three bytes come from
+    /// the p379 body's field tail. 3004 carries no member-count field
+    /// (#551 premise check in `o2jam-net`); the seat id raises the
+    /// headcount instead.
+    const EVIDENCE_ROOM_JOIN_BROADCAST_HEX: &str = concat!(
+        "017432303770726f62650001000000012c01000001000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000002300000000",
+        "000000000000000000000000000000000000000d00000061f360f35df35cf302f301f300",
+        "f3fff2fef2fdf2fbf2f6f2f5f200000000010000000000",
+    );
+
     /// The matching 3003 answer the joining peer received at the same
     /// instant: result 0, own seat 1, master `tester` in slot 0.
     const LIVE_JOIN_ANSWER_HEX: &str = concat!(
@@ -8392,6 +8405,33 @@ pub(super) mod session_tests {
         let peer = session.game.staged_waiting_member(1).unwrap();
         assert_eq!(peer.nickname, "tester2");
         assert_eq!(peer.team, 1);
+    }
+
+    /// #551 wire arm: the 3004 seat id is the only live count source
+    /// on the master. A vacant seat raises the headcount; a replayed
+    /// broadcast for the same seat replaces the member in place and
+    /// leaves the count alone. Live caller chain (docs/live-path-
+    /// reachability.md): main.rs::run_play -> assemble_online_session
+    /// -> stage_hosted_room -> OnlineSession::paint (Waiting) ->
+    /// poll_waiting_chat -> drain_waiting_chat -> apply_user_joined ->
+    /// JoinedRoom::seat_member. The channel-observer 2009/2003 half
+    /// stays OPEN: evidence-room taps saw no 2009 on any observer.
+    #[test]
+    fn join_broadcast_raises_the_headcount_from_the_pinned_3004_member_id() {
+        let body = hex_bytes(EVIDENCE_ROOM_JOIN_BROADCAST_HEX);
+        let (mut session, server) =
+            joined_waiting_session(created_host_snapshot(), move |mut stream| {
+                stream.write_all(&encode_frame(3004, &body)).unwrap();
+                stream.write_all(&encode_frame(3004, &body)).unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(1).is_some()
+        });
+        server.join().unwrap();
+        let room = session.joined_room.as_ref().expect("host snapshot");
+        assert_eq!(room.user_count, 2, "the vacant seat raised the count");
+        assert_eq!(room.slots[1].index, 1);
     }
 
     #[test]
