@@ -110,8 +110,12 @@ pub const MYROOM_CHARGEMONEY_CODE: u32 = 0x1540_0011;
 pub const MYROOM_NICKNAME_CODE: u32 = 0x1540_0037;
 /// Level caption (`IDC_TEXT_SMYROOM_LEVEL`).
 pub const MYROOM_LEVEL_CODE: u32 = 0x1540_0038;
-/// Bonus-point caption (`IDC_TEXT_SMYROOM_BONUSPOINT`).
+/// Bonus-point caption (`IDC_TEXT_SMYROOM_BONUSPOINT`). The exe's
+/// hash-pinned STATUS cells print `Cash Point` here instead, so the
+/// caption paints the 2001 cash-point field as `N PT`.
 pub const MYROOM_BONUS_CODE: u32 = 0x1540_0039;
+/// Alias for the observed Cash Point cell at `MYROOM_BONUS_CODE`.
+pub const MYROOM_CASH_POINT_CODE: u32 = MYROOM_BONUS_CODE;
 /// Experience caption (`IDC_TEXT_SMYROOM_EXP`).
 pub const MYROOM_EXP_CODE: u32 = 0x1540_003A;
 /// Next-up-exp caption (`IDC_TEXT_SMYROOM_NEXTUPEXP`): paints the
@@ -652,7 +656,7 @@ pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftVi
 }
 
 /// Identity captions from fetched character data: nickname, level,
-/// bonus point, experience, next-up exp (staged experience, room
+/// cash point (`N PT`), experience, next-up exp (staged experience, room
 /// precedent), win-rate (staged wins/battles percent), and penalties.
 /// Cash wallets live on the
 /// single [`WalletState`] now ([`myroom_wallet_captions` paints the
@@ -680,7 +684,10 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
     vec![
         (MYROOM_NICKNAME_CODE, character.nickname.clone()),
         (MYROOM_LEVEL_CODE, character.level.to_string()),
-        (MYROOM_BONUS_CODE, character.bonus_point.to_string()),
+        (
+            MYROOM_CASH_POINT_CODE,
+            format!("{} PT", character.cash_point),
+        ),
         (MYROOM_EXP_CODE, character.experience.to_string()),
         (MYROOM_NEXTUPEXP_CODE, myroom_next_up_exp_text(character)),
         (MYROOM_WINRATE_CODE, myroom_win_rate_text(character)),

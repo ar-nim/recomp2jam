@@ -5895,6 +5895,22 @@ mod side_tests {
         assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), None);
     }
 
+    #[test]
+    fn myroom_cash_point_caption_reads_the_character_cash_point() {
+        // Live caller chain (#420, INFO-PLATE-KNOWN-STATS x peer):
+        //   network 2001 -> OnlineSession::stage_online_identity
+        //   -> ScreenGame::set_myroom_character -> paint_myroom_overlay
+        //   -> myroom_identity_captions -> paint_myroom_data.
+        // Both hash-pinned exe STATUS frames print `0 PT` in the
+        // Cash Point cell at bnd rect 0x39 (617,122)-(694,141).
+        let character = CharacterInfo {
+            cash_point: 677,
+            ..CharacterInfo::default()
+        };
+        let captions = myroom_identity_captions(&character);
+        assert_eq!(caption_text(&captions, MYROOM_BONUS_CODE), Some("677 PT"));
+    }
+
     fn side_music_answer(free_music: bool) -> MusicListAnswer {
         use o2jam_net::play::MusicListEntry;
         MusicListAnswer {
@@ -7033,7 +7049,7 @@ mod side_tests {
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
         assert_eq!(
-            hash, 0x3CEA_0E90_1429_C6FB,
+            hash, 0x29DF_F88C_A23B_2CFF,
             "MyRoom outputs drifted: {observed}"
         );
     }
