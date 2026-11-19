@@ -62,3 +62,29 @@ Post-rebase note: `origin/main` later made stored colorkey `0` opaque in
 `Lanking_NoticeBoard.oji` band over the header (`top_header` 0.451423).
 That band is outside #372; the pre-rebase build of this patch scored
 0.859627 with no band. It needs its own exe pin before any verdict.
+
+## #524 role-owned song rect (2026-11-20)
+
+The owner decision from #278 stands: the master paints
+`IDC_BUTTON_SWAIT_MUSELECT 0x16200003` / `Wait_MusicSelect.ojs` (the blue
+곡선택 button) at bound `.bnd` rect 2, and a peer paints
+`IDC_IMAGE_SWAIT_COVERMUSIC 0x1650001d` / `Wait_Cover_Music.ojs` (BPM
+cover) at rect 28; `ALBUMMODE 0x1650001c` paints for neither role. Staging
+keeps both bodies for every role; `waiting_control_armed_for_role` in
+`o2jam-shell/src/screens/paint/waiting.rs` is the single home for the swap.
+
+Live-path guard: `waiting_song_rect_shows_select_button_for_host_and_cover_for_peer`
+(`recomp2jam/src/live_art.rs`, chain `main.rs::run_play` → `setup_online` →
+`OnlineSession::stage_live_art` → `stage_live_scenes` →
+`stage_interface_scenes(State::Waiting)` → `ScreenGame::paint_at` →
+`paint_waiting` → `paint_waiting_scene` → the role filter). It compares the
+whole staged song region against in-process references that keep one named
+body at a time; no capture pixel is baked in. Seam guards:
+`waiting_song_rect_bodies_swap_with_the_role` and
+`host_paints_the_select_button_while_peer_keeps_the_bpm_cover`.
+
+Red-proof (re-run on this branch): with the two role arms replaced by
+unconditional `true`, the live guard fails at the host/peer region
+comparison; restored arms pass. The exe display rule remains **OPEN**
+(#312): no qualified capture pins what the 7.55 exe paints in this state,
+so this note records the owner-decided shell rule only.
