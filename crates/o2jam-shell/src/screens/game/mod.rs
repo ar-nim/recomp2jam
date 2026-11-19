@@ -11712,6 +11712,7 @@ mod game_tests {
             placement(MYROOM_SLOTCOVER_CODE, Some("SlotCover.ojs"), cell),
             placement(MYROOM_USERINFO_CODE, Some("Status.ojs"), cell),
             placement(MYROOM_SLOT_FIRST_CODE, None, shifted(cell, 200)),
+            placement(MYROOM_SLOT_FIRST_CODE + 1, None, shifted(cell, 600)),
             placement(MYROOM_BAG_FIRST_CODE, None, cell),
             placement(MYROOM_GIFT_FIRST_CODE, None, shifted(cell, 400)),
             placement(MYROOM_SELECT_CODE, Some("Select.oji"), frame),
@@ -11783,11 +11784,35 @@ mod game_tests {
     }
 
     #[test]
-    fn myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber() {
-        // Live caller chain as above, both other selection families.
-        // No exe capture pins the highlight on a pressed slot or gift
-        // cell (docs/myroom.md OPEN 8); the shared frame body is ours
-        // by design, never an invented wire or hit-test rule.
+    fn myroom_hair_slot_press_keeps_the_bag_rows_and_selection_frame() {
+        // Live caller chain (#415, SLOT-PRESS-NO-FILTER x peer):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(SelectSlot)
+        //   -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // Exe3 pack `25c5997e…` (hair press after a bag pick) moves only the
+        // cursor: bag rows and the blue cell frame are unchanged.
+        let (mut game, cell) = myroom_selection_overlay(MyRoomPanel::Inventory);
+        let before = paint_myroom_panel(&mut game);
+        let bag_pixel = (cell.y + 10) as usize * 800 + (cell.x + 10) as usize;
+        let hair_pixel = 110usize * 800 + 710;
+        assert_eq!(before[bag_pixel], pack_xrgb(0, 0, 255));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(710, 110));
+        assert_eq!(game.myroom().selected_slot(), 1);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        assert_eq!(game.myroom().bag_page(), 0);
+
+        let after = paint_myroom_panel(&mut game);
+        assert_eq!(after[bag_pixel], before[bag_pixel], "bag frame stays put");
+        assert_eq!(after[hair_pixel], before[hair_pixel], "slot gets no frame");
+    }
+
+    #[test]
+    fn myroom_slot_and_gift_picks_keep_staged_frames_without_amber() {
+        // Live caller chain as above. The exe pins no frame on a slot
+        // press; the picked bag cell keeps its frame (story #23).
+        // No exe capture pins the gift-cell highlight (docs/myroom.md
+        // OPEN 8); that frame body is ours-by-design, never a wire rule.
         let (mut game, _) = myroom_selection_overlay(MyRoomPanel::Inventory);
         game.ingest_snapshot(&InputSnapshot::click_at(310, 110));
         assert_eq!(game.myroom().selected_slot(), 0);
@@ -11795,7 +11820,7 @@ mod game_tests {
         assert_eq!(myroom_amber_pixels(&buf), 0, "slot pick has no amber");
         assert!(
             buf.iter().any(|pixel| *pixel == pack_xrgb(0, 0, 255)),
-            "the staged frame body paints for the picked slot"
+            "the picked bag cell keeps the staged frame"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(510, 110));
         assert_eq!(game.myroom().gift_cell(), Some(0));
