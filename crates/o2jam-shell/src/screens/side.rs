@@ -767,6 +767,20 @@ pub const MSHOP_ARTIST_CODE: u32 = 0x1A40_0038;
 pub const MSHOP_EDITOR_CODE: u32 = 0x1A40_0039;
 pub const MSHOP_GENRE_CODE: u32 = 0x1A40_003A;
 pub const MSHOP_BPM_CODE: u32 = 0x1A40_003B;
+/// Row-local DIFF cell (`IDC_TEXT_MSHOP_MMS_DIFF`, `0x1A40003C`):
+/// the catalog's three chart levels (frame `4debf1f0…` reads
+/// `3/7/10`), row-local like the other MMS templates.
+pub const MSHOP_DIFF_CODE: u32 = 0x1A40_003C;
+/// Row-local gem/won price cells (`0x1A400040`/`0x1A400045`):
+/// the qualified shop frame reads `G 3000` and `W 0` from the
+/// catalog's table-3 price words (`docs/file-formats/ojn.md`).
+pub const MSHOP_GEM_PRICE_CODE: u32 = 0x1A40_0040;
+pub const MSHOP_WON_PRICE_CODE: u32 = 0x1A40_0045;
+/// Bottom wallet money texts (`0x1A400019`/`0x1A40001A`, staged
+/// rects `(41,567)-(136,580)` and `(166,567)-(261,580)`): the
+/// `G 15527` / `W 0` words in frame `964be986…`, fed by 5029.
+pub const MSHOP_MONEY_GEM_CODE: u32 = 0x1A40_0019;
+pub const MSHOP_MONEY_WON_CODE: u32 = 0x1A40_001A;
 /// Row-local buy buttons, tiled over the staged `MS_EX` slots:
 /// gem buy, won buy.
 pub const MSHOP_GEM_BUY_CODE: u32 = 0x1A20_0041;
@@ -833,21 +847,45 @@ pub struct MusicShopRow {
     pub free: bool,
     /// Server catalog carries this song id (chart data present).
     pub listed: bool,
+    /// Gem price from `OJNList.dat` table 3 (`param_b`); unknown
+    /// words stay `None` and ink no cell.
+    pub gem_price: Option<u32>,
+    /// Won price from `OJNList.dat` table 3 (`param_a`); unknown
+    /// words stay `None` and ink no cell.
+    pub won_price: Option<u32>,
+}
+
+/// One catalog price pair (`OJNList.dat` table 3, data-verified).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicShopPrice {
+    /// Gem price (`param_b` on the song's table-3 row).
+    pub gem: u32,
+    /// Won price (`param_a` on the song's table-3 row).
+    pub won: u32,
 }
 
 /// Song-shop rows in catalog order with live flags; a missing
-/// answer clears both flags without dropping rows.
+/// answer clears both flags without dropping rows. Songs absent
+/// from the staged table-3 prices keep both price cells blank.
 #[must_use]
 pub fn music_shop_rows(
     songs: &[LankingSong],
     answer: Option<&MusicListAnswer>,
+    prices: &HashMap<u32, MusicShopPrice>,
 ) -> Vec<MusicShopRow> {
     songs
         .iter()
         .cloned()
         .map(|song| {
             let (free, listed) = shop_flags_for(song.song_id, answer);
-            MusicShopRow { song, free, listed }
+            let price = prices.get(&song.song_id).copied();
+            MusicShopRow {
+                song,
+                free,
+                listed,
+                gem_price: price.map(|entry| entry.gem),
+                won_price: price.map(|entry| entry.won),
+            }
         })
         .collect()
 }

@@ -1591,7 +1591,11 @@ fn stage_session_catalog(session: &mut session::OnlineSession) {
     };
     match o2jam_file::parse_ojn_list(&bytes) {
         Ok(entries) => {
-            session.set_song_catalog_with_labels(&entries, &catalog_labels(&bytes));
+            session.set_song_catalog_with_params(
+                &entries,
+                &catalog_labels(&bytes),
+                &catalog_params(&bytes),
+            );
             tracing::info!("song catalog staged");
         }
         Err(source) => {
@@ -1608,6 +1612,19 @@ fn catalog_labels(bytes: &[u8]) -> Vec<o2jam_file::OjnMidTagEntry> {
         Ok(labels) => labels,
         Err(source) => {
             tracing::debug!(%source, "song labels unparsable; label filter keeps no row");
+            Vec::new()
+        }
+    }
+}
+
+/// The catalog's table-3 price words (the music-shop GEM/WON cells).
+/// An unreadable middle region stages no prices: the price cells
+/// stay blank instead of showing an invented word.
+fn catalog_params(bytes: &[u8]) -> Vec<o2jam_file::OjnMidParamEntry> {
+    match o2jam_file::parse_ojn_list_params(bytes) {
+        Ok(params) => params,
+        Err(source) => {
+            tracing::debug!(%source, "song prices unparsable; music shop keeps blank price cells");
             Vec::new()
         }
     }
@@ -1648,6 +1665,7 @@ fn stage_installed_song_catalog(game: &mut o2jam_shell::ScreenGame) {
     match o2jam_file::parse_ojn_list(&bytes) {
         Ok(entries) => {
             game.set_song_catalog_with_labels(&entries, &catalog_labels(&bytes));
+            game.stage_music_shop_prices(&catalog_params(&bytes));
             tracing::info!("offline song catalog staged");
         }
         Err(source) => {

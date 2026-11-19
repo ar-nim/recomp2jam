@@ -1,12 +1,15 @@
 //! Song-shop songs, sorts, pages, and the fetched flag board
 //! behind the music-shop side screen (#139 cluster 4).
 
-use o2jam_file::OjnListEntry;
+use std::collections::HashMap;
+
+use o2jam_file::{OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, sort_lanking_songs,
-    LankingSong, LankingSort, MusicShopAction, MusicShopRow, MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
+    LankingSong, LankingSort, MusicShopAction, MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS,
+    MSHOP_SONG_ROWS,
 };
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
@@ -39,6 +42,10 @@ pub(crate) struct MusicShopState {
     /// Cart-list page (five rows per page, the staged music-cart
     /// `CART_EX` slots).
     pub(crate) music_shop_cart_page: usize,
+    /// Per-song gem/won prices from `OJNList.dat` table 3
+    /// (`param_b`/`param_a`); the boot stages them once with the
+    /// catalog, and a table without a song leaves its cells blank.
+    pub(crate) music_shop_prices: HashMap<u32, MusicShopPrice>,
 }
 
 impl MusicShopState {
@@ -57,6 +64,24 @@ impl MusicShopState {
     pub(crate) fn stage_board(&mut self, answer: MusicListAnswer) {
         self.music_shop_board = Some(answer);
         self.music_shop_page = 0;
+    }
+
+    /// Stage the per-song price words from `OJNList.dat` table 3.
+    /// `param_b` is the gem price and `param_a` the won price;
+    /// songs the table omits have no price cells.
+    pub(crate) fn stage_prices(&mut self, params: &[OjnMidParamEntry]) {
+        self.music_shop_prices = params
+            .iter()
+            .map(|param| {
+                (
+                    param.song_id,
+                    MusicShopPrice {
+                        gem: param.param_b,
+                        won: param.param_a,
+                    },
+                )
+            })
+            .collect();
     }
 
     /// Fold the 5011 acquired-song ids into the fetched-flags board:
@@ -152,7 +177,11 @@ impl MusicShopState {
             sort_lanking_songs(&mut songs, sort);
         }
         let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
-        music_shop_rows(&songs[start..end], self.music_shop_board.as_ref())
+        music_shop_rows(
+            &songs[start..end],
+            self.music_shop_board.as_ref(),
+            &self.music_shop_prices,
+        )
     }
 
     /// Board action through the control-code dispatch: row picks

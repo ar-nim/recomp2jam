@@ -682,7 +682,20 @@ impl OnlineSession {
         entries: &[OjnListEntry<'_>],
         labels: &[o2jam_file::OjnMidTagEntry],
     ) -> &mut Self {
+        self.set_song_catalog_with_params(entries, labels, &[])
+    }
+
+    /// Stage the catalog and its table-3 price words together: the
+    /// live boot calls this once so the music-shop price cells read
+    /// from parsed data, never from a guessed constant.
+    pub fn set_song_catalog_with_params(
+        &mut self,
+        entries: &[OjnListEntry<'_>],
+        labels: &[o2jam_file::OjnMidTagEntry],
+        params: &[o2jam_file::OjnMidParamEntry],
+    ) -> &mut Self {
         self.game.set_song_catalog_with_labels(entries, labels);
+        self.game.stage_music_shop_prices(params);
         self.catalog = entries
             .iter()
             .filter(|entry| entry.is_song())
