@@ -7860,6 +7860,47 @@ mod paint_tests {
     }
 
     #[test]
+    fn waiting_notice_board_zero_words_leave_the_header_backdrop_visible() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::paint ->
+        // paint_waiting_scene -> SceneArt::paint_backdrop ->
+        // paint_scene_figures -> AvatarFigure::paint_scaled_anchors ->
+        // blit_rgb555. `Lanking_NoticeBoard.oji` stores key 0 and its
+        // transparent pixels are zero words: the band must not hide
+        // the header backdrop, unlike the key-0 `.ojs` plates.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let staged = stage_state(&archive, State::Waiting, StageContext::default())
+            .art
+            .expect("waiting scene stages with real bytes");
+        let art = SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        };
+        let sentinel = pack_xrgb(0xFF, 0x00, 0xFF);
+        let mut buf = vec![sentinel; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        assert_ne!(
+            buf[50 * 800 + 400],
+            pack_xrgb(0, 0, 0),
+            "notice-board zero word leaves the header backdrop visible"
+        );
+    }
+
+    #[test]
     fn channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels() {
         // Live caller chain: main.rs::run_play -> setup_online ->
         // live_art::stage_channel_dialog -> ScreenGame::paint_channel ->

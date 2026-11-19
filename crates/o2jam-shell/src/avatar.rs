@@ -304,6 +304,27 @@ impl AvatarFigure {
         Self::from_layers(layers)
     }
 
+    /// Map a prefixed body's zero transparent word to the canonical
+    /// colorkey word before staging. All ten shipped `.oji` bodies store
+    /// key `0` and use zero words for transparent pixels; the renderer's
+    /// load-time source-key rule (7.55 `DXSurface::Load`, nonzero keys
+    /// only) would otherwise paint those pixels as opaque black.
+    #[must_use]
+    pub fn with_prefixed_zero_key_as_colorkey(mut self) -> Self {
+        const PREFIXED_ZERO_ALIAS: u16 = 0x7D5F;
+        for layer in &mut self.layers {
+            if layer.colorkey == 0 {
+                layer.colorkey = PREFIXED_ZERO_ALIAS;
+                for word in &mut layer.image.words {
+                    if *word == 0 {
+                        *word = PREFIXED_ZERO_ALIAS;
+                    }
+                }
+            }
+        }
+        self
+    }
+
     /// Stack an extra layer on top (equipped parts resolve here).
     /// The layer joins the topmost body run, so a lone stack keeps
     /// the flat selection shape it always had.
@@ -742,6 +763,25 @@ pub fn load_archive_sprite_for_stage(
         return None;
     }
     Some(figure)
+}
+
+/// One staged body, with the `.oji` zero-transparent-word rule applied.
+/// The renderer keys only nonzero stored words (7.55 `DXSurface::Load`),
+/// so prefixed bodies with a zero key field need their zero words mapped
+/// to the canonical colorkey before they reach a scene painter; `.ojs`
+/// key-0 plates stay opaque (#371/#373).
+#[must_use]
+pub fn load_staged_figure(
+    archive: &[u8],
+    entry_name: &str,
+    arena_stage: Option<u16>,
+) -> Option<AvatarFigure> {
+    let figure = load_archive_sprite_for_stage(archive, entry_name, arena_stage)?;
+    if entry_name.to_ascii_lowercase().ends_with(".oji") {
+        Some(figure.with_prefixed_zero_key_as_colorkey())
+    } else {
+        Some(figure)
+    }
 }
 
 /// The archive entry one sprite reference loads through: exact
@@ -1657,7 +1697,7 @@ pub fn load_scene_figures_for_stage(
         if figures.contains_key(name) {
             continue;
         }
-        if let Some(figure) = load_archive_sprite_for_stage(archive, name, arena_stage) {
+        if let Some(figure) = load_staged_figure(archive, name, arena_stage) {
             figures.insert(name.clone(), figure);
         }
     }

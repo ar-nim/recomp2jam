@@ -13,9 +13,9 @@ use o2jam_render::{rect_from_corners, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 
 use crate::avatar::{
     bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
-    playing_backdrop_sprite, playing_member_selected, scene_block, scene_sprite_names,
-    AvatarFigure, PlacementRole, PlayingArtMode, ScenePlacement, LOADING_SPRITE,
-    PLAYING_BACKDROP_CODE,
+    load_staged_figure, playing_backdrop_sprite, playing_member_selected, scene_block,
+    scene_sprite_names, AvatarFigure, PlacementRole, PlayingArtMode, ScenePlacement,
+    LOADING_SPRITE, PLAYING_BACKDROP_CODE,
 };
 use crate::screen::Screen;
 use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
@@ -979,7 +979,7 @@ fn stage_playing_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> Stage
     };
     art.placements.insert(0, backdrop_placement(&backdrop));
     for extra in row.extra_sprites {
-        match load_archive_sprite_for_stage(archive, extra, ctx.arena_stage) {
+        match load_staged_figure(archive, extra, ctx.arena_stage) {
             Some(figure) => {
                 art.figures.insert((*extra).to_owned(), figure);
             }
@@ -1092,7 +1092,7 @@ fn load_figures(
         if is_scrollbar_params(name) {
             continue;
         }
-        match load_archive_sprite_for_stage(archive, name, ctx.arena_stage) {
+        match load_staged_figure(archive, name, ctx.arena_stage) {
             Some(figure) => {
                 art.figures.insert(name.clone(), figure);
             }

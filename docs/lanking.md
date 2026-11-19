@@ -78,3 +78,35 @@ stay OPEN like all TEXT entries.
 8. Per-song 2031 bests on the song rows: `MusicScoreListAnswer`
    2031 parses (count + width pinned) but never joins the
    catalog — next step: join against `OJNList.dat` by music id.
+
+## Notice-board colorkey path (#374, 2026-11-19)
+
+Version pin: `AngelO2Jam.exe` 5,029,888 B, SHA-256
+`83a04541…72c823b`. REA 6.9.0 / Ghidra 12.2 dossiers (local scratch
+bundles under `~/scratch/p374-rea/`, no disassembly reproduced):
+
+- Load-time source key: `DXSurface::Load` (file `0x4249F0`, dossier
+  `ev_2bdb3b2c…`) reads the stored u16 key at `+0x11E` and hands it
+  to frame-create `FUN_00422F60` (`0x422F60`, dossier
+  `ev_38c8c255…`) as its fourth argument. Frame-create installs the
+  DirectDraw source key only when that argument is nonzero;
+  `FUN_0042BA00` (`0x42BA00`, dossier `ev_20d472f2…`) is the
+  `SetColorKey` call with flags `8` and low==high==key. This is the
+  #371/#373 rule for key-0 `.ojs` plates: black stays opaque.
+- The only other `SetColorKey` caller is `FUN_00428C40` (dossier
+  `ev_013bc070…`), a blank 800x512 surface builder reached from the
+  Playing setup (`0x56F900`), not the notice-board art. A whole-image
+  decompile sweep found no blit-time `SetColorKey(0)` on the
+  notice-board path.
+- `Lanking_NoticeBoard.oji` stores key `0` and uses zero words for
+  transparent pixels (24,839 zero words, no `0x7D5F` words). All ten
+  shipped `.oji` bodies have the same pair. The staged loader maps that
+  pair to the canonical `0x7D5F` key at staging time
+  (`load_staged_figure` / `with_prefixed_zero_key_as_colorkey`), so the
+  renderer's load-time nonzero-key rule stays global while the notice
+  board's zero words keep cutting out the header backdrop.
+
+Guards: `waiting_notice_board_zero_words_leave_the_header_backdrop_visible`
+(lanking band), `planet_zero_key_black_plates_cover_the_board_art` and
+`channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels`
+(#371/#373), plus the renderer's `zero_color_key_leaves_black_pixels_opaque`.
