@@ -8969,6 +8969,108 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// Staged button for the MUSELECT-wire guards: the click lands on
+    /// the control's own `.bnd` rect, never on a literal screen point.
+    fn staged_waiting_button(id: &str, x: i32, y: i32) -> o2jam_shell::avatar::ScenePlacement {
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        ScenePlacement {
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: o2jam_render::Rect { x, y, w: 80, h: 30 },
+            role: PlacementRole::Single,
+        }
+    }
+
+    #[test]
+    fn mu_select_open_sends_no_4051_or_4053_over_scripted_gateway() {
+        // Ticket #407: no exe send pin names StartSelectMusic 4051 or
+        // CancelSelectMusic 4053, so a master's MUSELECT open must put
+        // no frame on the gateway. Live chain: `main.rs::run_play` ->
+        // `OnlineSession::paint` -> `ScreenGame::ingest_snapshot` ->
+        // `apply_pointer_down` -> `click_waiting_button` -> `select_music`
+        // staging; the session drains its outbox on the next paint.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let figures = std::collections::HashMap::new();
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![staged_waiting_button("IDC_BUTTON_SWAIT_MUSELECT", 100, 100)],
+            figures,
+        );
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert!(session.game.select_music_dialog_open());
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn music_select_ok_close_sends_no_4051_or_4053_over_scripted_gateway() {
+        // Ticket #407 close leg: the OK confirm closes the dialog and
+        // flushes the staged 4000, but never invents a 4051/4053 pair.
+        // Live chain: `main.rs::run_play` -> `OnlineSession::paint` ->
+        // `ScreenGame::ingest_snapshot` -> `click_select_music` ->
+        // `take_music_send` -> `OnlineSession::flush_music_send`.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let first = read_frame(&mut stream);
+            assert_ne!(first.id, 4051, "no StartSelectMusic send is pinned");
+            assert_ne!(first.id, 4053, "no CancelSelectMusic send is pinned");
+            assert_eq!(first.id, Request::SetRoomMusic.id(), "4000 still flushes");
+            let second = read_frame(&mut stream);
+            assert_ne!(second.id, 4051, "no StartSelectMusic send is pinned");
+            assert_ne!(second.id, 4053, "no CancelSelectMusic send is pinned");
+            assert_eq!(second.id, Request::SetRoomArena.id(), "4002 still flushes");
+            assert_quiet(&mut stream);
+        });
+        let figures = std::collections::HashMap::new();
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![staged_waiting_button("IDC_BUTTON_SWAIT_MUSELECT", 100, 100)],
+            figures.clone(),
+        );
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert!(session.game.select_music_dialog_open());
+        session.game_mut().load_select_music_scene(
+            vec![staged_waiting_button("IDC_BUTTON_DSMUSIC_OK", 326, 497)],
+            figures,
+        );
+        let mut rec = vec![0u8; 300];
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[4..8].copy_from_slice(&757u32.to_le_bytes());
+        rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+        rec[112..117].copy_from_slice(b"First");
+        rec[176..180].copy_from_slice(b"Band");
+        rec[240..251].copy_from_slice(b"o2ma757.ojm");
+        let entries = o2jam_file::parse_ojn_list(&rec).unwrap();
+        session.set_song_catalog(&entries);
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(400, 184));
+        assert!(session.game_mut().has_pending_music_send());
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(366, 512));
+        assert!(!session.game.select_music_dialog_open());
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        println!(
+            "after paint screen {:?} dialog {} pending {} selected {:?}",
+            session.game.screen(),
+            session.game.select_music_dialog_open(),
+            session.game.has_pending_music_send(),
+            session.selected_song()
+        );
+        server.join().unwrap();
+    }
+
     #[test]
     fn waiting_create_room_commit_stages_room_over_scripted_gateway() {
         use o2jam_net::frame::encode_frame;
