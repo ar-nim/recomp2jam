@@ -34,10 +34,10 @@ Concretely:
 - **Capture cost during work.** Appending ~5 lines of markdown in the
   current worktree is the cheapest possible capture: no context switch to
   the tracker, no title/body/labels ceremony, works offline, and any agent
-  can do it without `gh` write permissions. An Issue per capture costs a
-  `gh issue create` plus the repo's one-at-a-time hygiene
-  (`scripts/issue-create.sh`, after the `|`-split incident that shredded
-  20 junk issues, #143–162).
+  can do it without `gh` write permissions. An Issue per capture costs one
+  `scripts/issue-create.sh` invocation — the mandated creation path, which
+  also rejects duplicate open titles (#487) after the `|`-split incident
+  that shredded 20 junk issues (#143–162).
 - **Recall at retro time.** One file, read top to bottom, beats querying a
   label across the tracker — and the routing already exists (memory
   pointer into the retro skill). GitHub's own guidance puts open-ended,

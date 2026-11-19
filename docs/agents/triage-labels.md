@@ -124,8 +124,9 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    criterion with its command and output (`docs/agents/issue-tracker.md`,
    "Acceptance-criteria review before any close"). Any NOT MET or OPEN blocks
    the close; green gates alone never tick a box.
-3. File tracker issues sequentially in one chain and read back the title per number;
-   never assume parallel `gh issue create` output order.
+3. File tracker issues sequentially through `scripts/issue-create.sh` (the
+   mandated creation path) and read back the title per number; never run
+   parallel creates or assume their output order (#487).
 4. Closing includes triage-label cleanup: `needs-triage` and `needs-info` never
    survive on a closed issue, and the category (issue type) is set at triage
    time, not left for the close.

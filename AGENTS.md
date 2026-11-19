@@ -53,7 +53,7 @@ and the work is committed and pushed.
 
 ### Issue tracker
 
-Issues and specs live in GitHub Issues for `ar-nim/recomp2jam` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues for `ar-nim/recomp2jam` (via the `gh` CLI). All issue creation goes through `scripts/issue-create.sh` (dedup + read-back); bare `gh issue create` is not allowed. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

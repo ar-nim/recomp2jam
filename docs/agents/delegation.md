@@ -171,6 +171,13 @@ all. The owner caught both, not the senior. An automated tracker-audit leg is
 the reduce-needs-owner research's first deliverable; until it lands, this
 manual list stays mandatory. Close #495 when either version lands, noting
 which.
+## Resume discipline
+
+A resumed agent re-lists its own prior creates before any tracker write:
+`gh issue list --author @me --state all --limit 100 --json number,title,state`.
+An existing ticket is a result, not another create (#487: 36 duplicates from a
+resumed recon-c create step). New tickets go only through
+`scripts/issue-create.sh`, which rejects duplicate open titles.
 
 ## Brief requirements
 

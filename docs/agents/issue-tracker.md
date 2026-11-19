@@ -5,11 +5,11 @@ Issues and specs for this repo live as GitHub issues in `ar-nim/recomp2jam`
 
 ## Conventions
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Create an issue (mandatory)**: `scripts/issue-create.sh --title "..." --body-file BODY --type Bug|Task|Feature`. It normalizes doubled type prefixes, rejects an open issue with the same normalized title (exit 3), creates one issue, and reads back number/title/type/labels. Never call bare `gh issue create` (retro #487: a resume re-ran its create step into 36 duplicates). Write the body to a file with a heredoc; never interpolate it.
 - **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh issue create --blocked-by <n>,<n> ...` or `gh issue edit <child> --add-blocked-by <blocker>` (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
+- **Make an issue a sub-issue of a parent**: pass `--parent <parent>` to `scripts/issue-create.sh`, or use `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge by passing `--blocked-by <n>,<n>` to `scripts/issue-create.sh`, or with `gh issue edit <child> --add-blocked-by <blocker>` (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
 - **Count open blockers**: `gh api repos/<owner>/<repo>/issues/<n> --jq .issue_dependencies_summary.blocked_by` (open blockers only; 0 means startable). `gh issue view <n> --json blockedBy` also lists closed blockers, so filter it: `--jq '[.blockedBy.nodes[] | select(.state == "OPEN")] | length'`.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
@@ -77,6 +77,9 @@ Every subagent brief carries, at minimum:
   progress (gui-drive #64 post-mortem: 4 h, 371 captures, zero findings).
 - One ticket per brief; a research ticket carries one leg, not several
   methods.
+- Every tracker create goes through `scripts/issue-create.sh`, never bare
+  `gh issue create`. A resumed implementer re-lists its own prior creates
+  before any tracker write (see `docs/agents/delegation.md`).
 - Behavior guards (any test named under `## Guards`) must carry a live
   caller chain from boot or a seam-suffices note per
   `docs/live-path-reachability.md` (close discipline rules 7-8 in
@@ -86,7 +89,7 @@ Every subagent brief carries, at minimum:
 Scoping tickets quote claim ids exactly as minted in the ledger — a
 reviewer checks the ids against `docs/claims.md`.
 
-File issues only into the user's own repo. Never file into `mattpocock/skills` (the repo these skills come from) unless the user owns it. In a fork, `gh` can default to the upstream parent, so before the first `gh issue create` of a session, check the target with `gh repo view --json nameWithOwner` and confirm it with the user if it is not their repo.
+File issues only into the user's own repo. Never file into `mattpocock/skills` (the repo these skills come from) unless the user owns it. In a fork, `gh` can default to the upstream parent, so before the first `scripts/issue-create.sh` invocation of a session, check the target with `gh repo view --json nameWithOwner` and confirm it with the user if it is not their repo.
 
 ## Pull requests as a triage surface
 
@@ -102,7 +105,7 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create a GitHub issue through `scripts/issue-create.sh` (mandatory path).
 
 ## When a skill says "fetch the relevant ticket"
 
@@ -112,7 +115,7 @@ Read it as in **Read an issue** above.
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
+- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. Create it with `scripts/issue-create.sh --label wayfinder:map`.
 - **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
 - **Blocking**: see **Blocking** under Conventions.
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (see **Count open blockers**, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
@@ -121,11 +124,19 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 ## Issue creation hygiene (retro 2026-11-12)
 
-- Create issues ONE at a time with `scripts/issue-create.sh` (or
-  `gh issue create --body-file`). NEVER pipe markdown through delimiter-split
-  loops — a `|` in a table once shredded 20 junk issues out of one heredoc.
+- Create issues ONE at a time with `scripts/issue-create.sh`. This is the
+  MANDATED creation path; bare `gh issue create` is not a shortcut. NEVER pipe
+  markdown through delimiter-split loops — a `|` in a table once shredded 20
+  junk issues out of one heredoc.
+- The script normalizes repeated `Bug:`/`Task:` prefixes and refuses a title
+  that matches an open issue (after case/whitespace/prefix normalization).
+  If it exits 3, the ticket already exists: read the reported issue instead
+  of rephrasing the title to force a create.
 - The script reads back number, title, and labels; diff intent vs reality on
   the spot. A fragment title or a pipe-prefixed title fails the sanity check.
+- On a RESUMED session, re-list your own prior creates before any tracker
+  write (`gh issue list --author @me --state all --limit 100`). A resumed
+  agent re-ran its create step 36 times (#487); re-listing catches that.
 - GitHub has NO CLI/API issue deletion. Mistakes: label `to-remove`, the owner
   bulk-deletes via the UI (filter by label).
 
