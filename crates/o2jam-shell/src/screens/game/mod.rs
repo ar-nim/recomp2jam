@@ -4716,8 +4716,15 @@ impl ScreenGame {
     /// own settings and reports whether EXIT closed it, so the game
     /// keeps ownership of the modal.
     fn click_options_dialog(&mut self, x: i32, y: i32) {
+        let volume_before = self.options_dialog.settings().bgm_music();
         if self.options_dialog.click(x, y) {
             self.planet_board.close_modal();
+        }
+        // The dialog sits over the lobby: a BGMusic slider move must
+        // re-cue the running scene track at its new gain without a
+        // scene change. Other edits keep their existing paths.
+        if self.options_dialog.settings().bgm_music() != volume_before {
+            self.apply_scene_bgm();
         }
     }
 
@@ -16425,6 +16432,81 @@ mod game_tests {
         game.enter(Screen::Channel);
         // 1000 * 247 / 255 = 968.6, rounds to 969.
         assert_eq!(peaks.borrow().last(), Some(&969));
+    }
+
+    #[test]
+    fn bgmusic_slider_re_cues_the_lobby_track_without_a_scene_change() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> apply_scene_bgm ->
+        // AudioBackend::set_scene_bgm. The slider is a dialog over the
+        // lobby, so the sounding cue must change on the click itself.
+        use super::super::side::OPTION_SOUND_BG_MUSIC_DOWN;
+        use o2jam_audio::{AudioBackend, AudioError, PcmSamples};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct PeakProbe {
+            peaks: Rc<RefCell<Vec<i32>>>,
+        }
+        impl AudioBackend for PeakProbe {
+            fn play_pcm(&mut self, _pcm: &PcmSamples) -> Result<(), AudioError> {
+                Ok(())
+            }
+            fn set_scene_bgm(
+                &mut self,
+                pcm: Option<&PcmSamples>,
+                _repeat: bool,
+            ) -> Result<(), AudioError> {
+                let peak = pcm.map_or(0, |pcm| {
+                    pcm.samples
+                        .iter()
+                        .map(|sample| i32::from(*sample).abs())
+                        .max()
+                        .unwrap_or(0)
+                });
+                self.peaks.borrow_mut().push(peak);
+                Ok(())
+            }
+            fn samples_played(&self) -> u64 {
+                0
+            }
+        }
+        let peaks = Rc::new(RefCell::new(Vec::new()));
+        let probe = PeakProbe {
+            peaks: Rc::clone(&peaks),
+        };
+        let mut bank = vec![None; 10];
+        // `SceneBgm::resolve` indexes record id minus one: slot 8 is
+        // record 9, the Planet loop.
+        bank[8] = Some(PcmSamples {
+            samples: vec![1000i16; 441],
+            sample_rate: 44100,
+            channels: 1,
+        });
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(probe), HashMap::new());
+        game.stage_scene_bgm(bank);
+        game.enter(Screen::Planet);
+        assert_eq!(peaks.borrow().last(), Some(&1000));
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[(OPTION_SOUND_BG_MUSIC_DOWN, 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        click_button(&mut game, 100, 100);
+        // 1000 * 247 / 255 rounds to 969; no scene entry in between.
+        assert_eq!(
+            peaks.borrow().last(),
+            Some(&969),
+            "the slider re-cues the running lobby track"
+        );
+        assert_eq!(
+            game.options().bgm_music(),
+            255 - crate::options::SOUND_SLIDER_STEP
+        );
     }
 
     #[test]

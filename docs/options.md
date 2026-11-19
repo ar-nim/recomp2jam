@@ -35,7 +35,8 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
   `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by 8 inside 0–255.
   GameEffect drives the live key-strike gain; BGMusic scales the
-  lobby scene-BGM cue. The in-song mix path stays OPEN.
+  lobby scene-BGM cue and re-cues the running track on the slider click
+  (no scene change needed). The in-song mix path stays OPEN.
 - Game tab: NoteType1/2 → 0/1, guides Long/Middle/Short/NoUse →
   3/2/1/0, EQ Yes/No → 1/0, ModeFull/Win → 1/2, Longnote
   Used/None → 1/0, effects High/Normal/Low → in-memory 0/1/2.
@@ -130,4 +131,9 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
   `window::InputHandler::route_key` → `GameLoop::lane_key` →
   `ScreenGame::strike_at` → `pump_sounds` → `AudioBackend::play_key`),
 `scene_bgm_cue_scales_with_the_bgmusic_volume`,
+`bgmusic_slider_re_cues_the_lobby_track_without_a_scene_change` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `apply_scene_bgm` → `AudioBackend::set_scene_bgm`),
 `option_tabs_stage_all_three_sheets_when_archives_present`.
