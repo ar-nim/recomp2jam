@@ -209,6 +209,13 @@ const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
 /// `0x15fbb6`, REA `ev_a395ece8…`); later slots never reach its UI
 /// queue. Our trace mirror applies the same bound.
 const SUBMITTER_MEMBER_LIMIT: usize = 8;
+/// REA pin of the exe's UI event queue (REA `ev_f56c417…`).
+#[cfg(test)]
+const RESULT_UI_QUEUE_ADDRESS: u32 = 0x478d50;
+/// The two vftable entries whose `0xFB1` arms consume 4017 notices:
+/// the Playing states, not Result (REA `ev_17e20066…` / `ev_8299e310…`).
+#[cfg(test)]
+const RESULT_4017_PLAYING_VTABLE_ENTRIES: [u32; 2] = [0x64ae1c, 0x64b3dc];
 /// Resting gateway timeout outside the stats section: the transport
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
@@ -3857,6 +3864,7 @@ pub(super) mod session_tests {
 
     use super::{
         level_for_difficulty, listed_room_from_created, saturate_bonus, OnlineSession, SongChoice,
+        RESULT_4017_PLAYING_VTABLE_ENTRIES, RESULT_UI_QUEUE_ADDRESS,
     };
 
     /// One whole frame off the fake server's socket.
@@ -7141,6 +7149,103 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Result);
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn result_ui_has_no_submitter_marker_from_4017() {
+        // #679: REA finds the queue's type-0x12 consumers in the two
+        // Playing states, never in Result. The 0xFB1 arm checks a
+        // member byte at `+0x33` and writes a member state/animation;
+        // it does not name a Result marker. Keep our Result rows
+        // independent of the submitter slot until a two-member frame
+        // with a non-zero slot says otherwise.
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
+        assert_eq!(RESULT_UI_QUEUE_ADDRESS, 0x478d50);
+        assert_eq!(RESULT_4017_PLAYING_VTABLE_ENTRIES, [0x64ae1c, 0x64b3dc]);
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(&ScoreSubmission { member_id: 3 }.encode())
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 4,
+                        experience: 3000,
+                        result: MatchResult::Lose,
+                        gem: 12_000,
+                        cash_point: 0,
+                        speed: 3,
+                        long_note_score: 90,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(1).is_some());
+        server.join().unwrap();
+
+        assert_eq!(session.last_submitter_slot(), Some(3));
+        let rows = session.game.result_rank_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].judgements, Some([11, 22, 33, 44]));
+        assert_eq!(rows[0].score, Some(777));
+        assert_eq!(rows[1].judgements, Some([50, 0, 0, 0]));
+        assert_eq!(rows[1].score, Some(50_000));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[1].rank, None);
     }
 
     #[test]
