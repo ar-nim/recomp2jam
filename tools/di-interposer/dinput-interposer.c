@@ -311,6 +311,15 @@ static void start_feed_worker(void) {
     }
 }
 
+/* The feed epoch is known only after the song clock starts, so the file may
+ * not exist when DirectInputCreateA runs. Retry until the boot leg writes it. */
+static void load_feed_when_available(void) {
+    if (!scripted_feed.loaded) {
+        load_scripted_feed();
+        start_feed_worker();
+    }
+}
+
 static HRESULT WINAPI device_query_interface(ScriptedDevice *device,
                                              REFIID unused, void **out) {
     (void)device;
@@ -391,6 +400,7 @@ static HRESULT WINAPI get_device_state(ScriptedDevice *device, DWORD size,
         }
         return DI_OK;
     }
+    load_feed_when_available();
     apply_due_entries(&scripted_feed, unix_milliseconds());
     EnterCriticalSection(&scripted_feed.lock);
     for (DWORD index = 0; index < copied; index++) {
@@ -432,6 +442,7 @@ static HRESULT WINAPI get_device_data(ScriptedDevice *device, DWORD record_size,
         (destination == NULL && *in_out > 0)) {
         return DIERR_INVALIDPARAM;
     }
+    load_feed_when_available();
     apply_due_entries(&scripted_feed, unix_milliseconds());
     DWORD capacity = *in_out;
     if (capacity > MAX_BUFFERED_EVENTS) {
