@@ -5450,6 +5450,18 @@ impl ScreenGame {
         self.wallet.apply_purchase_wallets(wallets);
     }
 
+    /// Fold one observed live 5001 reply into the shell: the four
+    /// prefix words and the two post-list wallet words refresh the same
+    /// wallet the 5029 read uses, then the cart clears against the
+    /// bought rows. The bag words are decoded for framing only; the
+    /// exe handler takes its inventory count from a global, so an
+    /// item-landing paint still needs a matched live frame pair.
+    pub fn apply_shop_purchase_reply(&mut self, reply: &o2jam_net::shop::SyncItemPurchaseReply) {
+        self.wallet.apply_purchase_prefix(&reply.prefix);
+        self.wallet.apply_purchase_wallets(&reply.wallets);
+        self.apply_shop_purchase();
+    }
+
     /// Fold a successful 5001 purchase into the shell: the cart
     /// clears against the bought rows and the wallet prefix has
     /// already folded through [`Self::apply_shop_purchase_prefix`].

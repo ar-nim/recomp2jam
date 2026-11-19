@@ -152,7 +152,7 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase,
+    EquipItem, EquipItemResponse, SyncItemPurchase, SyncItemPurchaseReply, SyncMusicPurchase,
     SyncMusicPurchaseResponse,
 };
 use o2jam_net::EmptyMessage;
@@ -2358,13 +2358,11 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == 5001 => {
-                    if let Ok((prefix, _rest)) =
-                        SyncItemPurchasePrefix::decode_prefix(&frame.payload)
-                    {
-                        self.game.apply_shop_purchase_prefix(&prefix);
-                        self.game.apply_shop_purchase();
-                    } else {
-                        tracing::debug!(id = frame.id, "dropping undecodable shop buy reply");
+                    match SyncItemPurchaseReply::decode_live_152(&frame.payload) {
+                        Ok(reply) => self.game.apply_shop_purchase_reply(&reply),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable shop buy reply");
+                        }
                     }
                     return None;
                 }
@@ -4348,6 +4346,89 @@ pub(super) mod session_tests {
             .find(|(code, _)| *code == MYROOM_O2CASH_CODE)
             .map(|(_, text)| text);
         assert_eq!(myroom_o2.as_deref(), Some("450"));
+    }
+
+    #[test]
+    fn item_buy_folds_the_full_live_152_byte_reply_into_one_wallet() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_attempts ->
+        //   poll_shop_buy -> drain_shop_buy -> SyncItemPurchaseReply::
+        //   decode_live_152 -> ScreenGame::apply_shop_purchase_reply ->
+        //   WalletState::apply_purchase_prefix + apply_purchase_wallets.
+        // Readouts: shop_gem_caption + myroom_money_captions.
+        // Tier 2 scripted gateway; the body is the pinned 152-byte
+        // Memoryer shape with synthetic post-list wallet words.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{
+            SideScreen, MYROOM_ITEMCASH_CODE, MYROOM_MUSICCASH_CODE, SHOP_BUYITEM_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[..4].copy_from_slice(&626i32.to_le_bytes());
+            payload[16..20].copy_from_slice(&376i32.to_le_bytes());
+            payload[136..140].copy_from_slice(&42i32.to_le_bytes());
+            payload[140..144].copy_from_slice(&77i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BUYITEM_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
+        server.join().unwrap();
+
+        let captions = session.game.myroom_money_captions();
+        let caption = |code| {
+            captions
+                .iter()
+                .find(|(placed_code, _)| *placed_code == code)
+                .map(|(_, text)| text.as_str())
+        };
+        assert_eq!(caption(MYROOM_MUSICCASH_CODE), Some("42"));
+        assert_eq!(caption(MYROOM_ITEMCASH_CODE), Some("77"));
+        assert!(session.game.shop_cart().is_empty());
     }
 
     #[test]

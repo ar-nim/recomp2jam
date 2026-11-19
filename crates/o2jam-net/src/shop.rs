@@ -569,6 +569,93 @@ impl SyncItemPurchaseTail {
     }
 }
 
+/// One observed live `SyncItemPurchase` 5001 reply body: the four-word
+/// prefix, 30 unprefixed bag words, two post-list wallet words, an empty
+/// i32-counted attributive list and the free-pass tail (152 B total).
+///
+/// This is a **server-wire** shape, not an exe paint claim: both the
+/// uid-1 and uid-2 Memoryer legs answered the bare 5000 send with it
+/// (`~/scratch/evidence-shops/uid2-server.jsonl` `96bb62ce…25009b`,
+/// `uid1-server.jsonl` `506ac0a3…5d3b6`). The exe handler at VA
+/// `0x560a40` / file `0x160a40` reads the prefix and a count taken from
+/// the global `0x77cce4`, so a different staged inventory size changes
+/// the framing; this decoder is for the observed 152-byte case only.
+/// No result word exists in the body — a low-gem reply is the same
+/// shape with a smaller first word (`buy-low-gem.jsonl`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncItemPurchaseReply {
+    /// Four wallet words read before the bag list.
+    pub prefix: SyncItemPurchasePrefix,
+    /// Unprefixed bag words in Memoryer's inventory order.
+    pub inventory: Vec<i32>,
+    /// Music-shop and item-shop cash words after the bag list.
+    pub wallets: SyncItemPurchaseWallets,
+    /// Attributive restock pairs; empty in the observed live body.
+    pub attributive_items: Vec<ShopRestockPair>,
+    /// Free-pass extension days tail.
+    pub free_pass_days: i32,
+}
+
+/// Wire length of the observed 152-byte purchase reply.
+pub const SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN: usize = 152;
+/// Unprefixed bag words in the observed reply (`Bag1..Bag30`).
+const LIVE_REPLY_INVENTORY_WORDS: usize = 30;
+/// Prefix + bag words + wallet pair + empty-list count + tail.
+const LIVE_REPLY_FIXED_LEN: usize = SYNC_ITEM_PURCHASE_PREFIX_LEN
+    + 4 * LIVE_REPLY_INVENTORY_WORDS
+    + SYNC_ITEM_PURCHASE_WALLETS_LEN
+    + 4
+    + SYNC_ITEM_PURCHASE_TAIL_LEN;
+
+impl SyncItemPurchaseReply {
+    /// Decode the observed 152-byte live reply body.
+    ///
+    /// # Errors
+    ///
+    /// `TruncatedMessage` or `TrailingBytes` when the body is not the
+    /// live 152-byte shape, and `InvalidField` when its list counts do
+    /// not match that shape.
+    pub fn decode_live_152(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN,
+            ));
+        }
+        debug_assert_eq!(LIVE_REPLY_FIXED_LEN, SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN);
+        let (prefix, mut rest) = SyncItemPurchasePrefix::decode_prefix(body)?;
+        let mut inventory = Vec::with_capacity(LIVE_REPLY_INVENTORY_WORDS);
+        for _ in 0..LIVE_REPLY_INVENTORY_WORDS {
+            inventory.push(read_word_at(rest, 0));
+            rest = &rest[4..];
+        }
+        let (wallets, rest) = SyncItemPurchaseWallets::decode_prefix(rest)?;
+        let attributive_count = read_word_at(rest, 0);
+        if attributive_count != 0 {
+            return Err(Error::InvalidField {
+                field: "attributive item count",
+                reason: "unexpected pairs in the observed 152-byte reply",
+            });
+        }
+        let (tail, rest) = SyncItemPurchaseTail::decode_prefix(&rest[4..])?;
+        if !rest.is_empty() {
+            return Err(Error::TrailingBytes(rest.len()));
+        }
+        Ok(Self {
+            prefix,
+            inventory,
+            wallets,
+            attributive_items: Vec::new(),
+            free_pass_days: tail.free_pass_days,
+        })
+    }
+}
+
 /// `SellItem` 5002 request: sell the selected shop entry back.
 ///
 /// Body is two little-endian `i32` words: the validated selection
@@ -868,6 +955,98 @@ mod tests {
     use super::*;
     use crate::frame::decode_frame;
     use crate::message::SyncCashPoint;
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("test hex"))
+            .collect()
+    }
+
+    #[test]
+    fn live_uid2_purchase_reply_decodes_all_eight_fields() {
+        // Live Memoryer frame from `uid2-server.jsonl` (96bb62ce…25009b):
+        // 152-byte 5001 with gem 626, bag words 376/383/35 and an empty
+        // attributive list. No verdict word exists in this body.
+        let body = hex_bytes(concat!(
+            "72020000000000000000000000000000780100007f0100002300000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "000000000000000000000000000000000000000000000000"
+        ));
+        assert_eq!(body.len(), 152);
+
+        let reply = SyncItemPurchaseReply::decode_live_152(&body).unwrap();
+        assert_eq!(reply.prefix.gem, 626);
+        assert_eq!(reply.prefix.point, 0);
+        assert_eq!(reply.prefix.o2_cash, 0);
+        assert_eq!(reply.prefix.cash_point, 0);
+        assert_eq!(reply.inventory.len(), 30);
+        assert_eq!(&reply.inventory[..3], &[376, 383, 35]);
+        assert_eq!(reply.wallets.music_cash, 0);
+        assert_eq!(reply.wallets.item_cash, 0);
+        assert!(reply.attributive_items.is_empty());
+        assert_eq!(reply.free_pass_days, 0);
+    }
+
+    #[test]
+    fn live_uid1_purchase_reply_decodes_zero_bag_and_wallet() {
+        // `uid1-server.jsonl` (506ac0a3…5d3b6): gem 15527, all other
+        // words zero, still the same 152-byte shape.
+        let mut body = vec![0u8; SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN];
+        body[..4].copy_from_slice(&15527i32.to_le_bytes());
+        let reply = SyncItemPurchaseReply::decode_live_152(&body).unwrap();
+        assert_eq!(reply.prefix.gem, 15527);
+        assert!(reply.inventory.iter().all(|word| *word == 0));
+        assert_eq!(
+            reply.wallets,
+            SyncItemPurchaseWallets {
+                music_cash: 0,
+                item_cash: 0,
+            }
+        );
+        assert_eq!(reply.free_pass_days, 0);
+    }
+
+    #[test]
+    fn low_gem_reply_has_only_the_wallet_prefix_change() {
+        // SCRIPTED-GATEWAY `buy-low-gem.jsonl` (f6f3177f…957e2): the
+        // 5001 first word is rewritten 15527 → 17. No verdict word
+        // appears; every other field keeps the live shape. #390's
+        // "server failure verdict" premise is refuted by this pin.
+        let mut body = vec![0u8; SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN];
+        body[..4].copy_from_slice(&17i32.to_le_bytes());
+        let reply = SyncItemPurchaseReply::decode_live_152(&body).unwrap();
+        assert_eq!(reply.prefix.gem, 17);
+        assert!(reply.inventory.iter().all(|word| *word == 0));
+        assert!(reply.attributive_items.is_empty());
+        assert_eq!(reply.free_pass_days, 0);
+    }
+
+    #[test]
+    fn purchase_reply_rejects_wrong_lengths_and_nonempty_lists() {
+        assert_eq!(
+            SyncItemPurchaseReply::decode_live_152(&[0u8; 151]),
+            Err(Error::TruncatedMessage {
+                need: 152,
+                have: 151
+            })
+        );
+        assert_eq!(
+            SyncItemPurchaseReply::decode_live_152(&[0u8; 153]),
+            Err(Error::TrailingBytes(1))
+        );
+        let mut body = vec![0u8; SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN];
+        body[144..148].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            SyncItemPurchaseReply::decode_live_152(&body),
+            Err(Error::InvalidField {
+                field: "attributive item count",
+                reason: "unexpected pairs in the observed 152-byte reply",
+            })
+        );
+    }
 
     #[test]
     fn equip_item_encodes_slot_then_item() {
