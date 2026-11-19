@@ -960,8 +960,10 @@ impl WireMessage for CheckNameResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::decode_frame;
+    use crate::frame::{decode_frame, encode_frame};
     use crate::message::SyncCashPoint;
+    use crate::testing::{loopback_pair, read_frame};
+    use std::io::Write;
 
     fn hex_bytes(hex: &str) -> Vec<u8> {
         (0..hex.len())
@@ -1379,6 +1381,86 @@ mod tests {
         assert_eq!(
             ShopRestockPair::decode_prefix(&[0x01; 7]),
             Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn scripted_gateway_purchase_arms_round_trip_the_pinned_bodies() {
+        // Four pinned shop legs on one loopback gateway (no exe boot):
+        // 5000/5001 success, 5028/5029 refresh, 5002/5003 success and
+        // 5002/5003 failure. The failure is a SELL verdict (5003
+        // `01000000`), not a fabricated 5001 field (#390 refutation).
+        let (mut gateway, mut server) = loopback_pair();
+
+        gateway.send_frame(SyncItemPurchase::COMMAND, &[]).unwrap();
+        let buy = read_frame(&mut server);
+        assert_eq!(buy.id, 5000);
+        assert!(buy.payload.is_empty());
+        let mut buy_body = vec![0u8; SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN];
+        buy_body[..4].copy_from_slice(&626i32.to_le_bytes());
+        server.write_all(&encode_frame(5001, &buy_body)).unwrap();
+        let answer = gateway.next_frame().unwrap();
+        assert_eq!(
+            SyncItemPurchaseReply::decode_live_152(&answer.payload)
+                .unwrap()
+                .prefix
+                .gem,
+            626
+        );
+
+        gateway.send_frame(SyncCashPoint::COMMAND, &[]).unwrap();
+        let refresh = read_frame(&mut server);
+        assert_eq!(refresh.id, 5028);
+        assert!(refresh.payload.is_empty());
+        server
+            .write_all(&encode_frame(
+                5029,
+                &[0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ))
+            .unwrap();
+        let wallet =
+            crate::wallet::SyncCashPointResponse::decode_frame(&gateway.next_frame().unwrap())
+                .unwrap();
+        assert_eq!((wallet.gem, wallet.cash_point), (626, 0));
+
+        let sell = SellItem {
+            selection: 0,
+            entry: 376,
+        };
+        gateway
+            .send_frame(SellItem::COMMAND, &sell.encode_body())
+            .unwrap();
+        assert_eq!(
+            SellItem::decode_body(&read_frame(&mut server).payload),
+            Ok(sell)
+        );
+        server
+            .write_all(&encode_frame(5003, &hex_bytes("0000000022390000")))
+            .unwrap();
+        let refund = SellItemResponse::decode_frame(&gateway.next_frame().unwrap()).unwrap();
+        assert_eq!(refund.gem, Some(14626));
+
+        let invalid = SellItem {
+            selection: 999,
+            entry: 0,
+        };
+        gateway
+            .send_frame(SellItem::COMMAND, &invalid.encode_body())
+            .unwrap();
+        assert_eq!(
+            SellItem::decode_body(&read_frame(&mut server).payload),
+            Ok(invalid)
+        );
+        server
+            .write_all(&encode_frame(5003, &hex_bytes("01000000")))
+            .unwrap();
+        let failed = SellItemResponse::decode_frame(&gateway.next_frame().unwrap()).unwrap();
+        assert_eq!(
+            failed,
+            SellItemResponse {
+                result: 1,
+                gem: None,
+            }
         );
     }
 

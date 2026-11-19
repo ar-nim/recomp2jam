@@ -351,3 +351,11 @@ round-trip),
 `shop_restock_pair_decodes_attributive_item_and_count`,
 `shop_restock_pair_round_trips_pair_list`,
 `shop_restock_pair_rejects_short_body`.
+
+Live-shape additions: `live_uid2_purchase_reply_decodes_all_eight_fields`,
+`live_sell_pair_pins_request_refund_and_failure`,
+`scripted_gateway_purchase_arms_round_trip_the_pinned_bodies` and
+`purchase_reply_rejects_a_fabricated_failure_word`. The scripted-gateway
+test walks four pinned legs — 5000/5001 success, 5028/5029 refresh,
+5002/5003 success and 5003 `01000000` failure — over one loopback
+connection. It pins codecs and bodies, not an exe press (#392).
