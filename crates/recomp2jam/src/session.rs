@@ -5205,6 +5205,95 @@ pub(super) mod session_tests {
         assert!(session.gift_claim_attempt.is_none());
     }
 
+    #[test]
+    fn gift_claim_unknown_error_keeps_the_present_box_row() {
+        // Live caller chain:
+        //   OnlineSession::paint -> flush_gift_claim (5023) ->
+        //   poll_gift_claim -> drain_gift_claim (5024 verdict 4) — the
+        //   success-only bag fold stays closed. Tier 2 scripted gateway
+        //   with the live `9c9af74a…50d67` failure body `0000000004`.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            use o2jam_net::gift::GetGiftMessageListResponse;
+            assert_eq!(read_frame(&mut stream).id, 5017);
+            let empty = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &empty.encode_body()))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, 5023);
+            stream
+                .write_all(&encode_frame(5024, &[0, 0, 0, 0, 4]))
+                .unwrap();
+        });
+
+        let area = |code: u32, x: i32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let mut hero = o2jam_net::CharacterInfo {
+            nickname: "Tester".to_owned(),
+            ..o2jam_net::CharacterInfo::default()
+        };
+        hero.item_gifts.push(o2jam_net::GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        });
+        game.set_myroom_character(hero);
+        game.load_side_scene(
+            vec![
+                area(o2jam_shell::screens::side::MYROOM_GIFT_FIRST_CODE, 10),
+                area(o2jam_shell::screens::side::MYROOM_MOVE_CODE, 100),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.click_myroom_side(11, 11);
+        game.click_myroom_side(101, 11);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| s.gift_claim_attempt.is_none());
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert_eq!(hero.item_gifts.len(), 1, "failed claim keeps the gift row");
+        assert!(!hero.inventory.contains(&1), "failed claim mints no item");
+    }
+
     pub(super) fn entry_channel() -> o2jam_net::ChannelState {
         o2jam_net::ChannelState {
             gateway_id: 0,

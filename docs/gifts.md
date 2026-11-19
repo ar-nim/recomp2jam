@@ -29,6 +29,15 @@ field names/order only.
 | 5040 | C→S | `CheckGiftFreePass` | null-terminated nickname | absent on 7.55 wire (Memoryer-only shape, kept for interop) |
 | 5041 | S→C | `CheckGiftFreePassResponse` | `i32` flag + nickname | absent on 7.55 wire (Memoryer-only shape, kept for interop) |
 
+Live 5023/5024 pair (server-wire class, not exe paint): `uid2-server.jsonl`
+`96bb62ce…25009b` sends `00010000001000000000` (type 0 / gift 1 /
+resource 16 / flag 0) and answers `0000000000` (Success), while
+`uid1-invalid-sell.jsonl` `9c9af74a…50d67` answers `0000000004`
+(UnknownError). Our session folds only the Success verdict into the
+bag; every other verdict keeps the present-box row. The ITEMGIFT
+button press stays a recorded no-op — 5023 is a *claim*, and sending
+a gift to another player is the web-only `gift_input.aspx` flow.
+
 There is no coupon TCP opcode. `coupon.phtml` is an HTTP URL
 (`http://o2jam.nopp.co.kr/client/coupon2/coupon.phtml?`, in-exe
 string table), redeemed in the billing web view; the TCP side of

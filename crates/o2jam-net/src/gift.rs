@@ -517,6 +517,37 @@ mod tests {
     }
 
     #[test]
+    fn live_gift_claim_bodies_pin_success_and_unknown_error() {
+        // Live Memoryer legs `96bb62ce…25009b` (seeded gift box) and
+        // `9c9af74a…50d67` (missing gift): the 5023 request is
+        // type 0 / gift 1 / resource 16 / flag 0, and 5024 is a five-byte
+        // validity word plus a verdict byte. Verdict 4 is UnknownError.
+        let request =
+            ClaimGift::decode_body(&[0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00])
+                .unwrap();
+        assert_eq!(
+            request,
+            ClaimGift {
+                gift_type: GiftType::Item,
+                gift_id: 1,
+                resource_id: 16,
+                is_attributive: false,
+            }
+        );
+        let success = ClaimGiftResponse::decode_body(&[0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(
+            ClaimGiftResult::from_u8(success.result_code),
+            Some(ClaimGiftResult::Success)
+        );
+        let failure = ClaimGiftResponse::decode_body(&[0, 0, 0, 0, 4]).unwrap();
+        assert_eq!(
+            ClaimGiftResult::from_u8(failure.result_code),
+            Some(ClaimGiftResult::UnknownError)
+        );
+        assert_eq!(failure.encode_body(), vec![0x00, 0x00, 0x00, 0x00, 0x04]);
+    }
+
+    #[test]
     fn claim_gift_encodes_ten_byte_body() {
         let request = ClaimGift {
             gift_type: GiftType::Music,
