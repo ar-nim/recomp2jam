@@ -3393,6 +3393,7 @@ impl OnlineSession {
             id if id == RankNotification::COMMAND => self.apply_rank_notice(chat, &frame),
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
+            id if id == RoomList::COMMAND => self.apply_room_list(&frame),
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
@@ -3483,6 +3484,19 @@ impl OnlineSession {
             return;
         };
         self.game.upsert_room(listed_room_from_created(created));
+    }
+
+    /// Fold one 2003 room-list snapshot into the staged rows. The
+    /// same handler serves the ordinary lobby drain and frames the
+    /// #367 fuse read while its 07DA node was tracked (#569), so a
+    /// deferred row-state probe still reaches the list with the
+    /// one-OK sheet up. Undecodable bodies drop with a trace.
+    fn apply_room_list(&mut self, frame: &Frame) {
+        let Ok(list) = RoomList::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room-list frame");
+            return;
+        };
+        self.game.set_rooms(list.rooms);
     }
 
     /// Fold one 2007 disband broadcast into the Room list. Memoryer
@@ -10256,6 +10270,68 @@ pub(super) mod session_tests {
         );
         paint_frame(&mut session);
         assert!(!session.game.room_no_response_dialog_open());
+        server.join().unwrap();
+    }
+
+    /// #569 row-state arm: the 07DA fuse owns the socket while its
+    /// node is tracked, so a 2003 room-list probe read by that drain
+    /// is deferred. The overdue node then opens the one-OK sheet;
+    /// the next paint must replay the deferred 2003 into the row
+    /// state even while that modal is up. Live caller chain:
+    /// boot relay gate -> `stage_channel_list_after_relay_gate` ->
+    /// Room -> `OnlineSession::paint` -> `poll_wire` ->
+    /// `poll_room_user_list_fuse` -> `drain_room_user_list_reply` ->
+    /// `deferred_frames` -> `replay_deferred_frames` ->
+    /// `apply_lobby_frame` -> `ScreenGame::set_rooms`. No qualified
+    /// exe frame pair exists yet (story evidence is OPEN).
+    #[test]
+    fn starved_room_poll_replays_a_2003_row_state_probe_while_the_modal_is_up() {
+        let waiting = listed_p380_room(0, "STALLED");
+        let playing = o2jam_net::RoomListEntry {
+            state_code: 2,
+            ..waiting.clone()
+        };
+        let list = o2jam_net::RoomList {
+            rooms: vec![playing],
+        };
+        let body = list.encode_body();
+        let (port, server) = fake_gateway(move |mut stream| {
+            stream
+                .write_all(&encode_frame(o2jam_net::RoomList::COMMAND, &body))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        game.set_rooms(vec![waiting]);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        paint_frame(&mut session);
+        assert!(
+            session.game.room_no_response_dialog_open(),
+            "the starved node opened the one-OK sheet"
+        );
+        assert_eq!(
+            session.game.listed_rooms()[0].state_code,
+            1,
+            "the fuse read defers the 2003 instead of dropping it"
+        );
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.listed_rooms()[0].state_code,
+            2,
+            "the modal does not block row-state replay"
+        );
         server.join().unwrap();
     }
 
