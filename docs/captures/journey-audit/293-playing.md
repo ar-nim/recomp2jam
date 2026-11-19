@@ -59,6 +59,52 @@ Comparator classes: `pixel-region`, `wire-sequence`, `input-response`,
 | BLOCKED | 1, 8, 9, 10, 11, 12 | No provenance-backed exe Playing frame or input stream: f1 `drive.log` sha256 `89fe88f8…c58` / `citation.txt` sha256 `8773f5cc…8517` stop at Loading, `attach316.log` sha256 `ad8dd3ae…2b23f34` shows the render-thread wedge. Map to **#326**, plus **#245/#249/#250** for capture tooling. |
 | NA-DESIGN | — | None. |
 
+## WAVE 1 #378 addendum — guest Playing in a two-member room
+
+Fix `dae62a5` (rig-side, no client behavior change) makes the bot master send
+its eleven `4048` tick-sync frames after `4010/4012` and submit a zero `4016`
+after the guest's `4017`. The root cause was server-side: Memoryer's
+`ScoreTracker.SyncTick` (`/home/arnim/mozart-src/Source/Memoryer`,
+`Memoryer.Server/Services/ScoreTracker.cs:265-272`) withholds the `4050`
+broadcast until every tracked member finishes the latency burst; the old bot
+never sent one. `ScoreTracker.SubmitScore` (`:284-344`) withholds `4018`
+until every tracked member submits `4016`. Red guards:
+`scripts/tests/test_master_play_chain.py`; gates: `scripts/gate-check.sh
+--no-push` green on both install-root arms.
+
+Qualified exe pack `~/scratch/p378/guest-playing-1/guest` (one exe guest +
+fixed bot master; **not** a two-exe cell): manifest
+`aae3d446784e17defb21fdb23f3553fb7fa769a6c88e4c906805ce1f014e50c4`,
+citation `96345ebb11a552880d5b4a2384aebaac43e02abd3a788d99dcb23a20174f307d`,
+wire `99f360510b75a5abb8c5eae824772e8c1ef612c3bdcc57dd6ebab65638d6033e`,
+`guest-drive.log`
+`1e1c5891fcf0f879735f5112338f61be9a8a93ec3df3b0b80615645cfadf89c7`,
+host `091d1df23cdc31439f8fa9605ec36572b17fdf87ffca984303cc188037533208`.
+Containment `route=sink` / `on_default_sink=0` / `preboot_breach=0`; `cite
+--claim exe` PASS. This pins the following spec stories:
+
+- Story 1 (seven lanes / note rendering): the guest Highway paints after
+  `S2C 4050`, with BGA and HUD behind three lanes in this 757/3KEY room;
+  `artifacts/screenshots/guest-playing-entry.png`
+  `98aa85b8e773293ffbf10af076afd7e2f7c6445a2b776fa22ff6aea9e346965b`,
+  wire `:67`. The seven-lane geometry itself stays pinned by `s8` and the
+  static dispatcher.
+- Story 4 (life/Jam stats exchange): live two-member `C2S 4014` life `1000 →
+  0` with `S2C 4015 member=01` echoes, wire `:68-91`; later `MISS 32` frame
+  `guest-play-08.png`
+  `9d31b6e797a8c58f7d9ef6d4850adbd687e0c83dc8289bc4a70f3bb963f7c440`.
+  The master-side 4014 and the reactive master 4016 did not fire in this
+  pack (the guest never submitted 4016), so no full score-table claim.
+- The 23-action matrix (`293-playing-story-matrix.md`) gains five guest-half
+  cells: ENTER-BATTLE-PEER (peer + server), LIFE-MISS-DRAIN (peer),
+  BGA-HUD-ART (peer), TWO-CLIENT-ROSTER (peer).
+
+Chart-timed DIK replay (`chart757-level1.txt`, level 1, 40 events, lead
+400 ms) was applied, but all notes were missed (COOL 0 / MISS 32), so stories
+2, 8, 9 and 10 keep their prior verdicts. The `4016/4017/4018` Result arm
+(story 7) also stays unpinned for a two-member room. The second-exe master
+half of `E-MULTI / #378` remains OPEN.
+
 Live-lane carry-forward (all mapped, no new issues):
 1. One qualified Playing capture with epoch-stamped injector and judged log,
    one stimulus per boot (#326 + #249); until then stories 1/9/10/12 cannot

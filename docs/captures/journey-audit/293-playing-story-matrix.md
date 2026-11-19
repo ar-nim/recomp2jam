@@ -34,10 +34,13 @@ headless bot cannot supply one (#378).
 | `docs/captures/static-play/pins.md` (`S-PLAY-B1`, `S-PLAY-B2`) | `0x550db0` boot-time seven-bank OJM loader (sole caller chain from PE entry), not a per-frame effect loop; `0x67fe8c` 8-byte float-pair NoteTail table consumed at Playing `+0xfec` by option reload/setter (`0x16bf40`/`0x16bfb0`) | Corrects both old journey-audit BLOCKED arms; REA CLI artifact IDs are local static IDs, not dossier evidence |
 | #293 journey audit (`293-playing.md`), #294 matrix (`294-result-story-matrix.md`), #378 body, #379 close record | owner/static observations 2026-11-18/19; #294 boot-3 wire `870ba02f…`, frames `4a89faa5…`/`74e6a2ae…`/`c2ad594a…`; #378 OPEN 2026-11-19 | #293's 12 prior stories stay referenced, not duplicated. #378 names the bot-master chain as the next step for all two-client cells. #379 merged guards are cross-state fix state |
 | WAVE 1 `~/scratch/story-matrix-live/` | tap `e326e3f7eaae0cd88dfa9e8735d7554c5c73dd6fc7b376017dbb28ffb5d2834a`; observer `d4fa3dc6ff6dada19acbd7ced46eaeb7e21cb7743b07a74865445aea463ad680` | 2005 create / 2011 two-member list / 2007 last-disconnect wire; cross-state witness, not a Playing paint claim |
+| **`~/scratch/p378/guest-playing-1/guest`** (WAVE 1 #378 fix leg, fixed bot master + one exe guest, cite `--claim exe` 0) | manifest `aae3d446784e17defb21fdb23f3553fb7fa769a6c88e4c906805ce1f014e50c4`; citation `96345ebb11a552880d5b4a2384aebaac43e02abd3a788d99dcb23a20174f307d`; wire `99f360510b75a5abb8c5eae824772e8c1ef612c3bdcc57dd6ebab65638d6033e`; `guest-drive.log` `1e1c5891fcf0f879735f5112338f61be9a8a93ec3df3b0b80615645cfadf89c7`; host `091d1df23cdc31439f8fa9605ec36572b17fdf87ffca984303cc188037533208`; `guest-playing-entry.png` `98aa85b8e773293ffbf10af076afd7e2f7c6445a2b776fa22ff6aea9e346965b`; `guest-play-08.png` `9d31b6e797a8c58f7d9ef6d4850adbd687e0c83dc8289bc4a70f3bb963f7c440`; `waiting.png` `36a7fa4b8eb8055ce5e0fad994ff4a5d18d9c0b4d088cc5662661d5086fc9b5a` | First qualified guest Playing frame in a two-member room: S2C 4050 after the bot master's 4048 burst, guest 4014 life 1000→0 with 4015 echoes, three-lane BGA/HUD art and the master seat on Waiting. Containment `route=sink` / `on_default_sink=0` / `preboot_breach=0`; chart replay applied but all notes missed, so no judged-input or 4016/4018 claim |
 
 Negative probes are included with their verdicts: f1's stopped-state frame is
 not a pixel claim, s7's `judged-strike` line is retracted, s3 is a cold
 channel-enter flake, and both two-exe legs failed at the join/ready gate.
+The WAVE 1 #378 leg is bot master + exe guest, not a two-exe cell; it closes
+only the guest half named below.
 Green Rust guards (#379 member matrix, judgement/life guards) never grade an
 exe-behavior cell. Server state is shared by one Memoryer by construction;
 no "scenario delta" dismissal appears without a wire log and a per-client
@@ -45,10 +48,11 @@ frame.
 
 Gap IDs used below (each is a runnable next step, not a bare OPEN):
 
-- `E-MULTI / #378` — fix the bot-master chain in `scripts/wine-room-host.py`
-  (or drive a second exe as master), then capture both members' Playing
-  frames, both wire legs and the per-member 4014/4015/4016/4018 rows with
-  one trace id.
+- `E-MULTI / #378` — fixed in `scripts/wine-room-host.py` (`dae62a5`: master
+  4048 tick sync releases S2C 4050; reactive master 4016 completes the score
+  table). The WAVE 1 `p378` pack closes the guest half. Still OPEN: a second
+  exe as master, both members' frames/wire legs and the 4014/4015/4016/4018
+  pair under one trace id.
 - `E-LIFE` — controlled 7KEY replay with deliberate misses and chart-timed
   strikes, pairing life `0x3970`, 4014 type 0, 4015 echo and the early
   Result edge in one pack.
@@ -69,32 +73,33 @@ the board paints a highway.
 |---|---|---|---|---|---|
 | **ENTER-SOLO** (self:solo, entry: 4010 in a one-seat room) | EVIDENCED — `<START>` → highway + notes appear after 4011/4012/4013/4048 → pack `s2` `b1bb42cb…`, `s8` `d987d801…`, wire `77a9494a…`; static scroll `0x56e1cb`–`0x56e3d3` | NA-DESIGN — no peer seat in this entry | NA-DESIGN — no peer exists | NA-DESIGN — board observer cannot see the in-client highway | EVIDENCED — `<4010 len0 / 4011 len8 / 4012 / 4013 / eleven 4048>` → play gate answered → wire `77a9494a…:36-62` |
 | **ENTER-BATTLE-MASTER** (self:master with a peer, entry: 4010 with 2 members) | NA-DESIGN — solo entry is a different row | GAP — no qualified two-client master Playing frame; OPEN — `E-MULTI / #378`: drive a second exe as master, capture its highway and 4010 gate with both member seats | GAP — no peer-side view of the master's start; OPEN — `E-MULTI / #378`: same trace id, peer frame at START | NA-DESIGN — Playing is in-client | GAP — per-member 4010/4011/4012 fan-out unpinned; OPEN — `E-MULTI / #378`: tap both sockets at the same START checkpoint |
-| **ENTER-BATTLE-PEER** (self:peer in a master's room, entry: S2C 4010) | NA-DESIGN — no peer offline | GAP — master's view of the peer crossing into play is unpinned; OPEN — `E-MULTI / #378` | GAP — no qualified guest Highway frame; OPEN — `E-MULTI / #378`: guest pixels plus `C2S 4012` in one pack | NA-DESIGN — board has no play sheet | GAP — guest-side 4011/4012/4013 bodies unpinned; OPEN — `E-MULTI / #378`: both wire legs at the handoff |
+| **ENTER-BATTLE-PEER** (self:peer in a master's room, entry: S2C 4010) | NA-DESIGN — no peer offline | GAP — master's view of the peer crossing into play is unpinned; OPEN — second-exe master half of `E-MULTI / #378` | EVIDENCED — `<S2C 4050 then first play pixels>` → guest Highway at t+2.5 s, lane dark 0.885 / HUD bright 0.007, with `C2S 4012` and `C2S 4014` in the same pack → `guest-playing-entry.png` `98aa85b8…`, wire `99f36051…:41,67-69` | NA-DESIGN — board has no play sheet | EVIDENCED — `<start handshake>` → `4011 len=8 0000000000000000`, guest `4012 len=5 0000000001`, `4013` + last `4048 last=1`, then `S2C 4050 len=6 010100000000` → wire `99f36051…:28-67` |
 | **KEYMODE-7KEY** (self:solo/master, entry: 07D4 create) | EVIDENCED — `<7KEY plate lit>` → `07D4` key-mode byte `02`, seven caps and 28×7 note bars → pack `s8` `4a0ae4fe…`/`d987d801…`, wire `77a9494a…` | EVIDENCED — `<master 7KEY create>` → lit plate and `C2S 07D4 … 0002 …`, then WAITING row → this wave pack `ed13d762…`, wire `701297d1…` | GAP — no peer view of a 7KEY highway; OPEN — `E-MULTI / #378`: guest frame after a 7KEY START | NA-DESIGN — key mode is a create-form choice, not a board field | EVIDENCED — `<07D4 body>` → key-mode word at byte 6 = `02` → wire `77a9494a…:23`, run2 wire `701297d1…:23` |
 | **HIGHWAY-LANES** (self:solo, entry: first Playing frame) | EVIDENCED — `<play pixels>` → uneven lane columns `(5,28)…(165,28)`, judgement rule y≈296, note bars 28×7 → pack `s8` `d987d801…`, crop `caf7a8bc…`, dossier A26 `ev_f4662376…` | GAP — no master frame with a peer seated; OPEN — `E-MULTI / #378` | GAP — no peer frame with both member lanes addressed; OPEN — `E-MULTI / #378` | NA-DESIGN — local paint, no board row | NA-DESIGN — no wire field carries a lane column |
 | **KEY-DOWN-HEAD** (self:player, entry: note at judgement row) | EVIDENCED — `<DIK stroke timed to a note>` → cap lights and judged tally changes; routing inversion `0x1714b0`/`0x176c42` → pack `s8` input `951e0787…`, dossier `ev_c01db4a8…`; arrow/statics in `docs/gameplay.md` | GAP — no two-client head-routing frame; OPEN — `E-MULTI / #378` plus `E-864` | GAP — no peer head-routing frame; OPEN — same replay on the guest leg | NA-DESIGN — local input path | NA-DESIGN — key-down is not a gateway frame |
 | **KEY-UP-TAIL-HOLD** (self:player, entry: armed long-note release) | EVIDENCED — `<release>` → tail rated with the shared 6/18/25/≥26 windows; arming `+0x864[lane]`, files `0x176e60`/`0x176646`–`0x176709`, hold bonus +1 combo/tick → `docs/gameplay.md` B11/B12 | GAP — battle hold state unpinned; OPEN — `E-MULTI / #378`: hold chart on both clients | GAP — same for peer; OPEN — `E-MULTI / #378` | NA-DESIGN — tail rating is in-client | GAP — `longNote` word exists in 4014/4016 wire but its two-client echo unpinned; OPEN — `E-MULTI / #378`: tap both legs during one hold |
 | **JUDGEMENT-WINDOWS** (self:server judgement, entry: absolute song-note time difference) | EVIDENCED — `≤6/≤18/≤25 ms` → Cool/Good/Bad, else Miss; flags `0x10/0x20/0x40/0x80` → file `0x176540` (ev `14992eb2…`), sites `0x176646`/`0x176b7f`; s8 tallies 1/1/1/20 → pack `7c99c2b7…` | GAP — no battle-member tier frame; OPEN — `E-MULTI / #378` + `E-864` | GAP — no peer tier frame; OPEN — same | NA-DESIGN — judgement is inside the play state | EVIDENCED — `<4016 body>` → first four u32 `01 00 01 00 01 00 14 00` → wire `77a9494a…:69`; layout `docs/net-protocol.md:170` |
 | **JUDGED-REPLAY-7KEY** (self:solo, entry: chart-timed DIK schedule) | EVIDENCED — `<40 hits from level-1 757, shifted −400 ms>` → COOL 1 / GOOD 1 / BAD 1 / MISS 20, life `0x7c`, score `0x7c` → input `951e0787…`, frame `7c99c2b7…`, wire `77a9494a…` | GAP — no master replay with a peer present; OPEN — `E-MULTI / #378` + `E-864` | GAP — no guest replay with chart-timed strokes; OPEN — same | NA-DESIGN — no board observer for judged lines | EVIDENCED — `<4014/4016/4017/4018>` → life 124 and the same four tallies → wire `77a9494a…:67-71` |
-| **LIFE-MISS-DRAIN** (self:server tick, entry: miss or Cool/Good during play) | EVIDENCED — `<miss>` → life word `+0x3970` drains by the difficulty delta (Normal Miss −40), gauge stripe x≈236–245 falls; no-strike s7 hit 0 → pack `211f5acb…`/`s2`, dossier `feebe490…`; owner pin | GAP — each member's life drain unpinned; OPEN — `E-LIFE` under `E-MULTI / #378` | GAP — peer's own drain unpinned; OPEN — same | NA-DESIGN — gauge is in-client | EVIDENCED — `<4014 type=0 value=u16>` → life 124 in s8, 0 in s7 → wire `77a9494a…:67`, `211f5acb…:65` |
+| **LIFE-MISS-DRAIN** (self:server tick, entry: miss or Cool/Good during play) | EVIDENCED — `<miss>` → life word `+0x3970` drains by the difficulty delta (Normal Miss −40), gauge stripe x≈236–245 falls; no-strike s7 hit 0 → pack `211f5acb…`/`s2`, dossier `feebe490…`; owner pin | GAP — each member's life drain unpinned; OPEN — `E-LIFE` under `E-MULTI / #378` | EVIDENCED — `<all misses in a two-member room>` → guest `C2S 4014` life `e803`=1000 → `0000` in 12 ticks, each echoed as `S2C 4015 member=01`; HUD tally `MISS 32` → wire `99f36051…:68-91`, frame `9d31b6e7…` | NA-DESIGN — gauge is in-client | EVIDENCED — `<4014 type=0 value=u16>` → life 124 in s8, 0 in s7 → wire `77a9494a…:67`, `211f5acb…:65` |
 | **LIFE-DRIVE-JAM** (self:server judgement, entry: Cool/Good tail) | EVIDENCED — `<Cool/Good>` → Jam +2/+1 in the score path, 4014 type 1 on tails files `0x16e660`/`0x16e7dd`; life adder first (`0x17057c`/`0x1705f6`) → `docs/gameplay.md`, `docs/net-protocol.md:170` | GAP — no battle Jam exchange frame; OPEN — `E-LIFE` under `E-MULTI / #378` | GAP — same on guest; OPEN — same | NA-DESIGN — Jam gauge is in-client | EVIDENCED — `<4014 type=1>` → wire shape and send sites pinned; no solo pack has a type-1 body (OPEN — `E-LIFE` for the live body) |
 | **LIFE-DEATH-EARLY-RESULT** (self:server, entry: life reaches 0 before chart end) | EVIDENCED — `<all notes missed>` → bar empty, scorer freezes all tiers (`0x17051c`/`0x170557`), early 4016/4017/4018 → s2 wire `e4573ba2…`, s7 wire `211f5acb…`; owner pin | GAP — battle death per member unpinned; OPEN — `E-LIFE` under `E-MULTI / #378` | GAP — peer death/remaining-member continuation unpinned; OPEN — same | NA-DESIGN — no board observer of a death | EVIDENCED — `<4016 life byte 00, miss 20>` → 4017 slot 00 then 4018 → wire `211f5acb…:67-69` |
 | **PEER-LIFE-ECHO-4015** (self:server, entry: S2C 4015 during play) | NA-DESIGN — one seat has no peer echo | GAP — master's peer gauge from 4015 unpinned; OPEN — `E-HANDLER`, then `E-MULTI / #378` | GAP — guest's master gauge unpinned; OPEN — same | NA-DESIGN — gauge is in-client | EVIDENCED — `<4015>` → u8 member + type + u16 value + 8 rank bytes → `docs/net-protocol.md:170`; handler candidate file `0x15fa20` unlocated, s8 body `77a9494a…:68` |
 | **SONG-CLOCK** (self:server timer, entry: Playing update tick) | EVIDENCED — `<tick>` → exe paces on `timeGetTime` (`0x791d70`, B38 `efdaac19…`); our sample clock is the ADR-0001 deviation → `docs/scroll-map.md`, `docs/parity/playing.md` | GAP — two-member clock alignment unpinned; OPEN — `E-MULTI / #378`: both frames at one wall trace | GAP — same on guest; OPEN — same | NA-DESIGN — local clock, no board state | NA-DESIGN — no wire frame carries song position |
-| **BGA-HUD-ART** (self:solo, entry: Playing frame with stage scene) | EVIDENCED — `<play pixels>` → BGA video behind the highway, JAM/COOL/GOOD/MISS + TIME strip, seven lit caps → pack `s2` `b1bb42cb…`, `s8` `d987d801…`, `docs/parity/playing.md` Composition | GAP — no two-client master art frame; OPEN — `E-MULTI / #378` | GAP — no peer art frame; OPEN — same | NA-DESIGN — art is in-client | NA-DESIGN — no wire field selects HUD art |
+| **BGA-HUD-ART** (self:solo, entry: Playing frame with stage scene) | EVIDENCED — `<play pixels>` → BGA video behind the highway, JAM/COOL/GOOD/MISS + TIME strip, seven lit caps → pack `s2` `b1bb42cb…`, `s8` `d987d801…`, `docs/parity/playing.md` Composition | GAP — no two-client master art frame; OPEN — second-exe master half of `E-MULTI / #378` | EVIDENCED — `<guest play frame>` → city BGA video behind the three-lane highway, JAM/COOL/GOOD/BAD/MISS + TIME strip, `1st`/`2nd` rank plates → `guest-playing-entry.png` `98aa85b8…`, later `guest-play-08.png` `9d31b6e7…` | NA-DESIGN — art is in-client | NA-DESIGN — no wire field selects HUD art |
 | **SCORE-SUBMIT-4016** (self:solo, entry: end or death) | EVIDENCED — `<4016>` → u16 cool/good/bad/miss/maxCombo/jam/maxJam + u32 score + u8 life + speed + i32 longNote → s8 body `010001000100140000005b6300007c000000000100000000`, wire `77a9494a…:69`; layout `docs/net-protocol.md:170` | GAP — battle master's own 4016 row unpinned; OPEN — `E-MULTI / #378` | GAP — peer's 4016 row unpinned; OPEN — same | NA-DESIGN — submit is not board-visible | EVIDENCED — `<C2S 4016 len24>` → server accepts and answers 4017/4018 → wire `77a9494a…:69-71` |
 | **RESULT-TRANSITION** (self:server, entry: 4016 then 4017/4018) | EVIDENCED — `<4017 slot 00 / 4018 len 50>` → Result SCORE/`GOOD!`/one row, RETRY/BACK → pack `3ea6c481…`, wire `97ebe726…`, `docs/lifecycle.md` §10 | GAP — two-member Result sheet unpinned; OPEN — `E-MULTI / #378` + #294 `S294-RESULT-MULTI-02` | GAP — peer Result sheet unpinned; OPEN — same | NA-DESIGN — Result is in-client | EVIDENCED — `<4018 45-B row, master slot byte>` → score rows admitted to the member table → wire `77a9494a…:71`, files `0x15fbe0`/`0x1411a0` |
 | **DI-SCANCODE-MAP** (self:player, entry: keyboard setup) | EVIDENCED — `<DIK 1f/20/21/39/24/25/26>` → caps `S D F SPACE J K L`; `Option.ini` table `0x173290` (ev `fc65241f…`), poster `0x544b50`/`0x5429b0`; s8 input `951e0787…` | GAP — battle lane map with two clients unpinned; OPEN — `E-MULTI / #378` + `E-864` | GAP — same on guest; OPEN — same | NA-DESIGN — keyboard map is local config | NA-DESIGN — no opcode carries a scancode |
 | **NOTETAIL-STYLE** (self:local option, entry: `NoteTail` 0..=4) | EVIDENCED — `<option index>` → 8-byte float-pair table `0x67fe8c` loads into the Playing display object at `+0xfec`, divides by 160 and clamps 0..120 → `S-PLAY-B2`, files `0x16b8f0`/`0x16bf40`/`0x16bfb0` | EVIDENCED — same local option consumer, no role gate → `S-PLAY-B2` | EVIDENCED — same local option consumer → `S-PLAY-B2` | NA-DESIGN — option is not board state | NA-DESIGN — no wire field carries `NoteTail` |
 | **OJM-BANK-LOADER** (self:boot, entry: sound-device init) | EVIDENCED — `<boot>` → one call loads one of seven OJM banks; sole caller chain from PE entry → `S-PLAY-B1`, file `0x550db0` (corrects the old per-frame-effect label) | EVIDENCED — same boot-time call chain, no role gate → `S-PLAY-B1` | EVIDENCED — same boot-time call chain → `S-PLAY-B1` | GAP — whether the board observer's own bank set matches is unpinned; OPEN — `0x550db0` caller trace on the observer's own exe boot | NA-DESIGN — local sound bank, no gateway frame |
 | **RETRY-PLAY-AGAIN** (self:solo, entry: settled Result rect 6) | LIVE-FILLED — `<click (667,581)>` → new empty `C2S 4010`, then personal-room pixels, not a Waiting seat grid → #294 wire `870ba02f…`, frames `4a89faa5…`/`74e6a2ae…`/`c2ad594a…`; contradicts the older checked #294 story | GAP — battle RETRY with a ready sibling unpinned; OPEN — `E-MULTI / #378` + #294 battle retry leg | GAP — peer RETRY refusal view unpinned; OPEN — same | NA-DESIGN — button is in-client | LIVE-FILLED — `<second 4010>` → second 4016/4017/4018 round → #294 wire `870ba02f…` |
-| **TWO-CLIENT-ROSTER** (other:peer joins master room, entry: Waiting) | NA-DESIGN — no peer in a solo room | GAP — no qualified exe master frame of the joined seat after 3004; OPEN — `E-MULTI / #378`: master pixels + `3004` in one trace | GAP — no qualified exe guest frame of the master seat from 3003; OPEN — same | NA-DESIGN — board observer cannot see a Waiting seat | EVIDENCED — `<0BBA>` → `3004` 103 B to master, `3003` 180 B to guest, `4009` body `0101` to both → p379 taps `b07d63f8…`/`8e8735de…`; #379 guard fix is not the exe claim |
+| **TWO-CLIENT-ROSTER** (other:peer joins master room, entry: Waiting) | NA-DESIGN — no peer in a solo room | GAP — no qualified exe master frame of the joined seat after 3004; OPEN — second-exe master half of `E-MULTI / #378` | EVIDENCED — `<hover-verified 0BBA>` → guest Waiting frame paints the master seat `t207probe` with READY and the guest seat `tester` orange; `S2C 3003 len=183` and `4009 body 0101` in the same trace → `waiting.png` `36a7fa4b…`, wire `99f36051…:21-24` | NA-DESIGN — board observer cannot see a Waiting seat | EVIDENCED — `<0BBA>` → `3004` 103 B to master, `3003` 180 B to guest, `4009` body `0101` to both → p379 taps `b07d63f8…`/`8e8735de…`; #379 guard fix is not the exe claim |
 | **ROOM-ROW-FANOUT** (other:master creates, entry: peer on Room board) | NA-DESIGN — solo creation needs no second client | EVIDENCED — `<07D4>` → master's own Waiting row; this wave pack `399cea04…`, wire `701297d1…` | EVIDENCED — `<2003>` → second exe paints the master's WAITING row; this wave `room.png` `0eebef4d…`, wire `19bfc66d…`; the later join click failed, so no Playing claim | NA-DESIGN — no channel poll in this leg | EVIDENCED — `<2003 len=2417>` → body contains `PLAYMULTI` and state WAITING → wire `19bfc66d…:16`; WAVE 1 create wire `e326e3f7…` |
 
-Counts: **115 cells** — 36 EVIDENCED, 41 GAP, 2 LIVE-FILLED, 0 OPEN-FIX,
-36 NA-DESIGN. Counts were re-parsed from the table; every GAP names its next
-evidence step. A cell is a story candidate, not a closure: closing still
-needs the live caller chain and the project gates.
+Counts: **115 cells** — 41 EVIDENCED, 36 GAP, 2 LIVE-FILLED, 0 OPEN-FIX,
+36 NA-DESIGN. Counts were re-parsed from the table after the five #378 guest
+half cells were filled; every GAP names its next evidence step. A cell is a
+story candidate, not a closure: closing still needs the live caller chain and
+the project gates.
 
 ## 3. Simulation script and boot ledger
 
@@ -144,14 +149,27 @@ Both legs started only after a 60 s idle poll of `ss -tnp | grep 15010`;
 the shared Memoryer was never restarted or signalled. No other lane owned
 15010 during these legs. All processes stopped by their own PID files.
 
+### WAVE 1 #378 addendum boot (one guest leg, fixed bot master)
+
+| Boot | Display / sink / tap | Actor | Scene reached | Wire / pack | Result |
+|---|---|---|---|---|---|
+| p378-1 | `:355`, `rig_null_3899753`, 15012 | guest uid 1 `tester`; bot master uid 3 `t207probe` | Channel → Room → Waiting → READY → Playing (45 s hold) | `99f36051…` / `aae3d446…` | PASS: `S2C 4050` after the master's 4048 burst, guest Highway pixels, 4014 life drain and 4015 echoes; all notes missed, no 4016/4018 |
+
+The 15010 poll was idle before this boot; popup dismissed at every
+transition; live audio route re-checked while Playing; `cite --claim exe`
+PASS; Memoryer PID 92326 / epoch 1794986056 unchanged; all processes stopped
+by their PID files. This is a bot-master + one-exe leg, not a two-exe cell.
+
 ## 4. Gap-to-story hand-off and contradictions
 
-Ranked by player visibility × reachability (all multi-actor rows are GAP):
+Ranked by player visibility × reachability (the guest-half rows above are no
+longer GAP; the master-half rows still are):
 
-1. Two-client Highway and member stats (15 cells): `E-MULTI / #378` first.
-   The bot master must own the play/submit chain, or a second exe must be
-   driven as master. The second exe join click is the immediate blocker:
-   run2 painted the master's WAITING row but emitted no `0BBA`.
+1. Two-client Highway and member stats (15 cells): the fixed bot master now
+   releases 4050 and the guest half is EVIDENCED from the `p378` pack. The
+   remaining cells need a second exe as master, plus both members' frames
+   and the 4016/4018 pair. The second exe join click is still the immediate
+   blocker: run2 painted the master's WAITING row but emitted no `0BBA`.
 2. Life-bar family (6 cells): `E-LIFE` with deliberate misses; s7/s2 pin
    the empty-bar early Result, s8 pins a surviving bar at life 124. Owner
    pin: missing ALL notes empties the bar and ends the song early.
@@ -181,9 +199,10 @@ Contradictions and limits kept open:
   clock, Rust sample clock). It is not graded OPEN-FIX here; no parked fix
   exists for it. The two-client alignment arm stays GAP.
 - #379's merged member guards and two-client member matrix are green, but
-  green guards are not exe observations. Both live attempts show the wire
-  roster and one client's pixels; neither produced a two-client Playing
-  frame. #378 remains the named next step.
+  green guards are not exe observations. Both run1/run2 attempts show the
+  wire roster and one client's pixels; neither produced a two-client Playing
+  frame. The `p378` leg adds the guest half with the fixed bot master; the
+  second-exe master half remains OPEN.
 - The run2 guest saw the master's room in `2003` and painted its WAITING
   row, but the join click produced no `0BBA`. Negative evidence is recorded
   as a failed attempt; no two-client cell is filled from it.
