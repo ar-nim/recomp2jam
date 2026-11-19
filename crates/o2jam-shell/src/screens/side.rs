@@ -78,6 +78,19 @@ pub const CASH_CHARGE_WEB_CODE: u32 = 0x8350_0002;
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
 
+/// The seven `KeyEffect_Tutorial_%d.ojs` receptor bodies staged by
+/// Tutorial's kit arm (stage VA `0x4dd290`, file `0xdd3e6`), in lane
+/// order. Each body carries five frames at its parsed row-487 anchor.
+pub const TUTORIAL_RECEPTOR_SPRITES: [&str; 7] = [
+    "KeyEffect_Tutorial_1.ojs",
+    "KeyEffect_Tutorial_2.ojs",
+    "KeyEffect_Tutorial_3.ojs",
+    "KeyEffect_Tutorial_4.ojs",
+    "KeyEffect_Tutorial_5.ojs",
+    "KeyEffect_Tutorial_6.ojs",
+    "KeyEffect_Tutorial_7.ojs",
+];
+
 /// Bottom-right exit chrome of the tutorial: `Playing_Exit.ojs` at
 /// its parsed record anchor `(751,554)`, 42x42 (`docs/opi-pattern.md:54`).
 /// The qualified boot1 press `(777,567)` lands inside it and returns

@@ -2550,6 +2550,86 @@ mod tests {
         }
     }
 
+    /// Install-guarded real-art guard for the seven tutorial receptor
+    /// kits (stage VA `0x4dd290`, file `0xdd3e6`). Live chain: boot →
+    /// Planet → Channel → Room with its real `.bnd` chrome →
+    /// FIRSTSTEP → Tutorial painter. Each kit's five frames stay at its parsed
+    /// record anchor; a lane press must change only that lane's ink.
+    #[test]
+    fn firststep_tutorial_painter_inks_all_seven_staged_receptor_kits() {
+        let playing_path = install_root().join(PLAYING_ARCHIVE);
+        let interface_path = install_root().join(INTERFACE_ARCHIVE);
+        let (Ok(playing), Ok(interface)) =
+            (std::fs::read(&playing_path), std::fs::read(&interface_path))
+        else {
+            println!("skip: missing playing or interface archive");
+            return;
+        };
+        let art = stage_state(&playing, State::Tutorial, StageContext::default())
+            .art
+            .expect("Tutorial stages from the playing archive");
+        let kit_names = o2jam_shell::screens::side::TUTORIAL_RECEPTOR_SPRITES;
+        let mut kit_rects = Vec::new();
+        for name in kit_names {
+            let figure = art.figures.get(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(figure.len(), 5, "{name} carries five frames");
+            let layer = figure.layer(0).expect("frame 0");
+            assert!(
+                art.placements
+                    .iter()
+                    .any(|placed| placed.sprite.as_deref() == Some(name)),
+                "{name} has a staged placement"
+            );
+            kit_rects.push((
+                layer.dx,
+                layer.dy,
+                i32::try_from(layer.image.w).expect("kit width fits"),
+                i32::try_from(layer.image.h).expect("kit height fits"),
+            ));
+        }
+        assert!(
+            kit_rects.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "lane anchors advance left to right"
+        );
+
+        let mut game = ScreenGame::new();
+        if let Some(room) = stage_state(&interface, State::Room, StageContext::default()).art {
+            game.load_scene(Screen::Room, room.placements, room.figures);
+        }
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_tutorial_scene(art.placements, art.figures);
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(689, 16));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let rest = paint_native_frame(&mut game, 0);
+        let mut snapshot = o2jam_shell::InputSnapshot::new();
+        snapshot.push_edge(o2jam_shell::InputEdge::Lane {
+            lane: 0,
+            down: true,
+        });
+        game.ingest_snapshot(&snapshot);
+        let lit = paint_native_frame(&mut game, 0);
+        let changed_in = |rect: (i32, i32, i32, i32)| -> usize {
+            let (x, y, w, h) = rect;
+            (y..y + h)
+                .flat_map(|row| (x..x + w).map(move |column| (row, column)))
+                .filter(|(row, column)| {
+                    rest[*row as usize * 800 + *column as usize]
+                        != lit[*row as usize * 800 + *column as usize]
+                })
+                .count()
+        };
+        assert!(
+            changed_in(kit_rects[0]) > 0,
+            "lane 0 kit paints a new frame"
+        );
+        for rect in &kit_rects[1..] {
+            assert_eq!(changed_in(*rect), 0, "other lanes stay at rest");
+        }
+    }
+
     #[test]
     fn tutorial_shot_inks_the_b7_bubble_and_coach_rects() {
         // B7 qualified pack: manifest `064bec85c998dbeb5d9073f312ef949d490a4f8a2cc9d62adfccdb0c1183272d`,
