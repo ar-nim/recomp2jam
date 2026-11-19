@@ -533,7 +533,9 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
 
 /// One item-shop click the exe codes name: row toggles, the cart
 /// buy, the list/cart pagers, the bag pager, and the row preview.
-/// Everything else (filters, set-item, gift, totals) lands nowhere.
+/// Category tabs stage a local selection (exe FASHION press frame);
+/// everything else (gender/submenu filters, set-item, gift, totals)
+/// lands nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopAction {
     /// Row `ITEMBUY` button toggled (0-based on the page).
@@ -550,6 +552,9 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Category tab selected (0-based in the five-button row). The
+    /// FASHION press frame pins the highlight, not a filter rule.
+    SelectCategory(usize),
     /// Full-bleed BACK plate: leave the side and send `ExitShop` 5007.
     BackToLobby,
     /// Item-list scroll pager stepped back.
@@ -628,12 +633,20 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
+            .or_else(|| shop_category_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
                     .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
             })
             .or_else(|| shop_tryon_slot(code)),
     }
+}
+
+/// Category tab behind one `SHOP_CATEGORY_FIRST_CODE` code
+/// (`None` outside the five staged category buttons).
+fn shop_category_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_CATEGORY_FIRST_CODE, code)?;
+    (slot < SHOP_CATEGORY_BUTTONS).then_some(ShopAction::SelectCategory(slot))
 }
 
 /// Row slot behind one per-row button run (`None` below the run's

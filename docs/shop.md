@@ -99,12 +99,16 @@ per-row `ITEMWON` cells ink the parsed catalog price word
 data). ASSUMED pairings with rig next steps: the preview name
 inks `ITEMCOMMENT` (`0x85`; `ITEMCOMMENT2` mirrors it) and the
 bag readout inks current/total into the L (`0x4E`/`0x4F`)/R
-(`0x50`/`0x51`) digit unions. Labeled no-ops (each pinned by
-`shop_unwired_browse_chrome_lands_nowhere`): the gender, category
-(`0x0A..0x0E`), submenu, and ext-menu filter buttons never stage
+(`0x50`/`0x51`) digit unions. The FASHION category tab (`0x0B`) now stages a local selection: the
+live press frame `d4074ce7…` moves the tab highlight and emits no
+wire, so `ShopState::category` records the press but claims no
+filter rule (guard
+`shop_filter_scroll_and_cart_total_follow_the_sweep_frames`). Labeled no-ops (pinned by
+`shop_unwired_browse_chrome_lands_nowhere`): the gender, other
+category, submenu, and ext-menu filter buttons never stage
 in the live dump (203 placements, verified 2026-11-13 — the
 `ControlList` names them but the staged set omits them), so
-filter clicks land nowhere by absence; `BAGSORT`, the planet
+those clicks land nowhere by absence; `BAGSORT`, the planet
 pager, `ITEMGIFT1..8`/`GIFTITEM`, cart `CHECKGEM`/`CHECKMONEY`
 totals, and the `ITEMGEM1..8` cells (gem-price join still
 unpinned) stage but record nothing. No search chrome exists in
