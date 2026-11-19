@@ -4377,6 +4377,85 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn music_buy_failure_round_trip_leaves_the_song_unowned_in_the_scripted_gateway() {
+        // Live caller chain (same as the success guard):
+        //   OnlineSession::paint -> flush_music_buy (5010) ->
+        //   poll_music_buy -> drain_music_buy ->
+        //   ScreenGame::apply_music_purchase_response.
+        // The 5011 body is a state sync, not an error word: the
+        // failure arm is a reply whose acquired list omits the cart
+        // song. The wallet still refreshes from the reply words,
+        // but no OWNED row may appear from a failed buy.
+        // Tier 2 scripted gateway; synthetic catalog only (CI-safe).
+        use o2jam_net::shop::{MusicEntry, SyncMusicPurchaseResponse};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::PlacementRole;
+        use o2jam_shell::avatar::ScenePlacement;
+        use o2jam_shell::screens::side::{SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5010);
+            let response = SyncMusicPurchaseResponse {
+                gem: 777,
+                point: 250,
+                o2_cash: 5000,
+                music_cash: 120,
+                item_cash: 340,
+                cash_point: 56,
+                music_list: Vec::<MusicEntry>::new(),
+                gift_boxes_raw: Vec::new(),
+                free_pass_extension_days: 0,
+            };
+            stream.write_all(&response.encode()).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.set_song_catalog(&o2jam_file::parse_ojn_list(&select_catalog_blob()).unwrap());
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+                area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(19, 105);
+        game.click_music_shop(424, 529);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 777");
+        server.join().unwrap();
+
+        assert!(session.game.music_shop_cart().is_empty());
+        assert!(session
+            .game
+            .music_shop_visible_rows()
+            .iter()
+            .all(|row| !row.listed));
+        assert!(session
+            .game
+            .select_songs()
+            .iter()
+            .any(|song| song.song_id == 757));
+    }
+
+    #[test]
     fn myroom_gift_list_fetch_round_trips_through_scripted_gateway() {
         // Live caller chain:
         //   OnlineSession::paint (GameLoop, the windowed frame entry
