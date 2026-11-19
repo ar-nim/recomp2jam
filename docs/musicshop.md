@@ -125,3 +125,13 @@ names another seat's shop. Guard `music_shop_has_no_visitor_request_in_the_shop_
 sweeps ids 5000..=5100 and pins 5012 as the only known request there.
 This is a NA-DESIGN result, not a passed visitor cell: no executable
 press or visitor wire frame exists to grade.
+
+## Download controls (#410)
+
+`MSHOP_DOWN_START_CODE` (`0x1A20000E`, bnd rect
+`(699,312)-(781,336)`) and `MSHOP_DOWN_CANCEL_CODE` (`0x1A20000F`,
+`(721,529)-(775,551)`) stage with the shop but dispatch nothing:
+the shop-side 5012 send site is OPEN, so no request is guessed.
+Guard `music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned`
+pins both rects as inert. The room-song FTP pump's 5012 completion
+(`music_download.rs`) is a different state and is not claimed here.

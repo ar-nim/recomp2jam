@@ -790,6 +790,12 @@ pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
 /// next step as lanking).
 pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
 pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Download controls (`0x1A20000E` START, `0x1A20000F` CANCEL).
+/// Their rects stage with the shop, but the shop-side 5012 send
+/// site is OPEN, so both stay inert instead of guessing a wire
+/// ride (#179 story 17).
+pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
+pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
 /// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
 /// directions ASSUMED ascending (same named next step as lanking).
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
@@ -5640,6 +5646,28 @@ mod side_tests {
         // list, and search/TOP100 stay unevidenced: all land nowhere.
         assert_eq!(music_shop_action_at(&placements, 311, 85), None);
         assert_eq!(music_shop_action_at(&placements, 519, 315), None);
+    }
+
+    #[test]
+    fn music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned() {
+        // The bnd rects for START/CANCEL stage, but no shop-side
+        // 5012 send site is pinned (`docs/musicshop.md`), so a click
+        // on either control must dispatch nothing and queue no wire.
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        let placements = vec![
+            area(MSHOP_DOWN_START_CODE, 699, 312, 82, 24),
+            area(MSHOP_DOWN_CANCEL_CODE, 721, 529, 54, 22),
+        ];
+        assert_eq!(music_shop_action_at(&placements, 740, 324), None);
+        assert_eq!(music_shop_action_at(&placements, 748, 540), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_START_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_CANCEL_CODE), None);
     }
 
     #[test]
