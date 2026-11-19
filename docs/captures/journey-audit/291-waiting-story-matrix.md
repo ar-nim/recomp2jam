@@ -1,6 +1,7 @@
 # Waiting story matrix — Spec #291 (WAVE 1 exemplar)
 
-Method: `docs/captures/story-matrix/TEMPLATE.md`. Base `origin/main`
+Method: `docs/captures/story-matrix/TEMPLATE.md`. Cells are populated by the
+simulation scenario scripts in §3, not one boot per cell. Base `origin/main`
 `cbfff2a`; worktree `cb2/story-matrix`. No code changes, no pushes. The
 7.55 executable is the oracle (`OTwo.exe`, 5,029,888 B, SHA-256
 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`).
@@ -57,7 +58,82 @@ Counts: **65 cells** — 24 EVIDENCED, 22 GAP, 3 LIVE-FILLED, 1 OPEN-FIX,
 15 NA-DESIGN. Every GAP names its next evidence step; the two LIVE-FILLED
 cells are wire-only and do not close #380.
 
-## 3. Cross-cell contradictions and limits
+## 3. Simulation scenario plan (owner refinement)
+
+The four WAVE 1 boots were ad-hoc attempts, not the population method. The
+owner's refinement: run **scenario scripts** that traverse many cells in one
+two-client session. One boot pair plus a channel-observer socket walks
+create → join → ready → chat → gate-toggle → song-change → leave → disband
+in about ten minutes. Each checkpoint captures every actor's screen and the
+bidirectional wire, then fills one cell per observer column. The counts in
+§2 are current evidence states; the scripts below are how the 22 GAP cells
+and the OPEN-FIX cell get populated.
+
+### S291-WAITING-FULL-01 (primary chain)
+
+Boot pair: `M = tester / uid 1 / master`, `P = tester2 / uid 2 / peer`,
+`O = uid 3 / channel observer socket`. Containment: private displays, owned
+null sinks, `--no-sound`, one lane, server pid 92326/epoch 1794986056
+re-polled before boot. Trace id `S291-FULL-01` in both manifests and the tap.
+
+| Seq | Actor | Action | Checkpoint | Cells filled (row × observer) | Expected-outcome sentence source |
+|---|---|---|---|---|---|
+| 1 | `M` | create room 000 → Waiting | CP01 | ENTER-CREATE × master/channel/server | c3 + p343 packs, 2005/2006 wire |
+| 2 | `P` | join room 000 → Waiting | CP02 | ENTER-JOIN × peer/channel/server; PEER-JOIN × master/peer/channel/server | c3 guest frame; master half stays OPEN-FIX until exe-observed |
+| 3 | `P` | READY 4008 | CP03 | READY × master/peer/channel/server | c1 wire + static pin; master pill color from CP03 |
+| 4 | `M`,`P` | room chat + team toggle | CP04 | TEAM-CHAT × master/peer/server | 3011/3012/3013 + 4004 wire, CP04 frames |
+| 5 | `M` | gate toggle (team/instrument) | CP05 | START-GATE × master/peer/channel/server | 0x4b5560 pin, CP05 frames |
+| 6 | `M` | song change + room echo | CP06 | PICK-ECHO × master/peer/channel/server | CP06 before/after pick with 4000/4001 wire |
+| 7 | `P` | exit room, non-last | CP07 | PEER-LEAVE × master/peer/channel/server | CP07 master seat-clear frame + 3005 wire |
+| 8 | `M` | exit room, last occupant | CP08 | LAST-LEAVE × channel/server | server 2007 broadcast + `O`'s 2003 poll (WAVE 1 wire already pins this half) |
+
+Eight checkpoints × five observers can fill up to 40 cells; `NA-DESIGN`
+cells stay labeled, and any missed capture is recorded as a failed
+checkpoint, not silently dropped.
+
+### S291-WAITING-HANDOFF-02
+
+Same tagged pair. Chain: create → join → peer READY → `M` exits with `P`
+resident → `P` becomes master (role word `+0x30`) → `P` exits last →
+disband. Checkpoints CP11–CP14 fill MASTER-LEAVE-HANDOFF × master/peer/
+channel/server and a second LAST-LEAVE witness. Every step is one action with
+both screens plus the wire tap; no new boot between steps.
+
+### S291-WAITING-ROLE-03
+
+`M` alone plus `O`. Chain: MUSELECT open → song-row pick → room echo →
+uninstalled-song notice/acquire → DOWNLOADING badge → gate closed → solo
+idle/START face. Checkpoints CP21–CP25 fill the MUSELECT, PICK-ECHO,
+DOWNLOAD and SOLO-IDLE cells, including the qualified exe master dialog
+frame live-4 failed to capture. The driver must dismiss the blue
+NORMAL-mode popup at every scene transition.
+
+### Expected-outcome text and conformance
+
+For every cell, the observed 7.55 outcome is transcribed into a sentence of
+this shape: "When `<actor>` `<action>` in `<state>`, `<observer>`'s
+`<observable>` is `<observed outcome>` (pack `<full sha256>`, wire
+`<dir:id:body>`).". That sentence becomes the story's expected behavior in
+the spec. Already-pinned examples:
+
+- When the peer joins room 000, the peer's screen is plain Waiting with no
+  select dialog (pack `f394dcaa56ad058a11fefebd669fd19669fd9243616b0b955950d2e2e1393162`,
+  wire `C2S:0BBA`/`S2C:0BBB`).
+- When the peer sends READY 4008, the peer stays in Waiting (wire
+  `C2S:4008`/`S2C:4009`, c1 `drive.log:52-55`).
+- When the master creates a room, the channel observer's next 2003 lists it
+  (2005 body pin in `docs/net-protocol.md` §4b, `frame-000127-room.png`).
+- When the last occupant exits, the server emits `S2C 2007 len=8
+  hex=00000000` and the room leaves the 07D2 list (tap
+  `e326e3f7eaae0cd88dfa9e8735d7554c5c73dd6fc7b376017dbb28ffb5d2834a`).
+
+The #379 master-sees-peer cell has no exe-observed outcome: it stays
+`OPEN-FIX` and its spec row remains a parked fix item, not a fabricated
+expectation. Later client conformance is tested against these exe-derived
+stories. A mismatch becomes a bug; it is never a reason to edit the story.
+Only new exe evidence changes a story.
+
+## 4. Cross-cell contradictions and limits
 
 - #380's initial hypothesis said `RoomRemoved` is 2006. `docs/net-protocol.md`
   says 2007, and the WAVE 1 tap observed 2007 on last-player disconnect. The
