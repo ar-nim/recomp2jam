@@ -2,9 +2,12 @@
 # worktree-setup.sh — prepare a linked worktree: no push, pooled game data.
 #
 # Run this once, from inside an agent worktree, right after `git worktree add`.
-# It points origin's push URL at scripts/no-push.sh (an ext:: remote helper
-# that refuses with a clear message) using per-worktree config, so `git push`
-# fails locally and never reaches origin.
+# The no-push rule is absolute (docs/agents/delegation.md): this worktree must
+# never push to origin. As a local reminder, the script installs a pre-push
+# hook under a worktree-only hooks dir via `core.hooksPath` in worktree config.
+# It never writes remote.* or protocol.* config: those live in the shared
+# config and once broke the main checkout's push path (issue #488). A hook can
+# be bypassed with --no-verify, so the reviewer still enforces the rule.
 #
 # It also claims one of four persistent data slots under
 # ~/scratch/install-data/slot{1..4}, refreshes that slot from the read-only
@@ -72,6 +75,42 @@ report_busy_slots() {
     done
 }
 
+install_push_refusal_hook() {
+    local absolute_git_dir hooks_dir hook_source hook_target configured_hooks_dir refusal
+    absolute_git_dir="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+    hooks_dir="$absolute_git_dir/hooks-agent"
+    hook_source="$REPO_ROOT/scripts/lib/pre-push-refuse-agent-worktree.sh"
+    hook_target="$hooks_dir/pre-push"
+    [ -f "$hook_source" ] || { echo "worktree-setup: missing $hook_source" >&2; return 1; }
+
+    mkdir -p -- "$hooks_dir"
+    install -m 0755 -- "$hook_source" "$hook_target"
+
+    # Per-worktree config needs this feature flag in common config; it is not
+    # a remote or transport setting and cannot change where a push goes.
+    if [ "$(git -C "$REPO_ROOT" config --get extensions.worktreeConfig 2>/dev/null || true)" != "true" ]; then
+        git -C "$REPO_ROOT" config extensions.worktreeConfig true
+    fi
+    git -C "$REPO_ROOT" config --worktree --unset remote.origin.pushurl 2>/dev/null || true
+    git -C "$REPO_ROOT" config --worktree --unset protocol.ext.allow 2>/dev/null || true
+    git -C "$REPO_ROOT" config --worktree core.hooksPath "$hooks_dir"
+
+    configured_hooks_dir="$(git -C "$REPO_ROOT" config --get core.hooksPath)"
+    [ "$configured_hooks_dir" = "$hooks_dir" ] || {
+        echo "worktree-setup: hooksPath is $configured_hooks_dir, expected $hooks_dir" >&2
+        return 1
+    }
+    refusal="$("$hook_target" origin https://example.test/origin.git 2>&1 || true)"
+    case "$refusal" in
+        *'push refused'*) ;;
+        *) echo "worktree-setup: pre-push hook did not refuse a test push: $refusal" >&2; return 1 ;;
+    esac
+    echo "worktree-setup: no-push rule active (per-worktree hook $hook_target)"
+    echo "worktree-setup: rule is absolute — never push; --no-verify bypasses the hook"
+}
+
+install_push_refusal_hook
+
 claimed_slot=""
 setup_complete=0
 cleanup_failed_claim() {
@@ -91,27 +130,6 @@ if [ -n "$existing_slot" ]; then
     echo "worktree-setup: already linked to $existing_slot; skipping claim and refresh"
     setup_complete=1
     exit 0
-fi
-
-NO_PUSH="$REPO_ROOT/scripts/no-push.sh"
-[ -x "$NO_PUSH" ] || { echo "worktree-setup: missing $NO_PUSH" >&2; exit 1; }
-
-# Per-worktree config requires the extension; enable it if missing (shared
-# feature flag only, never pushurl/transport settings).
-if [ "$(git -C "$REPO_ROOT" config --get extensions.worktreeConfig 2>/dev/null || true)" != "true" ]; then
-    git -C "$REPO_ROOT" config extensions.worktreeConfig true
-fi
-
-git -C "$REPO_ROOT" config --worktree protocol.ext.allow always
-git -C "$REPO_ROOT" config --worktree remote.origin.pushurl "ext::$NO_PUSH"
-
-echo "worktree-setup: pushurl set (worktree config) to ext::$NO_PUSH"
-echo "worktree-setup: verifying push is blocked..."
-if git -C "$REPO_ROOT" push origin HEAD 2>&1; then
-    echo "worktree-setup: ERROR: push unexpectedly succeeded" >&2
-    exit 1
-else
-    echo "worktree-setup: OK — push refused locally"
 fi
 
 refuse_stale_data_entries

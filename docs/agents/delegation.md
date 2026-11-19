@@ -150,6 +150,12 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   gate-check output re-run FROM THE NAMED BASE COMMIT — the #341 agent
   reported its own hidden-arm regression as "pre-existing on d191bb8" while
   main was green.
+- Never push from an agent worktree: the orchestrator is the only pusher.
+  `scripts/worktree-setup.sh` installs a worktree-local pre-push hook as a
+  reminder (`--no-verify` bypasses it); it never edits shared `remote.*` or
+  `protocol.*` config (issue #488). `scripts/tracker-audit.sh` fails with exit
+  1 on shared push-URL drift and lists remote-only `cb2/*` branches. The
+  reviewer enforces the rule on every leg.
 - Multi-commit legs arrive as branches; the senior merges `--no-ff`. Reserve
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.

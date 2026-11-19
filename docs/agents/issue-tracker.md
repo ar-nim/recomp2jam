@@ -140,7 +140,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - GitHub has NO CLI/API issue deletion. Mistakes: label `to-remove`, the owner
   bulk-deletes via the UI (filter by label).
 
-## Worktree setup (push-proof agent worktrees)
+## Worktree setup (no-push agent worktrees)
 
 Agent worktrees are created **beside** the main checkout, named
 `/home/arnim/Projects/recomp2jam-wt<N>-v<ticket>` on branch `cb2/tt-<ticket>`
@@ -161,12 +161,19 @@ the symlinks into their own slot (`option.ini`, Temp→Music promotion);
 refresh replaces the slot contents from the source, so a previous user's
 download drift never leaks. Release on the way out with
 `scripts/worktree-release.sh`, which drops the
-claim marker but keeps the slot data. The script also sets
-`remote.origin.pushurl` to `ext::<repo>/scripts/no-push.sh` and
-enables the ext transport locally, so `git push` fails locally with a clear
-message before touching origin. The main checkout is never configured this
-way; `worktree-setup.sh` refuses to run there, keeping the orchestrator's
-push path intact. See retro-queue entry "agent pushed to origin (fix-175)".
+claim marker but keeps the slot data.
+
+**Never push from an agent worktree.** The orchestrator owns the push path;
+stray `cb2/*` branches confuse the merge queue. Setup installs a pre-push
+hook in a worktree-only hooks dir (`core.hooksPath` in worktree config) that
+refuses pushes locally. It never writes `remote.*` or `protocol.*` config:
+those keys are shared by every worktree and once broke the main checkout's
+push (issue #488). The hook is a reminder, not a boundary — `--no-verify`
+bypasses it, so the reviewer enforces the rule. `scripts/tracker-audit.sh`
+fails with exit 1 when the shared push URL drifts from the fetch URL and
+lists remote-only `cb2/*` branches. `worktree-setup.sh` refuses to run in the
+main checkout. See retro-queue entries "agent pushed to origin (fix-175)"
+and the 2026-11-19 resolution.
 
 ## Tracker CLI recipes (working snippets)
 

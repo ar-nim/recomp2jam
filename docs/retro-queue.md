@@ -40,6 +40,11 @@ Items parked for the next retrospective (owner calls the retro skill).
   merge queue), or does it read as boilerplate? Consider a pre-push
   enforcement (e.g. `git config remote.origin.pushurl` no-op in agent
   worktrees, or a wrapper) rather than relying on brief text.
+- Resolution (2026-11-19, #488): never mutate `remote.*` config — it is
+  shared by all worktrees and broke the main checkout's push twice. Setup
+  now installs a worktree-local pre-push hook; `tracker-audit.sh` fails on
+  push-url drift and lists stray `cb2/*` branches. The rule stays absolute;
+  the hook is only a reminder.
 
 ## 2026-11-13 — #175 reopen: fix merged to the wrong branch + stale test binary
 
