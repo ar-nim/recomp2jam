@@ -15876,6 +15876,59 @@ mod game_tests {
     }
 
     #[test]
+    fn key_tab_rebinds_all_seven_lanes_to_their_dik_codes() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::capture_raw_key
+        // -> ScreenGame::options_dialog.rebind_armed_lane ->
+        // OptionsSettings::rebind_lane. The exe builds its 37-byte key
+        // table (input object +0x344) from `Key`/`KEY_1..7` at VA
+        // 0x543290; lanes live at indexes 1..7, so every persisted DIK
+        // must be the code for the key that answered the lane.
+        use crate::options::OPTION_LANES;
+        use winit::keyboard::KeyCode;
+        let binds = [
+            KeyCode::KeyQ,
+            KeyCode::KeyW,
+            KeyCode::KeyE,
+            KeyCode::KeyR,
+            KeyCode::KeyT,
+            KeyCode::KeyY,
+            KeyCode::KeyU,
+        ];
+        let expected_dik = [0x10u8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16];
+        let buttons: Vec<(u32, i32, i32)> = (0..OPTION_LANES)
+            .map(|lane| {
+                (
+                    OPTION_KEY_LANE_FIRST + u32::try_from(lane).unwrap_or(0),
+                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100,
+                )
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        for (lane, code) in binds.iter().enumerate() {
+            let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
+            click_button(&mut game, x, 100);
+            assert_eq!(
+                game.option_rebind_armed(),
+                Some(lane),
+                "KEY{} arms lane {lane}",
+                lane + 1
+            );
+            assert!(game.capture_raw_key(*code, true));
+        }
+        assert_eq!(game.options().lane_keys(), binds);
+        assert_eq!(
+            game.options().lane_dik(),
+            expected_dik,
+            "KEY_1..7 must hold the DIK codes from the exe key table"
+        );
+    }
+
+    #[test]
     fn options_key_tab_rebind_refuses_unmappable_keys() {
         use winit::keyboard::KeyCode;
         let mut game = ScreenGame::new();

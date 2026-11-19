@@ -63,7 +63,13 @@ except where noted), all with writer twins
 | `NOTE`/`NoteType` | 0, clamp 0–2 else 0 | play `+0xeb4` | file `0x1713c7` | file `0x171447` |
 | `NOTE`/`NoteTail` | 2, clamp 0–4 else 2 | global `0x67feac` | file `0x16bf47` | file `0x16bfd0` |
 | `LONGNOTEMODE`/`LongnoteMode` (`Option.ini`) | 3 | play `+0x17d8` | file `0x16fb06` | — |
-| `Key`/`KEY_1..7` | DIK SDF Space JKL | key-table `+0x345..` | claims B37 | `0x1435xx` family |
+| `Key`/`KEY_1..7` | DIK SDF Space JKL | input object `+0x344`, lanes at indexes 1..7; builder VA `0x543290` / file `0x143290` | VA `0x543290` | `0x1435xx` family |
+
+The key builder also rebuilds the 0x80-byte DIK→lane reverse map at VA
+`0x67ebb0` (file `0x27ebb0`); the polled consumer `FUN_005441b0` (VA
+`0x5441b0`) and buffered thread `FUN_00544ca0` (VA `0x544ca0`) read
+the two tables. Their config→runtime handoff in this client stays OPEN;
+the older `0x173290` file-offset label is contradicted by the fresh pin.
 
 Consumers: `Mode` 1/2 arms drive the window apply (file `0x3a06c`);
 `NoteType` 0 vs nonzero branch (file `0x171480`, folds at
@@ -92,6 +98,10 @@ consumer (file `0x16E372`).
 
 Guards: `options::tests::*` (13: mapping, clamps, round-trip,
 DIK), `options_key_tab_rebind_answers_on_the_new_lane`,
+`key_tab_rebinds_all_seven_lanes_to_their_dik_codes` (seam suffices: the
+dialog-to-DIK mapping is the whole behavior; live chain `main.rs::run_online`
+→ `run_windowed_session` → `window::InputHandler::route_key` →
+`GameLoop::capture_raw_key` → `OptionsSettings::rebind_lane`),
 `options_key_tab_rebind_refuses_unmappable_keys`,
 `options_sound_tab_steps_move_volumes_with_exe_bounds`,
 `options_game_tab_buttons_map_to_the_pinned_ini_values`,

@@ -14,8 +14,14 @@
 //! `WritePrivateProfileStringA` `0x63f26c`):
 //!
 //! - `Key`/`KEY_1..KEY_7` ← `option.ini`, DirectInput defaults
-//!   `0x1F/0x20/0x21/0x39/0x24/0x25/0x26` (S D F Space J K L),
-//!   stored at key-table `+0x345..+0x34b` (claims B37).
+//!   `0x1F/0x20/0x21/0x39/0x24/0x25/0x26` (S D F Space J K L).
+//!   7.55 builds a 37-byte key table in the input object at `+0x344`
+//!   (indexes `1..=7` are the lanes) in `FUN_00543290` (VA `0x543290`,
+//!   file `0x143290`), and rebuilds the 0x80-byte DIK→lane reverse
+//!   map at VA `0x67ebb0` (file `0x27ebb0`) from the same entries.
+//!   The polled consumer `FUN_005441b0` (VA `0x5441b0`) and the
+//!   buffered thread `FUN_00544ca0` (VA `0x544ca0`) read those
+//!   tables; their config→runtime handoff in this client stays OPEN.
 //! - `Sound`/`GameBGVolume` ← `option.ini`, default 255, stored at
 //!   object `+0x68` (file `0x14bb45`); written back at file
 //!   `0x14badb` through the same section/key/file names.
