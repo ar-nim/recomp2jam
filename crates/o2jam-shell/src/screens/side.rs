@@ -5701,6 +5701,14 @@ mod side_tests {
     #[test]
     fn myroom_dispatch_names_bag_gift_and_chrome_codes() {
         assert_eq!(
+            myroom_action_for_code(MYROOM_BAG_TAB_CODE),
+            Some(MyRoomAction::ShowBagTab)
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_GIFT_TAB_CODE),
+            Some(MyRoomAction::ShowGiftTab)
+        );
+        assert_eq!(
             myroom_action_for_code(MYROOM_BAG_LEFT_CODE),
             Some(MyRoomAction::BagPage(MyRoomStep::Previous))
         );

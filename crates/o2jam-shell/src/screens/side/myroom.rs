@@ -40,6 +40,14 @@ pub const MYROOM_SLOT_NAMES: [&str; MYROOM_SLOT_BUTTONS] = [
     "CLOTHINGART",
     "SHOES",
 ];
+/// MY BAG tab anchor (`IDC_IMAGE_SMYROOM_MYBAG_POS`): bnd ordinal
+/// `0x45`, rect (6,383)-(94,404). The exe3 `8515a7e5…` frame shows
+/// this press leaving the gift panel open, so it records no change.
+pub const MYROOM_BAG_TAB_CODE: u32 = 0x1560_0045;
+/// PRESENT BOX tab anchor (`IDC_IMAGE_SMYROOM_GIFTBOX_POS`): bnd
+/// ordinal `0x46`, rect (98,384)-(186,406). Its press swaps the lower
+/// panel to the gift list (exe3 `6e29e51a…`).
+pub const MYROOM_GIFT_TAB_CODE: u32 = 0x1560_0046;
 /// First bag-cell image code (`IDC_IMAGE_SMYROOM_MYBAGITEM1`).
 pub const MYROOM_BAG_FIRST_CODE: u32 = 0x1560_0023;
 /// Bag cells per page (10 `MYBAGITEM` images).
@@ -207,6 +215,18 @@ pub fn myroom_panel_kept(placed: &ScenePlacement, panel: MyRoomPanel) -> bool {
     )
 }
 
+/// Lower-panel tab whose rows the painter inks. The exe gift-tab
+/// frame (`6e29e51a…`) hides the bag grid and shows the gift list;
+/// the pinned MY BAG press (`8515a7e5…`) does not switch it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MyRoomLowerTab {
+    /// Owned-item grid under the MY BAG tab (default on entry).
+    #[default]
+    Bag,
+    /// Gift rows under the PRESENT BOX tab.
+    Gifts,
+}
+
 /// One pager step: which end of the row run the press moves toward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MyRoomStep {
@@ -227,6 +247,10 @@ pub enum MyRoomAction {
     SelectSlot(u8),
     /// Bag pager pressed: turn the owned-item page.
     BagPage(MyRoomStep),
+    /// MY BAG tab pressed: records nothing (exe3 no-op pin).
+    ShowBagTab,
+    /// PRESENT BOX tab pressed: show the gift list below.
+    ShowGiftTab,
     /// Bag cell pressed: cell index within the page `0..10`.
     PickBagCell(usize),
     /// Gift pager pressed: turn the gift-box page.
@@ -264,6 +288,8 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         return Some(MyRoomAction::PickGiftCell(cell));
     }
     match code {
+        MYROOM_BAG_TAB_CODE => Some(MyRoomAction::ShowBagTab),
+        MYROOM_GIFT_TAB_CODE => Some(MyRoomAction::ShowGiftTab),
         MYROOM_BAG_LEFT_CODE => Some(MyRoomAction::BagPage(MyRoomStep::Previous)),
         MYROOM_BAG_RIGHT_CODE => Some(MyRoomAction::BagPage(MyRoomStep::Next)),
         MYROOM_GIFT_LEFT_CODE => Some(MyRoomAction::GiftPage(MyRoomStep::Previous)),
@@ -366,6 +392,8 @@ pub struct MyRoomState {
     gift_cell: Option<usize>,
     /// Visible upper-right panel face (exe default: Inventory).
     panel: MyRoomPanel,
+    /// Visible lower-panel tab (exe default: MY BAG).
+    lower_tab: MyRoomLowerTab,
 }
 
 impl Default for MyRoomState {
@@ -386,6 +414,7 @@ impl MyRoomState {
             gift_page: 0,
             gift_cell: None,
             panel: MyRoomPanel::Inventory,
+            lower_tab: MyRoomLowerTab::Bag,
         }
     }
 
@@ -425,11 +454,23 @@ impl MyRoomState {
         self.panel
     }
 
+    /// Visible lower-panel tab.
+    #[must_use]
+    pub const fn lower_tab(self) -> MyRoomLowerTab {
+        self.lower_tab
+    }
+
     /// Switch the panel face. Seam suffices: no live input gesture is
     /// pinned yet (qualified exe press capture OPEN), so no control
     /// maps here; the state keeps both faces reachable for the painter.
     pub fn show_panel(&mut self, panel: MyRoomPanel) {
         self.panel = panel;
+    }
+
+    /// Show one lower-panel tab. The MY BAG press is a no-op in the
+    /// pinned exe frame, so only the gift tab has a caller today.
+    pub fn show_lower_tab(&mut self, tab: MyRoomLowerTab) {
+        self.lower_tab = tab;
     }
 
     /// Record a slot-button press; past the eleventh button the

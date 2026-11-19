@@ -43,16 +43,16 @@ use super::side::{
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
     planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
-    shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState,
-    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState,
-    CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
-    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
-    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE, NO_RESPONSE_MESSAGE_CP949,
-    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949,
-    SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomLowerTab,
+    MyRoomState, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow,
+    WalletState, CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE,
+    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
+    MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
     SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
@@ -1135,7 +1135,8 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// into the `MYBAGITEM` rects, gift names into the `GIFTBOX_EX`
 /// rects, identity/gift strings into their TEXT rects, and the
 /// archive's `Myroom_MybagSelect.oji` frame body centered on the
-/// selected bag and gift cells. Slot presses only record the cursor:
+/// selected cell of the active lower tab (bag or gifts). Slot presses
+/// only record the cursor:
 /// the exe3 pack `25c5997e…` pins a hair-slot press after a bag pick
 /// leaving the bag rows and cell frame unchanged (story #23).
 /// The frame body and its `.bnd` placement are archive-pinned;
@@ -1161,17 +1162,27 @@ pub fn paint_myroom_data(
             paint_text_into_rect(frame, placed.rect, text, CP949_INK);
         }
     }
-    paint_myroom_cells(frame, placements, bag_names, MYROOM_BAG_FIRST_CODE);
-    paint_myroom_cells(frame, placements, gift_names, MYROOM_GIFT_FIRST_CODE);
-    let mut selected = Vec::new();
-    selected.extend(state.bag_cell().and_then(|cell| {
-        myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell).map(|placed| placed.rect)
-    }));
-    selected.extend(state.gift_cell().and_then(|cell| {
-        myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell).map(|placed| placed.rect)
-    }));
-    for rect in selected {
-        paint_myroom_selection(frame, placements, figures, &rect);
+    match state.lower_tab() {
+        MyRoomLowerTab::Bag => {
+            paint_myroom_cells(frame, placements, bag_names, MYROOM_BAG_FIRST_CODE);
+            if let Some(rect) = state
+                .bag_cell()
+                .and_then(|cell| myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell))
+                .map(|placed| placed.rect)
+            {
+                paint_myroom_selection(frame, placements, figures, &rect);
+            }
+        }
+        MyRoomLowerTab::Gifts => {
+            paint_myroom_cells(frame, placements, gift_names, MYROOM_GIFT_FIRST_CODE);
+            if let Some(rect) = state
+                .gift_cell()
+                .and_then(|cell| myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell))
+                .map(|placed| placed.rect)
+            {
+                paint_myroom_selection(frame, placements, figures, &rect);
+            }
+        }
     }
 }
 

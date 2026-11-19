@@ -63,13 +63,14 @@ use super::side::{
     select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
     shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
     CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
-    MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet,
-    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
-    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen, TutorialChartGlobals,
-    WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
-    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS,
+    MyRoomLowerTab, MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
+    TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    TUTORIAL_CHART_GLOBALS,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -4952,6 +4953,11 @@ impl ScreenGame {
     fn apply_myroom_action(&mut self, action: MyRoomAction) {
         match action {
             MyRoomAction::SelectSlot(slot) => self.myroom.select_slot(slot),
+            MyRoomAction::ShowBagTab => {
+                // Exe3 `8515a7e5…`: the MY BAG press leaves the gift
+                // panel open, so no lower-tab or panel state changes.
+            }
+            MyRoomAction::ShowGiftTab => self.myroom.show_lower_tab(MyRoomLowerTab::Gifts),
             MyRoomAction::BagPage(step) => {
                 let pages = self.myroom_bag_page_count();
                 self.myroom.turn_bag_page(step, pages);
@@ -11562,6 +11568,30 @@ mod game_tests {
         game
     }
 
+    /// MyRoom side with the two lower-panel tabs (`MYBAG_POS`
+    /// `0x15600045`, `GIFTBOX_POS` `0x15600046`) and one cell per
+    /// family, staged at synthetic rects. The captions are distinct so
+    /// a paint test can tell which family the painter chose.
+    fn myroom_tab_overlay() -> (ScreenGame, Vec<ScenePlacement>) {
+        use super::super::side::{
+            MYROOM_BAG_FIRST_CODE, MYROOM_BAG_TAB_CODE, MYROOM_GIFT_FIRST_CODE,
+            MYROOM_GIFT_TAB_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let placements = vec![
+            myroom_hit_placement(MYROOM_BAG_TAB_CODE, 10, 10),
+            myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 60, 10),
+            myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 10, 40),
+            myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 60, 40),
+        ];
+        game.load_side_scene(placements.clone(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, placements)
+    }
+
     /// MyRoom side with three synthetic panel bodies: red slotcover,
     /// green status plate (same rect, staged after it), blue inventory
     /// button body. The real sprites' anchors equal their `.bnd` rects.
@@ -11781,6 +11811,67 @@ mod game_tests {
             "the same frame body survives the panel-face filter"
         );
         assert_eq!(myroom_amber_pixels(&buf), 0);
+    }
+
+    #[test]
+    fn myroom_present_box_tab_switches_the_lower_panel_to_gift_rows() {
+        // Live caller chain (#417, GIFT-TAB-SWITCH x peer):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> ShowGiftTab
+        //   -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // Exe3 pack `6e29e51a…` swaps the lower panel to the gift list;
+        // `8515a7e5…` shows that MY BAG is not a return tab in that frame.
+        let (mut game, placements) = myroom_tab_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(65, 15));
+        let mut buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            game.myroom(),
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+        assert!(
+            region_has_ink(&buf, 800, 60, 40, 40, 20),
+            "the gift rows ink their staged cell"
+        );
+        assert!(
+            !region_has_ink(&buf, 800, 10, 40, 40, 20),
+            "the bag caption is hidden while the gift tab is active"
+        );
+    }
+
+    #[test]
+    fn myroom_my_bag_tab_press_leaves_the_gift_panel_open() {
+        // Live caller chain as above. The pinned exe3 `8515a7e5…`
+        // frame keeps the gift box after clicking the MY BAG tab;
+        // the story's claimed restore is contradicted by those pixels.
+        let (mut game, placements) = myroom_tab_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(65, 15));
+        game.ingest_snapshot(&InputSnapshot::click_at(15, 15));
+        assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            game.myroom(),
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+        assert!(region_has_ink(&buf, 800, 60, 40, 40, 20));
+        assert!(!region_has_ink(&buf, 800, 10, 40, 40, 20));
     }
 
     #[test]
