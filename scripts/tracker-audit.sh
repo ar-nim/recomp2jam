@@ -65,6 +65,7 @@ list_stray_origin_branches() {
             echo "tracker-audit: stray remote branch $remote_ref (no local branch $local_branch)"
         fi
     done < <(git_in_audit_repo for-each-ref --format='%(refname:short)' refs/remotes/origin/cb2/)
+    return 0
 }
 
 assert_push_url_matches_fetch || exit 1
@@ -142,6 +143,7 @@ while read -r num; do
     echo "ok #$num ($count guards)"
   fi
 done <<< "$NUMBERS"
+true
 
 # --- self-test hook: an extra guard name that must resolve (exit 1 if not) --
 if [ -n "${TRACKER_AUDIT_EXTRA_GUARD:-}" ]; then
@@ -171,11 +173,12 @@ if [ "$#" -eq 0 ] && [ "${TRACKER_AUDIT_SKIP_BLOCKED:-0}" != "1" ]; then
   if [ -n "$open_ready" ]; then
     while read -r onum; do
       [ -n "$onum" ] || continue
-      blockers="$(gh issue view "$onum" --template '{{range .blockedBy.nodes}}{{.number}} {{end}}' 2>/dev/null | sed 's/[[:space:]]*$//')"
+      blockers="$(gh issue view "$onum" --json blockedBy --template '{{range .blockedBy.nodes}}{{.number}} {{end}}' 2>/dev/null || true)"
       if [ -n "$blockers" ]; then
         echo "blocked #$onum -> $blockers"
       fi
     done <<< "$open_ready"
+    true
   fi
 fi
 if [ "${#missing[@]}" -gt 0 ]; then
