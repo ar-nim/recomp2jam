@@ -238,6 +238,9 @@ impl MusicShopState {
                 }
                 false
             }
+            // BACK is a side leave: `click_music_shop` owns the
+            // transition, so the board state never changes here.
+            MusicShopAction::BackToLobby => false,
         }
     }
 }

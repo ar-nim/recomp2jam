@@ -794,6 +794,11 @@ pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
 /// ride (#179 story 17).
+/// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
+/// `(711,569)-(794,593)`): the visible BACK button. The local
+/// return is pinned by the bnd arm; the 5007 ExitShop send stays
+/// OPEN until a qualified BACK capture taps it (#399).
+pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
 /// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
@@ -933,6 +938,8 @@ pub enum MusicShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// EXIT/BACK plate; the caller owns the local side leave.
+    BackToLobby,
 }
 
 /// Board click under native pixel (`x`, `y`): the staged placement
@@ -968,6 +975,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     match code {
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
+        MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
         MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),

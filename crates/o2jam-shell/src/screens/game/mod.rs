@@ -62,14 +62,15 @@ use super::side::{
     payment_side_notice, planet_action_at, select_chrome_action_at, select_filter_button_id,
     select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
     shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
-    MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet,
-    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
-    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen, TutorialChartGlobals,
-    WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
-    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
+    MyRoomAction, MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
+    TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    TUTORIAL_CHART_GLOBALS,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -5747,6 +5748,13 @@ impl ScreenGame {
         let Some(action) = music_shop_action_at(&self.side_placements, x, y) else {
             return;
         };
+        if action == MusicShopAction::BackToLobby {
+            // Local return to the opening lobby. No 5007 ExitShop
+            // body is pinned from a qualified BACK tap, so none is
+            // queued here (#399 stays OPEN on the wire arm).
+            self.leave_side();
+            return;
+        }
         if self.music_shop.apply_action(action) {
             self.outbox.pending_music_buy = Some(SyncMusicPurchase);
         }
@@ -17907,6 +17915,35 @@ mod game_tests {
         placements.push(area(MSHOP_PAGE_TOT_TENS_CODE, 286, 534, 14, 17));
         placements.push(area(MSHOP_PAGE_TOT_ONES_CODE, 300, 534, 14, 17));
         placements
+    }
+
+    #[test]
+    fn music_shop_back_button_returns_to_the_room_that_opened_it() {
+        // Red proof for #399: the staged EXIT/BACK rect
+        // (711,569)-(794,593) holds the visible BACK plate, but
+        // `music_shop_action_for_code` has no arm for code
+        // `0x1A200008`, so the click lands nowhere and the side
+        // stays open. The 5007 ExitShop wire is still OPEN; this
+        // guard only claims the local return.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: 0x1A20_0008,
+            sprite: None,
+            rect: Rect {
+                x: 711,
+                y: 569,
+                w: 83,
+                h: 24,
+            },
+        }];
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(757, 580);
+        assert_eq!(game.side(), None, "BACK leaves the music shop side");
+        assert!(game.take_music_buy().is_none(), "BACK queues no buy");
     }
 
     #[test]

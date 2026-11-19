@@ -59,6 +59,10 @@ Inbound `IDC_BUTTON_SROOM_MUSICSHOP 0X13200037`
 (`Room_MusicShop.ojs`, STATE_ROOM): a Room button names the song
 shop. EXIT/CASHFILLUP/TOP100/conference buttons on the shop side.
 No transition claimed from buttons alone; dispatch calls unknown.
+The visible BACK plate is bnd code `0x1A200008` at
+`(711,569)-(794,593)` (same rect as the Room BACK plate). Its click
+now leaves the side screen locally; no 5007 ExitShop body is sent
+because no qualified BACK tap has pinned one (#399 wire arm OPEN).
 
 ## Screens (implemented)
 
