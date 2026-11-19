@@ -386,6 +386,21 @@ mod tests {
     }
 
     #[test]
+    fn music_shop_has_no_visitor_request_in_the_shop_family() {
+        // Static-sweep guard for #179 story 35: the 5000 shop family
+        // holds only the download announce (5012). There is no
+        // request that asks to view another seat's Music Shop; the
+        // side screen is local through `visit_side(MusicShop)` and
+        // must never be graded as a passed visitor cell.
+        let known_requests: Vec<u16> = (5000..=5100)
+            .filter(|id| Request::from_id(*id).is_some())
+            .collect();
+        assert_eq!(known_requests, vec![5012]);
+        assert_eq!(Request::from_id(5042), None, "no visitor opcode");
+        assert_eq!(Response::from_id(5043), None, "no visitor answer");
+    }
+
+    #[test]
     fn resolves_the_start_gate_family_ids() {
         // docs/music-availability.md §4: the master's gate sends the
         // acquire ping 4034; the room re-announces 4025 off these four

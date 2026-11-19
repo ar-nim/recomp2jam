@@ -59,6 +59,10 @@ Inbound `IDC_BUTTON_SROOM_MUSICSHOP 0X13200037`
 (`Room_MusicShop.ojs`, STATE_ROOM): a Room button names the song
 shop. EXIT/CASHFILLUP/TOP100/conference buttons on the shop side.
 No transition claimed from buttons alone; dispatch calls unknown.
+The visible BACK plate is bnd code `0x1A200008` at
+`(711,569)-(794,593)` (same rect as the Room BACK plate). Its click
+now leaves the side screen locally; no 5007 ExitShop body is sent
+because no qualified BACK tap has pinned one (#399 wire arm OPEN).
 
 ## Screens (implemented)
 
@@ -111,7 +115,53 @@ TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/d
 4. Search/sort/filter/pager behavior — PARTIAL: TITLE/DIFF/BPM
    sorts and the MSALL pager answer (directions + pairing
    ASSUMED); PRICE sort, filters, search unevidenced.
-   Caption/money sources: ISBUY from 4031 flags; money texts
-   unpinned.
+   Caption/money sources: ISBUY from 4031 flags; bottom G/W money
+   texts from the shared 5029 wallet and row GEM/WON prices from
+   `OJNList.dat` table 3 (commit 9bbca9d).
 5. Shell paint/flow/staging — DONE for rows + pagers + buys;
    entry/exit paths still OPEN.
+
+## Privacy static sweep (#402)
+
+The Music Shop is a local side screen: `visit_side(MusicShop)` stages
+this seat's art and no control code or request in the 5000 shop family
+names another seat's shop. Guard `music_shop_has_no_visitor_request_in_the_shop_family`
+sweeps ids 5000..=5100 and pins 5012 as the only known request there.
+This is a NA-DESIGN result, not a passed visitor cell: no executable
+press or visitor wire frame exists to grade.
+
+## Download controls (#410)
+
+`MSHOP_DOWN_START_CODE` (`0x1A20000E`, bnd rect
+`(699,312)-(781,336)`) and `MSHOP_DOWN_CANCEL_CODE` (`0x1A20000F`,
+`(721,529)-(775,551)`) stage with the shop but dispatch nothing:
+the shop-side 5012 send site is OPEN, so no request is guessed.
+Guard `music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned`
+pins both rects as inert. The room-song FTP pump's 5012 completion
+(`music_download.rs`) is a different state and is not claimed here.
+
+## Search and CASHFILLUP (#413)
+
+The search edit/button (`0x1A30007B`/`0x1A20007C`) and CASHFILLUP
+(`0x1A200009`) stage with the entry frame but dispatch nothing:
+no qualified press frame exists for either (`E-T`). Guard
+`music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist`
+pins that state. #362's charge plate belongs to the Item Shop and
+is not a Music Shop pixel.
+
+## Rank buttons (#411)
+
+The right-panel buttons `0x1A200016..18` stage, but the one captured
+곡명 press left the rank list and `01/47` readout unchanged; no pager
+press frame exists. Guard `music_shop_rank_buttons_stay_inert_until_a_press_pairs_them`
+pins that state. Song-board sort directions and rank-page pairings
+stay ASSUMED until the interaction sweep (`E-T`) names them.
+
+## Row pick / cart buy (#412)
+
+`music_shop_row_pick_feedback_stages_cart_without_a_buy_wire` pins
+the client half of the loop through the routed click seam: an `MS_EX`
+row stages the cart and queues no 5010; `BUYITEM` queues exactly one
+5010 send. No exe row-pick or BUYITEM press frame exists yet (the
+pinned BUYITEM rect showed no visible button), so the exe feedback
+arm stays OPEN (`E-T`/`E-W-5010`).

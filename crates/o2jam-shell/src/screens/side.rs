@@ -767,6 +767,20 @@ pub const MSHOP_ARTIST_CODE: u32 = 0x1A40_0038;
 pub const MSHOP_EDITOR_CODE: u32 = 0x1A40_0039;
 pub const MSHOP_GENRE_CODE: u32 = 0x1A40_003A;
 pub const MSHOP_BPM_CODE: u32 = 0x1A40_003B;
+/// Row-local DIFF cell (`IDC_TEXT_MSHOP_MMS_DIFF`, `0x1A40003C`):
+/// the catalog's three chart levels (frame `4debf1f0…` reads
+/// `3/7/10`), row-local like the other MMS templates.
+pub const MSHOP_DIFF_CODE: u32 = 0x1A40_003C;
+/// Row-local gem/won price cells (`0x1A400040`/`0x1A400045`):
+/// the qualified shop frame reads `G 3000` and `W 0` from the
+/// catalog's table-3 price words (`docs/file-formats/ojn.md`).
+pub const MSHOP_GEM_PRICE_CODE: u32 = 0x1A40_0040;
+pub const MSHOP_WON_PRICE_CODE: u32 = 0x1A40_0045;
+/// Bottom wallet money texts (`0x1A400019`/`0x1A40001A`, staged
+/// rects `(41,567)-(136,580)` and `(166,567)-(261,580)`): the
+/// `G 15527` / `W 0` words in frame `964be986…`, fed by 5029.
+pub const MSHOP_MONEY_GEM_CODE: u32 = 0x1A40_0019;
+pub const MSHOP_MONEY_WON_CODE: u32 = 0x1A40_001A;
 /// Row-local buy buttons, tiled over the staged `MS_EX` slots:
 /// gem buy, won buy.
 pub const MSHOP_GEM_BUY_CODE: u32 = 0x1A20_0041;
@@ -776,6 +790,30 @@ pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
 /// next step as lanking).
 pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
 pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Download controls (`0x1A20000E` START, `0x1A20000F` CANCEL).
+/// Their rects stage with the shop, but the shop-side 5012 send
+/// site is OPEN, so both stay inert instead of guessing a wire
+/// ride (#179 story 17).
+/// Right-rank panel buttons (`0x1A200016..18`): the 곡명 press has
+/// one qualified frame with no reorder (the rank order was already
+/// active), and no pager press frame exists. They stay inert here;
+/// our song-board sort directions remain ASSUMED (`E-T`, #411).
+pub const MSHOP_RANK_BUTTON_FIRST_CODE: u32 = 0x1A20_0016;
+pub const MSHOP_RANK_BUTTON_LAST_CODE: u32 = 0x1A20_0018;
+/// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
+/// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
+/// exe press frame names a result (matrix `E-T`), so they stay
+/// inert until a capture pins the behavior (#413).
+pub const MSHOP_SEARCH_EDIT_CODE: u32 = 0x1A30_007B;
+pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
+pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
+/// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
+/// `(711,569)-(794,593)`): the visible BACK button. The local
+/// return is pinned by the bnd arm; the 5007 ExitShop send stays
+/// OPEN until a qualified BACK capture taps it (#399).
+pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
+pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
+pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
 /// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
 /// directions ASSUMED ascending (same named next step as lanking).
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
@@ -833,21 +871,45 @@ pub struct MusicShopRow {
     pub free: bool,
     /// Server catalog carries this song id (chart data present).
     pub listed: bool,
+    /// Gem price from `OJNList.dat` table 3 (`param_b`); unknown
+    /// words stay `None` and ink no cell.
+    pub gem_price: Option<u32>,
+    /// Won price from `OJNList.dat` table 3 (`param_a`); unknown
+    /// words stay `None` and ink no cell.
+    pub won_price: Option<u32>,
+}
+
+/// One catalog price pair (`OJNList.dat` table 3, data-verified).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicShopPrice {
+    /// Gem price (`param_b` on the song's table-3 row).
+    pub gem: u32,
+    /// Won price (`param_a` on the song's table-3 row).
+    pub won: u32,
 }
 
 /// Song-shop rows in catalog order with live flags; a missing
-/// answer clears both flags without dropping rows.
+/// answer clears both flags without dropping rows. Songs absent
+/// from the staged table-3 prices keep both price cells blank.
 #[must_use]
 pub fn music_shop_rows(
     songs: &[LankingSong],
     answer: Option<&MusicListAnswer>,
+    prices: &HashMap<u32, MusicShopPrice>,
 ) -> Vec<MusicShopRow> {
     songs
         .iter()
         .cloned()
         .map(|song| {
             let (free, listed) = shop_flags_for(song.song_id, answer);
-            MusicShopRow { song, free, listed }
+            let price = prices.get(&song.song_id).copied();
+            MusicShopRow {
+                song,
+                free,
+                listed,
+                gem_price: price.map(|entry| entry.gem),
+                won_price: price.map(|entry| entry.won),
+            }
         })
         .collect()
 }
@@ -889,6 +951,8 @@ pub enum MusicShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// EXIT/BACK plate; the caller owns the local side leave.
+    BackToLobby,
 }
 
 /// Board click under native pixel (`x`, `y`): the staged placement
@@ -924,6 +988,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     match code {
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
+        MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
         MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),
@@ -5602,6 +5667,54 @@ mod side_tests {
         // list, and search/TOP100 stay unevidenced: all land nowhere.
         assert_eq!(music_shop_action_at(&placements, 311, 85), None);
         assert_eq!(music_shop_action_at(&placements, 519, 315), None);
+    }
+
+    #[test]
+    fn music_shop_rank_buttons_stay_inert_until_a_press_pairs_them() {
+        // The 곡명 press left the rank readout at `01/47` and the
+        // list unchanged, and no pager press was captured. No sort
+        // direction or rank-page pairing may be inferred from the
+        // bnd rects alone; the board's own sort buttons are separate.
+        for code in MSHOP_RANK_BUTTON_FIRST_CODE..=MSHOP_RANK_BUTTON_LAST_CODE {
+            assert_eq!(
+                music_shop_action_for_code(code),
+                None,
+                "rank code {code:#x} has no pinned press behavior"
+            );
+        }
+    }
+
+    #[test]
+    fn music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist() {
+        // The search edit/button and CASHFILLUP rects are visible in
+        // the qualified entry frame, but no press result was captured
+        // (`E-T`). No sort, buy, or navigation may be guessed for
+        // them; the Item Shop charge plate is a different spec.
+        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_EDIT_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE), None);
+    }
+
+    #[test]
+    fn music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned() {
+        // The bnd rects for START/CANCEL stage, but no shop-side
+        // 5012 send site is pinned (`docs/musicshop.md`), so a click
+        // on either control must dispatch nothing and queue no wire.
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        let placements = vec![
+            area(MSHOP_DOWN_START_CODE, 699, 312, 82, 24),
+            area(MSHOP_DOWN_CANCEL_CODE, 721, 529, 54, 22),
+        ];
+        assert_eq!(music_shop_action_at(&placements, 740, 324), None);
+        assert_eq!(music_shop_action_at(&placements, 748, 540), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_START_CODE), None);
+        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_CANCEL_CODE), None);
     }
 
     #[test]

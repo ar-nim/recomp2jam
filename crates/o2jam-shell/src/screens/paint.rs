@@ -43,16 +43,18 @@ use super::side::{
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
     planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
-    shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomLowerTab,
-    MyRoomState, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow,
-    WalletState, CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE,
-    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
-    MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
-    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    shop_cart_slots, wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow,
+    MyRoomAction, MyRoomLowerTab, MyRoomState, PlanetAction, PlanetBand, PlanetOptionTab,
+    PlanetPromo, ShopGood, WalletRow, WalletState, CASH_CHARGE_WEB_CODE, GEM_LABEL,
+    INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
+    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
+    MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
+    MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE, MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE,
+    MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_SLOT_FIRST_CODE, NO_RESPONSE_MESSAGE_CP949,
+    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949,
+    SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
+    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
     SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
@@ -1743,6 +1745,52 @@ fn paint_music_shop_rows(
                 text,
                 CP949_INK,
             );
+        }
+        // Optional cells stay independent of the six required MMS
+        // templates: a board that stages only the original templates
+        // still paints, while the qualified 7.55 dump inks all three.
+        let optional = [
+            (MSHOP_DIFF_CODE, lanking_diff_caption(row.song.levels)),
+            (
+                MSHOP_GEM_PRICE_CODE,
+                row.gem_price
+                    .map(|price| format!("G {price}"))
+                    .unwrap_or_default(),
+            ),
+            (
+                MSHOP_WON_PRICE_CODE,
+                row.won_price
+                    .map(|price| format!("W {price}"))
+                    .unwrap_or_default(),
+            ),
+        ];
+        for (code, text) in optional {
+            if text.is_empty() {
+                continue;
+            }
+            if let Some(rect) = shop_template_rect(placements, code) {
+                paint_text_into_rect(frame, music_shop_tiled_rect(rect, slot), &text, CP949_INK);
+            }
+        }
+    }
+}
+
+/// Bottom money texts (`0x1A400019`/`0x1A40001A`) from the one wallet
+/// the shops share: `G`/`W` amounts stay `--` until 5029 folds them.
+pub fn paint_music_shop_wallet(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    wallet: &WalletState,
+) {
+    let cells = [
+        (MSHOP_MONEY_GEM_CODE, wallet.gem),
+        (MSHOP_MONEY_WON_CODE, wallet.cash_point),
+    ];
+    let labels = ["G", "W"];
+    for ((code, amount), label) in cells.into_iter().zip(labels) {
+        if let Some(rect) = shop_template_rect(placements, code) {
+            let text = format!("{} {}", label, wallet_amount_caption(amount));
+            paint_text_into_rect(frame, rect, &text, CP949_INK);
         }
     }
 }
@@ -3626,6 +3674,8 @@ mod paint_tests {
             },
             free: false,
             listed: false,
+            gem_price: Some(3000),
+            won_price: Some(0),
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(
@@ -3645,6 +3695,91 @@ mod paint_tests {
         assert!(!lit(299, 108, 66, 11), "blank ISBUY paints nothing");
         assert!(lit(246, 534, 28, 17), "cur page paints");
         assert!(!lit(481, 429, 282, 15), "empty cart paints nothing");
+    }
+
+    #[test]
+    fn music_shop_board_inks_diff_at_the_staged_cell_from_catalog_levels() {
+        // Red proof for #398: the DIFF cell (`0x1A40003C`) is staged,
+        // but the row painter only inks the six original MMS cells,
+        // so the catalog levels never reach the canvas.
+        let placements = vec![
+            shop_placement(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+            shop_placement(MSHOP_TITLE_CODE, 89, 5, 213, 11),
+            shop_placement(MSHOP_ISBUY_CODE, 281, 4, 66, 11),
+            shop_placement(MSHOP_ARTIST_CODE, 122, 23, 106, 11),
+            shop_placement(MSHOP_EDITOR_CODE, 265, 23, 82, 11),
+            shop_placement(MSHOP_GENRE_CODE, 122, 38, 65, 11),
+            shop_placement(MSHOP_BPM_CODE, 223, 38, 25, 11),
+            shop_placement(0x1A40_003C, 297, 38, 50, 11),
+            shop_placement(0x1A40_0040, 264, 54, 41, 11),
+            shop_placement(0x1A40_0045, 264, 70, 41, 11),
+        ];
+        let rows = vec![MusicShopRow {
+            song: LankingSong {
+                song_id: 757,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+                editor: "NoteFactory".to_owned(),
+                genre: 3,
+                bpm: 124.0,
+                levels: [3, 7, 10],
+            },
+            free: false,
+            listed: false,
+            gem_price: Some(3000),
+            won_price: Some(0),
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_music_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &rows,
+            0,
+            1,
+        );
+        assert!(
+            has_ink_in(&buf, 800, 315, 142, 50, 11),
+            "catalog DIFF levels ink the staged DIFF cell"
+        );
+        assert!(
+            has_ink_in(&buf, 800, 282, 158, 41, 11),
+            "catalog gem price inks the staged GEM cell"
+        );
+        assert!(
+            has_ink_in(&buf, 800, 282, 174, 41, 11),
+            "catalog won price inks the staged WON cell"
+        );
+    }
+
+    #[test]
+    fn music_shop_bottom_wallet_inks_gem_and_won_from_the_shared_wallet() {
+        // The bottom money texts stage at absolute rects and read
+        // the one wallet the shops share; unknown amounts stay `--`.
+        let placements = vec![
+            shop_placement(MSHOP_MONEY_GEM_CODE, 41, 567, 95, 13),
+            shop_placement(MSHOP_MONEY_WON_CODE, 166, 567, 95, 13),
+        ];
+        let wallet = WalletState {
+            gem: Some(15527),
+            cash_point: Some(0),
+            ..WalletState::default()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_music_shop_wallet(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &wallet,
+        );
+        assert!(has_ink_in(&buf, 800, 41, 567, 95, 13), "G amount paints");
+        assert!(has_ink_in(&buf, 800, 166, 567, 95, 13), "W amount paints");
     }
 
     #[test]
@@ -3671,6 +3806,8 @@ mod paint_tests {
             },
             free: true,
             listed: false,
+            gem_price: None,
+            won_price: None,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(

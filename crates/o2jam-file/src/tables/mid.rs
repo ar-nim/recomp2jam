@@ -606,6 +606,26 @@ pub fn parse_ojn_mid_table5(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileErr
 /// `FileError::Truncated` when the file carries no middle region, plus
 /// every error [`parse_ojn_mid_region`] reports.
 pub fn parse_ojn_list_labels(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileError> {
+    Ok(parse_ojn_middle(bytes)?.tags)
+}
+
+/// Parse the `OJNList.dat` middle table 3 (per-song price params).
+///
+/// The words are data-verified (`docs/file-formats/ojn.md` table 3);
+/// the music shop joins `param_b` to its gem cell and `param_a`
+/// to its won cell (qualified frame `4debf1f0…`, cross-checked with
+/// the catalog's premium-section layout). An unreadable middle
+/// region stages no prices, so no price word is invented.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short file, plus every error
+/// [`parse_ojn_mid_region`] reports.
+pub fn parse_ojn_list_params(bytes: &[u8]) -> Result<Vec<OjnMidParamEntry>, FileError> {
+    Ok(parse_ojn_middle(bytes)?.params)
+}
+
+fn parse_ojn_middle(bytes: &[u8]) -> Result<OjnMidRegion, FileError> {
     let end = OJN_MID_REGION_OFFSET + OJN_MID_REGION_LEN;
     let region = bytes
         .get(OJN_MID_REGION_OFFSET..end)
@@ -613,7 +633,7 @@ pub fn parse_ojn_list_labels(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileEr
             need: end,
             have: bytes.len(),
         })?;
-    Ok(parse_ojn_mid_region(region)?.tags)
+    parse_ojn_mid_region(region)
 }
 
 /// Parse the `OJNList.dat` middle region: magic + table-1 count, the
@@ -1018,6 +1038,22 @@ mod tests {
             blob.extend_from_slice(&word.to_le_bytes());
         }
         blob
+    }
+
+    #[test]
+    fn ojn_list_params_split_the_whole_file_at_the_record_boundary() {
+        // The music-shop price join stages from a whole
+        // `OJNList.dat` buffer: a zeroed record prefix before the
+        // middle region must still yield table-3 params, and a
+        // file cut inside the region stages none.
+        let mut file = vec![0u8; OJN_MID_REGION_OFFSET];
+        file.extend_from_slice(&full_mid_region_blob());
+        let params = parse_ojn_list_params(&file).unwrap();
+        assert_eq!(params.len(), OJN_MID_TABLE3_COUNT);
+        assert_eq!(params[0].song_id, 887);
+        assert_eq!(params[0].param_a, 2000);
+        assert_eq!(params[0].param_b, 5000);
+        assert!(parse_ojn_list_params(&file[..OJN_MID_REGION_OFFSET + 4]).is_err());
     }
 
     #[test]
