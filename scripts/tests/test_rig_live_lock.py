@@ -25,10 +25,12 @@ class RigLiveLockTests(unittest.TestCase):
         self.state = Path(self.temp.name)
         self.env = dict(os.environ, RIG_LIVE_LOCK_DIR=str(self.state / "lock"))
 
-    def launch_holder(self, owner: str, command: str) -> subprocess.Popen[str]:
+    def launch_holder(
+        self, owner: str, command: str, extra_env: dict[str, str] | None = None
+    ) -> subprocess.Popen[str]:
         process = subprocess.Popen(
             [str(LOCK_SCRIPT), "run", "--owner", owner, "--", "bash", "-c", command],
-            env=self.env,
+            env=dict(self.env, **(extra_env or {})),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -99,6 +101,26 @@ class RigLiveLockTests(unittest.TestCase):
 
         self.assertEqual(next_boot.returncode, 0, next_boot.stderr)
         self.assertNotIn("retrying", next_boot.stderr)
+
+    def test_child_shell_reuses_the_inherited_lock_without_waiting(self) -> None:
+        nested_result = self.state / "nested.rc"
+        holder = self.launch_holder(
+            "lane-A",
+            '. "$LOCK_LIB"; rig_live_lock_acquire nested 1; echo $? > "$NESTED_RC"; sleep 3',
+            extra_env={"LOCK_LIB": str(LOCK_SCRIPT), "NESTED_RC": str(nested_result)},
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not nested_result.exists():
+            time.sleep(0.02)
+
+        self.assertTrue(nested_result.exists(), "nested acquire never returned")
+        self.assertEqual(nested_result.read_text().strip(), "0")
+        self.assertEqual((self.state / "lock" / "lane.lock").read_text().strip(), "lane-A")
+        self.assertIsNone(holder.poll())
+        holder.terminate()
+        holder.wait(timeout=5)
+        self.assertIn("inherited", holder.stderr.read())
+        self.assertNotIn("retrying", holder.stderr.read())
 
     def test_acquire_times_out_without_taking_a_live_lane(self) -> None:
         holder = self.launch_holder("lane-A", "sleep 4")
