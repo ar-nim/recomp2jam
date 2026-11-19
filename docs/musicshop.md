@@ -148,3 +148,11 @@ no qualified press frame exists for either (`E-T`). Guard
 `music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist`
 pins that state. #362's charge plate belongs to the Item Shop and
 is not a Music Shop pixel.
+
+## Rank buttons (#411)
+
+The right-panel buttons `0x1A200016..18` stage, but the one captured
+곡명 press left the rank list and `01/47` readout unchanged; no pager
+press frame exists. Guard `music_shop_rank_buttons_stay_inert_until_a_press_pairs_them`
+pins that state. Song-board sort directions and rank-page pairings
+stay ASSUMED until the interaction sweep (`E-T`) names them.

@@ -794,6 +794,12 @@ pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
 /// ride (#179 story 17).
+/// Right-rank panel buttons (`0x1A200016..18`): the 곡명 press has
+/// one qualified frame with no reorder (the rank order was already
+/// active), and no pager press frame exists. They stay inert here;
+/// our song-board sort directions remain ASSUMED (`E-T`, #411).
+pub const MSHOP_RANK_BUTTON_FIRST_CODE: u32 = 0x1A20_0016;
+pub const MSHOP_RANK_BUTTON_LAST_CODE: u32 = 0x1A20_0018;
 /// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
 /// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
 /// exe press frame names a result (matrix `E-T`), so they stay
@@ -5661,6 +5667,21 @@ mod side_tests {
         // list, and search/TOP100 stay unevidenced: all land nowhere.
         assert_eq!(music_shop_action_at(&placements, 311, 85), None);
         assert_eq!(music_shop_action_at(&placements, 519, 315), None);
+    }
+
+    #[test]
+    fn music_shop_rank_buttons_stay_inert_until_a_press_pairs_them() {
+        // The 곡명 press left the rank readout at `01/47` and the
+        // list unchanged, and no pager press was captured. No sort
+        // direction or rank-page pairing may be inferred from the
+        // bnd rects alone; the board's own sort buttons are separate.
+        for code in MSHOP_RANK_BUTTON_FIRST_CODE..=MSHOP_RANK_BUTTON_LAST_CODE {
+            assert_eq!(
+                music_shop_action_for_code(code),
+                None,
+                "rank code {code:#x} has no pinned press behavior"
+            );
+        }
     }
 
     #[test]
