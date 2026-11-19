@@ -205,6 +205,10 @@ const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// still never stalls the frame loop — a late table retries on the
 /// next paint while Result stays up.
 const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
+/// The exe's 4017 member guard accepts slots `< 8` (compare at file
+/// `0x15fbb6`, REA `ev_a395ece8…`); later slots never reach its UI
+/// queue. Our trace mirror applies the same bound.
+const SUBMITTER_MEMBER_LIMIT: usize = 8;
 /// Resting gateway timeout outside the stats section: the transport
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
@@ -588,6 +592,11 @@ pub struct OnlineSession {
     /// gameplay reader is pinned; this mirror accounts for the wire
     /// words without inventing a rank-column source (#665).
     last_rank_places: Option<[u8; 8]>,
+    /// Last 4017 submitter slot in member range (`None` until one
+    /// arrives). The exe forwards accepted slots into its UI queue
+    /// but no Result-side consumer is pinned, so this stays a trace
+    /// instead of an invented marker (#667/#679).
+    last_submitter_slot: Option<u8>,
 }
 
 impl OnlineSession {
@@ -633,6 +642,7 @@ impl OnlineSession {
             deferred_frames: VecDeque::new(),
             result_records: [None; 8],
             last_rank_places: None,
+            last_submitter_slot: None,
         }
     }
 
@@ -1320,6 +1330,14 @@ impl OnlineSession {
     #[must_use]
     pub fn last_rank_places(&self) -> Option<[u8; 8]> {
         self.last_rank_places
+    }
+
+    /// Last 4017 slot in member range (`None` while none arrived).
+    /// Read-back for the trace guard; no Result painter consumes it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn last_submitter_slot(&self) -> Option<u8> {
+        self.last_submitter_slot
     }
 
     /// Transmit the pending chat draft as 3011.
@@ -2248,11 +2266,22 @@ impl OnlineSession {
     }
 
     /// Fold one 4017 frame: the submitting member is traced (no totals
-    /// ride this broadcast — those arrive with 4018).
+    /// ride this broadcast — those arrive with 4018). The exe handler
+    /// (file `0x15fba0`, `ev_246be0b6…`) drops slots `>= 8` before the
+    /// UI queue push; slots outside the eight member records get the
+    /// same treatment here. REA finds the queue's consumers in the two
+    /// Playing states, not in Result (`ev_16b2e797…`, `ev_f56c417…`).
     fn apply_score_submission(&mut self, frame: &Frame) {
         match ScoreSubmission::decode_frame(frame) {
-            Ok(submitted) => {
+            Ok(submitted) if usize::from(submitted.member_id) < SUBMITTER_MEMBER_LIMIT => {
+                self.last_submitter_slot = Some(submitted.member_id);
                 tracing::debug!(member = submitted.member_id, "tally submitted");
+            }
+            Ok(submitted) => {
+                tracing::debug!(
+                    member = submitted.member_id,
+                    "dropping out-of-range submitter"
+                );
             }
             Err(source) => {
                 tracing::debug!(id = frame.id, %source, "dropping undecodable tally notice");
@@ -7112,6 +7141,71 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Result);
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn score_submission_traces_a_valid_submitter_and_drops_slot_eight_or_more() {
+        // #667: the exe's 4017 handler (file `0x15fba0`) reads one
+        // member byte, drops it when the slot is not `< 8`, and
+        // forwards the rest into the UI queue at `0x478d50`. We have
+        // no Result consumer for that notice; this guard pins the
+        // traced slot on our side of the seam, including the guard.
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(&ScoreSubmission { member_id: 2 }.encode())
+                .unwrap();
+            stream
+                .write_all(&ScoreSubmission { member_id: 9 }.encode())
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![ScoreEntry {
+                    member_id: 0,
+                    active: true,
+                    cool: 11,
+                    good: 22,
+                    bad: 33,
+                    miss: 44,
+                    max_combo: 55,
+                    jam: 66,
+                    score: 777,
+                    reward: 88,
+                    level: 3,
+                    experience: 2000,
+                    result: MatchResult::Win,
+                    gem: 11_000,
+                    cash_point: 125,
+                    speed: 2,
+                    long_note_score: 60,
+                }],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(0).is_some());
+        server.join().unwrap();
+        assert_eq!(session.last_submitter_slot(), Some(2));
     }
 
     #[test]
