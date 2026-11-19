@@ -1546,6 +1546,15 @@ impl WireMessage for ScoreCompleted {
     }
 }
 
+/// Member-slot offset that holds a 4040 leaderboard place (VA
+/// `0x5414a0`, file `0x1414ad`, REA `ev_4684b913…`). The whole-image
+/// byte sweep `ev_94ff31c9…` finds the reset and writer here but no
+/// gameplay reader, so this word is traced, never painted as a rank.
+pub const RESULT_RANK_PLACE_OFFSET: u32 = 0x217d;
+/// Member-slot offset the Result rank column reads: the locally
+/// computed team table built by `FUN_004c49a0` (REA `ev_51da7213…`).
+pub const RESULT_RANK_COLUMN_OFFSET: u32 = 0x10d2c;
+
 /// `GameRankUpdate` 4040: leaderboard place per member.
 ///
 /// Eight rank bytes; byte `i` holds the member id on leaderboard

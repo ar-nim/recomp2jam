@@ -7183,6 +7183,109 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn result_rank_column_ignores_the_4040_place_bytes() {
+        // #680: the 4040 place bytes land at slot `+0x217d`, while the
+        // rank column reads the locally computed table at `+0x10d2c`.
+        // A scripted place that names seat 0 as first must not ink a
+        // rank digit; the two-member replay that would confirm this on
+        // the exe remains OPEN.
+        use o2jam_net::{
+            GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry, RESULT_RANK_COLUMN_OFFSET,
+            RESULT_RANK_PLACE_OFFSET,
+        };
+        assert_eq!(RESULT_RANK_PLACE_OFFSET, 0x217d);
+        assert_eq!(RESULT_RANK_COLUMN_OFFSET, 0x10d2c);
+        let places = [0u8, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(
+                    &GameRankUpdate {
+                        member_ranks: places,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 4,
+                        experience: 3000,
+                        result: MatchResult::Lose,
+                        gem: 12_000,
+                        cash_point: 0,
+                        speed: 3,
+                        long_note_score: 90,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(1).is_some());
+        server.join().unwrap();
+
+        assert_eq!(session.last_rank_places(), Some(places));
+        let rows = session.game.result_rank_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].rank, None, "no rank digit from a 4040 place");
+        assert_eq!(rows[1].rank, None, "no rank digit from a 4040 place");
+        assert_eq!(rows[0].score, Some(777));
+        assert_eq!(rows[1].score, Some(50_000));
+    }
+
+    #[test]
     fn result_drain_folds_server_totals_into_battle_verdict() {
         use o2jam_net::{GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
         let mut room = joined_snapshot();
