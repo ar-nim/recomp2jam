@@ -691,6 +691,10 @@ pub struct ScreenGame {
     /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
     /// the type-100 dismissal queue (#367).
     room_no_response: RoomNoResponseFuse,
+    /// One-OK liveness sheet over MyRoom after a MESSENGER press
+    /// (qualified B8 pack). It owns clicks until its OK is pressed;
+    /// the Messenger main sheet stays unwired (P0).
+    messenger_liveness_open: bool,
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1027,6 +1031,7 @@ impl ScreenGame {
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
+            messenger_liveness_open: false,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1516,6 +1521,12 @@ impl ScreenGame {
     #[must_use]
     pub const fn room_no_response_dialog_open(&self) -> bool {
         self.room_no_response.sheet_open()
+    }
+
+    /// Whether the pinned Messenger liveness sheet owns input.
+    #[must_use]
+    pub const fn messenger_liveness_open(&self) -> bool {
+        self.messenger_liveness_open
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -4259,6 +4270,14 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.messenger_liveness_open {
+            // The one-OK sheet owns every click until OK; it sends
+            // no wire (Memoryer has no messenger endpoint).
+            if self.information_ok_hit(x, y) {
+                self.messenger_liveness_open = false;
+            }
+            return;
+        }
         if self.room_no_response_dialog_open() {
             if self.information_ok_hit(x, y) {
                 self.post_room_no_response_dismissal();
@@ -5005,6 +5024,7 @@ impl ScreenGame {
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+            MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }
@@ -5251,6 +5271,7 @@ impl ScreenGame {
         if side == SideScreen::Tutorial {
             self.tutorial_key_lights.clear();
         }
+        self.messenger_liveness_open = false;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -5975,6 +5996,11 @@ impl ScreenGame {
                 now_ms,
             );
             self.paint_myroom_overlay(frame, &self.side_placements, &self.side_figures);
+        }
+        if self.messenger_liveness_open {
+            // Same staged Information sheet and Information origin as
+            // the relay notice; the B8 pack pins one OK and no wire.
+            paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
         }
     }
 
@@ -12791,6 +12817,59 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_messenger_press_opens_the_pinned_liveness_sheet_and_ok_clears_it() {
+        // Qualified B8 pack `f9d4a695…` pins MyRoom press `(644,580)`
+        // → one-OK Information sheet, OK `(400,368)` clears it and host
+        // navigation proceeds; b6 is byte-identical on the sheet.
+        // Live chain: boot → Waiting → MyRoom side → staged MESSENGER
+        // button → sheet → OK. No send is queued: Memoryer has no
+        // messenger endpoint (environment fact, closed #345).
+        use super::super::side::MYROOM_MESSENGER_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_MESSENGER_CODE, 627, 571)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // entry fetch, not the press
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let before = paint(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(game.messenger_liveness_open(), "the pinned sheet opens");
+        let after = paint(&mut game);
+        let ok_rect = crate::screens::paint::information_ok_fallback_rect();
+        let ok_w = i32::try_from(ok_rect.w).expect("OK rect width fits");
+        let ok_h = i32::try_from(ok_rect.h).expect("OK rect height fits");
+        let inked = |buf: &[u32]| -> usize {
+            (ok_rect.y..ok_rect.y + ok_h)
+                .flat_map(|row| (ok_rect.x..ok_rect.x + ok_w).map(move |column| (row, column)))
+                .filter(|(row, column)| buf[*row as usize * 800 + *column as usize] != 0)
+                .count()
+        };
+        assert!(inked(&after) > inked(&before), "one-OK sheet paints ink");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(200, 200));
+        assert!(game.messenger_liveness_open(), "host clicks are blocked");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.messenger_liveness_open(), "OK clears the sheet");
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.take_gift_list_request(), None);
+    }
+
+    #[test]
     fn myroom_p0_controls_answer_nothing_and_queue_no_wire() {
         // Live caller chain:
         //   main.rs::run_play -> OnlineSession::ingest_snapshot
@@ -12800,15 +12879,14 @@ mod game_tests {
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
-            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_MESSENGER_CODE,
-            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
-            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
+            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_NOTICEBOARD_CODE,
+            MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE, MYROOM_VACATE_CODE,
+            MYROOM_WEBAVATAR_CODE,
         };
         for code in [
             MYROOM_WEBAVATAR_CODE,
             MYROOM_CONFERENCE_CODE,
             MYROOM_BAGSORT_CODE,
-            MYROOM_MESSENGER_CODE,
         ] {
             assert_eq!(
                 myroom_action_for_code(code),

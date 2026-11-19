@@ -273,6 +273,10 @@ pub enum MyRoomAction {
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,
+    /// MESSENGER pressed: open the exe-pinned one-OK liveness sheet.
+    /// This is a UI response to the absent backend, not a Messenger
+    /// main sheet or a wire send.
+    MessengerLiveness,
 }
 
 /// Action for one avatar-room control code (`None` for caption and
@@ -303,6 +307,7 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_BACK_CODE => Some(MyRoomAction::BackToLobby),
         MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
+        MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
         _ => None,
     }
 }
@@ -712,9 +717,6 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
         }
         MYROOM_BAGSORT_CODE => {
             Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
-        }
-        MYROOM_MESSENGER_CODE => {
-            Some("MESSENGER P0: no wire send; backend never wired - visibly inert")
         }
         MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
             Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")
