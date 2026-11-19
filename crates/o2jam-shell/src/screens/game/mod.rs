@@ -6693,6 +6693,7 @@ impl ScreenGame {
     /// music-name box when it resolved (see [`Self::resolve_song_cover`]).
     fn paint_result(&self, frame: &mut Frame<'_>) {
         let album = self.song_cover.as_ref();
+        let numbers = self.result_numbers_score();
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
                 frame,
@@ -6705,7 +6706,7 @@ impl ScreenGame {
                     // table for other modes (OPEN,
                     // docs/cresult-anchors.md).
                     portrait_slots: None,
-                    score: self.playing.score(),
+                    score: &numbers,
                     rows: &self.result_rank_rows(),
                     art,
                     verdict: self.result_verdict(),
@@ -6721,13 +6722,30 @@ impl ScreenGame {
                     bottom_counter: None,
                 },
             ),
-            None => paint_result(
-                frame,
-                self.playing.score(),
-                &self.result_rank_rows(),
-                album,
-                None,
-            ),
+            None => paint_result(frame, &numbers, &self.result_rank_rows(), album, None),
+        }
+    }
+
+    /// Numbers for the result top panel. The `(605,533)` field reads the
+    /// local member record's gem word (self base `0x77cd00` + `0x2c`),
+    /// not the played score: the two qualified solo frames hold gem
+    /// 15527 / 626 while their C2S 4016 scores differ (6260 / 40113).
+    /// Without an admitted 4018 row the offline walk keeps its played
+    /// score, so no value is invented.
+    fn result_numbers_score(&self) -> o2jam_game::Score {
+        let played = self.playing.score();
+        let gem = self
+            .waiting
+            .as_ref()
+            .and_then(|room| self.result_member_records.get(usize::from(room.member_id)))
+            .and_then(|record| record.as_ref())
+            .and_then(|record| u32::try_from(record.gem).ok());
+        match gem {
+            Some(gem) => o2jam_game::Score {
+                points: u64::from(gem),
+                ..played.clone()
+            },
+            None => played.clone(),
         }
     }
 
@@ -19363,6 +19381,108 @@ mod game_tests {
             7000,
         );
         buf
+    }
+
+    /// One qualified solo Result band: the gem word in the 4018 row
+    /// (and the TOTAL GEM field in the frame), the different C2S
+    /// 4016 score word, and the frame's sha256.
+    fn qualified_result_band(gem: i32, submitted_score: u32, frame: &str) -> ScreenGame {
+        assert_eq!(
+            frame.len(),
+            64,
+            "qualified frame hash must be a full sha256"
+        );
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        finish_song(&mut game);
+        assert_ne!(game.playing.score().points, u64::from(submitted_score));
+        assert_ne!(game.playing.score().points, u64::try_from(gem).unwrap_or(0));
+        game.stage_result_member_record(
+            0,
+            ResultMemberRecord {
+                cool: 0,
+                good: 0,
+                bad: 0,
+                miss: 20,
+                max_combo: 0,
+                jam_combo: 0,
+                long_note_score: 0,
+                score: 0,
+                reward: 0,
+                result: o2jam_net::play::MatchResult::Draw,
+                speed: 1,
+                level: 7,
+                experience: 9_945,
+                gem,
+                cash_point: 0,
+                room_master: true,
+            },
+        );
+        game
+    }
+
+    /// Pixels of the `(605,533)` total field, the only panel digits
+    /// that differ between the two qualified frames.
+    fn total_field_hash(game: &mut ScreenGame) -> u64 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            7000,
+        );
+        total_field_hash_from(&buf)
+    }
+
+    fn total_field_hash_from(buf: &[u32]) -> u64 {
+        (533..552)
+            .flat_map(|y| (605..690).map(move |x| buf[y * 800 + x]))
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, pixel| {
+                (hash ^ u64::from(pixel)).wrapping_mul(0x100_0000_01b3)
+            })
+    }
+
+    /// Digits the shell painter produces for one pinned gem word when
+    /// no record stands (the fallback shape before #421).
+    fn total_field_hash_for(gem: i32) -> u64 {
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &o2jam_game::Score {
+                points: u64::try_from(gem).unwrap_or(0),
+                ..o2jam_game::Score::default()
+            },
+            &[],
+            None,
+            None,
+        );
+        total_field_hash_from(&buf)
+    }
+
+    #[test]
+    fn score_panel_paints_the_15527_gem_band_at_the_pinned_anchor() {
+        let mut game = qualified_result_band(
+            15_527,
+            6_260,
+            "3ea6c48156d474aadc3d5f31663395cdfabf75da550b44e2165c102e7a4df7e4",
+        );
+        assert_eq!(total_field_hash(&mut game), total_field_hash_for(15_527));
+    }
+
+    #[test]
+    fn score_panel_paints_the_626_gem_band_at_the_pinned_anchor() {
+        let mut game = qualified_result_band(
+            626,
+            40_113,
+            "5f812efe0143ce89c17118ba9daebc01e2f2be60522f748fea3afa0e54c4f608",
+        );
+        assert_eq!(total_field_hash(&mut game), total_field_hash_for(626));
     }
 
     #[test]
