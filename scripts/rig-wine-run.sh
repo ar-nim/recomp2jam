@@ -33,7 +33,9 @@
 #               Memoryer database, read-only.
 #   2. boot     scripts/rig-run.sh run — shared preflight (owned sink,
 #               Memoryer, install-root, prefix claim), audio lane, Xvfb,
-#               then `scripts/rig-wine.sh launch <argv.txt>`.
+#               then `scripts/rig-wine.sh launch <argv.txt>`. A flock on
+#               scripts/lib/rig-live-lock.sh is inherited by the client and
+#               held until it exits, so no second lane can boot (#489).
 #   3. drive    scripts/wine-scene.py --attach — SendInput clicks at aims
 #               that cite pinned evidence, one capture per scene, scene log.
 #   4. stop     scripts/rig-run.sh stop — recorded PIDs only.
@@ -57,6 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/rig-preflight.sh
 . "$SCRIPT_DIR/lib/rig-preflight.sh"
+# shellcheck source=lib/rig-live-lock.sh
+. "$SCRIPT_DIR/lib/rig-live-lock.sh"
 
 die() { echo "rig-wine-run: $*" >&2; exit 2; }
 
@@ -371,6 +375,11 @@ phase_verify() {
 }
 
 main() {
+  rig_live_lock_acquire "rig-wine-run:$OUT_DIR pid=$$" || {
+    note "live lane lock unavailable; no client booted"
+    return 1
+  }
+  rig_live_lock_install_release_trap
   verify_pins
   ensure_relay_fastfail
   if [ -z "$DISPLAY_NAME" ]; then

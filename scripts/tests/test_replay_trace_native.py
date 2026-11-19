@@ -63,6 +63,13 @@ class ReplayLaunchTests(unittest.TestCase):
         self.assertIn("--no-sound", command)
         self.assertNotIn("--token", command)
 
+    def test_driver_owned_boot_wraps_client_in_the_live_lane_lock(self) -> None:
+        command = self.driver.build_client_command(self.options(online=False))
+        wrapped = self.driver.wrap_in_live_lock(command, ":350")
+        self.assertEqual(wrapped[1:3], ["run", "--owner"])
+        self.assertIn("replay-trace-native:350", wrapped[3])
+        self.assertEqual(wrapped[-len(command):], command)
+
     def test_child_environment_removes_wayland_and_pins_x11(self) -> None:
         with patch.dict(
             "os.environ",

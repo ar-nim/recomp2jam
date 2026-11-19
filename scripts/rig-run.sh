@@ -36,6 +36,7 @@
 #     no free display in the allocation range)
 #   - port/audio/server/data/prefix rejections exit 11/12/13/14/15
 #     (see scripts/lib/rig-preflight.sh)
+#   - a timed-out live-lane lock exits 17 (only one client may boot)
 set -euo pipefail
 
 RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
@@ -50,6 +51,10 @@ RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # selftest, so both selftests stub the display from one home.
 # shellcheck source=lib/rig-stub-display.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/rig-stub-display.sh"
+# One live client lane: the descriptor is inherited by the booted client,
+# so the lane stays held after this launcher returns (#489).
+# shellcheck source=lib/rig-live-lock.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib/rig-live-lock.sh"
 
 die() { echo "rig-run: $*" >&2; exit 2; }
 
@@ -244,6 +249,11 @@ cmd_run() {
     exit "$RIG_E_AUDIO"
   fi
 
+  # Acquire immediately before the boot: Xvfb, the audio tap, and the
+  # preflight helpers are infrastructure, not the one live client lane.
+  rig_live_lock_acquire "rig-run:$(client_basename "$1") display=$display out=$out_dir" \
+    || fail_with "$RIG_LIVE_LOCK_DENIED" "live lane lock timed out; no client booted"
+  rig_live_lock_install_release_trap
   local client_pid
   if command -v setsid >/dev/null 2>&1; then
     DISPLAY="$display" setsid "$@" >"$out_dir/client.log" 2>&1 &
@@ -297,6 +307,9 @@ cmd_run_wayland() {
   [ "${1:-}" = "--" ] && shift
   [ "$#" -ge 1 ] || die "wayland: no binary given after --"
   [ -n "$socket" ] || die "wayland: no socket given"
+  rig_live_lock_acquire "rig-run-wayland:$(client_basename "$1") socket=$socket out=$out_dir" \
+    || fail_with "$RIG_LIVE_LOCK_DENIED" "live lane lock timed out; no client booted"
+  rig_live_lock_install_release_trap
   mkdir -p "$out_dir"
   : > "$out_dir/claims"
   export RIG_CLAIMS_FILE="$out_dir/claims"
@@ -606,6 +619,19 @@ PYEOF
   stop_quiet "$tmp/o-dsp-a"
   stop_quiet "$tmp/o-dsp-b"
   assert_reject "display-claim" 10 "already claimed" "$tmp/err-dsp-b"
+
+  # #489: one live client lane, even across different displays. The
+  # second launch is refused before its client boots while the first
+  # client is alive; the short timeout keeps the selftest bounded.
+  attempt "$tmp/err-lock-a" "${senv[@]}" bash "$0" run :190 "$tmp/o-lock-a" -- sleep 30
+  [ "$ATTEMPT_EXIT" -eq 0 ] || die "selftest: leg live-lane-lock setup run failed"
+  attempt "$tmp/err-lock-b" "${senv[@]}" RIG_LIVE_LOCK_TIMEOUT=1 \
+    bash "$0" run :191 "$tmp/o-lock-b" -- sleep 30
+  stop_quiet "$tmp/o-lock-a"
+  stop_quiet "$tmp/o-lock-b"
+  assert_reject "live-lane-lock" 17 "live lane lock timed out" "$tmp/err-lock-b"
+  grep -q "retrying" "$tmp/err-lock-b" ||
+    die "selftest: leg live-lane-lock FAILED: no contention message"
 
   # Second run on a claimed Wine prefix must reject with 15.
   attempt "$tmp/err-pfx-a" "${senv[@]}" RIG_WINEPREFIX="$tmp/p1" \

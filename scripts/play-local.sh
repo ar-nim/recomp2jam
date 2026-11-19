@@ -121,7 +121,11 @@ PY
 [ -x "$BIN" ] || cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"
 cd "$REPO_ROOT"
 echo "play-local: user-id $USER_ID, token ${TOKEN:0:8}…, memoryer 127.0.0.1:15010"
-exec env WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" "$BIN" online \
+# The wrapper holds the flock until this client exits; exec keeps one
+# process tree and traps inside the wrapper, not in the replaced shell.
+exec bash "$REPO_ROOT/scripts/lib/rig-live-lock.sh" \
+  run --owner "play-local:uid=$USER_ID pid=$$" -- \
+  env WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" "$BIN" online \
   --host 127.0.0.1 --port 15010 \
   --user-id "$USER_ID" --token "$TOKEN" \
   "${EXTRA[@]}"

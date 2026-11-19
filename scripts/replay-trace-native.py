@@ -45,6 +45,7 @@ KEY_NAME = {
 }
 DEFAULT_GATEWAY_PORT = 15010
 SESSION_DATABASE = Path.home() / "memoryer-local" / "O2JAM.db"
+LIVE_LOCK_SCRIPT = Path(__file__).resolve().parent / "lib" / "rig-live-lock.sh"
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,12 @@ def build_client_command(options: ReplayOptions) -> list[str]:
         "--input-log", str(options.input_log),
     ]
     return command
+
+
+def wrap_in_live_lock(command: list[str], display: str) -> list[str]:
+    """Hold the shared client lane until this driver's client exits."""
+    owner = f"replay-trace-native:{display.lstrip(':')}:pid={os.getpid()}"
+    return [str(LIVE_LOCK_SCRIPT), "run", "--owner", owner, "--", *command]
 
 
 def intended_ms(event):
@@ -455,7 +462,12 @@ def main():
     client = None
     if not attached:
         client_log = (out / "client.log").open("w")
-        client = subprocess.Popen(command, stdout=client_log, stderr=client_log, env=env)
+        client = subprocess.Popen(
+            wrap_in_live_lock(command, args.display),
+            stdout=client_log,
+            stderr=client_log,
+            env=env,
+        )
 
     applied = []
     applied_log = out / "applied.log"
@@ -466,6 +478,7 @@ def main():
         "command": command,
         "display": args.display,
         "attached_rig": attached,
+        "live_lock": "inherited from rig-run.sh" if attached else f"replay-trace-native:{args.display.lstrip(':')}",
         "started_at": time.time(),
     }
     verdict = 0
