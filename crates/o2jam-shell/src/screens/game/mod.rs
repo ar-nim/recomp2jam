@@ -1554,6 +1554,34 @@ impl ScreenGame {
         self
     }
 
+    /// Room rows currently staged for the Room painter.
+    #[must_use]
+    pub fn listed_rooms(&self) -> &[RoomListEntry] {
+        &self.rooms
+    }
+
+    /// Stage one live room row into its numbered slot: replace the
+    /// 2003 snapshot of that slot, or insert it in number order. A
+    /// 2005 create broadcast fills a slot the snapshot left empty.
+    pub fn upsert_room(&mut self, room: RoomListEntry) -> &mut Self {
+        if !Self::is_listed_room(&room) {
+            return self;
+        }
+        if let Some(staged) = self
+            .rooms
+            .iter_mut()
+            .find(|staged| staged.number == room.number)
+        {
+            *staged = room;
+            return self;
+        }
+        let insert_at = self
+            .rooms
+            .partition_point(|staged| staged.number < room.number);
+        self.rooms.insert(insert_at, room);
+        self
+    }
+
     /// Whether a room-list row names a real room (see [`Self::set_rooms`]).
     fn is_listed_room(room: &RoomListEntry) -> bool {
         room.number != 0 || !room.title.is_empty()
@@ -14328,6 +14356,42 @@ mod game_tests {
         assert!(ScreenGame::is_listed_room(&titled_first));
         assert!(!ScreenGame::is_listed_room(&free_slot));
         assert!(ScreenGame::is_listed_room(&two_rooms()[0]));
+    }
+
+    #[test]
+    fn upsert_room_inserts_a_created_row_in_number_order() {
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        let created = RoomListEntry {
+            number: 5,
+            title: "P376ROOM".to_owned(),
+            ..two_rooms()[0].clone()
+        };
+        game.upsert_room(created);
+        let titles: Vec<&str> = game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Jam", "P376ROOM", "Locked"]);
+    }
+
+    #[test]
+    fn upsert_room_replaces_the_snapshot_for_the_created_slot() {
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        let recreated = RoomListEntry {
+            number: 3,
+            title: "P376ROOM".to_owned(),
+            ..two_rooms()[0].clone()
+        };
+        game.upsert_room(recreated);
+        let titles: Vec<&str> = game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["P376ROOM", "Locked"]);
     }
 
     #[test]

@@ -147,8 +147,8 @@ use o2jam_net::play::{
 };
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    RoomList, RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
-    WaitingAdminMessage, WaitingUserMessage,
+    RoomList, RoomListEntry, RoomSlotAction, RoomSlotUpdate, RoomState, SendMainRoomMessage,
+    SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
     SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase, SyncMusicPurchaseResponse,
@@ -159,9 +159,10 @@ use o2jam_net::{
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
     DownloadProgressChanged, Event, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
     GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, Response, SetDownloadProgress,
-    SetRoomArena, SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent,
-    SyncMusicDownload, UpdateMusicState, WaitingMusicChanged, WireMessage,
+    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, Response, RoomCreated,
+    SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
+    SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, WaitingMusicChanged,
+    WireMessage,
 };
 use o2jam_shell::screens::game::{
     LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
@@ -264,6 +265,33 @@ fn start_broadcast_result(payload: &[u8]) -> Option<i32> {
 /// 4022 (a member left the game, VAs `0x4ab658`/`0x4b0e12`), 4024 and
 /// 4058 (the two skill changes, VAs `0x4ab90c`/`0x4b10fd`/`0x4b17dc`)
 /// arms end with the same 4025 send (`docs/music-availability.md` §2).
+/// One 2005 create event as the Room-list row the painter reads.
+///
+/// The broadcast carries the room identity and limits. The remaining
+/// fields are pinned by the 2003 row for the same freshly created room
+/// (`~/scratch/p376-wire-probe4.log`): waiting, no song yet, X1,
+/// eight seats, one seated host, no skills.
+fn listed_room_from_created(created: RoomCreated) -> RoomListEntry {
+    RoomListEntry {
+        number: created.number,
+        state_code: RoomState::Waiting as u8,
+        title: created.title,
+        has_password: created.has_password,
+        music_id: 0,
+        difficulty: 0,
+        key_mode: created.key_mode.as_u8(),
+        game_mode: created.game_mode.as_u8(),
+        speed: 1,
+        capacity: 8,
+        user_count: 1,
+        min_level: created.min_level,
+        max_level: created.max_level,
+        skills: Vec::new(),
+        premium: created.premium,
+        room_type: created.room_type,
+    }
+}
+
 #[must_use]
 fn announces_room_music_state(frame_id: u16) -> bool {
     matches!(
@@ -3075,6 +3103,9 @@ impl OnlineSession {
                 Ok(frame) if frame.id == RankNotification::COMMAND => {
                     self.apply_rank_notice(chat, &frame);
                 }
+                Ok(frame) if frame.id == RoomCreated::COMMAND => {
+                    self.apply_room_created(&frame);
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain");
@@ -3140,6 +3171,18 @@ impl OnlineSession {
             return;
         };
         self.game.push_lobby_rank_notification(chat, &notice);
+    }
+
+    /// Stage one live 2005 room-create broadcast. A peer already in the
+    /// Room lobby has a 2003 snapshot without this row; the exe repaints
+    /// from fresh 2005 data (`docs/captures/t320/findings.md`), so a
+    /// missing row here is a stale list, not an empty server.
+    fn apply_room_created(&mut self, frame: &Frame) {
+        let Ok(created) = RoomCreated::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room-create broadcast");
+            return;
+        };
+        self.game.upsert_room(listed_room_from_created(created));
     }
 }
 
@@ -3482,7 +3525,9 @@ pub(super) mod session_tests {
     use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord};
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
-    use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
+    use super::{
+        level_for_difficulty, listed_room_from_created, saturate_bonus, OnlineSession, SongChoice,
+    };
 
     /// One whole frame off the fake server's socket.
     pub(super) fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -5326,13 +5371,72 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn room_created_maps_the_wire_descriptor_to_a_listed_row() {
+        use o2jam_net::{GameMode, KeyMode, RoomCreated};
+        let created = RoomCreated {
+            number: 4,
+            title: "P376ROOM".to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            min_level: 1,
+            max_level: 99,
+            premium: false,
+            room_type: 0,
+        };
+        let row = listed_room_from_created(created);
+        assert_eq!(row.number, 4);
+        assert_eq!(row.title, "P376ROOM");
+        assert_eq!(row.state_code, 1);
+        assert_eq!(row.key_mode, KeyMode::FiveKeys.as_u8());
+        assert_eq!(row.min_level, 1);
+        assert_eq!(row.max_level, 99);
+        assert_eq!(row.capacity, 8);
+        assert_eq!(row.user_count, 1);
+    }
+
+    #[test]
+    fn room_created_broadcast_stages_a_live_row_for_a_peer_already_in_room() {
+        // Live caller chain: `Shell::run` -> `OnlineSession::paint` ->
+        // `poll_wire` -> `poll_lobby_chat` (Room scene). Memoryer pushes
+        // opcode 2005 when the host creates a room after this peer entered
+        // (`~/scratch/p376-wire-probe2.log`); the row must appear without
+        // another 2002/2003 refresh.
+        use o2jam_net::{GameMode, KeyMode, RoomCreated};
+        let created = RoomCreated {
+            number: 0,
+            title: "P376ROOM".to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            min_level: 1,
+            max_level: 99,
+            premium: false,
+            room_type: 0,
+        };
+        let (mut session, server) = room_session(move |mut stream| {
+            stream.write_all(&created.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        let titles: Vec<&str> = session
+            .game_mut()
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["P376ROOM"]);
+    }
+
+    #[test]
     fn pending_join_skips_interleaved_broadcasts() {
         // Live servers interleave broadcasts (our own RoomCreated echo
         // included) ahead of the 3003 answer; the join must skip them
         // instead of failing the exchange.
         use o2jam_net::{JoinRoom, JoinRoomResponse};
         let (mut session, server) = room_session(|mut stream| {
-            let broadcast = o2jam_net::frame::encode_frame(2007, &[]);
+            let broadcast = o2jam_net::frame::encode_frame(2005, &[]);
             stream.write_all(&broadcast).unwrap();
             let frame = read_frame(&mut stream);
             assert_eq!(frame.id, JoinRoom::COMMAND);

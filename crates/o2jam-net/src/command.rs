@@ -121,7 +121,7 @@ wire_enum! {
     /// Server-to-client broadcasts (Phase 2 rooms plus the 4015
     /// in-play stats echo and the 4017/4018/4040 tally answers).
     pub enum Event: u16, resolve from_id, encode id, {
-        RoomCreated = 2007,
+        RoomCreated = 2005,
         ReceiveWhisper = 2019,
         RankNotification = 2029,
         RoomSlotUpdate = 3009,
@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(Response::from_id(2016), Some(Response::Announcement));
         assert_eq!(Response::from_id(2018), Some(Response::SendWhisper));
-        assert_eq!(Event::from_id(2007), Some(Event::RoomCreated));
+        assert_eq!(Event::from_id(2005), Some(Event::RoomCreated));
         assert_eq!(Event::from_id(2019), Some(Event::ReceiveWhisper));
         assert_eq!(Event::from_id(2029), Some(Event::RankNotification));
         assert_eq!(Event::from_id(2006), None);

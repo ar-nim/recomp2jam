@@ -117,6 +117,17 @@ Events: 2005 RoomCreated, 2007 RoomRemoved, 2008 RoomParamsChanged, 2009 RoomUse
 4018 ScoreCompleted/4022/4024/4026 MemberStateChanged/4028/4029/4035/4037/4039/4040/4049/4050/4052/4054/4058,
 5027 SyncMemberMusicList.
 
+- `2005 RoomCreated` S→C: i32 room number, capped title, u8 key mode, u8 game
+  mode, u8 password flag, u8 min level, u8 max level, i16 premium flag, u8 room
+  type. A local Memoryer probe on 2026-11-19 pushed the 21-byte body
+  `0000000050333736524f4f4d000000000163000000` (number 0, `P376ROOM`) to a
+  peer that had already entered channel 0/0; the peer's next 2003 listed the
+  room in slot 0. The event carries no song, difficulty, speed, capacity,
+  player count, or skills; the matching fresh 2003 row had state 1, song 0,
+  difficulty 0, speed 1, capacity 8, one seated host, and no skills. The peer
+  must stage the row from 2005, not wait for a second 2003 (#376). 2007 is
+  `RoomRemoved`, not `RoomCreated`.
+
 ### 4c. Key payload shapes (Memoryer message fields, order = wire order)
 
 - `1000 Authorize` C→S: u8 `1`, i32 relayKey1/2 (from `user:authorize` RSA params), public+local endpoints, i32 userId, str token, gender, u8 `1`, str clientId. Live exe tap (7.55 sha256 `83a04541…`, 2026-11-18, `scripts/rig-wine-run.sh --wire-tap`, tester account blob minted by `scripts/rig-mint-launch-argv.sh --user-index-id 1`): 96-byte body with marker `1`, relay `0/0`, public endpoint `0.0.0.0:0`, local endpoint the exe socket, userId `1` (= blob `UserIndexId`), token = blob `Username`, NUL-terminated gender `"1"` (= blob `Gender`, male), marker `1`, `726PNA-B1YW-28ZG9M-I5SC-Q0OPM6` + NUL. So the exe copies the blob's user id, token, and gender word into 1000 verbatim; the other 16 blob fields and 5 gateway mirrors never enter this frame. Memoryer validates only the token (`AuthController.cs:36,56-58`, `~/mozart-src` 9d87c50, no LICENSE file — behavior reference only); the rest is stored or decoded. `recomp2jam connect --launch-blob BLOB` / `play --online --online-launch-blob BLOB` derive these three fields from the same blob (issue #265).

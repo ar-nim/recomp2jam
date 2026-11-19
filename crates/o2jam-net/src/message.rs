@@ -1031,7 +1031,8 @@ impl WireMessage for CreateRoomResponse {
     }
 }
 
-/// `RoomCreated` 2007 broadcast: the new room's full descriptor.
+/// `RoomCreated` 2005 broadcast: the new room's full descriptor
+/// (docs/net-protocol.md §4b; 2007 is `RoomRemoved`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomCreated {
     /// Room number.
@@ -1055,7 +1056,7 @@ pub struct RoomCreated {
 }
 
 impl WireMessage for RoomCreated {
-    const COMMAND: u16 = 2007;
+    const COMMAND: u16 = 2005;
 
     fn encode_body(&self) -> Vec<u8> {
         let mut body = Vec::with_capacity(4);
@@ -1753,6 +1754,25 @@ mod tests {
     }
 
     #[test]
+    fn room_created_uses_the_server_broadcast_opcode() {
+        // docs/net-protocol.md §4b and the live Memoryer push in
+        // ~/scratch/p376-wire-probe2.log: 2005 is RoomCreated; 2007 is
+        // RoomRemoved. The room-row fix must decode the frame that is
+        // actually on the wire.
+        assert_eq!(RoomCreated::COMMAND, 2005);
+    }
+
+    #[test]
+    fn room_created_decodes_the_live_twenty_one_byte_broadcast() {
+        let body = hex_body("0000000050333736524f4f4d000000000163000000");
+        let event = RoomCreated::decode_body(&body).unwrap();
+        assert_eq!(event.number, 0);
+        assert_eq!(event.title, "P376ROOM");
+        assert_eq!(event.min_level, 1);
+        assert_eq!(event.max_level, 99);
+    }
+
+    #[test]
     fn room_created_round_trips() {
         let event = RoomCreated {
             number: 3,
@@ -1766,7 +1786,7 @@ mod tests {
             room_type: 0,
         };
         let frame = decode_frame(&event.encode()).unwrap();
-        assert_eq!(frame.id, 2007);
+        assert_eq!(frame.id, 2005);
         assert_eq!(RoomCreated::decode_frame(&frame), Ok(event));
     }
 
