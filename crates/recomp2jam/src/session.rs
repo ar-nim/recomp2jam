@@ -4090,6 +4090,18 @@ pub(super) mod session_tests {
         session.paint(&mut frame);
     }
 
+    /// The game's native-canvas paint only (no session poll), for
+    /// frame comparisons after a wire event has been drained.
+    pub(super) fn painted_game_frame(session: &mut OnlineSession) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        session.game_mut().paint(&mut o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        buf
+    }
+
     /// How long a drained-state assertion may wait for the fake
     /// gateway's pushes to land. Generous on purpose: the deadline
     /// only burns when the session genuinely never reaches the
@@ -6394,6 +6406,76 @@ pub(super) mod session_tests {
             .map(|room| room.title.as_str())
             .collect();
         assert_eq!(titles, vec!["OTHER"]);
+    }
+
+    /// Pixel arm of #621: the observer's painted Room list must match
+    /// a list that never had the disbanded row. The wire handler and
+    /// the row state were pinned in #380; this guard reads the frame
+    /// the live chain `Shell::run` -> `OnlineSession::paint` ->
+    /// `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed`
+    /// produces. No exe frame pair was captured (`#380` close
+    /// comment), so the live before/after capture stays OPEN.
+    #[test]
+    fn observer_paint_drops_the_row_named_by_the_2007_disband_broadcast() {
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2007, &0i32.to_le_bytes()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        let before = painted_game_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.listed_rooms().len() == 1
+        });
+        let after = painted_game_frame(&mut session);
+
+        let (mut survivor_only, survivor_server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        survivor_only
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(1, "OTHER")]);
+        let expected = painted_game_frame(&mut survivor_only);
+        assert_ne!(before, after, "the disband changed the painted list");
+        assert_eq!(
+            after, expected,
+            "the painted list matches the survivor-only list"
+        );
+        server.join().unwrap();
+        survivor_server.join().unwrap();
+    }
+
+    /// Opposite arm: a 3007 leave event is not a disband, so the
+    /// observer's paint keeps painting both rows. Same live chain as
+    /// the disband guard, with the non-removing opcode from the pinned
+    /// two-client probe (`~/scratch/p380-wire-probe.log`).
+    #[test]
+    fn observer_paint_keeps_the_row_when_only_a_3007_leave_event_arrives() {
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[1, 0, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        let before = painted_game_frame(&mut session);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        let after = painted_game_frame(&mut session);
+        assert_eq!(
+            before, after,
+            "the non-disband leave event leaves the painted rows intact"
+        );
+        assert_eq!(session.game.listed_rooms().len(), 2);
+        server.join().unwrap();
     }
 
     #[test]
