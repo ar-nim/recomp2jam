@@ -154,6 +154,24 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.
 
+## Senior completeness pre-flight
+
+Run this list immediately before posting any close, retro, or merge note.
+Gates and criterion verification come first; this list checks the write-up.
+
+1. Count the acceptance criteria in the issue body and the rows in the close
+   table. Different counts stop the post: add a row for every criterion.
+2. Confirm a tracker record exists for the close or retro (issue created and
+   linked, or the exception stated in the post).
+3. Post only after both checks pass.
+
+Retro 2026-11-19: the #363 close table verified 2 of 4 body criteria
+(`docs/retro-queue.md:172-173`), and a retro post had no tracker record at
+all. The owner caught both, not the senior. An automated tracker-audit leg is
+the reduce-needs-owner research's first deliverable; until it lands, this
+manual list stays mandatory. Close #495 when either version lands, noting
+which.
+
 ## Brief requirements
 
 Each brief follows `docs/agents/issue-tracker.md` (implementer brief
