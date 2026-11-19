@@ -20,8 +20,8 @@ mod live_boot_gate_tests {
 
     use o2jam_net::frame::decode_frame;
     use o2jam_net::{
-        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, JoinedRoom,
-        Request, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
+        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, CharacterInfo, Frame,
+        Gender, JoinedRoom, Request, Response, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
     };
     use o2jam_render::{pack_xrgb, Frame as RenderFrame};
     use o2jam_shell::screens::game::PlanetModal;
@@ -122,6 +122,109 @@ mod live_boot_gate_tests {
             hero
         });
         (port, server)
+    }
+
+    /// Script the 1000/1001/1002/1003 boot exchange with real 1003
+    /// rows, returning the gateway's observed frame order. The order
+    /// is the relay-down story's socket-side pin (close-cp boot-2:
+    /// manifest `64caf0c4…8c7208`, citation `30d1b061…2e5290c7`).
+    fn spawn_boot_gateway_with_channels(
+        channels: Vec<ChannelState>,
+    ) -> (u16, thread::JoinHandle<(CharacterInfo, Vec<u16>)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut order = Vec::new();
+
+            let authorize = read_frame(&mut stream);
+            order.push(authorize.id);
+            assert_eq!(authorize.id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            order.push(Response::Authorize.id());
+
+            let listed = read_frame(&mut stream);
+            order.push(listed.id);
+            assert_eq!(listed.id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels }.encode())
+                .unwrap();
+            order.push(Response::GetChannelList.id());
+
+            let login = read_frame(&mut stream);
+            order.push(login.id);
+            assert_eq!(login.id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            order.push(Response::ChannelLogin.id());
+
+            let rooms = read_frame(&mut stream);
+            order.push(rooms.id);
+            assert_eq!(rooms.id, Request::GetChannelInfo.id());
+            stream
+                .write_all(&RoomList { rooms: vec![] }.encode())
+                .unwrap();
+            order.push(Response::RoomList.id());
+
+            let fetched = read_frame(&mut stream);
+            order.push(fetched.id);
+            assert_eq!(fetched.id, Request::GetCharacterInfo.id());
+            let hero = CharacterInfo {
+                nickname: "gate".to_owned(),
+                ..Default::default()
+            };
+            stream.write_all(&hero.encode()).unwrap();
+            order.push(Response::GetCharacterInfo.id());
+            (hero, order)
+        });
+        (port, server)
+    }
+
+    /// Record the frame clock at every banner change in a window.
+    /// The paint seam is the same one the windowed heartbeat drives,
+    /// so the returned instants are the client's own advance times.
+    fn promo_changes_between(
+        game: &mut o2jam_shell::ScreenGame,
+        from_ms: u64,
+        until_ms: u64,
+    ) -> Vec<(u64, u32)> {
+        let mut changes = Vec::new();
+        let mut shown = game.planet_promo_index();
+        let mut buf = vec![0u32; 16 * 12];
+        for now_ms in (from_ms..=until_ms).step_by(50) {
+            game.paint_at(
+                &mut RenderFrame {
+                    buf: &mut buf,
+                    w: 16,
+                    h: 12,
+                },
+                now_ms,
+            );
+            let next = game.planet_promo_index();
+            if next != shown {
+                changes.push((now_ms, next));
+                shown = next;
+            }
+        }
+        changes
     }
 
     /// Waiting room with no wire peers: the self seat still restages
@@ -334,7 +437,7 @@ mod live_boot_gate_tests {
             active: true,
         }]);
         game.menu_key(MenuKey::Back, true);
-        game.click_planet(136, 88);
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(136, 88));
         // The scripted gateway has no relay, so the boot arms the
         // relay-down notice over the channel frame (#348); dismiss
         // it before the Enter that opens the Room lobby.
@@ -1320,6 +1423,289 @@ mod live_boot_gate_tests {
         assert!(game.dismiss_relay_down_dialog());
         assert_eq!(game.channel_rows(), channels, "OK reveals the held rows");
         assert_eq!(game.screen(), Screen::Channel, "OK keeps the channel frame");
+    }
+
+    /// Ticket #504: the relay-down notice's wire half. Live chain:
+    /// `main.rs::run_online` -> `connect::connect_and_login_with_transport`
+    /// (1000/1001/1002/1003 on the gateway) -> `stage_channel_list_after_relay_gate`
+    /// -> `ScreenGame::hold_channel_rows_for_relay_notice` ->
+    /// `enter_screen(Channel)` -> `open_relay_down_dialog` ->
+    /// `paint_channel` -> `paint_planet_modal` -> OK at the pinned
+    /// (400,365) `Dialog_Information` rect -> `dismiss_relay_down_dialog`.
+    /// The exe's close-cp boot-2 pack pins this wire order and the
+    /// popup frame before the channel rows become visible.
+    #[test]
+    fn relay_down_notice_holds_the_pinned_1003_rows_until_ok() {
+        let row = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        };
+        let (port, server) = spawn_boot_gateway_with_channels(vec![row]);
+        let (report, _gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let (hero, order) = server.join().unwrap();
+
+        assert_eq!(
+            order,
+            [
+                Request::Authorize.id(),
+                Response::Authorize.id(),
+                Request::GetChannelList.id(),
+                Response::GetChannelList.id(),
+                Request::ChannelLogin.id(),
+                Response::ChannelLogin.id(),
+                Request::GetChannelInfo.id(),
+                Response::RoomList.id(),
+                Request::GetCharacterInfo.id(),
+                Response::GetCharacterInfo.id(),
+            ],
+            "exe boot wire order 1000/1001/1002/1003 before the notice"
+        );
+        assert_eq!(report.channels, [row], "1003 carries the held row");
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, Some(&hero));
+        crate::stage_channel_list_after_relay_gate(&mut game, report.channels, true);
+        assert_eq!(game.screen(), Screen::Avi, "notice is not a boot sheet");
+        assert!(game.relay_down_notice_pending());
+        assert!(game.enter_screen(Screen::Planet));
+        assert!(game.enter_screen(Screen::Channel));
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::RelayDown),
+            "1003 rows arrive behind the exe's notice"
+        );
+        assert!(game.channel_rows().is_empty(), "the notice holds the rows");
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(game.planet_modal(), None, "OK releases the held rows");
+        assert_eq!(game.channel_rows(), [row]);
+    }
+
+    /// Ticket #393: the blue "NORMAL mode only" sheet owns the
+    /// board after a lit emblem click. Live chain:
+    /// `main.rs::run_online` -> `connect_and_login_with_transport` ->
+    /// `stage_channel_list_after_relay_gate` -> splash dismissal ->
+    /// `ScreenGame::click_planet` at the pinned EASY rect ->
+    /// `dispatch_planet_action` -> `enter_screen(Channel)` ->
+    /// `open_relay_down_dialog` -> `click_dispatch` ->
+    /// `click_planet_modal` -> OK at the pinned (400,365) rect.
+    /// `docs/captures/t240/wine-drive.log` pins the popup
+    /// (`max_blue=0.986`, fallback OK, `max_blue=0.000`).
+    #[test]
+    fn normal_mode_popup_blocks_canvas_clicks_after_lit_emblem() {
+        use std::collections::HashMap;
+
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{PLANET_BUTTON_EASY_CODE, PLANET_EASY_RECT};
+
+        let row = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        };
+        let (port, server) = spawn_boot_gateway_with_channels(vec![row]);
+        let (report, _gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let (hero, _) = server.join().unwrap();
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, Some(&hero));
+        crate::stage_channel_list_after_relay_gate(&mut game, report.channels, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![ScenePlacement {
+                id: "easy".to_owned(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: None,
+                rect: PLANET_EASY_RECT,
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 300));
+        assert_eq!(game.screen(), Screen::Planet);
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(136, 88));
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(526, 248));
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::RelayDown),
+            "the sheet still owns the canvas after a row-face click"
+        );
+        assert!(game.channel_rows().is_empty(), "rows stay behind the sheet");
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(game.planet_modal(), None, "OK clears the blue sheet");
+        assert_eq!(game.channel_rows(), [row]);
+    }
+
+    /// Ticket #409: conformance of the client's three-record cycle
+    /// against the exe's pinned bare-board and dialog windows. Live
+    /// chain: `main.rs::run_online` -> `setup_online` ->
+    /// `assemble_online_session` -> `OnlineSession::stage_live_art`
+    /// -> `ScreenGame::paint_at` -> `tick_planet_promo_at` ->
+    /// `PlanetBoardState::tick_promo_clocked`.
+    /// Solo gaps `3056.5/2957.9/3052.9` (citation `d135105a…4ef3b0fe`);
+    /// guest/dialog gaps `2955.6/3053.6/2956.2` and
+    /// `2975.7/2966.4/3066.1` (boot-4 manifest `78e0617b…7c3ba9de8`).
+    #[test]
+    fn promo_cadence_conforms_on_solo_guest_and_dialog_arms() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        // The exe's slowest and fastest three-gap samples bound the
+        // 100 ms-poll cadence on every arm; our clock steps at 3000 ms.
+        const MIN_EXE_GAP_MS: u64 = 2_955;
+        const MAX_EXE_GAP_MS: u64 = 3_067;
+
+        for user in ["solo", "guest"] {
+            let (port, server) = spawn_boot_gateway();
+            let (report, gateway) =
+                connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+            let mut game = o2jam_shell::ScreenGame::new();
+            stage_online_identity(&mut game, report.character.as_ref());
+            let mut session =
+                assemble_online_session(game, gateway, Some(user), None, None, None).unwrap();
+            server.join().unwrap();
+            let game = session.game_mut();
+            game.menu_key(o2jam_shell::MenuKey::Back, true);
+            assert_eq!(game.screen(), Screen::Planet, "{user} reaches the board");
+
+            let changes = promo_changes_between(game, 0, 9_500);
+            assert_eq!(changes.len(), 3, "{user}: three record changes");
+            let shown: Vec<u32> = changes.iter().map(|(_, index)| *index).collect();
+            assert_eq!(shown, [2, 3, 1], "{user}: three-record cycle");
+            let instants: Vec<u64> = changes.iter().map(|(ms, _)| *ms).collect();
+            let gaps: Vec<u64> = instants.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            assert_eq!(gaps.len(), 2, "{user}: two measured gaps");
+            assert!(
+                gaps.iter()
+                    .all(|gap| (MIN_EXE_GAP_MS..=MAX_EXE_GAP_MS).contains(gap)),
+                "{user}: cadence inside the exe envelope, got {gaps:?}"
+            );
+        }
+
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("dialog"), None, None, None).unwrap();
+        server.join().unwrap();
+        let game = session.game_mut();
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
+        game.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        assert_eq!(
+            game.screen(),
+            Screen::Channel,
+            "dialog raised over the board"
+        );
+
+        let held = promo_changes_between(game, 0, 9_500);
+        assert!(held.is_empty(), "the dialog arm holds the banner");
+        game.enter_screen(Screen::Planet);
+        let resumed = promo_changes_between(game, 9_500, 12_500);
+        assert_eq!(resumed.len(), 1, "return resumes one tick, not a backlog");
+        assert_eq!(resumed[0].1, 2, "the cycle resumes on the next record");
+    }
+
+    /// Count bright text pixels and magenta ribbon pixels in one
+    /// native-frame region. The two colours separate the five dated
+    /// cell captions from the diagonal NEW ITEM ribbon in the pinned
+    /// exe frame.
+    fn promo_ink_counts(
+        frame: &[u32],
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+    ) -> (u32, u32) {
+        let (mut bright, mut magenta) = (0, 0);
+        for y in top..bottom {
+            for x in left..right {
+                let pixel = frame[y * 800 + x];
+                let red = pixel & 0xff;
+                let green = (pixel >> 8) & 0xff;
+                let blue = (pixel >> 16) & 0xff;
+                if red > 0xb4 && green > 0xb4 && blue > 0xb4 {
+                    bright += 1;
+                }
+                if red > 0x8c && blue > 0x8c && green + 0x3c < red && green + 0x3c < blue {
+                    magenta += 1;
+                }
+            }
+        }
+        (bright, magenta)
+    }
+
+    /// Ticket #400: the five dated promo cells and the NEW ITEM
+    /// ribbon are the real banner art, not a flat stand-in. Live
+    /// chain: `main.rs::run_online` -> `setup_online` ->
+    /// `assemble_online_session` -> `OnlineSession::stage_live_art`
+    /// -> `live_art::stage_interface_scenes` -> `ScreenGame::load_scene`
+    /// -> `paint_at` -> `paint_planet_scene`. Region counts come from
+    /// the exe frame sha256 `235f5352…c21` in `docs/captures/t240/`;
+    /// the ±40 envelope covers archive decode and the capture's
+    /// screenshot scaling. Skips cleanly without game data (#0a3ba).
+    #[test]
+    fn promo_banner_stages_five_dated_cells_and_new_item_ribbon() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        server.join().unwrap();
+        let game = session.game_mut();
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut RenderFrame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+
+        // (label, left, top, right, bottom, exe bright, exe magenta)
+        let regions = [
+            ("1일", 271, 390, 322, 450, 200, 0),
+            ("1일+이벤트", 324, 390, 397, 450, 255, 0),
+            ("7일", 400, 390, 456, 450, 173, 0),
+            ("30일", 458, 390, 514, 450, 112, 0),
+            ("90일", 516, 390, 635, 450, 431, 0),
+            ("NEW ITEM", 57, 175, 166, 260, 774, 2478),
+        ];
+        for (label, left, top, right, bottom, exe_bright, exe_magenta) in regions {
+            let (bright, magenta) = promo_ink_counts(&buf, left, top, right, bottom);
+            assert!(
+                bright.abs_diff(exe_bright) <= 40,
+                "{label}: bright ink {bright} differs from exe {exe_bright}"
+            );
+            assert!(
+                magenta.abs_diff(exe_magenta) <= 40,
+                "{label}: magenta ink {magenta} differs from exe {exe_magenta}"
+            );
+        }
     }
 
     /// Same boot chain, relay-up arm: no notice, the existing
