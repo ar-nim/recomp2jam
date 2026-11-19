@@ -35,6 +35,22 @@ pub const RESULT_WINLOSE_SPRITE: &str = "Result_WinLose.ojs";
 /// shell paints it nowhere (a never-staged name is pinned so a
 /// future network-variant staging cannot collide silently).
 pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
+/// Event-ticket URL string in the 7.55 exe: file `0x24a2d0`, VA
+/// `0x64a2d0` (`ev_5c1c7b322fe96ea565a2d68cf06cee0e7fc23660be9e080fe3494856d2a8f4dc`).
+/// The Result enter painter `FUN_004c1b90` gates the web arm
+/// (`ev_3bd9ba0997e292073a218baa203e613f5977a6ea27abc5d06aadb094dc46db1a`).
+/// This is a static string pin, not a claim that the GET fires in the
+/// qualified solo boots: those requested only `hot_time.php`.
+#[cfg(test)]
+pub const RESULT_TICKET_URL_FILE_OFFSET: u32 = 0x24a2d0;
+/// Load-image VA of [`RESULT_TICKET_URL_FILE_OFFSET`] (VA = file + image base).
+#[cfg(test)]
+pub const RESULT_TICKET_URL_VIRTUAL_ADDRESS: u32 = 0x64a2d0;
+/// The retired pin at `0x24a338` names `PointNum.ojs` art, not the URL.
+/// Kept only so guards can reject a regression to that string district.
+#[cfg(test)]
+pub const RESULT_POINT_NUM_ART_FILE_OFFSET: u32 = 0x24a338;
+
 /// Grade plate bound by `STATE_RESULT` rect 7
 /// (`IDC_IMAGE_SRESULT_RANKINGFIELD`, `Result_Imgs_Rank.ojs`): eight
 /// frames, all anchored (395,531) — 35×41 ×2, 39×41 ×4, 38×41, 79×41

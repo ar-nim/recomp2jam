@@ -7242,7 +7242,9 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
 #[cfg(test)]
 mod game_tests {
     use super::super::paint::{
-        background_of, channel_chat_row_text, rank_notice_board_text, seat_origin, RESULT_MUSIC_BOX,
+        background_of, channel_chat_row_text, rank_notice_board_text, seat_origin,
+        RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET, RESULT_TICKET_URL_FILE_OFFSET,
+        RESULT_TICKET_URL_VIRTUAL_ADDRESS,
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
@@ -19713,13 +19715,37 @@ mod game_tests {
     }
 
     #[test]
+    fn result_web_arm_names_the_corrected_url_pin() {
+        // #677: the URL string starts at file 0x24a2d0 (VA 0x64a2d0).
+        // The older 0x24a338 pin names the PointNum art block, not the
+        // web call; the gating painter is FUN_004c1b90. This seam has
+        // no web transport yet, so the guard also proves no gateway
+        // frame is substituted for the HTTP request.
+        assert_eq!(
+            RESULT_TICKET_URL_FILE_OFFSET + 0x40_0000,
+            RESULT_TICKET_URL_VIRTUAL_ADDRESS
+        );
+        assert_ne!(
+            RESULT_TICKET_URL_FILE_OFFSET,
+            RESULT_POINT_NUM_ART_FILE_OFFSET
+        );
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert!(game.take_result_battle_entry().is_none());
+        assert!(game.take_result_retry().is_none());
+        assert!(game.take_result_back().is_none());
+    }
+
+    #[test]
     fn result_entry_stages_the_pinned_ticket_wire_call() {
         // Result entry arms split by mode: a battle (Live) entry
         // queues `GetLiveState` 4042 (`0xfca`, empty — byte-verified,
         // `docs/relay.md` §10, the exe's battle-global-gated send);
         // a solo entry queues nothing on the gateway seam — its
         // event-ticket web call (`ticket_add.php?USER_INDEX_ID=<index>`,
-        // file `0x24a338`) is an HTTP GET, not a gateway frame, and
+        // URL string file `0x24a2d0`, gated in `FUN_004c1b90`) is an
+        // HTTP GET, not a gateway frame, and
         // the shell owns no web seam, so it stays OPEN (next steps:
         // the web-seam decision, then the live request-line capture).
         let mut game = ScreenGame::new();

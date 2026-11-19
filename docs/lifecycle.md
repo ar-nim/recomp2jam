@@ -176,7 +176,7 @@ Exit: song end / quit → `STATE_RESULT` (networked) with the
 ### 11. `STATE_RESULT` — results (`CStateResult`)
 Decl `0x07`, 8 entries: `Result_WinLose.ojs`, `Result_NumFont_*.ojs`,
 `StateResult_Top/Bottom.ojs`, `Retry` control, plus an event-ticket web
-call (`o2jam.nopp.co.kr/…/ticket_add.php?USER_INDEX_ID=`, file `0x24a338`).
+call (`o2jam.nopp.co.kr/…/ticket_add.php?USER_INDEX_ID=`, URL string file `0x24a2d0`; the old `0x24a338` pin named `PointNum.ojs` art).
 Entry: play finish. Exit: retry → `STATE_WAITING` loading; leave →
 `STATE_ROOM`/`STATE_CHANNEL`.
 

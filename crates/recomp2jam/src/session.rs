@@ -87,7 +87,8 @@
 //! sends), and a battle (Live) result entry posts `GetLiveState` 4042
 //! (`0xfca`, empty, the exe's battle-global-gated send). The solo
 //! entry's event-ticket web call (`ticket_add.php?USER_INDEX_ID=<index>`,
-//! file `0x24a338`) is an HTTP GET, not a gateway frame — it stays
+//! URL string file `0x24a2d0` / VA `0x64a2d0`; the old `0x24a338`
+//! pin named `PointNum.ojs` art) is an HTTP GET, not a gateway frame — it stays
 //! OPEN until the shell owns a web seam, and the gateway is never
 //! asked to stand in for it. Retry-while-siblings-ready stays
 //! server-side (the block string VA `0x64a3a0` is pinned in
