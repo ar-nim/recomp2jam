@@ -88,3 +88,35 @@ unconditional `true`, the live guard fails at the host/peer region
 comparison; restored arms pass. The exe display rule remains **OPEN**
 (#312): no qualified capture pins what the 7.55 exe paints in this state,
 so this note records the owner-decided shell rule only.
+
+## #538 master sees the joining peer (2026-11-20)
+
+The parked fix from #379 landed as `75c81be` on `cb2/tt-379`: the master's
+host snapshot carries seven empty slots, and the waiting drain decodes
+`UserJoinWaiting` 3004 (0x0BBC) into cover `member_id`. Live guards:
+`master_seats_the_joining_peer_from_the_3004_broadcast` and
+`joining_peer_seats_the_master_from_the_3003_answer`
+(`recomp2jam/src/session.rs`, chain `OnlineSession::paint` →
+`poll_waiting_chat` → `drain_waiting_chat` → `apply_user_joined` →
+`ScreenGame::set_joined_room` → `paint_waiting_scene`). Both are red-proved
+in `~/scratch/p379-findings.md` (evidence batches 3–5).
+
+Qualified two-client Rust-client capture (`~/scratch/p379-live/`, private
+Xvfb :381/:382, two socket taps, audio contained; `--claim none`, so no
+exe-oracle claim):
+
+- tap `tap-master.log` sha256
+  `d66d693db0166cf80a94db46cd0347dc25caedff48560fc9e7baf329b8201ca7`,
+  line 27 at 12:51:52.034: `S2C 3004 (0x0BBC)` len 103, member 1
+  `tester2`, team 1.
+- master pixel frame `master-after-join.png` sha256
+  `d42617e16df0f108c81f98878f4b535406fa8e55d55495bb2b86de66cda7d219`
+  names `P.ly:tester2` on cover 1; the peer frame
+  `guest-after-join.png` sha256
+  `2ac57af46b300caa2b677019e8fc427175597fbedcb792db5dfabb3b3dc06856`
+  shows the master on cover 0.
+
+So the roster half of the story is evidenced on both clients with the
+matching wire frame. The peer's worn figure is a separate residual: #570
+owns the red status icon where the peer body sits. No qualified exe pack
+exists for this leg; the exe display rule stays OPEN per #312.
