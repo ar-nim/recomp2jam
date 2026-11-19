@@ -379,6 +379,74 @@ target; use the recorded PIDs, never a pattern, for rig processes.
   `--frame-dump`; audio from the run's virtual sink through the monitor
   tap described below (`<out-dir>/audio/`, #279).
 
+## Boot-failure taxonomy (retro #490)
+
+One live lane at a time is now enforced, not volunteered: every client
+boot takes the flock in `scripts/lib/rig-live-lock.sh` (exit 17 on a
+timed-out acquire, with `live lane held by <owner>, retrying` while it
+waits). The lock is inherited by the client and held until it exits, so
+manual `ss -tnp | grep 15010` polling is no longer the only guard. A
+lock refusal is not a boot failure: count it as a **contention event**
+in the ledger and keep the failed attempt's pack.
+
+Boot failures still recur. Name each one the same way in every wave so
+the counts can be compared across waves.
+
+| Mode | First observable | Next step |
+| --- | --- | --- |
+| Channel flake / popup miss | emblem or channel click lands with no `03EA`/`03EC`, or the NORMAL-mode box is still up / never appears | probe a fresh frame at the transition, retry with a bounded count, and refuse to claim the scene until the wire cue arrives |
+| Duplicate-session `1001 feffffff` | auth or channel entry answers `-1` while another lane holds the account session | select a free account index, log the wire frame, and stop; never restart Memoryer to force recovery |
+| Preflight Wayland leak | `rig-run` exits 10 with `WAYLAND_DISPLAY is set` / `XDG_SESSION_TYPE=wayland` and no client boots | unset the ambient variables in the calling driver's clean env, then re-run |
+| Frame-gating miss | stale frame still shows the popup, or the first grab is black before paint | wait for a painted frame and a changed frame hash before any oracle read |
+| Driver / setup fault | wrong script path, missing `__main__` guard, bad arg order, wrong row formula, missing `mkdir` | fix the driver and re-run the same leg; keep the failed pack as the negative record |
+| Driver crash | XTEST `BadRRModeError` or an unhandled exception mid-drive | record the traceback and display, isolate the one input call, then re-run |
+| OOM kill | process SIGKILL with a journal OOM line, not a test assertion | check memory headroom and lower parallel cargo/REA load before re-running |
+
+### Per-wave counting rule
+
+Every wave ledger (the #382-style comment) gets a **boot failure ledger**
+table with one row per mode: `mode | count | attempts | evidence`.
+Count attempts, not impressions: name the boot id and the findings file
+(or pack hash) for each event. A no-boot preflight refusal counts in its
+mode with `attempts = 0`; a boot that hits two modes is counted once in
+each, and the ledger says so. Read the lane findings *and* the rollup
+comment before filling the table — they can describe the same failed
+boot at different granularity; record both, never silently merge them.
+
+After the table, cut or link a ticket for the top two modes by count.
+Each ticket is born `needs-triage`, gets a triage record citing this
+wave ledger, and is then promoted to a work role. If a mode already has
+an open ticket, link it instead of cutting a duplicate; if a mode drops
+out of the top two, leave its ticket open and count it again next wave.
+The ledger names the two ticket numbers so the next wave can verify the
+rule was followed.
+
+### Seed: 2026-11-19 session waves
+
+The #382 rollup (`gh issue view 382 --comments`, comment `7003507451`)
+reports Waiting/Room as 26 LIVE-FILLED with 34 GAP and says four of six
+boots failed early. The close-wr ledger (comment `7003219231`,
+`~/scratch/close-wr-findings.md`) spends all six boots: stale popup
+frame, row off-by-one, XTEST crash, observer FIFO timeout after CP05,
+the same failure after CP06, and driver argument order. Counts below
+use the named per-lane findings for the exact mode; the two views are
+kept side by side, not reconciled by guesswork.
+
+| Mode | Count | Evidence |
+| --- | --- | --- |
+| Channel flake / popup miss | 4 | `story-matrix-findings.md` boot 3; `story-planet-findings.md` boot 1; `story-result-findings.md` boots 2 and 4 |
+| Preflight Wayland leak | 4 | `story-channel-findings.md` boot attempt 1; `story-myroom-select/exe1/phases-boot.log`; `story-shops/mshop-wire/exe/phases-boot.log`; `side-scenes/b2-dialogs/phases-boot.log` (all no-boot, exit 10) |
+| Duplicate-session `1001 feffffff` | 3 | `story-matrix-findings.md` boot 4; `story-result-findings.md` boot 2 (also a channel flake); `rust-seam-331-findings.md` red-before |
+| Driver / setup fault | 6 | close-wr boots 2 and 6; `story-payment-findings.md` boots 1 and 2; `story-playing-findings.md` batch 2; `story-planet-findings.md` attempt 0 |
+| Frame-gating miss | 2 | close-wr boot 1 (stale popup frame); `~/scratch/close-cp-findings.md` boot 3 (black pre-paint frame) |
+| OOM kill | 2 | `~/scratch/journey-wave-plan.md` (one under max-parallel load); `~/scratch/data-dup-findings.md` (first proof attempt SIGKILL) |
+| Driver crash | 1 | close-wr boot 3 (XTEST `BadRRModeError`) |
+
+Top two by count: channel flake / popup miss and preflight Wayland leak
+(4 each). Their tickets are #497 (channel transition) and #498 (Wayland
+env). Both were born `needs-triage`, triaged against this seeded table,
+and promoted to `ready-for-agent`.
+
 ## Supervised seat sessions
 
 A supervised seat run is owner path. A background agent never starts one,
