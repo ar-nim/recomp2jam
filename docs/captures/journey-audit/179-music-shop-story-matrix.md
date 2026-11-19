@@ -22,7 +22,7 @@ enter the repo.
 | #362 / p362b (CLOSED `905ef9c`, `776cfe7`) | corrected Rust root frame `d04024813b799dbcde6c8c3c10c442d9b706ba86e1461f963ef480541389fbc9`; web-region MAE 0.667 vs b8 | `live_boot_charge_plate_snapshot_click_paints_chrome` covers click→Payment→painter; old live-4 negative was a capture artifact. Music Shop's CASHFILLUP control is a separate OPEN arm. |
 | #363 / #369 / live-4 gesture (cross-state fix ledger) | #363 `007c38c` dossier `ev_0df48…fd20d`; #369 `007c38c`, live-4 citation `a0e0fd08ef2d917d36be9e590dabce7ebebb1ca69b4214cfb3be87dba633c4a1`; STATUS `b095a915…`, return `c838e437…` | Item art and MyRoom panel faces are explicit cells in #178 / #180; they explain the Room→side-screen entry path but pin no Music Shop pixel. |
 | `docs/musicshop.md`, `docs/parity/musicshop.md`, `docs/shop-buy.md`, `docs/net-protocol.md`, journey audit `179-music-shop.md` | exe hash above; 138 `State_MShop.bnd` rects; sort codes `0x1A201010..15`, right-rank sorts `0x1A200016..18`, TOP100 `0x1A20007D..84` (#181), 5010 send switch file `0xa4df0` index 8, opcode 5012 file/offset pin, 5011 untraced | Static pins only. 5011/5012 reply shapes and 5010 live ride stay OPEN; no guard counts as exe evidence. |
-| MyRoom wave-3 gap list (`docs/captures/story-matrix/180-myroom-story-matrix.md`) | E-W/E-G: 5001/5003/5017/5018/5023/5024 | Cross-reference: shared wire family graded once with the #178 matrix; both legs tapped with no such frame. |
+| MyRoom wave-3 gap list (`docs/captures/journey-audit/180-myroom-story-matrix.md`) | E-W/E-G: 5001/5003/5017/5018/5023/5024 | Cross-reference: shared wire family graded once with the #178 matrix; both legs tapped with no such frame. |
 
 ## 2. Matrix (21 actions × 5 observer actors = 105 cells)
 
