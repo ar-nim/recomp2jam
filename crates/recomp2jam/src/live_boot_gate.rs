@@ -1620,6 +1620,94 @@ mod live_boot_gate_tests {
         assert_eq!(resumed[0].1, 2, "the cycle resumes on the next record");
     }
 
+    /// Count bright text pixels and magenta ribbon pixels in one
+    /// native-frame region. The two colours separate the five dated
+    /// cell captions from the diagonal NEW ITEM ribbon in the pinned
+    /// exe frame.
+    fn promo_ink_counts(
+        frame: &[u32],
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+    ) -> (u32, u32) {
+        let (mut bright, mut magenta) = (0, 0);
+        for y in top..bottom {
+            for x in left..right {
+                let pixel = frame[y * 800 + x];
+                let red = pixel & 0xff;
+                let green = (pixel >> 8) & 0xff;
+                let blue = (pixel >> 16) & 0xff;
+                if red > 0xb4 && green > 0xb4 && blue > 0xb4 {
+                    bright += 1;
+                }
+                if red > 0x8c && blue > 0x8c && green + 0x3c < red && green + 0x3c < blue {
+                    magenta += 1;
+                }
+            }
+        }
+        (bright, magenta)
+    }
+
+    /// Ticket #400: the five dated promo cells and the NEW ITEM
+    /// ribbon are the real banner art, not a flat stand-in. Live
+    /// chain: `main.rs::run_online` -> `setup_online` ->
+    /// `assemble_online_session` -> `OnlineSession::stage_live_art`
+    /// -> `live_art::stage_interface_scenes` -> `ScreenGame::load_scene`
+    /// -> `paint_at` -> `paint_planet_scene`. Region counts come from
+    /// the exe frame sha256 `235f5352…c21` in `docs/captures/t240/`;
+    /// the ±40 envelope covers archive decode and the capture's
+    /// screenshot scaling. Skips cleanly without game data (#0a3ba).
+    #[test]
+    fn promo_banner_stages_five_dated_cells_and_new_item_ribbon() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        server.join().unwrap();
+        let game = session.game_mut();
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut RenderFrame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+
+        // (label, left, top, right, bottom, exe bright, exe magenta)
+        let regions = [
+            ("1일", 271, 390, 322, 450, 200, 0),
+            ("1일+이벤트", 324, 390, 397, 450, 255, 0),
+            ("7일", 400, 390, 456, 450, 173, 0),
+            ("30일", 458, 390, 514, 450, 112, 0),
+            ("90일", 516, 390, 635, 450, 431, 0),
+            ("NEW ITEM", 57, 175, 166, 260, 774, 2478),
+        ];
+        for (label, left, top, right, bottom, exe_bright, exe_magenta) in regions {
+            let (bright, magenta) = promo_ink_counts(&buf, left, top, right, bottom);
+            assert!(
+                bright.abs_diff(exe_bright) <= 40,
+                "{label}: bright ink {bright} differs from exe {exe_bright}"
+            );
+            assert!(
+                magenta.abs_diff(exe_magenta) <= 40,
+                "{label}: magenta ink {magenta} differs from exe {exe_magenta}"
+            );
+        }
+    }
+
     /// Same boot chain, relay-up arm: no notice, the existing
     /// `set_channels` path still loads the rows immediately.
     #[test]
