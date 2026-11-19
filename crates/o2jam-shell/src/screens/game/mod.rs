@@ -15852,8 +15852,11 @@ mod game_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
+        // Re-based when Game DEFAULT began restoring the exe raw
+        // `LongnoteMode` 3 instead of the old stand-in 0; the observed
+        // state otherwise stays byte-for-byte identical.
         assert_eq!(
-            hash, 0x6C32_EBA2_9BF8_54AD,
+            hash, 0xBB2F_B224_2B51_A752,
             "options outputs drifted: {observed}"
         );
     }
@@ -16294,6 +16297,39 @@ mod game_tests {
         click_button(&mut game, 180, 100);
         assert_eq!(game.options().note_type(), 0);
         assert_eq!(game.options().note_tail(), 2);
+    }
+
+    #[test]
+    fn game_tab_default_restores_the_pinned_longnote_raw_default() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> OptionsDialog::click ->
+        // OptionsSettings::reset_game. The exe's `LONGNOTEMODE` read
+        // default is 3 (file `0x16fb06`); DEFAULT must put that raw
+        // value back, not a different stand-in that happens to behave
+        // the same through the `== 1` consumer.
+        use super::super::side::OPTION_GAME_LONGNOTE_USED;
+        use crate::options::DEFAULT_LONGNOTE_MODE;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[
+                (OPTION_GAME_LONGNOTE_USED, 100, 100),
+                (PlanetOptionTab::Game.default_code(), 140, 100),
+            ],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        assert!(game.options().longnote_used());
+        click_button(&mut game, 140, 100);
+        assert_eq!(
+            game.options().longnote_mode(),
+            DEFAULT_LONGNOTE_MODE,
+            "Game DEFAULT restores the exe raw default, not 0"
+        );
     }
 
     #[test]

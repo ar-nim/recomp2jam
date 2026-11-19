@@ -42,7 +42,9 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
   Used/None → 1/0, effects High/Normal/Low → in-memory 0/1/2.
 - SAVE commits to `option.ini` beside the install root (stays
   open); EXIT/Escape close without saving; DEFAULT restores the
-  tab's exe defaults. Settings load at boot; a restart keeps them.
+  tab's exe defaults (Game's raw `LongnoteMode` goes back to its
+  pinned read default 3, which the `== 1` consumer reads as off).
+  Settings load at boot; a restart keeps them.
 - `LongnoteMode` snapshots into the play setup at Playing entry
   (mirrors the exe `+0x17d8` cache): later edits never reach the
   running song.
@@ -125,6 +127,11 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
 `options_save_commits_beside_the_install_root`,
 `options_exit_closes_without_saving`,
 `options_default_restores_the_exe_defaults_per_tab`,
+`game_tab_default_restores_the_pinned_longnote_raw_default` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `OptionsDialog::click` → `OptionsSettings::reset_game`),
 `longnote_mode_snapshots_at_playing_entry`,
 `key_strikes_play_at_the_game_effect_gain` (unity → one step → mute,
   live chain: `main.rs::run_online` → `run_windowed_session` →

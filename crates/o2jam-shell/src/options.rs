@@ -795,14 +795,15 @@ impl OptionsSettings {
 
     /// Restore the exe Game-tab defaults (the Game-tab DEFAULT
     /// button): `NoteType` 0, `NoteTail` 2, `BlendHalf` 1
-    /// (effective), `Mode` 0, long-note off. In-memory selections
+    /// (effective), `Mode` 0 and the pinned raw `LongnoteMode` 3
+    /// (which its `== 1` consumer reads as off). In-memory selections
     /// return to Normal / 7-key / untested.
     pub fn reset_game(&mut self) {
         self.note_type = DEFAULT_NOTE_TYPE;
         self.note_tail = DEFAULT_NOTE_TAIL;
         self.blend_half = DEFAULT_BLEND_HALF;
         self.mode = DEFAULT_MODE;
-        self.longnote_mode = 0;
+        self.longnote_mode = DEFAULT_LONGNOTE_MODE;
         self.effect_level = 1;
         self.three_key = false;
         self.key_test = false;
