@@ -16025,6 +16025,58 @@ mod game_tests {
     }
 
     #[test]
+    fn sound_tab_four_sliders_step_by_eight_and_stay_in_byte_bounds() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> OptionsDialog::click_sound_tab ->
+        // OptionsSettings::step_*_volume. The four Sound keys are pinned;
+        // which slider writes which key stays ours-by-design (SAVE-diff OPEN).
+        use super::super::side::{
+            OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
+            OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
+            OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+        };
+        let pairs = [
+            (OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP),
+            (OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP),
+            (OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP),
+            (OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP),
+        ];
+        let buttons: Vec<(u32, i32, i32)> = pairs
+            .iter()
+            .enumerate()
+            .flat_map(|(index, (down, up))| {
+                let y = 100 + 40 * i32::try_from(index).unwrap_or(0);
+                [(*down, 100, y), (*up, 140, y)]
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Sound, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        for index in 0..pairs.len() {
+            let y = 100 + 40 * i32::try_from(index).unwrap_or(0);
+            click_button(&mut game, 100, y);
+            click_button(&mut game, 140, y);
+            for _ in 0..32 {
+                click_button(&mut game, 100, y);
+            }
+            click_button(&mut game, 140, y);
+        }
+        assert_eq!(
+            [
+                game.options().bgm_music(),
+                game.options().bg_effect(),
+                game.options().game_music(),
+                game.options().game_effect(),
+            ],
+            [crate::options::SOUND_SLIDER_STEP; 4],
+            "each slider steps 8 and saturates at both byte bounds"
+        );
+    }
+
+    #[test]
     fn options_game_tab_buttons_map_to_the_pinned_ini_values() {
         let mut game = ScreenGame::new();
         stage_option_buttons(

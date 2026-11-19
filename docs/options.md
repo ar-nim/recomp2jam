@@ -107,6 +107,12 @@ dialog-to-DIK mapping is the whole behavior; live chain `main.rs::run_online`
 `GameLoop::capture_raw_key` → `OptionsSettings::rebind_lane`),
 `options_key_tab_rebind_refuses_unmappable_keys`,
 `options_sound_tab_steps_move_volumes_with_exe_bounds`,
+`sound_tab_four_sliders_step_by_eight_and_stay_in_byte_bounds` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `OptionsDialog::click_sound_tab` →
+`OptionsSettings::step_*_volume`),
 `options_game_tab_buttons_map_to_the_pinned_ini_values`,
 `options_tab_switches_ride_the_staged_codes`,
 `options_tab_switches_open_each_own_staged_sheet` (all six sheet-owned
