@@ -74,6 +74,10 @@ pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
 /// (`IDC_IMAGE_CHARGECASH_WEB`, 0x83500002); its parent-relative
 /// `.bnd` rect stages the exe-pinned client area.
 pub const CASH_CHARGE_WEB_CODE: u32 = 0x8350_0002;
+/// Close button inside the Cash Charge dialog
+/// (`IDC_BUTTON_CHARGECASH_CLOSE`, 0x83200003): the qualified boot-3
+/// press at native `(590,23)` lands on its sprite anchor.
+pub const CASH_CHARGE_CLOSE_CODE: u32 = 0x8320_0003;
 /// Tutorial backdrop in `Playing1.opi` (stub `0x00` block, so no
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
@@ -4198,6 +4202,37 @@ pub fn lanking_rank_cells(entry: &RankEntry) -> [String; 6] {
 pub const PAYMENT_PAGE: &str = "payment_input.aspx";
 /// Billing page behind `STATE_PAYMENT2` (gift view).
 pub const GIFT_PAGE: &str = "gift_input.aspx";
+
+/// Native pixel box of the staged Cash Charge close sprite: its
+/// parsed `.bnd` origin plus the sprite's first decoded layer anchor,
+/// sized by that layer. No staged art means no close press.
+#[must_use]
+pub fn cash_charge_close_hit(dialog: &super::paint::SceneArt, x: i32, y: i32) -> bool {
+    let Some(placed) = dialog
+        .placements
+        .iter()
+        .find(|placed| placed.code == CASH_CHARGE_CLOSE_CODE)
+    else {
+        return false;
+    };
+    let Some(sprite) = placed.sprite.as_deref() else {
+        return false;
+    };
+    let Some(layer) = dialog
+        .figures
+        .get(sprite)
+        .and_then(|figure| figure.layer(0))
+    else {
+        return false;
+    };
+    let rect = Rect {
+        x: placed.rect.x.saturating_add(layer.dx),
+        y: placed.rect.y.saturating_add(layer.dy),
+        w: u32::try_from(layer.image.w).unwrap_or(u32::MAX),
+        h: u32::try_from(layer.image.h).unwrap_or(u32::MAX),
+    };
+    super::paint::rect_hit(&rect, x, y)
+}
 
 /// One billing view: its `ControlList` block and its web page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
