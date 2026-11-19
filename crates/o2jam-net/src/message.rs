@@ -1121,6 +1121,42 @@ impl WireMessage for RoomCreated {
     }
 }
 
+/// `RoomRemoved` 2007 broadcast: the disbanded room's number.
+///
+/// Memoryer `Messages/Events/MainRoom/RoomRemovedEventData.cs` carries
+/// one `i32 Number`. The server sends it to the whole channel after
+/// `Room.Remove` finds no member slots left
+/// (`~/scratch/p380-wire-probe.log`, opcode 0x07D7, 4-byte body
+/// `00000000`; #380).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomRemoved {
+    /// Room number that no longer exists.
+    pub number: i32,
+}
+
+impl WireMessage for RoomRemoved {
+    const COMMAND: u16 = 2007;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.number.to_le_bytes().to_vec()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        if body.len() > 4 {
+            return Err(Error::TrailingBytes(body.len() - 4));
+        }
+        Ok(Self {
+            number: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+        })
+    }
+}
+
 /// Gift, shop and wallet packets live in topical modules now;
 /// re-exported here so `crate::message::…` paths keep working.
 pub use super::gift::{
@@ -1750,6 +1786,22 @@ mod tests {
         assert_eq!(
             CreateRoomResponse::decode_body(&body),
             Err(Error::TruncatedMessage { need: 4, have: 0 })
+        );
+    }
+
+    #[test]
+    fn room_removed_decodes_the_live_disband_broadcast() {
+        // ~/scratch/p380-wire-probe.log: opcode 2007 (0x07D7), body
+        // `00000000` for room number 0, sent to both room members.
+        let frame = decode_frame(&[8, 0, 0xD7, 0x07, 0, 0, 0, 0]).unwrap();
+        assert_eq!(frame.id, 2007);
+        assert_eq!(
+            RoomRemoved::decode_frame(&frame),
+            Ok(RoomRemoved { number: 0 })
+        );
+        assert_eq!(
+            RoomRemoved { number: 3 }.encode(),
+            vec![8, 0, 0xD7, 0x07, 3, 0, 0, 0]
         );
     }
 

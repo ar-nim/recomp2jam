@@ -1582,6 +1582,15 @@ impl ScreenGame {
         self
     }
 
+    /// Drop one live room row from its numbered slot. A 2007 disband
+    /// broadcast names the room by number; the highlight stays on a
+    /// real row (or at rest when the list becomes empty).
+    pub fn remove_room(&mut self, number: i32) -> &mut Self {
+        self.rooms.retain(|room| room.number != number);
+        self.room_highlight = self.room_highlight.min(self.rooms.len().saturating_sub(1));
+        self
+    }
+
     /// Whether a room-list row names a real room (see [`Self::set_rooms`]).
     fn is_listed_room(room: &RoomListEntry) -> bool {
         room.number != 0 || !room.title.is_empty()

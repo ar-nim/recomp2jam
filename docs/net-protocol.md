@@ -148,6 +148,17 @@ Events: 2005 RoomCreated, 2007 RoomRemoved, 2008 RoomParamsChanged, 2009 RoomUse
   ready flag. Reaches every member, including the sender
   (`~/scratch/p379-wire-probe.log`, room tester/tester2). The master's
   join/leave/ready seat stages all come from these three events (#379).
+- `2007 RoomRemoved` S→C (`0x07D7`): one `i32` room number. Memoryer
+  `Room.Remove` deletes the room when no member slots remain, then
+  `RoomServiceEventPublisher.OnRoomDeleted` broadcasts the number to
+  the whole channel. Local probe 2026-11-19: guest leaves first (only
+  3007, room stays listed); host leaves last (both legs get 2007 with
+  body `00000000`, room disappears from the next 2003). Host leaving
+  while a peer remains draws 3007 with `new_master_id` and no 2007
+  (`~/scratch/p380-wire-probe.log`, #380). On the client, a 07DA/07DB
+  fuse node can read 2007 before the matching room-list drain; frames
+  read by that fuse are deferred and replayed through the same handler
+  instead of being dropped as foreign (#380).
 
 ### 4c. Key payload shapes (Memoryer message fields, order = wire order)
 

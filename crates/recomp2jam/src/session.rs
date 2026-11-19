@@ -135,6 +135,7 @@
 //! and invalid ranks stage no row (the shell push rules), so the drain
 //! never invents one.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -160,8 +161,8 @@ use o2jam_net::{
     DownloadProgressChanged, Event, ExitPlaying, ExitWaiting, FinalizeRank, Frame, GameMode,
     GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
     JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, MusicState, Ready, Request,
-    Response, RoomCreated, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
-    SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, UserJoinedWaiting,
+    Response, RoomCreated, RoomRemoved, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame,
+    SubmitScore, SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, UserJoinedWaiting,
     UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
@@ -555,6 +556,10 @@ pub struct OnlineSession {
     /// Last ready flag per seat, from 4009 echoes (`None` while the
     /// seat never echoed) — same bridge shape as `slot_actions`.
     ready_echoes: [Option<bool>; 8],
+    /// Frames the 07DA/07DB fuse drain read before their owning lobby
+    /// or waiting drain could (#380). Replayed at the next paint instead
+    /// of being dropped as foreign.
+    deferred_frames: VecDeque<Frame>,
     /// Result record words per seat, from 4018 rows (`None` while the
     /// seat never sent an active row). Mirrors the exe's member record
     /// at the offsets pinned in `docs/net-protocol.md` §4c.
@@ -599,6 +604,7 @@ impl OnlineSession {
             silent_audio: true,
             slot_actions: [None; 8],
             ready_echoes: [None; 8],
+            deferred_frames: VecDeque::new(),
             result_records: [None; 8],
         }
     }
@@ -2763,50 +2769,40 @@ impl OnlineSession {
     /// shape: keepalives skip silently, foreign ids log and skip
     /// (`ERRORS-19`: nothing is dropped without a trace).
     fn drain_waiting_chat(&mut self) {
-        loop {
-            match self.gateway.next_frame() {
-                Ok(frame) if frame.id == WaitingUserMessage::COMMAND => {
-                    self.apply_waiting_user_message(&frame);
-                }
-                Ok(frame) if frame.id == WaitingAdminMessage::COMMAND => {
-                    self.apply_waiting_admin_message(&frame);
-                }
-                Ok(frame) if frame.id == START_BROADCAST_COMMAND => {
-                    self.apply_start_broadcast(&frame.payload);
-                }
-                Ok(frame) if frame.id == UserJoinedWaiting::COMMAND => {
-                    self.apply_user_joined(&frame);
-                }
-                Ok(frame) if frame.id == UserLeftWaiting::COMMAND => {
-                    self.apply_user_left(&frame);
-                }
-                Ok(frame) if frame.id == RoomSlotUpdate::COMMAND => {
-                    self.apply_slot_update(&frame);
-                }
-                Ok(frame) if frame.id == MemberReadyStateChanged::COMMAND => {
-                    self.apply_ready_echo(&frame);
-                }
-                Ok(frame) if frame.id == SyncMemberMusicStateEvent::COMMAND => {
-                    self.apply_member_music_state(&frame);
-                }
-                Ok(frame) if frame.id == AcquireMusic::COMMAND => {
-                    self.apply_acquire_music(&frame);
-                }
-                Ok(frame) if frame.id == DownloadProgressChanged::COMMAND => {
-                    self.apply_download_progress(&frame);
-                }
-                Ok(frame) if frame.id == WaitingMusicChanged::COMMAND => {
-                    self.apply_waiting_music_changed(&frame);
-                }
-                Ok(frame) if announces_room_music_state(frame.id) => {
-                    self.announce_music_state();
-                }
-                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
-                Ok(frame) => {
-                    tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain");
-                }
-                Err(_) => break,
+        while let Ok(frame) = self.gateway.next_frame() {
+            self.apply_waiting_frame(frame);
+        }
+    }
+
+    /// Apply one waiting-room frame. Shared by the socket drain and the
+    /// replay of frames the fuse drain read first, so a 07DA poll can
+    /// never eat a join, leave, ready, or disband broadcast (#380).
+    fn apply_waiting_frame(&mut self, frame: Frame) {
+        match frame.id {
+            id if id == WaitingUserMessage::COMMAND => {
+                self.apply_waiting_user_message(&frame);
             }
+            id if id == WaitingAdminMessage::COMMAND => {
+                self.apply_waiting_admin_message(&frame);
+            }
+            START_BROADCAST_COMMAND => self.apply_start_broadcast(&frame.payload),
+            id if id == UserJoinedWaiting::COMMAND => self.apply_user_joined(&frame),
+            id if id == UserLeftWaiting::COMMAND => self.apply_user_left(&frame),
+            id if id == RoomSlotUpdate::COMMAND => self.apply_slot_update(&frame),
+            id if id == MemberReadyStateChanged::COMMAND => self.apply_ready_echo(&frame),
+            id if id == SyncMemberMusicStateEvent::COMMAND => {
+                self.apply_member_music_state(&frame);
+            }
+            id if id == AcquireMusic::COMMAND => self.apply_acquire_music(&frame),
+            id if id == DownloadProgressChanged::COMMAND => {
+                self.apply_download_progress(&frame);
+            }
+            id if id == WaitingMusicChanged::COMMAND => {
+                self.apply_waiting_music_changed(&frame);
+            }
+            id if announces_room_music_state(id) => self.announce_music_state(),
+            id if Generic::from_id(id).is_some() => {}
+            _ => tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain"),
         }
     }
 
@@ -3140,31 +3136,44 @@ impl OnlineSession {
     /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
     /// without a trace).
     fn drain_lobby_chat(&mut self, chat: LobbyChat) {
-        loop {
-            match self.gateway.next_frame() {
-                Ok(frame) if frame.id == MainRoomUserMessage::COMMAND => {
-                    self.apply_lobby_user_message(chat, &frame);
-                }
-                Ok(frame) if frame.id == MainRoomAdminMessage::COMMAND => {
-                    self.apply_lobby_admin_message(chat, &frame);
-                }
-                Ok(frame) if frame.id == ReceiveWhisper::COMMAND => {
-                    self.apply_lobby_whisper(chat, &frame);
-                }
-                Ok(frame) if frame.id == Announcement::COMMAND => {
-                    self.apply_announcement(chat, &frame);
-                }
-                Ok(frame) if frame.id == RankNotification::COMMAND => {
-                    self.apply_rank_notice(chat, &frame);
-                }
-                Ok(frame) if frame.id == RoomCreated::COMMAND => {
-                    self.apply_room_created(&frame);
-                }
-                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
-                Ok(frame) => {
-                    tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain");
-                }
-                Err(_) => break,
+        while let Ok(frame) = self.gateway.next_frame() {
+            self.apply_lobby_frame(chat, frame);
+        }
+    }
+
+    /// Apply one lobby frame. Shared with fuse-drain replay so a 2005
+    /// create or 2007 disband read during a #367 poll still stages (#380).
+    fn apply_lobby_frame(&mut self, chat: LobbyChat, frame: Frame) {
+        match frame.id {
+            id if id == MainRoomUserMessage::COMMAND => {
+                self.apply_lobby_user_message(chat, &frame);
+            }
+            id if id == MainRoomAdminMessage::COMMAND => {
+                self.apply_lobby_admin_message(chat, &frame);
+            }
+            id if id == ReceiveWhisper::COMMAND => self.apply_lobby_whisper(chat, &frame),
+            id if id == Announcement::COMMAND => self.apply_announcement(chat, &frame),
+            id if id == RankNotification::COMMAND => self.apply_rank_notice(chat, &frame),
+            id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
+            id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
+            id if Generic::from_id(id).is_some() => {}
+            _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
+        }
+    }
+
+    /// Replay frames the #367 fuse drain read while an unrelated drain
+    /// owned the screen. Room/Channel frames go to the lobby handler,
+    /// Waiting frames to the waiting handler; nothing is lost just
+    /// because a 07DA poll was in flight (#380).
+    fn replay_deferred_frames(&mut self) {
+        while let Some(frame) = self.deferred_frames.pop_front() {
+            match LobbyChat::of_screen(self.game.screen()) {
+                Some(chat) => self.apply_lobby_frame(chat, frame),
+                None if self.game.screen() == Screen::Waiting => self.apply_waiting_frame(frame),
+                None => tracing::debug!(
+                    id = frame.id,
+                    "dropping deferred frame outside a wire screen"
+                ),
             }
         }
     }
@@ -3238,6 +3247,18 @@ impl OnlineSession {
         };
         self.game.upsert_room(listed_room_from_created(created));
     }
+
+    /// Fold one 2007 disband broadcast into the Room list. Memoryer
+    /// sends it to the whole channel when the last member exits
+    /// (`~/scratch/p380-wire-probe.log`); only the named row goes,
+    /// never a whole-list refresh (#380).
+    fn apply_room_removed(&mut self, frame: &Frame) {
+        let Ok(removed) = RoomRemoved::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room-remove broadcast");
+            return;
+        };
+        self.game.remove_room(removed.number);
+    }
 }
 
 impl OnlineSession {
@@ -3302,7 +3323,11 @@ impl OnlineSession {
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
-                    tracing::debug!(id = frame.id, "skipping non-07DB frame in fuse drain");
+                    // The socket is a stream: once read, this frame is
+                    // gone. Keep it for the owning drain at the next
+                    // paint instead of dropping a live broadcast (#380).
+                    tracing::debug!(id = frame.id, "deferring non-07DB frame from fuse drain");
+                    session.deferred_frames.push_back(frame);
                 }
                 Err(_) => {}
             },
@@ -3341,6 +3366,7 @@ impl OnlineSession {
     /// 2021 leave (Memoryer answers it with a 1001 `-1` auth error
     /// until the leave resets the session, ticket #175 probe).
     fn poll_wire(&mut self) {
+        self.replay_deferred_frames();
         self.flush_channel_logout();
         self.poll_attempts();
         if self.game.screen() == Screen::Room {
@@ -5497,6 +5523,146 @@ pub(super) mod session_tests {
             .map(|room| room.title.as_str())
             .collect();
         assert_eq!(titles, vec!["P376ROOM"]);
+    }
+
+    /// One listed row for the #380 disband guards.
+    fn listed_p380_room(number: i32, title: &str) -> o2jam_net::RoomListEntry {
+        use o2jam_net::{GameMode, KeyMode, RoomCreated};
+        listed_room_from_created(RoomCreated {
+            number,
+            title: title.to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            min_level: 1,
+            max_level: 99,
+            premium: false,
+            room_type: 0,
+        })
+    }
+
+    #[test]
+    fn last_leave_broadcast_removes_the_disbanded_room_row() {
+        // Live caller chain: `Shell::run` -> `OnlineSession::paint` ->
+        // `poll_wire` -> `poll_lobby_chat` (Room scene). The tapped
+        // two-client probe (`~/scratch/p380-wire-probe.log`, 13:05:03)
+        // shows Memoryer broadcasting 2007 (0x07D7, `i32` room number)
+        // to the whole channel when the last member exits. The row must
+        // disappear without a new 2002/2003 refresh.
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2007, &0i32.to_le_bytes()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        paint_until(&mut session, |session| {
+            session.game.listed_rooms().len() == 1
+        });
+        server.join().unwrap();
+        let titles: Vec<&str> = session
+            .game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["OTHER"]);
+    }
+
+    #[test]
+    fn disband_broadcast_read_by_the_07da_fuse_still_removes_the_row() {
+        // Live-path guard for the drain gap seen in the 13:14 live leg:
+        // the #367 07DA/07DB fuse owns the socket while its node is
+        // tracked. Its single-frame drain read 2007 *before* the 07DB
+        // answer and used to log-and-drop it, so the row survived.
+        // The live caller chain is Shell::run -> OnlineSession::paint
+        // -> poll_wire -> poll_room_user_list_fuse -> deferred replay
+        // -> apply_lobby_frame -> apply_room_removed.
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2007, &0i32.to_le_bytes()))
+                .unwrap();
+            stream.write_all(&encode_frame(2011, &[0; 16])).unwrap();
+            // The fuse keeps polling 07DA in Room; answer those without
+            // treating the extra traffic as a test failure.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            while Instant::now() < deadline {
+                let mut header = [0u8; 4];
+                if stream.read_exact(&mut header).is_err() {
+                    continue;
+                }
+                let size = u16::from_le_bytes([header[0], header[1]]) as usize;
+                let mut rest = vec![0u8; size - HEADER_LEN];
+                if stream.read_exact(&mut rest).is_err() {
+                    break;
+                }
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&rest);
+                if let Ok(frame) = decode_frame(&bytes) {
+                    if frame.id == Request::GetUserList.id() {
+                        stream.write_all(&encode_frame(2011, &[0; 16])).unwrap();
+                    }
+                }
+            }
+        });
+        session.game.set_room_no_response_relay_down(true);
+        assert!(session.game.track_room_user_list_send());
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P380ROOM")]);
+        paint_until(&mut session, |session| {
+            session.game.listed_rooms().is_empty()
+        });
+        server.join().unwrap();
+        assert!(session.game.listed_rooms().is_empty());
+    }
+
+    #[test]
+    fn non_last_leave_keeps_the_room_row_for_the_remaining_peer() {
+        // The same probe's 13:05:01 leg: guest leaves while the host
+        // stays, and the following 2003 still lists P380ROOM. Only a
+        // 3007 leave event arrives — never 2007 — so the row survives.
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[1, 0, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P380ROOM")]);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.listed_rooms()[0].title, "P380ROOM");
+    }
+
+    #[test]
+    fn master_leave_with_a_seated_peer_keeps_the_room_row() {
+        // Probe phase 3 (13:05:06): the master leaves with one peer
+        // still seated. The peer gets 3007 with `new_master_id = 1`,
+        // no 2007 follows, and the room stays listed.
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[0, 1, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P380SECOND")]);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.listed_rooms()[0].title, "P380SECOND");
     }
 
     #[test]

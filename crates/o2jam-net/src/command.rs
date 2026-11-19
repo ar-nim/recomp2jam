@@ -125,6 +125,10 @@ wire_enum! {
     /// in-play stats echo and the 4017/4018/4040 tally answers).
     pub enum Event: u16, resolve from_id, encode id, {
         RoomCreated = 2005,
+        /// `RoomRemoved` (`0x07D7`): the server disbands a room when
+        /// its last member leaves and broadcasts its room number to
+        /// the whole channel (#380).
+        RoomRemoved = 2007,
         ReceiveWhisper = 2019,
         RankNotification = 2029,
         RoomSlotUpdate = 3009,
@@ -296,6 +300,7 @@ mod tests {
     fn event_ids_round_trip() {
         let all = [
             Event::RoomCreated,
+            Event::RoomRemoved,
             Event::ReceiveWhisper,
             Event::RankNotification,
             Event::RoomSlotUpdate,
@@ -355,6 +360,7 @@ mod tests {
     #[test]
     fn resolves_tally_answer_events() {
         assert_eq!(Event::from_id(4017), Some(Event::ScoreSubmission));
+        assert_eq!(Event::from_id(2007), Some(Event::RoomRemoved));
         assert_eq!(Event::from_id(3004), Some(Event::UserJoinWaiting));
         assert_eq!(Event::from_id(3007), Some(Event::UserLeaveWaiting));
         assert_eq!(Event::from_id(4018), Some(Event::ScoreCompleted));

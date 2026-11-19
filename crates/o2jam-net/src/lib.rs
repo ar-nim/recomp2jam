@@ -50,8 +50,9 @@ pub use message::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelLoginResult, ChannelState, CreateResult, CreateRoom, CreateRoomResponse, CreatedRoom,
     EmptyMessage, ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo,
-    GetUserList, KeyMode, LegacyPing, MultiSessionError, Ping, RoomCreated, SendMusicList,
-    SessionKeys, SessionKeysRequest, SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
+    GetUserList, KeyMode, LegacyPing, MultiSessionError, Ping, RoomCreated, RoomRemoved,
+    SendMusicList, SessionKeys, SessionKeysRequest, SubscriptionAlert, Terminate, WireMessage,
+    MEMORYER_CLIENT_ID,
 };
 pub use play::{
     AcquireMusic, AcquireMusicRequest, ConfirmMusicLoaded, DownloadProgressChanged, ExitPlaying,
