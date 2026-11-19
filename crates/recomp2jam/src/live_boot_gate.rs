@@ -408,7 +408,7 @@ mod live_boot_gate_tests {
             active: true,
         }]);
         game.menu_key(MenuKey::Back, true);
-        game.click_planet(136, 88);
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(136, 88));
         // The scripted gateway has no relay, so the boot arms the
         // relay-down notice over the channel frame (#348); dismiss
         // it before the Enter that opens the Room lobby.
@@ -1453,6 +1453,69 @@ mod live_boot_gate_tests {
 
         game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
         assert_eq!(game.planet_modal(), None, "OK releases the held rows");
+        assert_eq!(game.channel_rows(), [row]);
+    }
+
+    /// Ticket #393: the blue "NORMAL mode only" sheet owns the
+    /// board after a lit emblem click. Live chain:
+    /// `main.rs::run_online` -> `connect_and_login_with_transport` ->
+    /// `stage_channel_list_after_relay_gate` -> splash dismissal ->
+    /// `ScreenGame::click_planet` at the pinned EASY rect ->
+    /// `dispatch_planet_action` -> `enter_screen(Channel)` ->
+    /// `open_relay_down_dialog` -> `click_dispatch` ->
+    /// `click_planet_modal` -> OK at the pinned (400,365) rect.
+    /// `docs/captures/t240/wine-drive.log` pins the popup
+    /// (`max_blue=0.986`, fallback OK, `max_blue=0.000`).
+    #[test]
+    fn normal_mode_popup_blocks_canvas_clicks_after_lit_emblem() {
+        use std::collections::HashMap;
+
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{PLANET_BUTTON_EASY_CODE, PLANET_EASY_RECT};
+
+        let row = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        };
+        let (port, server) = spawn_boot_gateway_with_channels(vec![row]);
+        let (report, _gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let (hero, _) = server.join().unwrap();
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, Some(&hero));
+        crate::stage_channel_list_after_relay_gate(&mut game, report.channels, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![ScenePlacement {
+                id: "easy".to_owned(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: None,
+                rect: PLANET_EASY_RECT,
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 300));
+        assert_eq!(game.screen(), Screen::Planet);
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(136, 88));
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(526, 248));
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::RelayDown),
+            "the sheet still owns the canvas after a row-face click"
+        );
+        assert!(game.channel_rows().is_empty(), "rows stay behind the sheet");
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(game.planet_modal(), None, "OK clears the blue sheet");
         assert_eq!(game.channel_rows(), [row]);
     }
 
