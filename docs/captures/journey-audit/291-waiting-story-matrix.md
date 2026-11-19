@@ -43,20 +43,22 @@ from the template; guards alone never prove exe behavior.
 | **ENTER-CREATE** (self:master) | NA-DESIGN — no solo session | EVIDENCED — Waiting plain after create; p343 proof `20fbe170…`, `p343-ab/{exe,rust}` frames | NA-DESIGN — no peer exists at create | EVIDENCED — live row from 2005; #376 two-client frame `frame-000127-room.png` | LIVE-FILLED — WAVE 1 leg2 tap: `2004 → 2006 result=0,number=0`, `e326e3f7…` |
 | **ENTER-JOIN** (self:peer) | NA-DESIGN — no solo session | EVIDENCED — seat grid stays plain on arrival; c3 citation `96339c1f…`; joiner visibility is row 10 | EVIDENCED — lands in Waiting; c3 `waiting.png` `f394dcaa…`, p343 proof | GAP — user-count event on join unpinned; OPEN — scripted tap of 2009/2003 around `0BBA` | EVIDENCED — `C2S:0BBA / S2C:0BBB`, c1 wire `40efa…` (matched route #339/#343) |
 | **SOLO-IDLE** (self:solo) | EVIDENCED — solo master room + START face; `s1-master-ui` `waiting-master.png` `85decf32…` | NA-DESIGN — same seat is the solo actor | NA-DESIGN — no peer | NA-DESIGN — no channel observer in solo room | EVIDENCED — 6001/4037/5027/4039 async cadence, c1 `drive.log` + wire |
-| **MUSELECT** (self:master) | GAP — no solo-master dialog frame; OPEN — one qualified solo master MUSELECT capture | GAP — static handler `0xb2622` + role-2 gate `0xaaee0`, but no qualified exe master dialog frame (live-4 boot 4 crash); OPEN — re-run master drive with pixel delta fixed | EVIDENCED — guest hides popup/BPM cover; c1 cue inventory, c3 guest frame, p343 role-3 read | NA-DESIGN — dialog is modal inside Waiting | EVIDENCED — no 4051/4053 frames in c1/c3/p343/p346 windows (#266); negative wire pin |
-| **PICK-ECHO** (self:master) | GAP — no solo pick/echo frame; OPEN — before/after pick capture with frame hashes | EVIDENCED — owner observation #274: exe `SPEED_NUM`/BPM read ROOM echo, not staged pick; `docs/caption-sources.md` | EVIDENCED — guest keeps BPM cover after room echo; c3 frame, #274/#275 pins (visual confirm still OPEN) | GAP — room-list song field after 2008/2023 not pinned; OPEN — tap 2008/2023 and read painted row | GAP — no 4000/4001 body pin in matched packs; OPEN — scripted-gateway 4000 echo guard |
+| **MUSELECT** (self:master) | LIVE-FILLED — master dialog open in CP03 pack `d16865b90a0484dda69a0fa41f0df9be044d5c5c5aef35c81f85e780dfe6f736` (Rust, `--claim none`); exe master frame still OPEN | LIVE-FILLED — CP03 master dialog pack `d16865b90a0484dda69a0fa41f0df9be044d5c5c5aef35c81f85e780dfe6f736` + dossier `0xb2622`/`0xaaee0`; qualified exe master frame still OPEN | EVIDENCED — guest hides popup/BPM cover; c1 cue inventory, c3 guest frame, p343 role-3 read | NA-DESIGN — dialog is modal inside Waiting | EVIDENCED — no 4051/4053 frames in c1/c3/p343/p346 windows (#266); negative wire pin |
+| **PICK-ECHO** (self:master) | LIVE-FILLED — CP04 before/after pick pack `d8a3cf108b26833f6ea902ce8cf32174c6ef80ed3d73e218ee8a52e81e70d49d` + `4000/4001` wire; exe pick frame still OPEN | EVIDENCED — owner observation #274: exe `SPEED_NUM`/BPM read ROOM echo, not staged pick; `docs/caption-sources.md` | EVIDENCED — guest keeps BPM cover after room echo; c3 frame, #274/#275 pins (visual confirm still OPEN) | GAP — room-list song field after 2008/2023 not pinned; OPEN — tap 2008/2023 and read painted row | LIVE-FILLED — `C2S 4000 len=8 hex=64000101` → `S2C 4001 len=8 hex=64000101`, `full01/tap.log` 15:43:48; create `2004 → 2006` 15:43:30 |
 | **READY** (self:peer) | NA-DESIGN — no peer to ready | EVIDENCED — seat ready mark / gate input; static pin file `0xb237d`, clear VA `0x4b2540`, #163 seat guards | EVIDENCED — `C2S:4008 / S2C:4009`, stays Waiting; c1 `drive.log:52-55` + wire `40efa…` | GAP — 2009 user-count on ready not pinned; OPEN — scripted tap during 4008 | EVIDENCED — 4008/4009 wire pin, `docs/net-protocol.md` §4; c1 matched window |
 | **START-GATE** (self:master) | EVIDENCED — exe emits `4010` then full gate/score flow; `s1-master-ui` manifest `4bd221b8…` | EVIDENCED — gate order readiness → team → music, VA `0x4b5560`; #276 close record + solo pack | EVIDENCED — host-driven start leaves Waiting to Loading; p343 proof, c1 `host/host.log:13` | GAP — 2020 RoomStateChanged on start unpinned; OPEN — channel-observer socket during 4010 | EVIDENCED — `4010/4011/4012/4013` wire family, solo pack + `docs/net-protocol.md` |
-| **TEAM-CHAT** (self:any seated) | GAP — no solo chat/team frame; OPEN — one solo-master chat + 4004 toggle capture | GAP — master emblem still OPEN (#303); team guards exist but no qualified master frame; OPEN — two-client emblem capture | GAP — Waiting chat row feed has no exe reader pin; OPEN — 3012/3013 payload-to-row capture | NA-DESIGN — Waiting chat is not channel chat | EVIDENCED — 4004/4008, 3011/3012/3013 layouts, `docs/net-protocol.md` §4c (Memoryer corroboration + exe send sites) |
+| **TEAM-CHAT** (self:any seated) | LIVE-FILLED — CP05 master chat pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c`, `C2S 3011` → `S2C 3012` tap; 4004 toggle still unpinned | LIVE-FILLED — CP05 master chat-row pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c` + `3011/3012` wire; emblem still OPEN (#303) | GAP — Waiting chat row feed has no exe reader pin; OPEN — 3012/3013 payload-to-row capture | NA-DESIGN — Waiting chat is not channel chat | EVIDENCED — 4004/4008, 3011/3012/3013 layouts, `docs/net-protocol.md` §4c (Memoryer corroboration + exe send sites) |
 | **DOWNLOAD** (self:server) | GAP — no solo-master badge frame; OPEN — matched solo download capture | EVIDENCED — `states/gate-closed.png`, `member-downloading.png` in matched-ab-339; p343 proof | EVIDENCED — 4026/4037/3009 matched wire + badge crop `7d4d586c…` | GAP — no channel-visible download state; OPEN — 2003 row state probe during download | EVIDENCED — `S2C:4026/4037/3009` in p343 proof; 5012 completion pin in `docs/net-protocol.md` |
-| **PEER-JOIN** (self:peer, while Waiting) | NA-DESIGN — no peer | OPEN-FIX — **master observes peer joining**: owner #379 "master sees nobody joining", fix parked per owner; wire shows join, client does not stage it; no LIVE-FILLED frame (4 boots spent) | EVIDENCED — joiner sees master seated; c3 `waiting.png` `f394dcaa…`, #376 peer-side fix | GAP — 2009/2003 user-count change on join unpinned; OPEN — channel-observer socket with a real join | EVIDENCED — `0BBA/0BBB` c1/c3 wire + #376 `2005` broadcast pin; server state shared by both clients |
-| **PEER-LEAVE** (self:peer, non-last) | NA-DESIGN — no peer | GAP — no frame of peer seat clearing; OPEN — master frame before/after a real 3005 ExitWaiting | GAP — leaver's exit-to-Room frame unpinned; OPEN — one leaver-side capture with `3005/3006` | GAP — room stays listed but no non-last wire pin; OPEN — observer 2003 poll with master resident | GAP — no member-removal frame body pinned for non-last exit; OPEN — tap master socket during 3005 |
+| **PEER-JOIN** (self:peer, while Waiting) | NA-DESIGN — no peer | LIVE-FILLED — merged #379 fix stages the peer seat label/icon in CP06 master pack `b7da707e040a33fadfaae001d00ddfadac845076fed396b7c2c5cca9fc117775`, wire `S2C 3004 len=107`; peer figure still renders as a red status icon (pixel parity OPEN) | EVIDENCED — joiner sees master seated; c3 `waiting.png` `f394dcaa…`, #376 peer-side fix | GAP — 2009/2003 user-count change on join unpinned; OPEN — channel-observer socket with a real join | EVIDENCED — `0BBA/0BBB` c1/c3 wire + #376 `2005` broadcast pin; server state shared by both clients |
+| **PEER-LEAVE** (self:peer, non-last) | NA-DESIGN — no peer | GAP — wire-only CP35 pins `3007` to master, but no master frame before/after a real `3005`; OPEN — master frame pair | GAP — leaver's exit-to-Room frame unpinned; OPEN — one leaver-side capture with `3005/3006` | LIVE-FILLED — wire-only CP35: `3007 body=0100000000000000` to master, no 2007; observer 2003 still lists `S291WIRE` (wire only, no Room paint frame) | LIVE-FILLED — wire-only CP35: peer `C2S 3005`, `S2C 3006 body=00000000`, master `ASYNC 3007 len=8 hex=0100000000000000` (`wire-only/master.log`, `peer.log`) |
 | **LAST-LEAVE** (self:last occupant) | NA-DESIGN — no room after last exit | NA-DESIGN — no master after last exit | NA-DESIGN — no peer after last exit | LIVE-FILLED — WAVE 1 leg2 observer saw the room vanish; `observer.log` `d4fa3dc6…` | LIVE-FILLED — WAVE 1 leg2 tap `S2C 2007 len=8 hex=00000000` on final disconnect; `tap.log` `e326e3f7…`. #380 fix still OPEN |
-| **MASTER-LEAVE-HANDOFF** (self:master, peer remains) | NA-DESIGN — no solo session | GAP — no master exit frame; OPEN — master-side 3005 capture | GAP — peer-becomes-master observation unpinned; OPEN — two-client frame pair with role word `+0x30` | GAP — room remains listed under new master; OPEN — 2003 row poll after master exit | GAP — server transfer/no-disband wire body unpinned; OPEN — scripted tap of 3005 with resident peer |
+| **MASTER-LEAVE-HANDOFF** (self:master, peer remains) | NA-DESIGN — no solo session | GAP — no master exit frame; OPEN — master-side 3005 capture | GAP — wire-only CP37 pins the promotion byte (`3007 body=0001000000000000`); role word `+0x30` and frame pair still OPEN | LIVE-FILLED — wire-only CP37 observer 2003 lists `S291WIRE` after master `3005` (wire only; no channel frame) | LIVE-FILLED — wire-only CP37: master `C2S 3005`, promoted peer `3007 body=0001000000000000`, no 2007 until CP38 last exit |
 
-Counts: **65 cells** — 24 EVIDENCED, 22 GAP, 3 LIVE-FILLED, 1 OPEN-FIX,
-15 NA-DESIGN. Every GAP names its next evidence step; the two LIVE-FILLED
-cells are wire-only and do not close #380.
+Counts after Lane B: **65 cells** — 24 EVIDENCED, 12 GAP, 14 LIVE-FILLED,
+0 OPEN-FIX, 15 NA-DESIGN. Retired GAP/OPEN-FIX cells carry a LIVE-FILLED
+pin in §5; the 12 survivors name their still-open exe or channel-frame step.
+Every GAP names its next evidence step. All LIVE-FILLED pins are client or
+wire observations, not exe packs, so they do not close an exe-oracle story.
 
 ## 3. Simulation scenario plan (owner refinement)
 
@@ -146,3 +148,31 @@ Only new exe evidence changes a story.
 - A p343 base SSIM of 0.8906 is a region comparison, not proof of an actor's
   observation. Caption and seat-order residuals stay MISMATCHED per the
   journey audit; this matrix does not re-grade them.
+
+## 5. Lane B closure batch — #382 (2026-11-19)
+
+All new pins below are **LIVE-FILLED** Rust/client observations, not exe
+packs. No exe pack was captured in this batch; every exe-only cell keeps its
+GAP with the next evidence step. Evidence homes (git-ignored scratch):
+
+- `~/scratch/close-wr/full01/checkpoints/index.txt`: CP01–CP06 frame hashes
+  for master (`M`) and peer (`P`), captured on the two-client boot with
+  `ffmpeg` from private Xvfb displays. `--claim none` class (client pixels).
+- `~/scratch/close-wr/full01/tap.log`: bidirectional 15013 → 15010 tap, all
+  non-ping frames with direction, port, opcode, length and body hex.
+- `~/scratch/close-wr/full01/observer.log`: scripted user-3 channel observer
+  (`2005` create event and `2003` polls at every checkpoint).
+- `~/scratch/close-wr/wire-only/*.log`: zero-boot scripted actor lifecycle
+  CP31–CP38 with per-frame body hex and cued `2003` polls.
+- Containment: every boot went through `scripts/rig-run.sh` with a private
+  Xvfb display, a dedicated `rig_null_*` sink, and a fresh-frame popup probe
+  that dismissed the NORMAL-mode box at each transition. Boot manifests
+  report `route=sink`, `on_default_sink=0`, `preboot_breach=0`, server pid
+  92326 / epoch 1794986056. No exe pack earned a PASS citation here.
+
+Boot ledger (all six boots spent, no further client boot allowed): boot 1
+stale frame-dump popup detector; boot 2 off-by-one room-row y; boot 3 XTEST
+`BadRRModeError` mid-typing; boot 4 observer FIFO timeout/SIGPIPE after CP05;
+boot 5 same observer failure after CP06 (CP01–CP06 survive); boot 6 local
+driver argument order. Boot 4/5 failures are recorded as failed attempts,
+not as behavior evidence. The wire-only leg spent no boot.
