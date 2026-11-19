@@ -67,10 +67,10 @@ use super::side::{
     PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
     SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
     SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
-    TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    TUTORIAL_CHART_GLOBALS,
+    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -736,6 +736,10 @@ pub struct ScreenGame {
     /// values are exe globals, so leaving a side visit does not clear
     /// them; no exit writer is pinned.
     tutorial_chart_globals: Option<TutorialChartGlobals>,
+    /// Visual key-cap/glow lights for the Tutorial's seven kit bodies.
+    /// No judgement or score state: the boot2 key frames keep every
+    /// tally at zero.
+    tutorial_key_lights: TutorialKeyLights,
     /// Lanking board state (the catalog, sort, pages, board, and
     /// pick; #139 cluster 2): every `lanking_*` word lives here;
     /// the hash fold reads it for the six hashed words.
@@ -1039,6 +1043,7 @@ impl ScreenGame {
             side: None,
             side_origin: None,
             tutorial_chart_globals: None,
+            tutorial_key_lights: TutorialKeyLights::default(),
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
@@ -5145,6 +5150,9 @@ impl ScreenGame {
         self.side = Some(side);
         self.mount_staged_side_art(side);
         self.apply_bgm_cue(side.bgm_cue());
+        if side == SideScreen::Tutorial {
+            self.tutorial_key_lights.clear();
+        }
         if side == SideScreen::MyRoom {
             // Entry gift-list fetch (5017): the wire shape is
             // exe-pinned (`docs/gifts.md`); queueing it on entry is
@@ -5216,6 +5224,9 @@ impl ScreenGame {
         };
         if !can_return_side(side, origin) {
             return false;
+        }
+        if side == SideScreen::Tutorial {
+            self.tutorial_key_lights.clear();
         }
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
@@ -5844,7 +5855,13 @@ impl ScreenGame {
                 myroom_panel_kept(placed, panel)
             });
         } else if self.side == Some(SideScreen::Tutorial) {
-            paint_tutorial_scene(frame, &self.side_placements, &self.side_figures);
+            paint_tutorial_scene(
+                frame,
+                &self.side_placements,
+                &self.side_figures,
+                &self.tutorial_key_lights,
+                now_ms,
+            );
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -6778,6 +6795,17 @@ impl GameLoop for ScreenGame {
     }
 
     fn lane_key(&mut self, lane: usize, down: bool) {
+        if self.side == Some(SideScreen::Tutorial) {
+            // Tutorial keys light their own cap and glow; they never
+            // reach the Playing strike path or any judgement tally.
+            if down {
+                let pressed_at_ms = self.now_ms();
+                self.tutorial_key_lights.press(lane, pressed_at_ms);
+            } else {
+                self.tutorial_key_lights.release(lane);
+            }
+            return;
+        }
         if !down {
             return;
         }
@@ -21947,6 +21975,97 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[298 * 800 + 375], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn firststep_tutorial_lane_press_lights_only_its_own_cap_with_no_judgement() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial → lane-key press → painter. Boot2 pack
+        // `989abc137caec5cb429d98d1b0e19c094032fc1c900a350c423f6ae0e82c088f`
+        // pins one lit cap per lane key with all judgement tallies at 0
+        // (frames `28d1ca44…1a`, `be76f41d…3a`, `d662b505…3e`). The
+        // seven kit bodies stage at their own parsed row-487 anchors.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let lit_words = [0x7C00u16, 0x03E0, 0x001F, 0x7C1F, 0x7FE0, 0x07FF, 0x681F];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (lane, lit_word) in lit_words.iter().enumerate() {
+            let name = format!("KeyEffect_Tutorial_{}.ojs", lane + 1);
+            let mut figure = AvatarFigure::default();
+            for frame in 0..5 {
+                let word = if frame == 0 { 0x7FFFu16 } else { *lit_word };
+                let pixels = [word.to_le_bytes(); 16].concat();
+                figure.push_layer(crate::avatar::FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                    dx: 100 + (lane as i32) * 20,
+                    dy: 487,
+                    colorkey: 0x0000,
+                });
+            }
+            placements.push(ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(name.clone()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            });
+            figures.insert(name, figure);
+        }
+        game.load_tutorial_scene(placements, figures);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let rest = paint(&mut game);
+        let cap_pixel = |buf: &[u32], lane: usize| buf[488 * 800 + 101 + lane * 20];
+        for lane in 0..7 {
+            assert_eq!(cap_pixel(&rest, lane), pack_xrgb(255, 255, 255));
+        }
+
+        for lit_lane in 0..7 {
+            game.lane_key(lit_lane, true);
+            let pressed = paint(&mut game);
+            assert_ne!(
+                cap_pixel(&pressed, lit_lane),
+                cap_pixel(&rest, lit_lane),
+                "lane {lit_lane} cap lights"
+            );
+            for other_lane in (0..7).filter(|lane| *lane != lit_lane) {
+                assert_eq!(
+                    cap_pixel(&pressed, other_lane),
+                    cap_pixel(&rest, other_lane),
+                    "lane {other_lane} stays rest"
+                );
+            }
+            assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
+
+            game.lane_key(lit_lane, false);
+            let released = paint(&mut game);
+            assert_eq!(
+                cap_pixel(&released, lit_lane),
+                cap_pixel(&rest, lit_lane),
+                "key up clears the cap"
+            );
+        }
     }
 
     #[test]
