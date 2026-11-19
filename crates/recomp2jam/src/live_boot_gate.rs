@@ -20,8 +20,8 @@ mod live_boot_gate_tests {
 
     use o2jam_net::frame::decode_frame;
     use o2jam_net::{
-        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, JoinedRoom,
-        Request, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
+        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, CharacterInfo, Frame,
+        Gender, JoinedRoom, Request, Response, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
     };
     use o2jam_render::{pack_xrgb, Frame as RenderFrame};
     use o2jam_shell::screens::game::PlanetModal;
@@ -120,6 +120,80 @@ mod live_boot_gate_tests {
             };
             stream.write_all(&hero.encode()).unwrap();
             hero
+        });
+        (port, server)
+    }
+
+    /// Script the 1000/1001/1002/1003 boot exchange with real 1003
+    /// rows, returning the gateway's observed frame order. The order
+    /// is the relay-down story's socket-side pin (close-cp boot-2:
+    /// manifest `64caf0c4…8c7208`, citation `30d1b061…2e5290c7`).
+    fn spawn_boot_gateway_with_channels(
+        channels: Vec<ChannelState>,
+    ) -> (u16, thread::JoinHandle<(CharacterInfo, Vec<u16>)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut order = Vec::new();
+
+            let authorize = read_frame(&mut stream);
+            order.push(authorize.id);
+            assert_eq!(authorize.id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            order.push(Response::Authorize.id());
+
+            let listed = read_frame(&mut stream);
+            order.push(listed.id);
+            assert_eq!(listed.id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels }.encode())
+                .unwrap();
+            order.push(Response::GetChannelList.id());
+
+            let login = read_frame(&mut stream);
+            order.push(login.id);
+            assert_eq!(login.id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            order.push(Response::ChannelLogin.id());
+
+            let rooms = read_frame(&mut stream);
+            order.push(rooms.id);
+            assert_eq!(rooms.id, Request::GetChannelInfo.id());
+            stream
+                .write_all(&RoomList { rooms: vec![] }.encode())
+                .unwrap();
+            order.push(Response::RoomList.id());
+
+            let fetched = read_frame(&mut stream);
+            order.push(fetched.id);
+            assert_eq!(fetched.id, Request::GetCharacterInfo.id());
+            let hero = CharacterInfo {
+                nickname: "gate".to_owned(),
+                ..Default::default()
+            };
+            stream.write_all(&hero.encode()).unwrap();
+            order.push(Response::GetCharacterInfo.id());
+            (hero, order)
         });
         (port, server)
     }
@@ -1320,6 +1394,66 @@ mod live_boot_gate_tests {
         assert!(game.dismiss_relay_down_dialog());
         assert_eq!(game.channel_rows(), channels, "OK reveals the held rows");
         assert_eq!(game.screen(), Screen::Channel, "OK keeps the channel frame");
+    }
+
+    /// Ticket #504: the relay-down notice's wire half. Live chain:
+    /// `main.rs::run_online` -> `connect::connect_and_login_with_transport`
+    /// (1000/1001/1002/1003 on the gateway) -> `stage_channel_list_after_relay_gate`
+    /// -> `ScreenGame::hold_channel_rows_for_relay_notice` ->
+    /// `enter_screen(Channel)` -> `open_relay_down_dialog` ->
+    /// `paint_channel` -> `paint_planet_modal` -> OK at the pinned
+    /// (400,365) `Dialog_Information` rect -> `dismiss_relay_down_dialog`.
+    /// The exe's close-cp boot-2 pack pins this wire order and the
+    /// popup frame before the channel rows become visible.
+    #[test]
+    fn relay_down_notice_holds_the_pinned_1003_rows_until_ok() {
+        let row = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        };
+        let (port, server) = spawn_boot_gateway_with_channels(vec![row]);
+        let (report, _gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let (hero, order) = server.join().unwrap();
+
+        assert_eq!(
+            order,
+            [
+                Request::Authorize.id(),
+                Response::Authorize.id(),
+                Request::GetChannelList.id(),
+                Response::GetChannelList.id(),
+                Request::ChannelLogin.id(),
+                Response::ChannelLogin.id(),
+                Request::GetChannelInfo.id(),
+                Response::RoomList.id(),
+                Request::GetCharacterInfo.id(),
+                Response::GetCharacterInfo.id(),
+            ],
+            "exe boot wire order 1000/1001/1002/1003 before the notice"
+        );
+        assert_eq!(report.channels, [row], "1003 carries the held row");
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, Some(&hero));
+        crate::stage_channel_list_after_relay_gate(&mut game, report.channels, true);
+        assert_eq!(game.screen(), Screen::Avi, "notice is not a boot sheet");
+        assert!(game.relay_down_notice_pending());
+        assert!(game.enter_screen(Screen::Planet));
+        assert!(game.enter_screen(Screen::Channel));
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::RelayDown),
+            "1003 rows arrive behind the exe's notice"
+        );
+        assert!(game.channel_rows().is_empty(), "the notice holds the rows");
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(game.planet_modal(), None, "OK releases the held rows");
+        assert_eq!(game.channel_rows(), [row]);
     }
 
     /// Same boot chain, relay-up arm: no notice, the existing
