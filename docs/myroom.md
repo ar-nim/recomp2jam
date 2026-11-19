@@ -101,6 +101,51 @@ and the live gate assertion in
 Matched-state pixel hash against the exe pack stays OPEN without a live
 boot; the synthetic guard pins paint order, not a 1:1 screenshot hash.
 
+## Selection frame body (ticket #305, 2026-11-19)
+
+Version pin as above (`83a04541…c823b`, 5,029,888 B); archive
+`Interface1.opi` `d6654119…bdd50584`, 75,100,702 B. Local read-only
+archive parse (no bytes added to the repo):
+
+| Entry | Slot / file offset / size | Body | Evidence |
+|---|---|---|---|
+| `State_Myroom.ojs` | 1137 / 42,946,754 / 960,028 B | 1 raw 800x600 frame, anchor (0,0) | default Inventory face, baked STATUS badge (427,22)-(476,46), slot grid |
+| `Myroom_Inventory.ojs` | 306 / 22,023,032 / 2,788 B | 1 frame, anchor (147,307), 60x23 | INVENTORY body on the STATUS-toggled face (`0x15203034`, bnd ordinal `0x34`) |
+| `Myroom_Status.ojs` | 312 / 22,037,148 / 274,204 B | 1 frame, anchor (392,22), 384x357 | STATUS plate on that face (`0x15500036`, ordinal `0x36`) |
+| `Myroom_SlotCover.ojs` | 1584 / 73,857,906 / 308,284 B | 1 frame, anchor (240,46), 494x312 | slot grid on both faces (`0x15500035`, ordinal `0x35`) |
+| `Myroom_MybagSelect.oji` | 1305 / 58,501,780 / 2,042 B | 1 prefixed frame, 86x69, 134 row spans | static blue selection frame (`0x15500033`, ordinal `0x33`, bnd rect (0,0,86,69)) |
+| `Window_Cursor.ojs` | 1303 / 58,448,076 / 1,848 B | 2 frames, 18x25 | orange pointer, not panel art |
+
+`State_Myroom.bnd` is slot 1340, offset 61,442,280, 1,782 B, 111 rects;
+ordinal `(code & 0xFFF)-1` reproduces the four rects named in the #369
+table above.
+
+The live-4 gesture pack (`~/scratch/live-4/myroom-gesture/exe`,
+`myroom.png` `5ddb5454…1663`, `myroom-status-toggle.png` `b095a915…aeb9c6`,
+`myroom-gesture.png` `c838e437…c7bfe3`, exe `83a04541…c823b`) pins both
+panel faces and the click that switches them (input log: (177,318) on the
+INVENTORY control). The orange arrows in those frames are **not** a
+per-state frame: decoding `Window_Cursor.ojs` frame 0 matches its pixels
+at (517,16) in `myroom.png` and (177,318) in both later frames with mean
+per-channel error 0.68 — exactly the two logged click points. The bnd
+`0x33` rect shows no `.oji` ink in either capture (0/604 opaque pixels
+match), so no exe frame pins the selection body to a pressed cell. That
+mapping stays ours-by-design; the next evidence step is a qualified
+exe capture with a pressed slot/bag/gift cell.
+
+Landed: `paint_myroom_data` stops painting `paint_cursor` amber on the
+MyRoom path. It reads the staged `MYBAGSELECT` sprite and its decoded
+86x69 frame body, then centers that body over each selected staged cell
+rect (slot, bag, gift). Geometry comes from staged `.bnd` rects and the
+sprite record only. Guards:
+`myroom_inventory_face_paints_the_staged_selection_frame_without_amber`,
+`myroom_status_face_paints_the_staged_selection_frame_without_amber`,
+`myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber`
+(all red on the amber painter: amber pixel 30, frame pixel absent), plus
+the live gate assertion in
+`live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
+Owner visual confirm is still pending after merge.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to
@@ -246,5 +291,7 @@ its source, never to "the data":
    ours-by-design; the claim round trip is scripted-gateway only
    (live Memoryer replay names the server's 5024 verdict and any
    inventory echo). Next step: live gateway replay of the gift box.
-8. Highlight rendering: the amber cursor is an OPEN stand-in.
-   Next step: rig capture of the selected-slot/cell frames.
+8. Highlight rendering: the amber stand-in is gone; the archive frame
+   body is staged, but which cell the exe highlights and whether it
+   uses `Myroom_MybagSelect.oji` at all is still unpinned. Next step:
+   qualified exe capture with a pressed slot/bag/gift cell.

@@ -48,7 +48,7 @@ use super::side::{
     CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
     MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_SLOT_FIRST_CODE,
     NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
     RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
     SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
@@ -1134,15 +1134,18 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// Avatar-room rows and captions over staged placements: bag names
 /// into the `MYBAGITEM` rects, gift names into the `GIFTBOX_EX`
 /// rects, identity/gift strings into their TEXT rects, and the
-/// amber stand-in cursor at the selected slot, bag cell, and gift
-/// cell (highlight rendering is unevidenced — the cursor is an OPEN
-/// stand-in like the planet band cursor, never exe parity).
+/// archive's `Myroom_MybagSelect.oji` frame body centered on the
+/// selected slot, bag cell, and gift cell. The frame body and its
+/// `.bnd` placement are archive-pinned; centering it on a picked
+/// cell is ours-by-design (no selected-cell exe capture exists,
+/// `docs/myroom.md` OPEN 8). Without staged art no stand-in paints.
 /// Everything rides staged `.bnd` rects in file order; without
 /// staged rows nothing paints (no fallback geometry is invented).
 #[allow(clippy::too_many_arguments)]
 pub fn paint_myroom_data(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
     state: MyRoomState,
     bag_names: &[String],
     gift_names: &[String],
@@ -1158,28 +1161,70 @@ pub fn paint_myroom_data(
     }
     paint_myroom_cells(frame, placements, bag_names, MYROOM_BAG_FIRST_CODE);
     paint_myroom_cells(frame, placements, gift_names, MYROOM_GIFT_FIRST_CODE);
+    let mut selected = Vec::new();
     if let Some(placed) =
         myroom_family_placement(placements, MYROOM_SLOT_FIRST_CODE, state.selected_slot())
     {
-        paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
+        selected.push(placed.rect);
     }
-    if let Some(cell) = state.bag_cell() {
-        if let Some(placed) = myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell) {
-            paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
-        }
-    }
-    if let Some(cell) = state.gift_cell() {
-        if let Some(placed) = myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell) {
-            paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
-        }
+    selected.extend(state.bag_cell().and_then(|cell| {
+        myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell).map(|placed| placed.rect)
+    }));
+    selected.extend(state.gift_cell().and_then(|cell| {
+        myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell).map(|placed| placed.rect)
+    }));
+    for rect in selected {
+        paint_myroom_selection(frame, placements, figures, &rect);
     }
 }
 
-/// Vertical middle of one staged rect (native pixels): the amber
-/// stand-in cursor's anchor, matching the planet band cursor rule.
-fn myroom_rect_mid_y(rect: &Rect) -> i32 {
-    let half = i32::try_from(rect.h).unwrap_or(0) / 2;
-    rect.y + half
+/// Paint the archive selection frame over one staged cell rect.
+/// The frame's sprite and `.bnd` placement come from the
+/// `MYBAGSELECT` control; its size comes from the decoded record.
+/// The destination is centered on the staged cell — no literal
+/// geometry and no amber fill.
+fn paint_myroom_selection(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    cell: &Rect,
+) {
+    let Some(selection) = placements
+        .iter()
+        .find(|placed| placed.code == MYROOM_SELECT_CODE)
+    else {
+        return;
+    };
+    let Some(sprite) = selection.sprite.as_deref() else {
+        return;
+    };
+    let Some(layer) = figures.get(sprite).and_then(|figure| figure.layer(0)) else {
+        return;
+    };
+    let (Ok(frame_w), Ok(frame_h)) = (u32::try_from(layer.image.w), u32::try_from(layer.image.h))
+    else {
+        return;
+    };
+    let view = ScenePlacement {
+        rect: centered_frame_rect(cell, frame_w, frame_h),
+        ..selection.clone()
+    };
+    paint_placement_layer(frame, &view, figures, 0, true, None);
+}
+
+/// Center the selection frame on a staged cell, using only that
+/// cell's rect and the sprite's stored dimensions.
+fn centered_frame_rect(cell: &Rect, frame_w: u32, frame_h: u32) -> Rect {
+    let cell_half_w = i32::try_from(cell.w / 2).unwrap_or(0);
+    let cell_half_h = i32::try_from(cell.h / 2).unwrap_or(0);
+    let frame_half_w = i32::try_from(frame_w / 2).unwrap_or(0);
+    let frame_half_h = i32::try_from(frame_h / 2).unwrap_or(0);
+    Rect {
+        x: cell.x + cell_half_w - frame_half_w,
+        y: cell.y + cell_half_h - frame_half_h,
+        w: frame_w,
+        h: frame_h,
+    }
 }
 
 /// One family member by ordinal within its code run: the staged

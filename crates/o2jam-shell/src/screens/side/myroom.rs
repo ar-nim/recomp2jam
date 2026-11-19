@@ -79,6 +79,13 @@ pub const MYROOM_VACATE_CODE: u32 = 0x1520_0004;
 /// queued `EquipItem` 5004 shape and slot derivation are
 /// exe-pinned; next step: rig walk of the myroom apply gesture.
 pub const MYROOM_APPLY_CODE: u32 = 0x1520_3034;
+/// Static blue selection frame (`IDC_IMAGE_SMYROOM_MYBAGSELECT`,
+/// `Myroom_MybagSelect.oji`): archive slot 1305, 86x69 prefixed
+/// body; `.bnd` ordinal `0x33` = (0,0,86,69). The captured faces never
+/// show it at that rect (`docs/myroom.md` p305 note), so the painter
+/// uses it as the real frame body over a selected cell while its
+/// placement geometry still comes from the staged `.bnd` rects.
+pub const MYROOM_SELECT_CODE: u32 = 0x1550_0033;
 /// Avatar portrait (`0X15700012` AVATAR image, `docs/myroom.md`
 /// block walk): the staged worn figure paints here, never text.
 /// Keyed by code like the other MyRoom image families (bag, gift,

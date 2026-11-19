@@ -5848,7 +5848,7 @@ impl ScreenGame {
                 self.myroom_worn_figure(),
                 now_ms,
             );
-            self.paint_myroom_overlay(frame, &self.side_placements);
+            self.paint_myroom_overlay(frame, &self.side_placements, &self.side_figures);
         }
     }
 
@@ -5878,7 +5878,7 @@ impl ScreenGame {
                     myroom_panel_kept(placed, panel)
                 });
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
-                self.paint_myroom_overlay(frame, &art.placements);
+                self.paint_myroom_overlay(frame, &art.placements, &art.figures);
             }
             None => paint_screen(frame, Screen::Myroom),
         }
@@ -5897,7 +5897,12 @@ impl ScreenGame {
     /// visible bag names, gift names, and identity/gift captions.
     /// Reads staged data only — without a staged item table and
     /// character nothing paints (no fallback geometry is invented).
-    fn paint_myroom_overlay(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+    fn paint_myroom_overlay(
+        &self,
+        frame: &mut Frame<'_>,
+        placements: &[ScenePlacement],
+        figures: &HashMap<String, AvatarFigure>,
+    ) {
         let Some(table) = self.myroom_items.as_ref() else {
             return;
         };
@@ -5926,7 +5931,15 @@ impl ScreenGame {
             self.myroom.gift_page(),
             self.myroom.gift_cell(),
         ));
-        paint_myroom_data(frame, placements, self.myroom, &bag, &gifts, &captions);
+        paint_myroom_data(
+            frame,
+            placements,
+            figures,
+            self.myroom,
+            &bag,
+            &gifts,
+            &captions,
+        );
     }
 
     /// Rankings: staged art when present, else the flat card. The
@@ -11600,6 +11613,139 @@ mod game_tests {
                 pack_xrgb(0, 0, 255)
             ),
             "the inventory button body returns on the status face"
+        );
+    }
+
+    /// MyRoom side with a staged blue selection frame body, one bag
+    /// cell, and a picked row. The frame body is the archive's
+    /// `Myroom_MybagSelect.oji` stand-in (10x10 synthetic pixels);
+    /// its placement is the pinned `0x15500033` control. Both faces
+    /// keep the cell and the frame, so the painter must find the art
+    /// through staged rects, not through the panel state.
+    fn myroom_selection_overlay(panel: MyRoomPanel) -> (ScreenGame, Rect) {
+        use super::super::side::{
+            MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
+            MYROOM_SLOTCOVER_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_USERINFO_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let frame = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let cell = Rect {
+            x: 100,
+            y: 100,
+            w: 20,
+            h: 20,
+        };
+        let placement = |code: u32, sprite: Option<&str>, rect: Rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            sprite: sprite.map(str::to_owned),
+            code,
+            rect,
+        };
+        let placements = vec![
+            placement(MYROOM_SLOTCOVER_CODE, Some("SlotCover.ojs"), cell),
+            placement(MYROOM_USERINFO_CODE, Some("Status.ojs"), cell),
+            placement(MYROOM_SLOT_FIRST_CODE, None, shifted(cell, 200)),
+            placement(MYROOM_BAG_FIRST_CODE, None, cell),
+            placement(MYROOM_GIFT_FIRST_CODE, None, shifted(cell, 400)),
+            placement(MYROOM_SELECT_CODE, Some("Select.oji"), frame),
+        ];
+        let figures = HashMap::from([
+            ("SlotCover.ojs".to_owned(), solid_figure(20, 20, 0x7C00)),
+            ("Status.ojs".to_owned(), solid_figure(20, 20, 0x03E0)),
+            ("Select.oji".to_owned(), solid_figure(10, 10, 0x001F)),
+        ]);
+        game.load_side_scene(placements, figures);
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.show_myroom_panel(panel);
+        game.ingest_snapshot(&InputSnapshot::click_at(110, 110));
+        (game, cell)
+    }
+
+    /// Count the stand-in colour on one painted MyRoom frame.
+    fn myroom_amber_pixels(buf: &[u32]) -> usize {
+        let amber = pack_xrgb(0xFF, 0xD0, 0x20);
+        buf.iter().filter(|pixel| **pixel == amber).count()
+    }
+
+    /// One staged cell shifted along x: the three selection families
+    /// get separate hit rects without hand-written geometry.
+    fn shifted(rect: Rect, dx: i32) -> Rect {
+        Rect {
+            x: rect.x + dx,
+            ..rect
+        }
+    }
+
+    #[test]
+    fn myroom_inventory_face_paints_the_staged_selection_frame_without_amber() {
+        // Live caller chain (#305):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> PickBagCell
+        //   -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // The exe b8/live-4 captures pin the Inventory face; the frame
+        // body is the archive's `Myroom_MybagSelect.oji`.
+        let (mut game, cell) = myroom_selection_overlay(MyRoomPanel::Inventory);
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Inventory);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        let buf = paint_myroom_panel(&mut game);
+        assert_eq!(
+            buf[(cell.y + 10) as usize * 800 + (cell.x + 10) as usize],
+            pack_xrgb(0, 0, 255),
+            "the staged selection frame paints over the picked cell"
+        );
+        assert_eq!(
+            myroom_amber_pixels(&buf),
+            0,
+            "the amber stand-in is gone from the staged path"
+        );
+    }
+
+    #[test]
+    fn myroom_status_face_paints_the_staged_selection_frame_without_amber() {
+        // Live caller chain as above; the live-4 gesture pack pins the
+        // toggled STATUS face at click (177,318) in the same scene.
+        let (mut game, cell) = myroom_selection_overlay(MyRoomPanel::Status);
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Status);
+        let buf = paint_myroom_panel(&mut game);
+        assert_eq!(
+            buf[(cell.y + 10) as usize * 800 + (cell.x + 10) as usize],
+            pack_xrgb(0, 0, 255),
+            "the same frame body survives the panel-face filter"
+        );
+        assert_eq!(myroom_amber_pixels(&buf), 0);
+    }
+
+    #[test]
+    fn myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber() {
+        // Live caller chain as above, both other selection families.
+        // No exe capture pins the highlight on a pressed slot or gift
+        // cell (docs/myroom.md OPEN 8); the shared frame body is ours
+        // by design, never an invented wire or hit-test rule.
+        let (mut game, _) = myroom_selection_overlay(MyRoomPanel::Inventory);
+        game.ingest_snapshot(&InputSnapshot::click_at(310, 110));
+        assert_eq!(game.myroom().selected_slot(), 0);
+        let buf = paint_myroom_panel(&mut game);
+        assert_eq!(myroom_amber_pixels(&buf), 0, "slot pick has no amber");
+        assert!(
+            buf.iter().any(|pixel| *pixel == pack_xrgb(0, 0, 255)),
+            "the staged frame body paints for the picked slot"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(510, 110));
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+        let buf = paint_myroom_panel(&mut game);
+        assert_eq!(myroom_amber_pixels(&buf), 0, "gift pick has no amber");
+        assert!(
+            buf.iter().any(|pixel| *pixel == pack_xrgb(0, 0, 255)),
+            "the staged frame body paints for the picked gift cell"
         );
     }
 

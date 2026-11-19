@@ -23,11 +23,14 @@ mod live_boot_gate_tests {
         AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, JoinedRoom,
         Request, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
     };
-    use o2jam_render::Frame as RenderFrame;
+    use o2jam_render::{pack_xrgb, Frame as RenderFrame};
     use o2jam_shell::screens::game::PlanetModal;
-    use o2jam_shell::screens::side::{MyRoomPanel, PlanetOptionTab};
+    use o2jam_shell::screens::side::{
+        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
+    };
     use o2jam_shell::screens::SideScreen;
-    use o2jam_shell::{GameLoop, Screen};
+    use o2jam_shell::staging::{read_install_archives, stage_state, StageContext, State};
+    use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
     use crate::{
         assemble_online_session, connect, install_root, setup_online, stage_online_identity,
@@ -1073,6 +1076,59 @@ mod live_boot_gate_tests {
         assert_ne!(
             painted, bare,
             "entered MyRoom paints staged character data live (figure, bag, captions)"
+        );
+        // #305: the real selection frame body and its bnd control
+        // must land in the same live staging pass, and a picked
+        // cell must repaint with the art instead of the amber
+        // stand-in. Geometry comes from the staged archive block,
+        // never a literal in this gate.
+        let interface = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive checked above");
+        let myroom = stage_state(&interface, State::MyRoom, StageContext::default())
+            .art
+            .expect("MyRoom block stages from the installed archive");
+        let selection = myroom
+            .placements
+            .iter()
+            .find(|placed| placed.code == MYROOM_SELECT_CODE)
+            .expect("MYBAGSELECT control is staged");
+        let sprite = selection
+            .sprite
+            .as_deref()
+            .expect("MYBAGSELECT names a sprite body");
+        assert!(
+            myroom.figures.contains_key(sprite),
+            "Myroom_MybagSelect.oji decodes through the live staging path"
+        );
+        let cell = myroom
+            .placements
+            .iter()
+            .find(|placed| placed.code == MYROOM_BAG_FIRST_CODE)
+            .expect("MYBAGITEM1 is staged");
+        live.ingest_snapshot(&InputSnapshot::click_at(
+            cell.rect.x + i32::try_from(cell.rect.w / 2).unwrap_or(0),
+            cell.rect.y + i32::try_from(cell.rect.h / 2).unwrap_or(0),
+        ));
+        assert_eq!(live.myroom().bag_cell(), Some(0));
+        let mut picked = vec![0u32; 800 * 600];
+        live.paint_at(
+            &mut RenderFrame {
+                buf: &mut picked,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_ne!(
+            painted, picked,
+            "a live bag pick repaints the staged selection frame"
+        );
+        let amber = pack_xrgb(0xFF, 0xD0, 0x20);
+        assert_eq!(
+            picked.iter().filter(|pixel| **pixel == amber).count(),
+            0,
+            "no amber stand-in survives the live staged path"
         );
         server.join().unwrap();
     }
