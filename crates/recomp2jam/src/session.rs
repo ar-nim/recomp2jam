@@ -583,6 +583,11 @@ pub struct OnlineSession {
     /// seat never sent an active row). Mirrors the exe's member record
     /// at the offsets pinned in `docs/net-protocol.md` §4c.
     result_records: [Option<ResultMemberRecord>; 8],
+    /// Eight 4040 place bytes from the last rank frame (`None` until
+    /// one arrives). The exe writes these to slot `+0x217d`, but no
+    /// gameplay reader is pinned; this mirror accounts for the wire
+    /// words without inventing a rank-column source (#665).
+    last_rank_places: Option<[u8; 8]>,
 }
 
 impl OnlineSession {
@@ -627,6 +632,7 @@ impl OnlineSession {
             ready_echoes: [None; 8],
             deferred_frames: VecDeque::new(),
             result_records: [None; 8],
+            last_rank_places: None,
         }
     }
 
@@ -1305,6 +1311,15 @@ impl OnlineSession {
     #[must_use]
     pub fn result_record(&self, member_id: u8) -> Option<&ResultMemberRecord> {
         self.result_records.get(usize::from(member_id))?.as_ref()
+    }
+
+    /// Last decoded 4040 place bytes (`None` while no rank frame
+    /// arrived). Read-back for the write-side guard; no painter reads
+    /// these words, matching the exe's missing gameplay reader.
+    #[cfg(test)]
+    #[must_use]
+    pub fn last_rank_places(&self) -> Option<[u8; 8]> {
+        self.last_rank_places
     }
 
     /// Transmit the pending chat draft as 3011.
@@ -2258,11 +2273,16 @@ impl OnlineSession {
         self.stage_server_totals(&completed);
     }
 
-    /// Fold one 4040 frame: decoded and validated (the places mirror
-    /// the entry order the 4018 table already stages), then traced.
+    /// Fold one 4040 frame: decode the eight place bytes, keep them
+    /// for read-back, then trace them. The exe handler (VA `0x559a60`,
+    /// file `0x159a60`, `ev_41a169ae…`) forwards each place through the
+    /// notify writer (VA `0x5414a0`, `ev_aad816d4…`) into slot `+0x217d`;
+    /// a whole-image byte sweep (`ev_94ff31c9…`) finds no gameplay
+    /// reader, so the rank column keeps its own source (#665/#680).
     fn apply_rank_update(&mut self, frame: &Frame) {
         match GameRankUpdate::decode_frame(frame) {
             Ok(ranks) => {
+                self.last_rank_places = Some(ranks.member_ranks);
                 tracing::debug!(?ranks.member_ranks, "rank places");
             }
             Err(source) => {
@@ -7092,6 +7112,74 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Result);
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn rank_update_traces_the_eight_place_bytes_from_the_gateway() {
+        // #665: the exe's 4040 handler stores one place byte per seat
+        // at `+0x217d` (handler file `0x159a60`, writer file `0x1414ad`).
+        // Our gateway never emits it, so a scripted 4040 is the only
+        // way to prove the decoder's eight bytes are accounted for
+        // instead of silently traced and forgotten.
+        use o2jam_net::{GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry};
+        let places = [0u8, 0xff, 1, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(
+                    &GameRankUpdate {
+                        member_ranks: places,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![ScoreEntry {
+                    member_id: 0,
+                    active: true,
+                    cool: 11,
+                    good: 22,
+                    bad: 33,
+                    miss: 44,
+                    max_combo: 55,
+                    jam: 66,
+                    score: 777,
+                    reward: 88,
+                    level: 3,
+                    experience: 2000,
+                    result: MatchResult::Win,
+                    gem: 11_000,
+                    cash_point: 125,
+                    speed: 2,
+                    long_note_score: 60,
+                }],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.last_rank_places().is_some());
+        server.join().unwrap();
+        assert_eq!(session.last_rank_places(), Some(places));
     }
 
     #[test]
