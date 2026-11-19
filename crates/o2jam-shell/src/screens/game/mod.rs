@@ -54,23 +54,24 @@ use super::paint::{
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
-    can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
-    music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
-    myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
-    myroom_identity_captions, myroom_panel_kept, myroom_record_slot, myroom_wallet_captions,
-    paint_side_scene, paint_side_scene_live, paint_tutorial_scene, password_action_at,
-    payment_side_notice, planet_action_at, select_chrome_action_at, select_filter_button_id,
-    select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
-    shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
-    MyRoomAction, MyRoomLowerTab, MyRoomPanel, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
-    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
+    default_room_title, lanking_action_at, music_shop_action_at, myroom_action_at,
+    myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions, myroom_gift_page,
+    myroom_gift_pages, myroom_gift_views, myroom_identity_captions, myroom_panel_kept,
+    myroom_record_slot, myroom_wallet_captions, paint_side_scene, paint_side_scene_live,
+    paint_tutorial_scene, password_action_at, payment_side_notice, planet_action_at,
+    select_chrome_action_at, select_filter_button_id, select_filter_choice_at, select_music_rows,
+    select_music_songs_with_labels, select_row_hit, shop_action_at, side_scene_slot,
+    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
+    LankingSong, LankingSort, MusicShopAction, MusicShopRow, MyRoomAction, MyRoomLowerTab,
+    MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet,
+    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
+    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen, TutorialChartGlobals,
+    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::staging::MessengerSheet;
@@ -4394,6 +4395,10 @@ impl ScreenGame {
             self.click_shop(x, y);
             return true;
         }
+        if self.side == Some(SideScreen::Payment) {
+            self.click_cash_charge_close(x, y);
+            return true;
+        }
         if self.side == Some(SideScreen::MusicShop) {
             self.click_music_shop(x, y);
             return true;
@@ -4405,6 +4410,19 @@ impl ScreenGame {
             return true;
         }
         false
+    }
+
+    /// One press on the staged close sprite dismisses the billing
+    /// sheet and returns to the shop that opened it (boot 3). Other
+    /// billing clicks stay consumed; the web bridge is unwired.
+    fn click_cash_charge_close(&mut self, x: i32, y: i32) {
+        let close_pressed = self
+            .cash_charge_art
+            .as_ref()
+            .is_some_and(|art| cash_charge_close_hit(&art.dialog, x, y));
+        if close_pressed {
+            let _ = self.leave_side();
+        }
     }
 
     /// Waiting clicks: the song-select dialog consumes first, the

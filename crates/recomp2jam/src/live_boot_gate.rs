@@ -733,6 +733,74 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
+    /// Ticket #430: the exe's one X press at (590,23) dismisses the
+    /// Cash Charge chrome and reveals the Item Shop board (boot 3,
+    /// manifest `391212db8ff478efc97b9a761631cee6668441b60d17b164356406580b72ce6c`,
+    /// post-X frame `ce0e097066d1f53488af4039c85125e5e927b2cb900bcc7042bce633574ff5fd`).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> assemble_online_session
+    ///   -> OnlineSession::ingest_snapshot(click_at(92,355))
+    ///   -> ScreenGame::visit_side(Shop) -> click_shop -> visit_side(Payment)
+    ///   -> OnlineSession::ingest_snapshot(click_at(590,23))
+    ///   -> ScreenGame::click_side_screen -> cash_charge_close_press -> leave_side
+    ///   -> paint_screen(Shop)
+    #[test]
+    fn live_boot_charge_plate_close_press_returns_to_host_board() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(
+                session.game_mut().enter_screen(lobby),
+                "gate reaches the shop lobby through {lobby:?}"
+            );
+        }
+        assert!(session.game_mut().visit_side(SideScreen::Shop));
+        session.ingest_snapshot(&InputSnapshot::click_at(92, 355));
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::Payment),
+            "the charge plate opens the Cash Charge view"
+        );
+
+        session.ingest_snapshot(&InputSnapshot::click_at(590, 23));
+
+        assert_eq!(
+            session.game_mut().side(),
+            None,
+            "the pinned X press dismisses the Cash Charge view"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        session.paint(&mut RenderFrame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        let client = buf[300 * 800 + 400];
+        let channels = [(client >> 16) as u8, (client >> 8) as u8, client as u8];
+        assert!(
+            channels
+                .into_iter()
+                .zip([25, 24, 25])
+                .any(|(a, b)| a.abs_diff(b) > 1),
+            "the web-client colour is gone after the close press: {channels:?}"
+        );
+        assert!(
+            session.game_mut().take_shop_buy().is_none(),
+            "the close press queues no purchase send"
+        );
+        server.join().unwrap();
+    }
+
     /// Ticket #191 reopen: the shop board must not be empty on the
     /// DEFAULT live boot (no --gateway-id/--channel-id, no
     /// --avatar-opa). The seam guard

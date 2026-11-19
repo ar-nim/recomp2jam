@@ -3,7 +3,9 @@ use crate::avatar::{
     is_playing_backdrop_sprite, playing_backdrop_sprite, playing_member_frame,
     PLAYING_BACKDROP_CODE,
 };
-use crate::screens::side::{CASH_CHARGE_WEB_CODE, TUTORIAL_RECEPTOR_SPRITES};
+use crate::screens::side::{
+    cash_charge_close_hit, CASH_CHARGE_WEB_CODE, TUTORIAL_RECEPTOR_SPRITES,
+};
 
 #[test]
 fn states_key_by_their_block_names() {
@@ -1113,6 +1115,26 @@ fn cash_charge_sheet_stages_the_b8_frame_client_and_close() {
     assert_eq!(close.role, PlacementRole::Clone);
     assert!(art.dialog.figures.contains_key("Dialog_ChargeCash.ojs"));
     assert!(art.dialog.figures.contains_key("ChargeCash_Btn_Close.ojs"));
+}
+
+/// The boot-3 X press at native `(590,23)` must land on the staged
+/// close sprite; points just outside its anchor box must not. Install
+/// data is local-only: CI skips cleanly.
+#[test]
+fn cash_charge_close_press_hits_the_b8_sprite_anchor() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let art = stage_cash_charge(&interface, StageContext::default());
+    assert!(
+        cash_charge_close_hit(&art.dialog, 590, 23),
+        "boot-3 press lands on the parsed close sprite"
+    );
+    assert!(!cash_charge_close_hit(&art.dialog, 569, 23));
+    assert!(!cash_charge_close_hit(&art.dialog, 620, 23));
+    assert!(!cash_charge_close_hit(&art.dialog, 590, 4));
 }
 
 /// Spec #315 story 12: the six `DIALOG_MESSENGER_*` blocks stage at
