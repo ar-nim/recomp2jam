@@ -78,6 +78,20 @@ pub const CASH_CHARGE_WEB_CODE: u32 = 0x8350_0002;
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
 
+/// Bottom-right exit chrome of the tutorial: `Playing_Exit.ojs` at
+/// its parsed record anchor `(751,554)`, 42x42 (`docs/opi-pattern.md:54`).
+/// The qualified boot1 press `(777,567)` lands inside it and returns
+/// the Room board without a modal (`ed1bf56e…7b46`).
+pub const TUTORIAL_EXIT_SPRITE: &str = "Playing_Exit.ojs";
+/// Fallback hit rect when the exit body is not staged: the same
+/// parsed anchor, never an invented point.
+pub const TUTORIAL_EXIT_HIT_RECT: Rect = Rect {
+    x: 751,
+    y: 554,
+    w: 42,
+    h: 42,
+};
+
 /// First-page instruction bubble (`Guide_Text.ojs` record 0, anchor
 /// `(374,297)`, 322x156). The body stores 13 full pages; record 0 bakes
 /// the Korean lesson text and the `1/13` counter seen in the B7 exe

@@ -70,7 +70,7 @@ use super::side::{
     TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
     INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
     SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS,
+    SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -4308,12 +4308,35 @@ impl ScreenGame {
         }
     }
 
+    /// Tutorial exit hit test: use the staged `Playing_Exit.ojs` rect
+    /// when the art is present, otherwise the same anchor from the
+    /// archive pin. The qualified boot1 press `(777,567)` lands here.
+    fn tutorial_exit_hit(&self, x: i32, y: i32) -> bool {
+        let rect = self
+            .side_placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some(TUTORIAL_EXIT_SPRITE))
+            .map_or(TUTORIAL_EXIT_HIT_RECT, |placed| placed.rect);
+        let offset_x = i64::from(x) - i64::from(rect.x);
+        let offset_y = i64::from(y) - i64::from(rect.y);
+        offset_x >= 0
+            && offset_x < i64::from(rect.w)
+            && offset_y >= 0
+            && offset_y < i64::from(rect.h)
+    }
+
     /// The open side screen answers its named controls at staged
     /// rects (lanking: sorts, pagers, row picks; shop: row toggles,
-    /// buys, pagers, sorts; my room: the side overlay); every other
-    /// side screen stays click-silent. Returns whether the click was
-    /// consumed.
+    /// buys, pagers, sorts; my room: the side overlay; tutorial: the
+    /// bottom-right exit); every other side screen stays click-silent.
+    /// Returns whether the click was consumed.
     fn click_side_screen(&mut self, x: i32, y: i32) -> bool {
+        if self.side == Some(SideScreen::Tutorial) {
+            if self.tutorial_exit_hit(x, y) {
+                let _ = self.leave_side();
+            }
+            return true;
+        }
         if self.side == Some(SideScreen::Lanking) {
             self.click_lanking(x, y);
             return true;
@@ -21871,6 +21894,52 @@ mod game_tests {
         assert!(game.leave_side());
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn firststep_tutorial_exit_click_returns_to_room_and_recues_its_bgm() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial → bottom-right exit press → opening Room.
+        // Boot1 input log `cee8b7d5…1913` clicks `(777,567)`; the next
+        // frame `ed1bf56e…7b46` is the Room board with no modal.
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        let mut bank = vec![None; 10];
+        bank[2] = Some(o2jam_audio::PcmSamples {
+            samples: vec![3; 441],
+            sample_rate: 44_100,
+            channels: 1,
+        });
+        game.stage_scene_bgm(bank);
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: None,
+                rect: ROOM_CONTROL_TEST_RECT,
+            }],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None, "exit leaves the side visit");
+        assert_eq!(game.screen(), Screen::Room, "opening lobby returns");
+        assert_eq!(game.planet_modal(), None, "no modal on return");
+        assert_eq!(game.scene_bgm_selection().map(|cue| cue.record), Some(3));
     }
 
     #[test]
