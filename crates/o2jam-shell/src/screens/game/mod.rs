@@ -15929,6 +15929,49 @@ mod game_tests {
     }
 
     #[test]
+    fn three_key_lane_buttons_arm_lanes_zero_through_three() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::capture_raw_key
+        // -> ScreenGame::options_dialog.rebind_armed_lane ->
+        // OptionsSettings::rebind_lane. `3KEY_1..4` sits at the four
+        // staged rects next to `KEY1..7` on the exe Key sheet; each
+        // click arms the lane with the same rebind capture. Which four
+        // playable lanes the 3-key mode uses stays OPEN (no exe pin).
+        use super::super::side::OPTION_KEY_3KEY_FIRST;
+        use winit::keyboard::KeyCode;
+        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC, KeyCode::KeyV];
+        let buttons: Vec<(u32, i32, i32)> = (0..4u32)
+            .map(|lane| {
+                (
+                    OPTION_KEY_3KEY_FIRST + lane,
+                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100,
+                )
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        for (lane, code) in binds.iter().enumerate() {
+            let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
+            click_button(&mut game, x, 100);
+            assert_eq!(
+                game.option_rebind_armed(),
+                Some(lane),
+                "3KEY{} arms lane {lane}",
+                lane + 1
+            );
+            assert!(game.capture_raw_key(*code, true));
+        }
+        assert_eq!(
+            game.options().lane_keys()[..4],
+            binds,
+            "the first four lanes answer the 3KEY binds"
+        );
+    }
+
+    #[test]
     fn options_key_tab_rebind_refuses_unmappable_keys() {
         use winit::keyboard::KeyCode;
         let mut game = ScreenGame::new();

@@ -98,6 +98,9 @@ consumer (file `0x16E372`).
 
 Guards: `options::tests::*` (13: mapping, clamps, round-trip,
 DIK), `options_key_tab_rebind_answers_on_the_new_lane`,
+`three_key_lane_buttons_arm_lanes_zero_through_three` (same live chain as
+the 7-lane rebind; the 4-button arm is the whole behavior, 3-key lane
+mapping stays OPEN),
 `key_tab_rebinds_all_seven_lanes_to_their_dik_codes` (seam suffices: the
 dialog-to-DIK mapping is the whole behavior; live chain `main.rs::run_online`
 → `run_windowed_session` → `window::InputHandler::route_key` →
