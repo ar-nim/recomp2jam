@@ -96,6 +96,12 @@ DIK), `options_key_tab_rebind_answers_on_the_new_lane`,
 `options_sound_tab_steps_move_volumes_with_exe_bounds`,
 `options_game_tab_buttons_map_to_the_pinned_ini_values`,
 `options_tab_switches_ride_the_staged_codes`,
+`options_tab_switches_open_each_own_staged_sheet` (all six sheet-owned
+switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::apply_pointer_down` → `click_dispatch` → `click_planet` →
+`click_planet_modal` → `click_options_dialog` → `OptionsDialog::click` →
+`PlanetOptionTab::switch_tab`),
 `options_save_commits_beside_the_install_root`,
 `options_exit_closes_without_saving`,
 `options_default_restores_the_exe_defaults_per_tab`,

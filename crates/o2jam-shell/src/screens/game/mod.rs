@@ -15986,6 +15986,65 @@ mod game_tests {
     }
 
     #[test]
+    fn options_tab_switches_open_each_own_staged_sheet() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::apply_pointer_down -> click_dispatch -> click_planet
+        // -> click_planet_modal -> click_options_dialog -> OptionsDialog::click
+        // -> PlanetOptionTab::switch_tab. The six switch codes belong to
+        // their own sheets: a code pressed on a foreign sheet answers
+        // nothing (its rect is not staged there).
+        use super::super::side::{
+            OPTION_GAME_KEYSET, OPTION_GAME_SOUNDSET, OPTION_KEY_GAMESET, OPTION_KEY_SOUNDSET,
+            OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET,
+        };
+        let cases = [
+            (
+                PlanetOptionTab::Key,
+                OPTION_KEY_SOUNDSET,
+                PlanetOptionTab::Sound,
+            ),
+            (
+                PlanetOptionTab::Key,
+                OPTION_KEY_GAMESET,
+                PlanetOptionTab::Game,
+            ),
+            (
+                PlanetOptionTab::Sound,
+                OPTION_SOUND_KEYSET,
+                PlanetOptionTab::Key,
+            ),
+            (
+                PlanetOptionTab::Sound,
+                OPTION_SOUND_GAMESET,
+                PlanetOptionTab::Game,
+            ),
+            (
+                PlanetOptionTab::Game,
+                OPTION_GAME_KEYSET,
+                PlanetOptionTab::Key,
+            ),
+            (
+                PlanetOptionTab::Game,
+                OPTION_GAME_SOUNDSET,
+                PlanetOptionTab::Sound,
+            ),
+        ];
+        for (owner, code, expected) in cases {
+            let mut game = ScreenGame::new();
+            stage_option_buttons(&mut game, owner, &[(code, 100, 100)]);
+            open_options(&mut game);
+            game.switch_option_tab(owner);
+            click_button(&mut game, 100, 100);
+            assert_eq!(
+                game.planet_option_tab(),
+                expected,
+                "{owner:?} {code:#010X} must open its own sheet"
+            );
+        }
+    }
+
+    #[test]
     fn options_save_commits_beside_the_install_root() {
         let root = std::env::temp_dir().join(format!("recomp2jam-options-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
