@@ -9871,7 +9871,7 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            &champion_room(),
+            champion_room().speed,
             &placements,
         );
         assert_eq!(buf[376 * 800 + 677], 0, "the chip has no shell scrim");
@@ -12933,9 +12933,12 @@ mod paint_tests {
         // #372 re-pinned after the exe-matched seat-index mapping:
         // peer slots keep their `slot.index` cover and the local member
         // sits at `member_id`; header class chips stay unpainted.
-        // Named guards + the p343 matched rerun carry the exe evidence.
+        // #535 re-cut: `SPEED_NUM` now inks caption level's pick-or-room
+        // speed instead of the room's own speed, so the four folded
+        // frames differ at that rect alone. Named guards + the p343
+        // matched rerun carry the exe evidence.
         assert_eq!(
-            hash, 0x7E96_06C7_AA25_D885,
+            hash, 0x2EF3_90AE_C80F_1B86,
             "waiting paint generation changed; re-check the exe pins before updating"
         );
     }

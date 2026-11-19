@@ -4647,6 +4647,17 @@ mod tests {
         assert_eq!(guest.screen(), Screen::Waiting);
     }
 
+    /// True while a pixel index lies inside one staged rect.
+    fn rect_contains_pixel(rect: o2jam_render::Rect, x: usize, y: usize) -> bool {
+        let (Ok(px), Ok(py)) = (i32::try_from(x), i32::try_from(y)) else {
+            return false;
+        };
+        rect.x <= px
+            && px < rect.x.saturating_add(i32::try_from(rect.w).unwrap_or(0))
+            && rect.y <= py
+            && py < rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(0))
+    }
+
     #[test]
     fn guest_view_hides_staged_select_but_keeps_shared_captions() {
         // The gate hides dialog art, structure, and panel even when
@@ -4684,11 +4695,26 @@ mod tests {
             );
             return;
         };
+        let speed = guest
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_IMAGE_SWAIT_SPEED_NUM")
+            .map(|placed| placed.rect)
+            .expect("SPEED_NUM placement missing from staged Waiting art");
         let changed = o2jam_render::first_change_outside(&before, &after, width, badge);
-        assert!(
-            changed.is_none(),
-            "guest staged no select pixels outside the shared LEVEL badge: {changed:?}"
-        );
+        // #535: the pick-or-room speed caption is shared with every
+        // role, so its rect may ink alongside the LEVEL badge.
+        if let Some((x, y)) = changed {
+            assert!(
+                rect_contains_pixel(speed, x, y),
+                "guest staged no select pixels outside the shared captions: {changed:?}"
+            );
+            assert_ne!(
+                o2jam_render::pixels_in_rect(&before, width, speed),
+                o2jam_render::pixels_in_rect(&after, width, speed),
+                "the shared SPEED_NUM caption follows the staged pick"
+            );
+        }
         assert_ne!(
             o2jam_render::pixels_in_rect(&before, width, badge),
             o2jam_render::pixels_in_rect(&after, width, badge),

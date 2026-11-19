@@ -62,3 +62,87 @@ Post-rebase note: `origin/main` later made stored colorkey `0` opaque in
 `Lanking_NoticeBoard.oji` band over the header (`top_header` 0.451423).
 That band is outside #372; the pre-rebase build of this patch scored
 0.859627 with no band. It needs its own exe pin before any verdict.
+
+## #524 role-owned song rect (2026-11-20)
+
+The owner decision from #278 stands: the master paints
+`IDC_BUTTON_SWAIT_MUSELECT 0x16200003` / `Wait_MusicSelect.ojs` (the blue
+곡선택 button) at bound `.bnd` rect 2, and a peer paints
+`IDC_IMAGE_SWAIT_COVERMUSIC 0x1650001d` / `Wait_Cover_Music.ojs` (BPM
+cover) at rect 28; `ALBUMMODE 0x1650001c` paints for neither role. Staging
+keeps both bodies for every role; `waiting_control_armed_for_role` in
+`o2jam-shell/src/screens/paint/waiting.rs` is the single home for the swap.
+
+Live-path guard: `waiting_song_rect_shows_select_button_for_host_and_cover_for_peer`
+(`recomp2jam/src/live_art.rs`, chain `main.rs::run_play` → `setup_online` →
+`OnlineSession::stage_live_art` → `stage_live_scenes` →
+`stage_interface_scenes(State::Waiting)` → `ScreenGame::paint_at` →
+`paint_waiting` → `paint_waiting_scene` → the role filter). It compares the
+whole staged song region against in-process references that keep one named
+body at a time; no capture pixel is baked in. Seam guards:
+`waiting_song_rect_bodies_swap_with_the_role` and
+`host_paints_the_select_button_while_peer_keeps_the_bpm_cover`.
+
+Red-proof (re-run on this branch): with the two role arms replaced by
+unconditional `true`, the live guard fails at the host/peer region
+comparison; restored arms pass. The exe display rule remains **OPEN**
+(#312): no qualified capture pins what the 7.55 exe paints in this state,
+so this note records the owner-decided shell rule only.
+
+## #538 master sees the joining peer (2026-11-20)
+
+The parked fix from #379 landed as `75c81be` on `cb2/tt-379`: the master's
+host snapshot carries seven empty slots, and the waiting drain decodes
+`UserJoinWaiting` 3004 (0x0BBC) into cover `member_id`. Live guards:
+`master_seats_the_joining_peer_from_the_3004_broadcast` and
+`joining_peer_seats_the_master_from_the_3003_answer`
+(`recomp2jam/src/session.rs`, chain `OnlineSession::paint` →
+`poll_waiting_chat` → `drain_waiting_chat` → `apply_user_joined` →
+`ScreenGame::set_joined_room` → `paint_waiting_scene`). Both are red-proved
+in `~/scratch/p379-findings.md` (evidence batches 3–5).
+
+Qualified two-client Rust-client capture (`~/scratch/p379-live/`, private
+Xvfb :381/:382, two socket taps, audio contained; `--claim none`, so no
+exe-oracle claim):
+
+- tap `tap-master.log` sha256
+  `d66d693db0166cf80a94db46cd0347dc25caedff48560fc9e7baf329b8201ca7`,
+  line 27 at 12:51:52.034: `S2C 3004 (0x0BBC)` len 103, member 1
+  `tester2`, team 1.
+- master pixel frame `master-after-join.png` sha256
+  `d42617e16df0f108c81f98878f4b535406fa8e55d55495bb2b86de66cda7d219`
+  names `P.ly:tester2` on cover 1; the peer frame
+  `guest-after-join.png` sha256
+  `2ac57af46b300caa2b677019e8fc427175597fbedcb792db5dfabb3b3dc06856`
+  shows the master on cover 0.
+
+So the roster half of the story is evidenced on both clients with the
+matching wire frame. The peer's worn figure is a separate residual: #570
+owns the red status icon where the peer body sits. No qualified exe pack
+exists for this leg; the exe display rule stays OPEN per #312.
+
+## #414 native two-Confirm drive (2026-11-20)
+
+One native-client run with a pass-through gateway tap (`15020 -> 15010`,
+`--claim none`; no exe frame is claimed). Pack
+`~/scratch/waiting-414/afk01/` (`rig-afk`, display :150, private null sink,
+`route=sink`, `on_default_sink=0`, `preboot_breach=0` in `audio/manifest`):
+
+- scene sequence `planet → channel → planet → channel → room → waiting →
+  loading → playing` (`artifacts/scene-sequence.txt` sha256
+  `d5ad2bf9fc63d33605991040074c2d3537c2457457df6bd27376f12ee56c3791`);
+  the extra planet/channel pair is the NORMAL-mode popup dismissal leg.
+  `frame-000026-playing.png` sha256
+  `e05c0812148827b4636068aa6f0444758a8acb50e499db3255b404d89f58fbbd`
+  shows the Highway and HUD in Playing.
+- wire slice `~/scratch/waiting-414/wire-chain.log` sha256
+  `ec05197952acfd09c3456d0d28c5eecb801d0630c762edf6cd80d5a1552ee312`:
+  `C2S 4000 len=4` → `S2C 4001`, `C2S 4002` → `S2C 4003`,
+  `C2S 4030` → `S2C 4031` (02:43:04), then `C2S 4010` → `S2C 4011`
+  (02:43:22), `C2S 4012 len=5` → `S2C 4013`, followed by 4014/4015 and
+  2007. This is the two-Confirm chain from t280 and
+  `scripts/planet-to-waiting.sh`, now in one native run that reaches
+  Playing.
+
+This is a native-drive pin only. No qualified exe frame covers the
+sequence; the exe comparison stays OPEN per #312.

@@ -1025,7 +1025,8 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_wins(frame, room, placements);
-    paint_waiting_speed(frame, room, placements);
+    let speed = captions.level.map_or(room.speed, |level| level.speed);
+    paint_waiting_speed(frame, speed, placements);
     paint_waiting_skills(frame, room, placements);
     paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
     paint_waiting_mapname(frame, room, placements);
@@ -1264,19 +1265,16 @@ pub(crate) fn paint_waiting_wins(
 }
 
 /// Scroll-speed label at the `SPEED_NUM` rect (rect 101): the shared
-/// `X0.5`..`XR` chain (`room-enums.md`, codes 0..11). The exe's chip
-/// art carries its own plate, so the caption inks bare glyphs at the
-/// reference bearing — no black box over the chip.
-pub(crate) fn paint_waiting_speed(
-    frame: &mut Frame<'_>,
-    room: &JoinedRoom,
-    placements: &[ScenePlacement],
-) {
+/// `X0.5`..`XR` chain (`room-enums.md`, codes 0..11). The caller
+/// supplies the pick-or-room speed so a staged pick survives the 4001
+/// room echo (#535); the exe's chip carries its own plate, so the
+/// caption inks bare glyphs at the reference bearing — no black box.
+pub(crate) fn paint_waiting_speed(frame: &mut Frame<'_>, speed: u8, placements: &[ScenePlacement]) {
     paint_waiting_bare_caption(
         frame,
         placements,
         WAITING_SPEED_NUM_ID,
-        &room_speed_label(room.speed),
+        &room_speed_label(speed),
     );
 }
 

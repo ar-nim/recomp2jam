@@ -3950,12 +3950,12 @@ impl ScreenGame {
         self.catalog_bpm.get(&u32::from(music_id)).copied()
     }
 
-    /// Catalog BPM for the joined room's song, if staged: the `BPM`
-    /// caption source (`OJNList.dat` row +20 column); `None` paints
-    /// the pinned `-0-` mismatch default.
-    fn room_song_bpm(&self) -> Option<f32> {
-        let room = self.waiting.as_ref()?;
-        self.catalog_song_bpm(room.music_id)
+    /// Catalog BPM for the song the `BPM` caption names: the staged
+    /// pick first, else the room echo (`OJNList.dat` row +20 column).
+    /// `None` paints the pinned `-0-` mismatch default.
+    fn waiting_song_bpm(&self) -> Option<f32> {
+        let song = self.waiting_song()?;
+        self.catalog_song_bpm(song.music_id)
     }
 
     /// Stage the owned-item inventory counts, one per skill slot (the
@@ -6430,7 +6430,7 @@ impl ScreenGame {
     fn paint_waiting(&self, frame: &mut Frame<'_>, now_ms: u64) {
         let captions = WaitingCaptions {
             song: self.waiting_song(),
-            song_bpm: self.room_song_bpm(),
+            song_bpm: self.waiting_song_bpm(),
             skill_counts: self.skill_counts,
             level: self.waiting_level(),
             notice: self.waiting_notice,
@@ -11398,15 +11398,96 @@ mod game_tests {
         let mut room = waiting_room();
         room.music_id = 757;
         game.set_joined_room(room);
-        assert_eq!(game.room_song_bpm(), None);
+        assert_eq!(game.waiting_song_bpm(), None);
         let blob = waiting_song_catalog_blob();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         game.set_song_catalog(&entries);
         game.set_skill_counts([7, 42, 1500]);
-        assert_eq!(game.room_song_bpm(), Some(124.0));
+        assert_eq!(game.waiting_song_bpm(), Some(124.0));
         assert_eq!(game.catalog_song_bpm(757), Some(124.0));
         assert_eq!(game.catalog_song_bpm(999), None);
         assert_eq!(game.skill_counts(), [7, 42, 1500]);
+    }
+
+    /// Staged scene for the #535 caption guards: one seat cover opens
+    /// the staged paint path; the two caption rects carry scrim plus ink.
+    fn bpm_and_speed_caption_placements() -> Vec<ScenePlacement> {
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let caption = |id: &str, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        vec![
+            caption("IDC_IMAGE_SWAIT_COVERAVATAR1", 28, 53, 141, 175),
+            caption("IDC_TEXT_SWAIT_BPM", 620, 60, 60, 20),
+            caption("IDC_IMAGE_SWAIT_SPEED_NUM", 681, 378, 54, 35),
+        ]
+    }
+
+    /// A catalog whose picked song (758, 180 BPM) differs from the
+    /// echoed room song (757, 124 BPM).
+    fn two_tempo_catalog_blob() -> Vec<u8> {
+        let mut catalog = waiting_song_catalog_blob();
+        let mut picked = catalog[..300].to_vec();
+        picked[4..8].copy_from_slice(&758u32.to_le_bytes());
+        picked[20..24].copy_from_slice(&180.0f32.to_le_bytes());
+        picked[112..117].copy_from_slice(b"Secon");
+        catalog.extend_from_slice(&picked);
+        catalog
+    }
+
+    fn waiting_game_with_song(music_id: u16, speed: u8) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = music_id;
+        room.speed = speed;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game
+    }
+
+    #[test]
+    fn room_echo_keeps_the_staged_pick_on_bpm_and_speed_captions() {
+        // Ticket #535 live chain: the 4001 room echo lands through
+        // `OnlineSession::drain_waiting_chat` ->
+        // `OnlineSession::apply_waiting_music_changed` ->
+        // `ScreenGame::set_room_music` -> `ScreenGame::paint_at` ->
+        // `paint_waiting` -> `paint_waiting_staged` ->
+        // `paint_waiting_bpm` / `paint_waiting_speed`. The master's
+        // staged pick (758, BPM 180, speed code 6) must keep naming
+        // both captions after the room echoes 757 at speed 2.
+        let catalog = two_tempo_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&catalog).unwrap();
+        let placements = bpm_and_speed_caption_placements();
+
+        let mut staged = waiting_game_with_song(757, 2);
+        staged.set_song_catalog(&entries);
+        staged.set_selected_music(o2jam_net::play::SetRoomMusic {
+            music_id: 758,
+            difficulty: 2,
+            speed: 6,
+        });
+        staged.set_room_music(757, 0, 2);
+        staged.load_scene(Screen::Waiting, placements.clone(), HashMap::new());
+
+        let mut picked_room = waiting_game_with_song(758, 6);
+        picked_room.set_song_catalog(&entries);
+        picked_room.load_scene(Screen::Waiting, placements.clone(), HashMap::new());
+
+        let staged_frame = paint_waiting_frame(&mut staged, 800, 600);
+        let picked_frame = paint_waiting_frame(&mut picked_room, 800, 600);
+        for placement in placements {
+            assert_eq!(
+                o2jam_render::pixels_in_rect(&staged_frame, 800, placement.rect),
+                o2jam_render::pixels_in_rect(&picked_frame, 800, placement.rect),
+                "{} must ink the staged pick's value after the room echo",
+                placement.id
+            );
+        }
     }
 
     #[test]

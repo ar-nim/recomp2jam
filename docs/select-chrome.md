@@ -233,6 +233,25 @@ All four wired-family guards were red-proved by disabling the
 differing pixels in the OK body). Both red arms were reproduced by
 running the tests before the fix; both now pass.
 
+## #404 placement parity (2026-11-20)
+
+`song_dialog_controls_keep_their_ordinal_paired_rects` extends the
+inventory guard: each of the 134 authored `DAILOG_SELECTMUSIC` controls
+must stage at the rect an independent ControlList + `.bnd` ordinal parse
+names, while `SET` members land at parent origin plus their template
+rect. Red-proof: swapping the OK and CANCEL rects in
+`bind_entries_by_ordinal` fails the guard; restoring the file passes.
+CI skips cleanly when `install-root` has no `Interface1.opi`.
+
+Overlaps that the shipped art authors are not defects: BG plates under
+their buttons, the random panel over the level column, the guide sheets
+over the sheet, and the two dark `?` plates baked into
+`Dialog_SelectMusic.ojs`. The grey `?` button bodies stay unpainted at
+open so those plates remain visible;
+`song_dialog_question_buttons_leave_the_baked_backdrop_plate_visible`
+pins that half. The exe's hover/help-active face for those buttons is
+still OPEN. This note pins geometry, not a qualified exe frame.
+
 ## OPEN after this leg
 
 The chosung INDEX grid, its two special buttons, the result/playlist
