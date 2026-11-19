@@ -3393,6 +3393,7 @@ impl OnlineSession {
             id if id == RankNotification::COMMAND => self.apply_rank_notice(chat, &frame),
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
+            id if id == RoomList::COMMAND => self.apply_room_list(&frame),
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
@@ -3483,6 +3484,19 @@ impl OnlineSession {
             return;
         };
         self.game.upsert_room(listed_room_from_created(created));
+    }
+
+    /// Fold one 2003 room-list snapshot into the staged rows. The
+    /// same handler serves the ordinary lobby drain and frames the
+    /// #367 fuse read while its 07DA node was tracked (#569), so a
+    /// deferred row-state probe still reaches the list with the
+    /// one-OK sheet up. Undecodable bodies drop with a trace.
+    fn apply_room_list(&mut self, frame: &Frame) {
+        let Ok(list) = RoomList::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room-list frame");
+            return;
+        };
+        self.game.set_rooms(list.rooms);
     }
 
     /// Fold one 2007 disband broadcast into the Room list. Memoryer
@@ -4088,6 +4102,18 @@ pub(super) mod session_tests {
             h: 600,
         };
         session.paint(&mut frame);
+    }
+
+    /// The game's native-canvas paint only (no session poll), for
+    /// frame comparisons after a wire event has been drained.
+    pub(super) fn painted_game_frame(session: &mut OnlineSession) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        session.game_mut().paint(&mut o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        buf
     }
 
     /// How long a drained-state assertion may wait for the fake
@@ -6396,6 +6422,76 @@ pub(super) mod session_tests {
         assert_eq!(titles, vec!["OTHER"]);
     }
 
+    /// Pixel arm of #621: the observer's painted Room list must match
+    /// a list that never had the disbanded row. The wire handler and
+    /// the row state were pinned in #380; this guard reads the frame
+    /// the live chain `Shell::run` -> `OnlineSession::paint` ->
+    /// `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed`
+    /// produces. No exe frame pair was captured (`#380` close
+    /// comment), so the live before/after capture stays OPEN.
+    #[test]
+    fn observer_paint_drops_the_row_named_by_the_2007_disband_broadcast() {
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2007, &0i32.to_le_bytes()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        let before = painted_game_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.listed_rooms().len() == 1
+        });
+        let after = painted_game_frame(&mut session);
+
+        let (mut survivor_only, survivor_server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        survivor_only
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(1, "OTHER")]);
+        let expected = painted_game_frame(&mut survivor_only);
+        assert_ne!(before, after, "the disband changed the painted list");
+        assert_eq!(
+            after, expected,
+            "the painted list matches the survivor-only list"
+        );
+        server.join().unwrap();
+        survivor_server.join().unwrap();
+    }
+
+    /// Opposite arm: a 3007 leave event is not a disband, so the
+    /// observer's paint keeps painting both rows. Same live chain as
+    /// the disband guard, with the non-removing opcode from the pinned
+    /// two-client probe (`~/scratch/p380-wire-probe.log`).
+    #[test]
+    fn observer_paint_keeps_the_row_when_only_a_3007_leave_event_arrives() {
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[1, 0, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        let before = painted_game_frame(&mut session);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        let after = painted_game_frame(&mut session);
+        assert_eq!(
+            before, after,
+            "the non-disband leave event leaves the painted rows intact"
+        );
+        assert_eq!(session.game.listed_rooms().len(), 2);
+        server.join().unwrap();
+    }
+
     #[test]
     fn disband_broadcast_read_by_the_07da_fuse_still_removes_the_row() {
         // Live-path guard for the drain gap seen in the 13:14 live leg:
@@ -8204,6 +8300,19 @@ pub(super) mod session_tests {
         "00000000000000000000000000000000000000000000000000010000000000"
     );
 
+    /// Evidence-room leg (`~/scratch/evidence-room/row-state-3/rust-master/
+    /// wire/room-stage.log`, 02:53:32): 3004 with 13 music ids. The wire
+    /// log caps the hex at 256 chars; the last three bytes come from
+    /// the p379 body's field tail. 3004 carries no member-count field
+    /// (#551 premise check in `o2jam-net`); the seat id raises the
+    /// headcount instead.
+    const EVIDENCE_ROOM_JOIN_BROADCAST_HEX: &str = concat!(
+        "017432303770726f62650001000000012c01000001000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000002300000000",
+        "000000000000000000000000000000000000000d00000061f360f35df35cf302f301f300",
+        "f3fff2fef2fdf2fbf2f6f2f5f200000000010000000000",
+    );
+
     /// The matching 3003 answer the joining peer received at the same
     /// instant: result 0, own seat 1, master `tester` in slot 0.
     const LIVE_JOIN_ANSWER_HEX: &str = concat!(
@@ -8310,6 +8419,33 @@ pub(super) mod session_tests {
         let peer = session.game.staged_waiting_member(1).unwrap();
         assert_eq!(peer.nickname, "tester2");
         assert_eq!(peer.team, 1);
+    }
+
+    /// #551 wire arm: the 3004 seat id is the only live count source
+    /// on the master. A vacant seat raises the headcount; a replayed
+    /// broadcast for the same seat replaces the member in place and
+    /// leaves the count alone. Live caller chain (docs/live-path-
+    /// reachability.md): main.rs::run_play -> assemble_online_session
+    /// -> stage_hosted_room -> OnlineSession::paint (Waiting) ->
+    /// poll_waiting_chat -> drain_waiting_chat -> apply_user_joined ->
+    /// JoinedRoom::seat_member. The channel-observer 2009/2003 half
+    /// stays OPEN: evidence-room taps saw no 2009 on any observer.
+    #[test]
+    fn join_broadcast_raises_the_headcount_from_the_pinned_3004_member_id() {
+        let body = hex_bytes(EVIDENCE_ROOM_JOIN_BROADCAST_HEX);
+        let (mut session, server) =
+            joined_waiting_session(created_host_snapshot(), move |mut stream| {
+                stream.write_all(&encode_frame(3004, &body)).unwrap();
+                stream.write_all(&encode_frame(3004, &body)).unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(1).is_some()
+        });
+        server.join().unwrap();
+        let room = session.joined_room.as_ref().expect("host snapshot");
+        assert_eq!(room.user_count, 2, "the vacant seat raised the count");
+        assert_eq!(room.slots[1].index, 1);
     }
 
     #[test]
@@ -10134,6 +10270,68 @@ pub(super) mod session_tests {
         );
         paint_frame(&mut session);
         assert!(!session.game.room_no_response_dialog_open());
+        server.join().unwrap();
+    }
+
+    /// #569 row-state arm: the 07DA fuse owns the socket while its
+    /// node is tracked, so a 2003 room-list probe read by that drain
+    /// is deferred. The overdue node then opens the one-OK sheet;
+    /// the next paint must replay the deferred 2003 into the row
+    /// state even while that modal is up. Live caller chain:
+    /// boot relay gate -> `stage_channel_list_after_relay_gate` ->
+    /// Room -> `OnlineSession::paint` -> `poll_wire` ->
+    /// `poll_room_user_list_fuse` -> `drain_room_user_list_reply` ->
+    /// `deferred_frames` -> `replay_deferred_frames` ->
+    /// `apply_lobby_frame` -> `ScreenGame::set_rooms`. No qualified
+    /// exe frame pair exists yet (story evidence is OPEN).
+    #[test]
+    fn starved_room_poll_replays_a_2003_row_state_probe_while_the_modal_is_up() {
+        let waiting = listed_p380_room(0, "STALLED");
+        let playing = o2jam_net::RoomListEntry {
+            state_code: 2,
+            ..waiting.clone()
+        };
+        let list = o2jam_net::RoomList {
+            rooms: vec![playing],
+        };
+        let body = list.encode_body();
+        let (port, server) = fake_gateway(move |mut stream| {
+            stream
+                .write_all(&encode_frame(o2jam_net::RoomList::COMMAND, &body))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        game.set_rooms(vec![waiting]);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        paint_frame(&mut session);
+        assert!(
+            session.game.room_no_response_dialog_open(),
+            "the starved node opened the one-OK sheet"
+        );
+        assert_eq!(
+            session.game.listed_rooms()[0].state_code,
+            1,
+            "the fuse read defers the 2003 instead of dropping it"
+        );
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.listed_rooms()[0].state_code,
+            2,
+            "the modal does not block row-state replay"
+        );
         server.join().unwrap();
     }
 

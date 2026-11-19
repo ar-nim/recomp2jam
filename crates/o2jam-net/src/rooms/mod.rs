@@ -3364,6 +3364,35 @@ mod notice_tests {
         assert_eq!(event.encode_body(), body);
     }
 
+    /// The #551 premise check: the evidence-room 3004 body (131 B,
+    /// `~/scratch/evidence-room/row-state-3/rust-master/wire/room-stage.log`,
+    /// 02:53:32) is accounted for by fields 0..13 with no member-count
+    /// field. The wire log caps the hex at 256 chars, so the last
+    /// three bytes are restored from the p379 body's field tail
+    /// (free pass `1`, playing state `0`, admin `0`). The 13 music ids
+    /// are the only count on this frame; headcount is derived from
+    /// the member-id seat (guard on the session seam).
+    #[test]
+    fn user_joined_waiting_has_no_member_count_field_in_the_evidence_room_body() {
+        let body = hex_bytes(concat!(
+            "017432303770726f62650001000000012c01000001000000000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000002300000000",
+            "000000000000000000000000000000000000000d00000061f360f35df35cf302f301f300",
+            "f3fff2fef2fdf2fbf2f6f2f5f200000000010000000000",
+        ));
+        assert_eq!(body.len(), 131, "evidence-room frame length");
+        let event = UserJoinedWaiting::decode_body(&body).unwrap();
+        assert_eq!(event.member_id, 1);
+        assert_eq!(event.member.nickname, "t207probe");
+        assert_eq!(event.member.music_ids.len(), 13, "music-id count field");
+        assert_eq!(event.member.free_pass, 1);
+        assert_eq!(
+            event.encode_body(),
+            body,
+            "every body byte is accounted for"
+        );
+    }
+
     #[test]
     fn user_left_waiting_decodes_the_captured_wire_body() {
         let event = UserLeftWaiting::decode_body(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap();
