@@ -17216,6 +17216,76 @@ mod game_tests {
         assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
     }
 
+    #[test]
+    fn messenger_sheet_keeps_the_host_bgm_while_it_blocks_host_clicks() {
+        // Spec #315 story 20, messenger side: the qualified B8 sheet
+        // paints over MyRoom (#479). Our client keeps the host's cue
+        // running while the sheet owns clicks; no new dialogue cue is
+        // invented (#301). The exe has no before/after audio pair yet
+        // (`N-AUDIO`), so this is a client-side coexistence invariant,
+        // not an exe audio pin.
+        // Live chain: main.rs::run_play -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> MyRoomAction::MessengerLiveness
+        // -> paint_relay_down_dialog; audio rides the single
+        // `apply_bgm_cue` seam on side entry and side leave.
+        use super::super::side::{MYROOM_BACK_CODE, MYROOM_MESSENGER_CODE};
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(CueLog {
+                inner: o2jam_audio::NullBackend::new(),
+                pushes: Rc::clone(&pushes),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[5, 6, 8, 9]));
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_MESSENGER_CODE, 627, 571),
+                myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // entry fetch, not the press
+        let host_pushes = pushes.borrow().clone();
+        let host_cue = game.scene_bgm_selection();
+        assert_eq!(host_cue.map(|cue| cue.record), Some(5), "MyRoom cue");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
+        assert!(game.messenger_liveness_open(), "B8 liveness sheet opens");
+        assert_eq!(
+            *pushes.borrow(),
+            host_pushes,
+            "opening the sheet must not cut the host cue"
+        );
+        assert_eq!(game.scene_bgm_selection(), host_cue, "same latched track");
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(game.side(), Some(SideScreen::MyRoom));
+
+        // A host button under the sheet cannot take the click, and so
+        // cannot re-cue the scene. OK closes; the same button works
+        // again and re-cues the Waiting lobby.
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 20));
+        assert!(game.messenger_liveness_open(), "host click stays blocked");
+        assert_eq!(*pushes.borrow(), host_pushes, "blocked click cues nothing");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.messenger_liveness_open(), "OK clears the sheet");
+        assert_eq!(
+            *pushes.borrow(),
+            host_pushes,
+            "closing the sheet cues nothing"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 20));
+        assert_eq!(game.side(), None, "host BACK works after OK");
+        assert_eq!(
+            pushes.borrow().last().copied(),
+            Some(6),
+            "returning to Waiting re-cues record 6"
+        );
+    }
+
     fn lanking_record(song_id: u32, bpm: f32, title: &str, artist: &str) -> Vec<u8> {
         let mut rec = vec![0u8; 300];
         rec[8..11].copy_from_slice(b"ojn");
