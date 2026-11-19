@@ -33,6 +33,22 @@ Two player-visible residuals from the p343 annotated pack are fixed:
   the slot-0 master on the left and the guest on the right. Guards:
   `guest_sees_the_wire_master_on_the_left_cover`,
   `guest_self_seat_lands_at_its_member_id_cover`.
+- **Symmetric member visibility (#379)**: the guest reads the master
+  from 3003 slots; the master's 2006/2003 host snapshot had no slot rows
+  and its drain skipped 3004 `UserJoinWaiting` (0x0BBC), so a joining
+  peer never appeared. The drain now decodes 3004/3007/4009, seats and
+  clears peers, and the host snapshot carries seven empty covers.
+  Guards: `master_seats_the_joining_peer_from_the_3004_broadcast`,
+  `joining_peer_seats_the_master_from_the_3003_answer`,
+  `leave_broadcast_removes_the_{peer,master}_seat_on_the_{master,guest}`,
+  `ready_echo_lights_the_{joining_peer,master}_seat_on_the_{master,guest}`,
+  `waiting_back_sends_the_room_leave_on_the_live_gateway`. Live taps and
+  the screenshot pair: `~/scratch/p379-live/`
+  (`master-after-join.png`, `guest-after-join.png`,
+  `master-after-ready.png`, `master-after-leave.png`). OPEN: a master
+  leaving promotes `new_master_id` on the wire; our guest clears the
+  departed cover but does not swap its START/READY role. Next step:
+  gate that role swap against a live host-leave capture.
 
 Matched rerun against the p343 exe frame: `top_header` SSIM 0.809921 →
 0.859627, `seat_grid_left` 0.878300 → 0.893151. Both stay below 0.95

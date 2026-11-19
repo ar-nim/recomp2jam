@@ -147,8 +147,8 @@ use o2jam_net::play::{
 };
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    RoomList, RoomListEntry, RoomSlotAction, RoomSlotUpdate, RoomState, SendMainRoomMessage,
-    SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    RoomList, RoomListEntry, RoomSlot, RoomSlotAction, RoomSlotState, RoomSlotUpdate, RoomState,
+    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
     SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase, SyncMusicPurchaseResponse,
@@ -157,12 +157,12 @@ use o2jam_net::EmptyMessage;
 use o2jam_net::{
     AcquireMusic, AcquireMusicRequest, ChannelLogin, ChannelLoginResponse, ChannelLoginResult,
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
-    DownloadProgressChanged, Event, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
-    GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, Response, RoomCreated,
-    SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
-    SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, WaitingMusicChanged,
-    WireMessage,
+    DownloadProgressChanged, Event, ExitPlaying, ExitWaiting, FinalizeRank, Frame, GameMode,
+    GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
+    JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, MusicState, Ready, Request,
+    Response, RoomCreated, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
+    SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, UserJoinedWaiting,
+    UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
     LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
@@ -773,7 +773,17 @@ impl OnlineSession {
             speed: entry.speed,
             has_super_manager: false,
             user_count: i32::from(entry.user_count),
-            slots: Vec::new(),
+            // The host's 2006/2003 path carries no slot rows. Give the
+            // waiting painter the same seven empty cover containers the
+            // 3003 guest answer decodes, so a later 3004 join broadcast
+            // has a seat to fill (#379).
+            slots: (0..7)
+                .map(|index| RoomSlot {
+                    index,
+                    state_code: RoomSlotState::Unoccupied as i32,
+                    member: None,
+                })
+                .collect(),
             skills: Vec::new(),
             premium: entry.premium,
             champion: None,
@@ -2764,6 +2774,12 @@ impl OnlineSession {
                 Ok(frame) if frame.id == START_BROADCAST_COMMAND => {
                     self.apply_start_broadcast(&frame.payload);
                 }
+                Ok(frame) if frame.id == UserJoinedWaiting::COMMAND => {
+                    self.apply_user_joined(&frame);
+                }
+                Ok(frame) if frame.id == UserLeftWaiting::COMMAND => {
+                    self.apply_user_left(&frame);
+                }
                 Ok(frame) if frame.id == RoomSlotUpdate::COMMAND => {
                     self.apply_slot_update(&frame);
                 }
@@ -3033,14 +3049,52 @@ impl OnlineSession {
         self.slot_actions[usize::from(update.index)] = update.action();
     }
 
-    /// Fold one 4009 frame into the ready mirror (undecodable bodies
-    /// drop with a trace; the socket position is already past them).
+    /// Fold one 4009 frame into the ready mirror and the staged seat.
+    /// The echo reaches every room member, so the master learns a
+    /// guest's READY and a guest learns the master's from this frame
+    /// (#379). Undecodable bodies drop with a trace.
     fn apply_ready_echo(&mut self, frame: &Frame) {
         let Ok(echo) = MemberReadyStateChanged::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable ready echo");
             return;
         };
         self.ready_echoes[usize::from(echo.member_id)] = Some(echo.ready);
+        self.game.set_member_ready(echo.member_id, echo.ready);
+    }
+
+    /// Fold one 3004 join broadcast into the staged seats. Memoryer
+    /// excludes the joiner from this event, so this is the master's
+    /// only live source for a new peer (#379). The session's own 3003
+    /// snapshot moves with the shell so later gates see the same room.
+    fn apply_user_joined(&mut self, frame: &Frame) {
+        let Ok(joined) = UserJoinedWaiting::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable join broadcast");
+            return;
+        };
+        self.game
+            .seat_waiting_member(joined.member_id, joined.member.clone());
+        if let Some(room) = self.joined_room.as_mut() {
+            room.seat_member(joined.member_id, joined.member);
+        }
+    }
+
+    /// Fold one 3007 leave broadcast into the staged seats: the
+    /// departed cover clears on every remaining member (#379). The
+    /// promoted-master word is read but does not change our own seat id.
+    fn apply_user_left(&mut self, frame: &Frame) {
+        let Ok(left) = UserLeftWaiting::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable leave broadcast");
+            return;
+        };
+        tracing::debug!(
+            member = left.member_id,
+            new_master = left.new_master_id,
+            "room member left"
+        );
+        self.game.clear_waiting_member_seat(left.member_id);
+        if let Some(room) = self.joined_room.as_mut() {
+            room.clear_member(left.member_id);
+        }
     }
 
     /// Fold one 3012 frame into the waiting history (undecodable
@@ -3321,6 +3375,22 @@ impl GameLoop for OnlineSession {
         if key == MenuKey::Confirm && self.game.screen() == Screen::Waiting {
             self.confirm_waiting();
             return;
+        }
+        if key == MenuKey::Back && self.game.screen() == Screen::Waiting && self.joined_waiting {
+            // The shell owns the local Room transition; the wire leave
+            // is ours, so the remaining members receive 3007 and can
+            // clear this seat (#379). A failed send keeps the intent:
+            // shell state is unchanged and the next Back retries it.
+            let leave = ExitWaiting { exit_type: 0 };
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::ExitWaiting.id(), &leave.encode_body())
+            {
+                tracing::warn!(%source, "room leave send failed");
+                return;
+            }
+            self.joined_waiting = false;
+            self.joined_room = None;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
             // A Room Back can queue the 2021 leave without a paint in
@@ -6680,6 +6750,236 @@ pub(super) mod session_tests {
         server.join().unwrap();
         assert_eq!(session.member_ready(1), Some(true));
         assert_eq!(session.member_ready(0), None);
+    }
+
+    /// Bytes pushed to the master by Memoryer at 12:28:14.751
+    /// (`~/scratch/p379-wire-probe.log`): 3004 `UserJoinWaiting`, seat 1
+    /// named tester2. Kept as the capture, not a hand-built fixture.
+    const LIVE_JOIN_BROADCAST_HEX: &str = concat!(
+        "017465737465723200010000000172020000010000100000001e000000780100007f0100",
+        "008501000000000000000000000000000000000000000000000000000023000000000000",
+        "00000000000000000000000000000000000000000000000000010000000000"
+    );
+
+    /// The matching 3003 answer the joining peer received at the same
+    /// instant: result 0, own seat 1, master `tester` in slot 0.
+    const LIVE_JOIN_ANSWER_HEX: &str = concat!(
+        "00000000010150333739524f4f4d0000001d000080000000010000000002000000000100",
+        "0000746573746572000700000001a73c0000010001000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000230000000000",
+        "000000000000000000000000000000000000000000000000000001000000000000000000",
+        "020000000003000000000400000000050000000006000000000700000000000000000000"
+    );
+
+    fn hex_bytes(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn room_with_peer(nickname: &str) -> o2jam_net::JoinedRoom {
+        use o2jam_net::RoomSlot;
+        let mut room = joined_snapshot();
+        room.user_count = 2;
+        room.slots[1] = RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(member(nickname, false)),
+        };
+        room
+    }
+
+    /// Run the host's real 2004/2006 -> 2002/2003 exchange so the guard
+    /// uses the snapshot `create_and_join_room` actually stages, not a
+    /// hand-built fixture with seat rows already present.
+    fn created_host_snapshot() -> o2jam_net::JoinedRoom {
+        use o2jam_net::message::{CreateResult, CreateRoomResponse, CreatedRoom};
+        use o2jam_net::{RoomList, RoomListEntry};
+        let (mut session, server) = room_session(|mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::CreateRoom.id());
+            let created = CreateRoomResponse {
+                result: CreateResult::Success,
+                info: Some(CreatedRoom {
+                    number: 0,
+                    premium: false,
+                    password: String::new(),
+                    has_password: false,
+                    min_level: 1,
+                    max_level: 99,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(
+                    CreateRoomResponse::COMMAND,
+                    &created.encode_body(),
+                ))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let entry = RoomListEntry {
+                number: 0,
+                state_code: 1,
+                title: "P379LIVE".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 1,
+                max_level: 99,
+                skills: Vec::new(),
+                premium: false,
+                room_type: 0,
+            };
+            let list = RoomList { rooms: vec![entry] };
+            stream
+                .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
+                .unwrap();
+        });
+        let room = session.create_and_join_room("P379LIVE").unwrap();
+        server.join().unwrap();
+        room
+    }
+
+    #[test]
+    fn master_seats_the_joining_peer_from_the_3004_broadcast() {
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> assemble_online_session (create_room host
+        //   path) -> create_and_join_room -> stage_hosted_room
+        //   -> OnlineSession::paint (Waiting) -> poll_waiting_chat
+        //   -> drain_waiting_chat -> ScreenGame staged seats.
+        // Memoryer excludes the joiner from this broadcast, so the host is
+        // the only leg that can learn the new member from it (#379).
+        let body = hex_bytes(LIVE_JOIN_BROADCAST_HEX);
+        let host_room = created_host_snapshot();
+        assert_eq!(host_room.slots.len(), 7, "host snapshot must own seat rows");
+        let (mut session, server) = joined_waiting_session(host_room, move |mut stream| {
+            stream.write_all(&encode_frame(3004, &body)).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(1).is_some()
+        });
+        server.join().unwrap();
+        let peer = session.game.staged_waiting_member(1).unwrap();
+        assert_eq!(peer.nickname, "tester2");
+        assert_eq!(peer.team, 1);
+    }
+
+    #[test]
+    fn joining_peer_seats_the_master_from_the_3003_answer() {
+        // The other direction of the owner's matrix: the joiner reads
+        // the room's existing members out of its own 3003 snapshot,
+        // which lists slot 0 but not the joiner's own seat.
+        let body = hex_bytes(LIVE_JOIN_ANSWER_HEX);
+        let (mut session, server) = room_session(move |mut stream| {
+            let request = read_frame(&mut stream);
+            assert_eq!(request.id, 3002);
+            stream.write_all(&encode_frame(3003, &body)).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(0, "");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting
+                && session.game.staged_waiting_member(0).is_some()
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.staged_waiting_member(0).unwrap().nickname,
+            "tester"
+        );
+    }
+
+    #[test]
+    fn leave_broadcast_removes_the_peer_seat_on_the_master() {
+        // 3007 is sent to the remaining room members only. The master's
+        // staged seat 1 must disappear without another snapshot.
+        let (mut session, server) =
+            joined_waiting_session(room_with_peer("tester2"), |mut stream| {
+                stream
+                    .write_all(&encode_frame(3007, &[1, 0, 0, 0, 0, 0, 0, 0]))
+                    .unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(1).is_none()
+        });
+        server.join().unwrap();
+        assert!(session.game.staged_waiting_member(1).is_none());
+    }
+
+    #[test]
+    fn leave_broadcast_removes_the_master_seat_on_the_guest() {
+        // Guest leg of the leave matrix: member 0 left, member 1 (us)
+        // is the new master. Own seat stays; the departed cover clears.
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[0, 1, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(0).is_none()
+        });
+        server.join().unwrap();
+        assert!(session.game.staged_waiting_member(0).is_none());
+        assert_eq!(
+            session.game.staged_waiting_member(1).unwrap().nickname,
+            "guest"
+        );
+    }
+
+    #[test]
+    fn ready_echo_lights_the_joining_peer_seat_on_the_master() {
+        let (mut session, server) =
+            joined_waiting_session(room_with_peer("tester2"), |mut stream| {
+                stream.write_all(&encode_frame(4009, &[1, 1])).unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.ready)
+        });
+        server.join().unwrap();
+        assert!(session.game.staged_waiting_member(1).unwrap().ready);
+    }
+
+    #[test]
+    fn ready_echo_lights_the_master_seat_on_the_guest() {
+        let mut room = guest_snapshot();
+        room.slots[0].member.as_mut().unwrap().ready = false;
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            stream.write_all(&encode_frame(4009, &[0, 1])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session
+                .game
+                .staged_waiting_member(0)
+                .is_some_and(|member| member.ready)
+        });
+        server.join().unwrap();
+        assert!(session.game.staged_waiting_member(0).unwrap().ready);
+    }
+
+    #[test]
+    fn waiting_back_sends_the_room_leave_on_the_live_gateway() {
+        // Memoryer's 3005 body is a u16 exit type (`0` = Normal);
+        // without this send our leave never reaches the other member.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let leave = read_frame(&mut stream);
+            assert_eq!(leave.id, 3005);
+            assert_eq!(leave.payload, vec![0, 0]);
+        });
+        session.menu_key(MenuKey::Back, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
     }
 
     #[test]

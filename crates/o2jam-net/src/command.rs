@@ -35,6 +35,9 @@ wire_enum! {
         GetMusicScoreList = 2030,
         GetMusicMaxScore = 2032,
         JoinWaiting = 3002,
+        /// Waiting-room leave (`0x0BBD`); a `u16` exit type, 0 = Normal.
+        /// Memoryer broadcasts 3007 to the remaining room members.
+        ExitWaiting = 3005,
         SetRoomMusic = 4000,
         SetRoomArena = 4002,
         SetRoomTeam = 4004,
@@ -125,6 +128,12 @@ wire_enum! {
         ReceiveWhisper = 2019,
         RankNotification = 2029,
         RoomSlotUpdate = 3009,
+        /// `UserJoinWaiting` (`0x0BBC`): one peer took a seat. Memoryer
+        /// sends this to the room members except the joiner, which reads
+        /// the existing seats from its 3003 answer instead (#379).
+        UserJoinWaiting = 3004,
+        /// `UserLeaveWaiting` (`0x0BBF`): one peer left a seat (#379).
+        UserLeaveWaiting = 3007,
         /// The room's song changed; the client restages it and
         /// re-announces its music state (the exe's 4001 arm, VAs
         /// `0x4ab591`/`0x4b0d4e`; handler VA `0x55f2d0`).
@@ -167,6 +176,7 @@ mod tests {
         assert_eq!(Request::from_id(1007), Some(Request::SessionKeys));
         assert_eq!(Request::from_id(2000), Some(Request::GetCharacterInfo));
         assert_eq!(Request::from_id(3002), Some(Request::JoinWaiting));
+        assert_eq!(Request::from_id(3005), Some(Request::ExitWaiting));
         assert_eq!(Request::from_id(2002), Some(Request::GetChannelInfo));
         assert_eq!(Request::from_id(2010), Some(Request::GetUserList));
         assert_eq!(Request::from_id(2024), Some(Request::SendMusicList));
@@ -198,6 +208,7 @@ mod tests {
             Request::GetMusicScoreList,
             Request::GetMusicMaxScore,
             Request::JoinWaiting,
+            Request::ExitWaiting,
             Request::SetRoomMusic,
             Request::SetRoomArena,
             Request::SetRoomTeam,
@@ -288,6 +299,8 @@ mod tests {
             Event::ReceiveWhisper,
             Event::RankNotification,
             Event::RoomSlotUpdate,
+            Event::UserJoinWaiting,
+            Event::UserLeaveWaiting,
             Event::RoomArenaEcho,
             Event::RoomTeamChanged,
             Event::UserReadyStateChanged,
@@ -342,6 +355,8 @@ mod tests {
     #[test]
     fn resolves_tally_answer_events() {
         assert_eq!(Event::from_id(4017), Some(Event::ScoreSubmission));
+        assert_eq!(Event::from_id(3004), Some(Event::UserJoinWaiting));
+        assert_eq!(Event::from_id(3007), Some(Event::UserLeaveWaiting));
         assert_eq!(Event::from_id(4018), Some(Event::ScoreCompleted));
         assert_eq!(Event::from_id(4040), Some(Event::GameRankUpdate));
         assert_eq!(Event::from_id(4016), None);

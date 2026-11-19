@@ -1650,6 +1650,55 @@ impl ScreenGame {
         self
     }
 
+    /// One staged waiting seat's member (`None` for a vacant seat or
+    /// without a joined room). Read-only seam for the session's live
+    /// join/leave/ready guards; the painter reads the same room state.
+    #[must_use]
+    pub fn staged_waiting_member(&self, member_id: u8) -> Option<&o2jam_net::RoomMember> {
+        self.waiting
+            .as_ref()?
+            .slots
+            .iter()
+            .find(|slot| slot.index == member_id)?
+            .member
+            .as_ref()
+    }
+
+    /// Stage one peer into its waiting seat from a 3004 join event.
+    /// A previously vacant cover takes the member, and the room's
+    /// headcount follows the seats; an existing seat is replaced in
+    /// place so chat history and the local seat survive (#379).
+    pub fn seat_waiting_member(
+        &mut self,
+        member_id: u8,
+        member: o2jam_net::RoomMember,
+    ) -> &mut Self {
+        let Some(room) = self.waiting.as_mut() else {
+            return self;
+        };
+        let known_seat = room.slots.iter().any(|slot| slot.index == member_id);
+        room.seat_member(member_id, member);
+        if known_seat {
+            self.restage_waiting_figures();
+        }
+        self
+    }
+
+    /// Clear one peer's waiting seat from a 3007 leave event. The
+    /// local seat is never the subject of a leave broadcast (Memoryer
+    /// excludes the sender), so only wire peers reach this path.
+    pub fn clear_waiting_member_seat(&mut self, member_id: u8) -> &mut Self {
+        let Some(room) = self.waiting.as_mut() else {
+            return self;
+        };
+        let known_seat = room.slots.iter().any(|slot| slot.index == member_id);
+        room.clear_member(member_id);
+        if known_seat {
+            self.restage_waiting_figures();
+        }
+        self
+    }
+
     /// Fold one member's music state into its waiting seat — the field
     /// the exe keeps at `seat+0x217c` and writes from the `4035`/
     /// `4037` handlers (`docs/music-availability.md` §2).

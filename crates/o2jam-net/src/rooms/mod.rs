@@ -188,6 +188,51 @@ pub struct RoomListEntry {
     pub room_type: u8,
 }
 
+/// Wire fields shared by a joined-room member and a 3004 join event:
+/// the two layouts differ only in the master and super-manager flags.
+struct MemberProfile {
+    equipment: [i32; 17],
+    music_ids: Vec<u16>,
+    cash_point: i32,
+    free_pass: u32,
+    playing_state: u8,
+    administrator: bool,
+}
+
+fn decode_member_profile(reader: &mut Reader<'_>) -> Result<MemberProfile, Error> {
+    let mut equipment = [0i32; 17];
+    for slot in &mut equipment {
+        *slot = reader.read_i32()?;
+    }
+    let music_count = reader.read_count("member music ids", true)?;
+    let mut music_ids = Vec::with_capacity(music_count);
+    for _ in 0..music_count {
+        music_ids.push(reader.read_u16()?);
+    }
+    Ok(MemberProfile {
+        equipment,
+        music_ids,
+        cash_point: reader.read_i32()?,
+        free_pass: reader.read_u32()?,
+        playing_state: reader.read_u8()?,
+        administrator: reader.read_flag("member administrator flag")?,
+    })
+}
+
+fn encode_member_profile(body: &mut Vec<u8>, member: &RoomMember) {
+    for slot in member.equipment {
+        body.extend_from_slice(&slot.to_le_bytes());
+    }
+    body.extend_from_slice(&(member.music_ids.len() as i32).to_le_bytes());
+    for id in &member.music_ids {
+        body.extend_from_slice(&id.to_le_bytes());
+    }
+    body.extend_from_slice(&member.cash_point.to_le_bytes());
+    body.extend_from_slice(&member.free_pass.to_le_bytes());
+    body.push(member.playing_state);
+    body.push(u8::from(member.administrator));
+}
+
 /// Decode one member slot of a joined-room body.
 fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let nickname = reader.read_string()?;
@@ -198,20 +243,7 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let team = reader.read_u8()?;
     let ready = reader.read_flag("member ready flag")?;
     let music_state = reader.read_u8()?;
-    let mut equipment = [0i32; 17];
-    for slot in &mut equipment {
-        *slot = reader.read_i32()?;
-    }
-    let music_count = reader.read_count("member music ids", true)?;
-    let mut music_ids = Vec::with_capacity(music_count);
-    for _ in 0..music_count {
-        music_ids.push(reader.read_u16()?);
-    }
-    let cash_point = reader.read_i32()?;
-    let free_pass = reader.read_u32()?;
-    let playing_state = reader.read_u8()?;
-    let administrator = reader.read_flag("member administrator flag")?;
-    let super_manager = reader.read_int_flag("member super-manager flag")?;
+    let profile = decode_member_profile(reader)?;
     Ok(RoomMember {
         nickname,
         level,
@@ -221,13 +253,13 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
         team,
         ready,
         music_state,
-        equipment,
-        music_ids,
-        cash_point,
-        free_pass,
-        playing_state,
-        administrator,
-        super_manager,
+        equipment: profile.equipment,
+        music_ids: profile.music_ids,
+        cash_point: profile.cash_point,
+        free_pass: profile.free_pass,
+        playing_state: profile.playing_state,
+        administrator: profile.administrator,
+        super_manager: reader.read_int_flag("member super-manager flag")?,
     })
 }
 
@@ -240,17 +272,7 @@ fn encode_room_member(body: &mut Vec<u8>, member: &RoomMember) {
     body.push(member.team);
     body.push(u8::from(member.ready));
     body.push(member.music_state);
-    for slot in member.equipment {
-        body.extend_from_slice(&slot.to_le_bytes());
-    }
-    body.extend_from_slice(&(member.music_ids.len() as i32).to_le_bytes());
-    for id in &member.music_ids {
-        body.extend_from_slice(&id.to_le_bytes());
-    }
-    body.extend_from_slice(&member.cash_point.to_le_bytes());
-    body.extend_from_slice(&member.free_pass.to_le_bytes());
-    body.push(member.playing_state);
-    body.push(u8::from(member.administrator));
+    encode_member_profile(body, member);
     body.extend_from_slice(&i32::from(member.super_manager).to_le_bytes());
 }
 
@@ -622,6 +644,34 @@ pub struct JoinedRoom {
     pub champion_streak: Option<i32>,
 }
 
+impl JoinedRoom {
+    /// Put one member in its seat. A vacant cover raises the room's
+    /// headcount; an occupied one is replaced in place. Unknown seats
+    /// are a no-op.
+    pub fn seat_member(&mut self, member_id: u8, member: RoomMember) {
+        let Some(slot) = self.slots.iter_mut().find(|slot| slot.index == member_id) else {
+            return;
+        };
+        if slot.member.is_none() {
+            self.user_count = self.user_count.saturating_add(1);
+        }
+        slot.state_code = RoomSlotState::Occupied as i32;
+        slot.member = Some(member);
+    }
+
+    /// Empty one member's seat and lower the headcount when a member
+    /// was there. Unknown seats are a no-op.
+    pub fn clear_member(&mut self, member_id: u8) {
+        let Some(slot) = self.slots.iter_mut().find(|slot| slot.index == member_id) else {
+            return;
+        };
+        if slot.member.take().is_some() {
+            self.user_count = self.user_count.saturating_sub(1);
+        }
+        slot.state_code = RoomSlotState::Unoccupied as i32;
+    }
+}
+
 /// Empty-password padding of the 7.55 `JoinWaiting` 3002 send.
 ///
 /// Live matched A/B wire (2026-11-18, room WINEJOIN on one Memoryer):
@@ -715,6 +765,159 @@ impl WireMessage for JoinRoomResponse {
             result_code: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
             room,
         })
+    }
+}
+
+/// `ExitWaiting` 3005 request: a `u16` exit type, 0 = Normal (#379).
+///
+/// Memoryer `Messages/Requests/Waiting/ExitWaitingRequest.cs` has one
+/// `ExitType : ushort` field; the live probe sent `01 00 00 00` as an
+/// empty body and the server rejected it (`Invalid request
+/// parameters`), while `00 00` logged `Exit room: [000]: Normal` and
+/// broadcast 3007 to the remaining member (`p379-wire-probe.log`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExitWaiting {
+    /// Exit type word (`0` = Normal, `1` = Penalized).
+    pub exit_type: u16,
+}
+
+impl WireMessage for ExitWaiting {
+    const COMMAND: u16 = 3005;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.exit_type.to_le_bytes().to_vec()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 2 {
+            return Err(Error::TruncatedMessage {
+                need: 2,
+                have: body.len(),
+            });
+        }
+        if body.len() > 2 {
+            return Err(Error::TrailingBytes(body.len() - 2));
+        }
+        Ok(Self {
+            exit_type: u16::from_le_bytes([body[0], body[1]]),
+        })
+    }
+}
+
+/// `UserJoinWaiting` 3004 event: one peer took a waiting-room seat.
+///
+/// Memoryer `UserJoinWaitingEventData` fields 0..13 in wire order:
+/// `u8` member id, NUL name, `i32` level, `u8` gender, `i32` gem,
+/// `RoomTeam`/`bool`/`bool`/`MusicState` bytes, the member profile,
+/// `i32` cash, `u32` free pass, `u8` playing state, `bool` admin. The
+/// joined-room 3003 member adds a master flag and a trailing super-
+/// manager `i32`, both absent here. Captured body (103 B) in
+/// `~/scratch/p379-wire-probe.log`; the exe's opcode table calls it
+/// `0x0BBC` (`docs/net-protocol.md` §4b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserJoinedWaiting {
+    /// Seat index the joiner now occupies.
+    pub member_id: u8,
+    /// The joiner's staged seat snapshot. `master` and `super_manager`
+    /// are always false: the event carries neither field.
+    pub member: RoomMember,
+}
+
+impl WireMessage for UserJoinedWaiting {
+    const COMMAND: u16 = 3004;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = vec![self.member_id];
+        body.extend_from_slice(&encode_null_terminated(
+            &self.member.nickname,
+            MAX_STRING_LEN,
+        ));
+        body.extend_from_slice(&self.member.level.to_le_bytes());
+        body.push(self.member.gender);
+        body.extend_from_slice(&self.member.gem.to_le_bytes());
+        body.push(self.member.team);
+        body.push(u8::from(self.member.ready));
+        body.push(self.member.music_state);
+        encode_member_profile(&mut body, &self.member);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let member_id = reader.read_u8()?;
+        let nickname = reader.read_string()?;
+        let level = reader.read_i32()?;
+        let gender = reader.read_u8()?;
+        let gem = reader.read_i32()?;
+        let team = reader.read_u8()?;
+        let ready = reader.read_flag("joined member ready flag")?;
+        let music_state = reader.read_u8()?;
+        let profile = decode_member_profile(&mut reader)?;
+        reader.finish()?;
+        Ok(Self {
+            member_id,
+            member: RoomMember {
+                nickname,
+                level,
+                gender,
+                gem,
+                master: false,
+                team,
+                ready,
+                music_state,
+                equipment: profile.equipment,
+                music_ids: profile.music_ids,
+                cash_point: profile.cash_point,
+                free_pass: profile.free_pass,
+                playing_state: profile.playing_state,
+                administrator: profile.administrator,
+                super_manager: false,
+            },
+        })
+    }
+}
+
+/// `UserLeaveWaiting` 3007 event: one peer left a waiting-room seat.
+///
+/// Memoryer `UserLeaveWaitingEventData` fields 0..4: departing member
+/// id, newly promoted master id, `i16` premium flag, `i32` super-manager
+/// flag, then a trailing Live-mode snapshot that is absent in normal
+/// rooms (captured body: `01 00 00 00 00 00 00 00`, #379). The
+/// Live-mode suffix is consumed but not modeled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserLeftWaiting {
+    /// Seat that is now empty.
+    pub member_id: u8,
+    /// Seat the server promoted to master.
+    pub new_master_id: u8,
+    /// Premium room flag from the leave event.
+    pub premium: bool,
+    /// Whether a super room manager remains.
+    pub has_super_manager: bool,
+}
+
+impl WireMessage for UserLeftWaiting {
+    const COMMAND: u16 = 3007;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = vec![self.member_id, self.new_master_id];
+        body.extend_from_slice(&i16::from(self.premium).to_le_bytes());
+        body.extend_from_slice(&i32::from(self.has_super_manager).to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let event = Self {
+            member_id: reader.read_u8()?,
+            new_master_id: reader.read_u8()?,
+            premium: reader.read_short_flag("leave premium flag")?,
+            has_super_manager: reader.read_int_flag("leave super-manager flag")?,
+        };
+        // A Live room appends an eight-seat snapshot; the seat removal
+        // needs none of it, so consume rather than reject the event.
+        let _ = reader.take(reader.remaining())?;
+        Ok(event)
     }
 }
 
@@ -3134,6 +3337,57 @@ mod notice_tests {
         assert_eq!(
             MusicMaxScoreAnswer::decode_body(&body),
             Err(Error::TrailingBytes(1))
+        );
+    }
+
+    fn hex_bytes(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn user_joined_waiting_decodes_the_captured_wire_body() {
+        let body = hex_bytes(concat!(
+            "017465737465723200010000000172020000010000100000001e000000780100007f0100",
+            "008501000000000000000000000000000000000000000000000000000023000000000000",
+            "00000000000000000000000000000000000000000000000000010000000000"
+        ));
+        let event = UserJoinedWaiting::decode_body(&body).unwrap();
+        assert_eq!(event.member_id, 1);
+        assert_eq!(event.member.nickname, "tester2");
+        assert_eq!(event.member.gem, 626);
+        assert_eq!(event.member.team, 1);
+        assert_eq!(event.member.equipment[0], 16);
+        assert!(!event.member.master);
+        assert_eq!(event.encode_body(), body);
+    }
+
+    #[test]
+    fn user_left_waiting_decodes_the_captured_wire_body() {
+        let event = UserLeftWaiting::decode_body(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(
+            event,
+            UserLeftWaiting {
+                member_id: 1,
+                new_master_id: 0,
+                premium: false,
+                has_super_manager: false,
+            }
+        );
+        assert_eq!(event.encode_body(), vec![1, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn exit_waiting_encodes_the_normal_exit_word() {
+        assert_eq!(
+            ExitWaiting { exit_type: 0 }.encode(),
+            vec![6, 0, 0xBD, 0x0B, 0, 0]
+        );
+        assert_eq!(
+            ExitWaiting::decode_body(&[0, 0]),
+            Ok(ExitWaiting { exit_type: 0 })
         );
     }
 }

@@ -128,6 +128,27 @@ Events: 2005 RoomCreated, 2007 RoomRemoved, 2008 RoomParamsChanged, 2009 RoomUse
   must stage the row from 2005, not wait for a second 2003 (#376). 2007 is
   `RoomRemoved`, not `RoomCreated`.
 
+- `3004 UserJoinWaiting` S→C (`0x0BBC`, Memoryer
+  `Messages/Events/Waiting/UserJoinWaitingEventData.cs`): `u8` member id,
+  NUL nickname, `i32` level, `u8` gender, `i32` gem, team/ready/music-state
+  bytes, 17 equipment `i32`s, `i32` song-id count plus ids, `i32` cash,
+  `u32` free pass, `u8` playing state, `bool` admin. The master's only live
+  source for a joining peer: Memoryer excludes the joiner from the
+  broadcast, which reads existing seats from its 3003 answer instead.
+  Local two-client probe 2026-11-19: 103-byte body, `member_id=1`,
+  nickname `tester2`, team 1 (`~/scratch/p379-wire-probe.log`).
+- `3005 ExitWaiting` C→S (`0x0BBD`): one `u16` exit type (`0` = Normal).
+  An empty body is rejected by the server; the valid frame drew `Exit
+  room: [000]: Normal` in the live log (#379).
+- `3007 UserLeaveWaiting` S→C (`0x0BBF`): `u8` departing member, `u8`
+  promoted master, `i16` premium flag, `i32` super-manager flag, then a
+  Live-mode-only seat snapshot (absent in normal rooms). Captured normal
+  body: `01 00 00 00 00 00 00 00`. Sent to the remaining members only.
+- `4009 UserReadyStateChanged` S→C (`0x0FA9`): `u8` member id + `u8`
+  ready flag. Reaches every member, including the sender
+  (`~/scratch/p379-wire-probe.log`, room tester/tester2). The master's
+  join/leave/ready seat stages all come from these three events (#379).
+
 ### 4c. Key payload shapes (Memoryer message fields, order = wire order)
 
 - `1000 Authorize` C→S: u8 `1`, i32 relayKey1/2 (from `user:authorize` RSA params), public+local endpoints, i32 userId, str token, gender, u8 `1`, str clientId. Live exe tap (7.55 sha256 `83a04541…`, 2026-11-18, `scripts/rig-wine-run.sh --wire-tap`, tester account blob minted by `scripts/rig-mint-launch-argv.sh --user-index-id 1`): 96-byte body with marker `1`, relay `0/0`, public endpoint `0.0.0.0:0`, local endpoint the exe socket, userId `1` (= blob `UserIndexId`), token = blob `Username`, NUL-terminated gender `"1"` (= blob `Gender`, male), marker `1`, `726PNA-B1YW-28ZG9M-I5SC-Q0OPM6` + NUL. So the exe copies the blob's user id, token, and gender word into 1000 verbatim; the other 16 blob fields and 5 gateway mirrors never enter this frame. Memoryer validates only the token (`AuthController.cs:36,56-58`, `~/mozart-src` 9d87c50, no LICENSE file — behavior reference only); the rest is stored or decoded. `recomp2jam connect --launch-blob BLOB` / `play --online --online-launch-blob BLOB` derive these three fields from the same blob (issue #265).
