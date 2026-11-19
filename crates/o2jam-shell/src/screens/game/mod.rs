@@ -5378,6 +5378,13 @@ impl ScreenGame {
         self.shop.cart_page()
     }
 
+    /// Selected category tab (`None` until a press like FASHION).
+    /// The exe press pins the highlight only; no filter rule or wire
+    /// frame is claimed (#391).
+    pub fn shop_category(&self) -> Option<usize> {
+        self.shop.category()
+    }
+
     /// Checked cart item ids in toggle order.
     #[must_use]
     pub fn shop_cart(&self) -> Vec<u32> {
@@ -5505,6 +5512,18 @@ impl ScreenGame {
         self.wallet.apply_purchase_wallets(wallets);
     }
 
+    /// Fold one observed live 5001 reply into the shell: the four
+    /// prefix words and the two post-list wallet words refresh the same
+    /// wallet the 5029 read uses, then the cart clears against the
+    /// bought rows. The bag words are decoded for framing only; the
+    /// exe handler takes its inventory count from a global, so an
+    /// item-landing paint still needs a matched live frame pair.
+    pub fn apply_shop_purchase_reply(&mut self, reply: &o2jam_net::shop::SyncItemPurchaseReply) {
+        self.wallet.apply_purchase_prefix(&reply.prefix);
+        self.wallet.apply_purchase_wallets(&reply.wallets);
+        self.apply_shop_purchase();
+    }
+
     /// Fold a successful 5001 purchase into the shell: the cart
     /// clears against the bought rows and the wallet prefix has
     /// already folded through [`Self::apply_shop_purchase_prefix`].
@@ -5560,6 +5579,12 @@ impl ScreenGame {
         self.outbox.take_shop_buy()
     }
 
+    /// Queued shop exit for the session bridge, if any (5007). The
+    /// session sends the empty body once and clears the queue.
+    pub fn take_exit_shop(&mut self) -> Option<o2jam_net::shop::ExitShop> {
+        self.outbox.take_exit_shop()
+    }
+
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
     /// commits a non-empty cart through the pinned 5000 send, both
@@ -5577,6 +5602,13 @@ impl ScreenGame {
         };
         let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
         match action {
+            ShopAction::BackToLobby => {
+                // The tap leaves the side and emits the empty 5007;
+                // the session owns the wire, the shell owns the return.
+                if self.leave_side() {
+                    self.outbox.pending_exit_shop = Some(o2jam_net::shop::ExitShop);
+                }
+            }
             ShopAction::OpenCashCharge => {
                 // The charge plate leaves the shop board and opens
                 // the Cash Charge view from the same lobby (b8).
@@ -7194,6 +7226,12 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
             .map_or(u64::MAX, |modal| modal as u64),
     );
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
+    if game.outbox.pending_exit_shop.is_some() {
+        hash_u64(&mut hash, 5_007);
+    }
+    if let Some(category) = game.shop.category() {
+        hash_u64(&mut hash, u64::try_from(category).unwrap_or(u64::MAX));
+    }
     hash_u64(
         &mut hash,
         game.outbox.pending_music_buy.map_or(0, |_| 5_010),
@@ -17537,11 +17575,57 @@ mod game_tests {
     }
 
     #[test]
+    fn shop_filter_scroll_and_cart_total_follow_the_sweep_frames() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> ScreenGame::click_shop
+        //   -> shop_action_at(FASHION / scroll RIGHT / ITEMBUY) ->
+        //   ShopState::apply_action -> shop_cart_money_total.
+        // Exe sweep `d4074ce7…` (FASHION highlight), `099d1ee6…`
+        // (scroll changes cards/page) and `698f9ec8…` (cart press
+        // negative): only the local tab state and board page move;
+        // no wire frame is pinned for either press.
+        use super::super::side::SHOP_CATEGORY_FIRST_CODE;
+        use crate::avatar::PlacementRole;
+        use o2jam_render::Rect;
+
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_CATEGORY_FIRST_CODE + 1,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 0,
+                w: 60,
+                h: 25,
+            },
+        });
+        assert_eq!(game.shop_category(), None);
+
+        game.click_shop(528, 19);
+        assert_eq!(game.shop_category(), Some(1), "FASHION tab is selected");
+        assert!(
+            game.take_shop_buy().is_none(),
+            "filter press queues nothing"
+        );
+        assert!(game.shop_cart().is_empty());
+
+        game.click_shop(261, 196);
+        assert_eq!(game.shop_cart(), vec![1]);
+        assert_eq!(game.shop_cart_money_total(), 100);
+        game.click_shop(753, 379);
+        assert_eq!(game.shop_page(), 1, "scroll RIGHT turns the catalogue");
+        assert_eq!(game.shop_category(), Some(1), "scroll keeps the filter");
+        assert!(game.take_shop_buy().is_none(), "scroll queues nothing");
+    }
+
+    #[test]
     fn shop_unwired_browse_chrome_lands_nowhere() {
         // Live caller chain: same catalog staging as the preview
         // guard, then click_shop on ControlList-named chrome the live
-        // dump never stages (gender, category, submenu, ext-menu,
-        // bag-sort, planet pager, per-row gifts, gift commit), plus
+        // dump never stages (gender, submenu, ext-menu, bag-sort,
+        // planet pager, per-row gifts, gift commit), plus
         // the music-shop TOP100 arm (#181: music-shop-only — the item
         // shop owns no TOP100 control), plus the paint-target codes
         // (icons, comment, gem cells, cart totals). Every one lands
@@ -17947,6 +18031,43 @@ mod game_tests {
         assert_eq!(game.shop_try_on(), Some(2));
         assert!(game.leave_side());
         assert_eq!(game.shop_try_on(), None);
+    }
+
+    #[test]
+    fn item_shop_back_button_returns_and_queues_empty_5007() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> OnlineSession::paint
+        //   -> ScreenGame::click_shop(BACK plate) -> leave_side +
+        //   PendingOutbox::pending_exit_shop -> OnlineSession::
+        //   flush_exit_shop -> GatewayConnection::send_frame(5007, []).
+        // Tapped exe frame `ff522720…ef29b270` and wire
+        // `94b2ea8f…a2508` pin the return and the empty C2S 5007.
+        use super::super::side::{SideScreen, SHOP_BACK_CODE};
+        use o2jam_net::shop::ExitShop;
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+
+        game.click_shop(757, 580);
+        assert_eq!(game.side(), None, "BACK leaves the Item Shop side");
+        assert_eq!(game.take_exit_shop(), Some(ExitShop));
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
+        assert!(game.take_shop_buy().is_none());
     }
 
     #[test]

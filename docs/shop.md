@@ -47,7 +47,12 @@ Active non-self codes cover `0x01..0xBA` with no gaps/dups, so
 ## Entry and exit evidence
 
 `IDC_BUTTON_SSHOP_BACK` + `IDC_BUTTON_SSHOP_GOMYROOM` name
-back/myroom targets; no `EXIT` id exists in-block. Room side
+back/myroom targets; no `EXIT` id exists in-block. The tapped BACK
+frame (`~/scratch/evidence-shops/gifted-boot/exe/shop-back.png`,
+`ff522720…ef29b270`, wire `94b2ea8f…a2508`) leaves the side and emits
+`C2S 5007` with an empty body, followed by `5028 → 5029`. The full-
+bleed rect 0 pairs with code ordinal 1 (`0x1420_0001`); our client
+queues the same exit on that press. Room side
 `IDC_BUTTON_SROOM_ITEMSHOP 0X13200008` (`Room_ItemShop.ojs`)
 names the inbound button. Names only — no transition claimed.
 
@@ -94,12 +99,16 @@ per-row `ITEMWON` cells ink the parsed catalog price word
 data). ASSUMED pairings with rig next steps: the preview name
 inks `ITEMCOMMENT` (`0x85`; `ITEMCOMMENT2` mirrors it) and the
 bag readout inks current/total into the L (`0x4E`/`0x4F`)/R
-(`0x50`/`0x51`) digit unions. Labeled no-ops (each pinned by
-`shop_unwired_browse_chrome_lands_nowhere`): the gender, category
-(`0x0A..0x0E`), submenu, and ext-menu filter buttons never stage
+(`0x50`/`0x51`) digit unions. The FASHION category tab (`0x0B`) now stages a local selection: the
+live press frame `d4074ce7…` moves the tab highlight and emits no
+wire, so `ShopState::category` records the press but claims no
+filter rule (guard
+`shop_filter_scroll_and_cart_total_follow_the_sweep_frames`). Labeled no-ops (pinned by
+`shop_unwired_browse_chrome_lands_nowhere`): the gender, other
+category, submenu, and ext-menu filter buttons never stage
 in the live dump (203 placements, verified 2026-11-13 — the
 `ControlList` names them but the staged set omits them), so
-filter clicks land nowhere by absence; `BAGSORT`, the planet
+those clicks land nowhere by absence; `BAGSORT`, the planet
 pager, `ITEMGIFT1..8`/`GIFTITEM`, cart `CHECKGEM`/`CHECKMONEY`
 totals, and the `ITEMGEM1..8` cells (gem-price join still
 unpinned) stage but record nothing. No search chrome exists in
@@ -133,6 +142,11 @@ room slot).
   and queue nothing. Gift send has no TCP shape (web-only
   `gift_input.aspx`, `docs/gifts.md`); `Dialog_GiftView.bnd`
   stages nowhere (census bucket E, `docs/bnd-consumption.md`).
+- Gem price (#395, partial): `ShopGood::gem_price` is an explicit
+  `Option<u32>` and the staged `ITEMGEM1..8` cells ink it when a word
+  is pinned. The parsed catalog still stages `None`: the gifted boot
+  reads won `4500` / gem `0`, so no table-word → entry `+0x18` map is
+  evidenced. No gem price is invented; the story stays PARTIAL.
 - Balances: `MGASH` paints the `o2_cash` word (`--` until the 5001
   prefix folds; the cell→word join stays OPEN — `cash_point` /
   `item_cash` are the named alternatives). `CHECKMONEY` sums the

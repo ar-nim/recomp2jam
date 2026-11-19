@@ -407,6 +407,12 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 // semantics stay display-only OPEN (next step: SendInput sweep on
 // the live shop per the `~/scratch/planet-verify/` recipe).
 
+/// Full-bleed BACK rect (`State_ItemShop.bnd` rect 0, code ordinal 1):
+/// the tapped BACK press at `(757,580)` leaves the shop and emits the
+/// empty `C2S 5007` (`ff522720…ef29b270`, wire `94b2ea8f…a2508`).
+/// Code `0x1420_0001` follows the pinned `(code & 0xFFF) - 1` ordinal
+/// pairing from `docs/shop.md`; no separate `EXIT` id exists in-block.
+pub const SHOP_BACK_CODE: u32 = 0x1420_0001;
 /// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
 /// contiguously through `+7` (block walk + staged dump).
 pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
@@ -586,8 +592,13 @@ pub struct ShopGood {
     pub item_id: u32,
     /// Korean item name.
     pub name: String,
-    /// Parsed price (inks the WON cell; the GEM join is OPEN).
+    /// Parsed price (inks the WON cell).
     pub price: u32,
+    /// Exe's second price (entry `+0x18`, inks the GEM cell). Stays
+    /// `None` in the parsed catalog: the gifted boot showed gem `0`
+    /// beside won `4500`, so no table→entry map is pinned yet. Only
+    /// an explicitly staged pinned word may set this (#395 partial).
+    pub gem_price: Option<u32>,
 }
 
 /// Staged shop goods in table order; empty without catalog data.
@@ -600,13 +611,16 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
             item_id: row.item_id,
             name: row.name.clone(),
             price: row.price,
+            gem_price: None,
         })
         .collect()
 }
 
 /// One item-shop click the exe codes name: row toggles, the cart
 /// buy, the list/cart pagers, the bag pager, and the row preview.
-/// Everything else (filters, set-item, gift, totals) lands nowhere.
+/// Category tabs stage a local selection (exe FASHION press frame);
+/// everything else (gender/submenu filters, set-item, gift, totals)
+/// lands nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopAction {
     /// Row `ITEMBUY` button toggled (0-based on the page).
@@ -623,6 +637,11 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Category tab selected (0-based in the five-button row). The
+    /// FASHION press frame pins the highlight, not a filter rule.
+    SelectCategory(usize),
+    /// Full-bleed BACK plate: leave the side and send `ExitShop` 5007.
+    BackToLobby,
     /// Item-list scroll pager stepped back.
     ItemPrev,
     /// Item-list scroll pager stepped forward.
@@ -689,6 +708,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
         SHOP_CHARGE_MONEY_CODE => Some(ShopAction::OpenCashCharge),
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
+        SHOP_BACK_CODE => Some(ShopAction::BackToLobby),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
@@ -698,12 +718,20 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
+            .or_else(|| shop_category_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
                     .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
             })
             .or_else(|| shop_tryon_slot(code)),
     }
+}
+
+/// Category tab behind one `SHOP_CATEGORY_FIRST_CODE` code
+/// (`None` outside the five staged category buttons).
+fn shop_category_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_CATEGORY_FIRST_CODE, code)?;
+    (slot < SHOP_CATEGORY_BUTTONS).then_some(ShopAction::SelectCategory(slot))
 }
 
 /// Row slot behind one per-row button run (`None` below the run's
@@ -894,8 +922,9 @@ pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
 pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
-/// return is pinned by the bnd arm; the 5007 ExitShop send stays
-/// OPEN until a qualified BACK capture taps it (#399).
+/// return is pinned by the bnd arm; the shared 5007 ExitShop send is
+/// pinned by the Item Shop BACK tap (`94b2ea8f…a2508`), but a music
+/// shop BACK frame is still OPEN (#399).
 pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;

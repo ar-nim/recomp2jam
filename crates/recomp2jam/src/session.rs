@@ -152,9 +152,10 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase,
-    SyncMusicPurchaseResponse,
+    EquipItem, EquipItemResponse, ExitShop, SellItemResponse, SyncItemPurchase,
+    SyncItemPurchaseReply, SyncMusicPurchase, SyncMusicPurchaseResponse,
 };
+use o2jam_net::wallet::{SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
     AcquireMusic, AcquireMusicRequest, ChannelLogin, ChannelLoginResponse, ChannelLoginResult,
@@ -519,6 +520,10 @@ pub struct OnlineSession {
     /// Live item-shop buy (`None` while no BUYITEM commit is in
     /// flight; the per-frame [`Self::poll_shop_buy`] owns it).
     shop_buy_attempt: Option<ShopBuyAttempt>,
+    /// A 5028 wallet refresh was sent after BACK and its 5029 answer
+    /// is still expected. Gates the read-side drain so unrelated
+    /// lobby/waiting frames keep their own polls.
+    wallet_refresh_expected: bool,
     /// Live song-shop buy (`None` while no buy commit is in
     /// flight; the per-frame [`Self::poll_music_buy`] owns it).
     music_buy_attempt: Option<MusicBuyAttempt>,
@@ -602,6 +607,7 @@ impl OnlineSession {
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
+            wallet_refresh_expected: false,
             music_buy_attempt: None,
             gift_list_attempt: None,
             gift_claim_attempt: None,
@@ -2308,6 +2314,59 @@ impl OnlineSession {
         }
     }
 
+    /// Send one queued BACK exit (5007 empty body). The shell has
+    /// already returned to the lobby; a failed send warns and drops the
+    /// queue, since the local transition cannot be retried by another
+    /// press on a side screen that is no longer open.
+    fn flush_exit_shop(&mut self) {
+        if self.game.take_exit_shop().is_none() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(ExitShop::COMMAND, &[]) {
+            tracing::warn!(%source, "shop exit send failed after BACK");
+            return;
+        }
+        // The tap emits 5028 next; Memoryer answers with the 5029
+        // wallet snapshot that repaints both shop and MyRoom.
+        if let Err(source) = self.gateway.send_frame(SyncCashPoint::COMMAND, &[]) {
+            tracing::warn!(%source, "wallet refresh send failed after BACK");
+        } else {
+            self.wallet_refresh_expected = true;
+        }
+    }
+
+    /// Drain the wallet answer that follows BACK (5028 → 5029),
+    /// and any other 5029 snapshot from the gateway. The body is two
+    /// words: gem and cash point, the same slots the 5001 prefix and
+    /// post-list wallets refresh.
+    fn poll_wallet_answer(&mut self) {
+        if !self.wallet_refresh_expected {
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "wallet refresh", |session| loop {
+            match session.gateway.next_frame() {
+                Ok(frame) if frame.id == SyncCashPointResponse::COMMAND => {
+                    match SyncCashPointResponse::decode_body(&frame.payload) {
+                        Ok(response) => session.game.apply_shop_cash_point(&response),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable wallet answer")
+                        }
+                    }
+                    session.wallet_refresh_expected = false;
+                    break;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-wallet frame in wallet drain");
+                }
+                Err(_) => {
+                    session.wallet_refresh_expected = false;
+                    break;
+                }
+            }
+        });
+    }
+
     fn flush_shop_buy(&mut self) {
         // A buy already in flight must not be re-sent; leave any
         // queued commit staged so it retries once the reply lands.
@@ -2358,13 +2417,11 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == 5001 => {
-                    if let Ok((prefix, _rest)) =
-                        SyncItemPurchasePrefix::decode_prefix(&frame.payload)
-                    {
-                        self.game.apply_shop_purchase_prefix(&prefix);
-                        self.game.apply_shop_purchase();
-                    } else {
-                        tracing::debug!(id = frame.id, "dropping undecodable shop buy reply");
+                    match SyncItemPurchaseReply::decode_live_152(&frame.payload) {
+                        Ok(reply) => self.game.apply_shop_purchase_reply(&reply),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable shop buy reply");
+                        }
                     }
                     return None;
                 }
@@ -2379,6 +2436,32 @@ impl OnlineSession {
             }
         }
         Some(attempt)
+    }
+
+    /// Read-side sell refund: the live 5002/5003 legs pin the body,
+    /// but the shell has no sell press, so an answer can arrive without
+    /// a pending attempt. Fold a success refund into the shared wallet
+    /// and leave it alone on a failure verdict. Runs before the lobby
+    /// drains so a 5003 is never skipped as a foreign frame.
+    fn poll_sell_response(&mut self) {
+        if self.game.side() != Some(SideScreen::Shop) || self.wire_attempt_pending() {
+            return;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == SellItemResponse::COMMAND => {
+                    match SellItemResponse::decode_body(&frame.payload) {
+                        Ok(response) => self.game.apply_shop_sell(&response),
+                        Err(_) => tracing::debug!(id = frame.id, "dropping undecodable sell reply"),
+                    }
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-sell frame in sell drain");
+                }
+                Err(_) => break,
+            }
+        }
     }
 
     fn flush_music_buy(&mut self) {
@@ -3466,7 +3549,10 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
         self.flush_channel_logout();
+        self.flush_exit_shop();
         self.poll_attempts();
+        self.poll_sell_response();
+        self.poll_wallet_answer();
         if self.game.screen() == Screen::Room {
             self.poll_room_user_list_fuse();
         }
@@ -4250,15 +4336,76 @@ pub(super) mod session_tests {
         assert_eq!(session.game.shop_gem_caption(), "GEM 626");
     }
 
-    /// Insufficient-funds arm stays OPEN: no distinct 5001 failure
-    /// reply is evidenced in `docs/shop-buy.md` (the 5001 handler
-    /// returns wallet words on every reply, with no result code), so
-    /// there is no separate failure shape to script. Probe bytes for
-    /// the success reply used above: 152 B, first word `gem=626` LE,
-    /// wallets zero, trailing word `2912127`.
     #[test]
-    #[ignore = "OPEN #194: no distinct 5001 insufficient-funds reply evidenced; probe bytes 152B gem=626 tail=2912127"]
-    fn shop_buy_insufficient_funds_arm_open() {}
+    fn low_gem_reply_completes_without_a_failure_verdict() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_attempts ->
+        //   poll_shop_buy -> drain_shop_buy -> SyncItemPurchaseReply::
+        //   decode_live_152 -> ScreenGame::apply_shop_purchase_reply.
+        // SCRIPTED-GATEWAY `buy-low-gem.jsonl` (`f6f3177f…957e2`):
+        // the 5001 first word is rewritten to gem 17; the 152-byte body
+        // has no result field, so the reply completes with the smaller
+        // wallet instead of a painted failure notice. The notice itself
+        // belongs to the web payment flow and stays OPEN.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BUYITEM_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[..4].copy_from_slice(&17i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BUYITEM_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 17");
+        server.join().unwrap();
+
+        assert_eq!(session.game.shop_gem_caption(), "GEM 17");
+        assert!(session.game.shop_cart().is_empty());
+    }
 
     #[test]
     fn wallet_single_source_refreshes_shop_and_myroom_after_item_buy() {
@@ -4348,6 +4495,267 @@ pub(super) mod session_tests {
             .find(|(code, _)| *code == MYROOM_O2CASH_CODE)
             .map(|(_, text)| text);
         assert_eq!(myroom_o2.as_deref(), Some("450"));
+    }
+
+    #[test]
+    fn item_buy_folds_the_full_live_152_byte_reply_into_one_wallet() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_attempts ->
+        //   poll_shop_buy -> drain_shop_buy -> SyncItemPurchaseReply::
+        //   decode_live_152 -> ScreenGame::apply_shop_purchase_reply ->
+        //   WalletState::apply_purchase_prefix + apply_purchase_wallets.
+        // Readouts: shop_gem_caption + myroom_money_captions.
+        // Tier 2 scripted gateway; the body is the pinned 152-byte
+        // Memoryer shape with synthetic post-list wallet words.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{
+            SideScreen, MYROOM_ITEMCASH_CODE, MYROOM_MUSICCASH_CODE, SHOP_BUYITEM_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[..4].copy_from_slice(&626i32.to_le_bytes());
+            payload[16..20].copy_from_slice(&376i32.to_le_bytes());
+            payload[136..140].copy_from_slice(&42i32.to_le_bytes());
+            payload[140..144].copy_from_slice(&77i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BUYITEM_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
+        server.join().unwrap();
+
+        let captions = session.game.myroom_money_captions();
+        let caption = |code| {
+            captions
+                .iter()
+                .find(|(placed_code, _)| *placed_code == code)
+                .map(|(_, text)| text.as_str())
+        };
+        assert_eq!(caption(MYROOM_MUSICCASH_CODE), Some("42"));
+        assert_eq!(caption(MYROOM_ITEMCASH_CODE), Some("77"));
+        assert!(session.game.shop_cart().is_empty());
+    }
+
+    #[test]
+    fn wallet_refresh_reads_the_live_626_over_zero_5029_body() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_wallet_answer ->
+        //   SyncCashPointResponse::decode_body ->
+        //   ScreenGame::apply_shop_cash_point -> WalletState::apply_cash_point.
+        // The BACK tap's wire `94b2ea8f…a2508` carries `5029` body
+        // `7202000000000000` (gem 626, cash point 0); the exe paints
+        // `G 626 / W 0` in the same frame. Tier 2 scripted gateway.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let exit = read_frame(&mut stream);
+            assert_eq!(exit.id, 5007);
+            stream
+                .write_all(&encode_frame(
+                    5029,
+                    &[0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                ))
+                .unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(757, 580);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+
+        assert_eq!(session.game.shop_gem_caption(), "GEM 626");
+        assert_eq!(session.game.wallet().cash_point, Some(0));
+    }
+
+    #[test]
+    fn item_shop_back_sends_the_empty_5007_exit() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> flush_exit_shop ->
+        //   ScreenGame::take_exit_shop (queued by click_shop BACK) ->
+        //   GatewayConnection::send_frame(5007, []).
+        // Tap `ff522720…ef29b270` and wire `94b2ea8f…a2508`.
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let exit = read_frame(&mut stream);
+            assert_eq!(exit.id, 5007);
+            assert!(exit.payload.is_empty(), "5007 carries an empty body");
+            let refresh = read_frame(&mut stream);
+            assert_eq!(refresh.id, 5028);
+            assert!(refresh.payload.is_empty(), "5028 carries an empty body");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(757, 580);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.side(), None);
+    }
+
+    #[test]
+    fn sell_refund_updates_the_gem_wallet_from_a_live_5003_body() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_sell_response ->
+        //   SellItemResponse::decode_body -> ScreenGame::apply_shop_sell ->
+        //   WalletState::apply_sell_response -> shop_gem_caption.
+        // Tier 2 scripted gateway. The 5003 body is the live uid-2 pin
+        // `96bb62ce…25009b`: result 0, refund 14626 (626 + item 376
+        // price 14000). The shell has no sell press yet, so this is
+        // the read-side fold, not a player-visible sell click.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_shell::screens::side::SideScreen;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let refund = 14626i32.to_le_bytes();
+            let body = [0, 0, 0, 0, refund[0], refund[1], refund[2], refund[3]];
+            stream.write_all(&encode_frame(5003, &body)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.apply_shop_cash_point(&o2jam_net::wallet::SyncCashPointResponse {
+            gem: 626,
+            cash_point: 0,
+        });
+        assert!(game.visit_side(SideScreen::Shop));
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.shop_gem_caption(), "GEM 14626");
+    }
+
+    #[test]
+    fn sell_failure_leaves_the_gem_wallet_untouched() {
+        // Same live chain as the refund guard. The invalid sell leg
+        // `9c9af74a…50d67` answers 5002 slot999 with 5003 `01000000`:
+        // a result word with no refund word.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_shell::screens::side::SideScreen;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            stream
+                .write_all(&encode_frame(5003, &[1, 0, 0, 0]))
+                .unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.apply_shop_cash_point(&o2jam_net::wallet::SyncCashPointResponse {
+            gem: 626,
+            cash_point: 0,
+        });
+        assert!(game.visit_side(SideScreen::Shop));
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.shop_gem_caption(), "GEM 626");
     }
 
     #[test]
@@ -4795,6 +5203,95 @@ pub(super) mod session_tests {
         assert!(hero.item_gifts.is_empty(), "claimed gift leaves the box");
         assert!(hero.inventory.contains(&1), "claimed item lands in the bag");
         assert!(session.gift_claim_attempt.is_none());
+    }
+
+    #[test]
+    fn gift_claim_unknown_error_keeps_the_present_box_row() {
+        // Live caller chain:
+        //   OnlineSession::paint -> flush_gift_claim (5023) ->
+        //   poll_gift_claim -> drain_gift_claim (5024 verdict 4) — the
+        //   success-only bag fold stays closed. Tier 2 scripted gateway
+        //   with the live `9c9af74a…50d67` failure body `0000000004`.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            use o2jam_net::gift::GetGiftMessageListResponse;
+            assert_eq!(read_frame(&mut stream).id, 5017);
+            let empty = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &empty.encode_body()))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, 5023);
+            stream
+                .write_all(&encode_frame(5024, &[0, 0, 0, 0, 4]))
+                .unwrap();
+        });
+
+        let area = |code: u32, x: i32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let mut hero = o2jam_net::CharacterInfo {
+            nickname: "Tester".to_owned(),
+            ..o2jam_net::CharacterInfo::default()
+        };
+        hero.item_gifts.push(o2jam_net::GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        });
+        game.set_myroom_character(hero);
+        game.load_side_scene(
+            vec![
+                area(o2jam_shell::screens::side::MYROOM_GIFT_FIRST_CODE, 10),
+                area(o2jam_shell::screens::side::MYROOM_MOVE_CODE, 100),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.click_myroom_side(11, 11);
+        game.click_myroom_side(101, 11);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| s.gift_claim_attempt.is_none());
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert_eq!(hero.item_gifts.len(), 1, "failed claim keeps the gift row");
+        assert!(!hero.inventory.contains(&1), "failed claim mints no item");
     }
 
     pub(super) fn entry_channel() -> o2jam_net::ChannelState {

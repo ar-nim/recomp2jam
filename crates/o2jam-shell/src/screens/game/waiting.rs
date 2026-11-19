@@ -3,7 +3,7 @@
 
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::SetRoomMusic;
-use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
+use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::{CreateRoom, ExitPlaying, JoinRoom, Ready, SetRoomTeam, StartGame};
 
 /// Queued session-bridge sends behind the shell screens (#139
@@ -45,6 +45,9 @@ pub(crate) struct PendingOutbox {
     /// Queued cart buy awaiting the session send (5000; the cart
     /// `BUYITEM` owns it).
     pub(crate) pending_shop_buy: Option<SyncItemPurchase>,
+    /// Queued shop exit awaiting the session send (5007; the full-bleed
+    /// BACK rect owns it).
+    pub(crate) pending_exit_shop: Option<ExitShop>,
     /// Queued song buy awaiting the session send (5010; the row
     /// buy buttons and the cart `BUYITEM` own it).
     pub(crate) pending_music_buy: Option<SyncMusicPurchase>,
@@ -177,6 +180,11 @@ impl PendingOutbox {
     /// body per `BUYITEM` commit; the seam drains it.
     pub(crate) fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
         self.pending_shop_buy.take()
+    }
+    /// Queued shop exit for the session bridge, if any (5007). One
+    /// BACK press sends once.
+    pub(crate) fn take_exit_shop(&mut self) -> Option<ExitShop> {
+        self.pending_exit_shop.take()
     }
     /// Queued song buy for the session bridge, if any (5010). One
     /// body per row or cart commit; the seam drains it.

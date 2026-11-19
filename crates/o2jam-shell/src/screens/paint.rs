@@ -54,8 +54,8 @@ use super::side::{
     PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
     SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1512,6 +1512,12 @@ fn paint_shop_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement], goods: 
         }
         if let Some(rect) = shop_template_rect(placements, SHOP_ITEMWON_FIRST_CODE + slot_u32) {
             paint_text_into_rect(frame, rect, &good.price.to_string(), CP949_INK);
+        }
+        if let (Some(gem_price), Some(rect)) = (
+            good.gem_price,
+            shop_template_rect(placements, SHOP_ITEMGEM_FIRST_CODE + slot_u32),
+        ) {
+            paint_text_into_rect(frame, rect, &gem_price.to_string(), CP949_INK);
         }
     }
 }
@@ -3431,6 +3437,37 @@ mod paint_tests {
     }
 
     #[test]
+    fn shop_gem_price_cell_inks_an_explicit_pinned_word() {
+        // #395 partial: the exe's second price cell has a painter, but
+        // the live catalog still stages `gem_price: None` — the gifted
+        // boot showed won 4500 / gem 0, so no table→entry `+0x18` map
+        // is pinned. This guard only proves that an explicitly staged
+        // word inks the staged ITEMGEM rect; it claims no live value.
+        let placements = vec![shop_placement(SHOP_ITEMGEM_FIRST_CODE, 300, 169, 38, 13)];
+        let goods = vec![ShopGood {
+            item_id: 1,
+            name: "Hair".to_owned(),
+            price: 4500,
+            gem_price: Some(3000),
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+            &WalletState::default(),
+            &[],
+            0,
+            1,
+        );
+        assert!(has_ink_in(&buf, 800, 300, 169, 38, 13), "ITEMGEM inks");
+    }
+
+    #[test]
     fn shop_board_paints_names_prices_and_wallet_at_staged_rects() {
         // Synthetic `STATE_SHOP` board: two goods ink their names
         // and prices into the staged ITEMNAME/ITEMWON rects, the
@@ -3457,11 +3494,13 @@ mod paint_tests {
                 item_id: 1,
                 name: "Hair".to_owned(),
                 price: 1000,
+                gem_price: None,
             },
             ShopGood {
                 item_id: 2,
                 name: "Boots".to_owned(),
                 price: 2500,
+                gem_price: None,
             },
         ];
         let wallet = WalletState {
@@ -3513,11 +3552,13 @@ mod paint_tests {
             item_id: 7,
             name: "PreviewHair".to_owned(),
             price: 14000,
+            gem_price: None,
         };
         let goods = vec![ShopGood {
             item_id: 1,
             name: "Hair".to_owned(),
             price: 1000,
+            gem_price: None,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(
@@ -3579,6 +3620,7 @@ mod paint_tests {
             item_id: 1,
             name: "Hair".to_owned(),
             price: 1000,
+            gem_price: None,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(

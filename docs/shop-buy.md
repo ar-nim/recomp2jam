@@ -24,6 +24,28 @@ response S→C `N+1` (`docs/net-protocol.md` §3).
 | `CheckNameResponse` | 5033 (`0x13a9`) | `i32` verdict + null-term string |
 | `SyncCashPoint` (request) | 5028 (`0x13a4`) | empty (kept from earlier work) |
 
+The gateway legs in `~/scratch/evidence-shops-findings.md` are the first
+**live** bodies for this family (server-wire class, not exe paint):
+`uid1-server.jsonl` `506ac0a3…5d3b6` and `uid2-server.jsonl`
+`96bb62ce…25009b` each answer the bare 5000 with a 152-byte 5001 —
+four-word prefix, 30 bag words (`376/383/35` on uid 2), two post-list
+wallet words, empty i32-counted attributive list and free-pass tail —
+and the invalid sell answers 5002 with `01000000` (no refund word).
+`buy-low-gem.jsonl` `f6f3177f…957e2` rewrites the 5001 first word to 17
+and leaves the same 152-byte shape: there is no 5001 verdict field.
+This refutes the old "insufficient-gems verdict in 5001" premise
+(stories #178/6 and /35): our client completes the smaller wallet with
+no invented notice. Any player-visible low-balance notice belongs to
+the web payment flow (`docs/net-protocol.md` §4a) and stays OPEN.
+`SyncItemPurchaseReply::decode_live_152` pins this observed shape;
+item-landing pixels stay OPEN because the exe sizes the bag list from
+the global `0x77cce4`. The tapped BACK sends `5028` next, answered by
+`5029 7202000000000000` (gem 626 / cash point 0) on the gifted account;
+the read side folds that snapshot into the shared wallet. The 5003 read-side fold runs on the Shop side
+when no attempt is in flight: a success refund updates the shared gem
+slot and an error word leaves it alone. The shell has no sell press
+pin yet, so no 5002 send is invented.
+
 Packet helpers used as evidence vocabulary: the fixed-size
 packet reader (`0x555d20`: copy `len` bytes from the packet
 cursor, advance it), the fixed-size packet writer (`0x555d70`:
@@ -329,3 +351,11 @@ round-trip),
 `shop_restock_pair_decodes_attributive_item_and_count`,
 `shop_restock_pair_round_trips_pair_list`,
 `shop_restock_pair_rejects_short_body`.
+
+Live-shape additions: `live_uid2_purchase_reply_decodes_all_eight_fields`,
+`live_sell_pair_pins_request_refund_and_failure`,
+`scripted_gateway_purchase_arms_round_trip_the_pinned_bodies` and
+`purchase_reply_rejects_a_fabricated_failure_word`. The scripted-gateway
+test walks four pinned legs — 5000/5001 success, 5028/5029 refresh,
+5002/5003 success and 5003 `01000000` failure — over one loopback
+connection. It pins codecs and bodies, not an exe press (#392).

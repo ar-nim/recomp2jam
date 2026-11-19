@@ -32,6 +32,10 @@ pub(crate) struct ShopState {
     /// Cart-list page (five rows per page, the staged `CART_EX`
     /// slots).
     pub(crate) shop_cart_page: usize,
+    /// Selected category tab (`None` on entry). The FASHION press
+    /// frame `d4074ce7…` moves only the tab highlight; no wire frame
+    /// and no catalogue filter rule is pinned yet.
+    pub(crate) shop_category: Option<usize>,
     /// Previewed item id (`ITEMPRE` pick, `ITEMBACK` clears; `None`
     /// until picked). Ids stay stable across pages (unlike slots).
     pub(crate) preview: Option<u32>,
@@ -50,6 +54,7 @@ impl ShopState {
         self.shop_page = 0;
         self.preview = None;
         self.bag_page = 0;
+        self.shop_category = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -60,6 +65,11 @@ impl ShopState {
     /// Cart-list page (five rows per page).
     pub(crate) fn cart_page(&self) -> usize {
         self.shop_cart_page
+    }
+
+    /// Selected category tab (`None` until a FASHION-class press).
+    pub(crate) fn category(&self) -> Option<usize> {
+        self.shop_category
     }
 
     /// Checked cart item ids in toggle order.
@@ -245,7 +255,11 @@ impl ShopState {
                 false
             }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
-            ShopAction::OpenCashCharge => false,
+            ShopAction::OpenCashCharge | ShopAction::BackToLobby => false,
+            ShopAction::SelectCategory(slot) => {
+                self.shop_category = Some(slot);
+                false
+            }
             ShopAction::CartBuy => !self.shop_cart.is_empty(),
             ShopAction::ItemPrev => {
                 self.shop_page = self.shop_page.saturating_sub(1);
