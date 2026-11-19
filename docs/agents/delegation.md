@@ -29,6 +29,30 @@ implement something that the ticket or the gates imply.
 - Skips are recorded in the junior's report and re-checked by the
   senior during review.
 
+## Scoped tracker-write grants
+
+Some programs let a junior write to the tracker (for example spec bodies).
+The senior puts the grant in the brief; every write outside it stays senior work.
+
+- **Scope statement:** name the exact objects up front: `Tracker grant scope
+  only: bodies of #178/#179; no comments, labels, closes, new issues, or
+  pushes`. Repeat the line in the report's tracker section.
+- **One edit per object:** fetch the body, build the new body as an additive
+  change, then run one `gh issue edit <n> --body-file <file>` per object. Keep
+  existing text byte-for-byte; a second edit to one object needs a stated
+  reason.
+- **Read-back:** after each edit, run `gh issue view <n> --json body --jq .body`
+  and compare the original prefix and checklist counts (GitHub adds one
+  trailing LF). Record byte counts and sha256 in the findings. The write is
+  done only when read-back matches.
+- **Resume dedup:** on re-entry, list prior writes from the findings and the
+  tracker before touching an object, then skip objects already written. One
+  create-script resume re-ran its queue and duplicated 36 tickets (#431-#466);
+  each duplicate needed a close comment and a `to-remove` label, with the lower
+  number in each pair kept as the keeper. One listing at resume would have
+  caught it. Create new issues one at a time with `scripts/issue-create.sh`
+  and read back each number.
+
 ## Steer vs respawn
 
 - **Steer** for narrow corrections: a typo, a wrong constant, a missed
