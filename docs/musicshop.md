@@ -111,7 +111,17 @@ TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/d
 4. Search/sort/filter/pager behavior — PARTIAL: TITLE/DIFF/BPM
    sorts and the MSALL pager answer (directions + pairing
    ASSUMED); PRICE sort, filters, search unevidenced.
-   Caption/money sources: ISBUY from 4031 flags; money texts
-   unpinned.
+   Caption/money sources: ISBUY from 4031 flags; bottom G/W money
+   texts from the shared 5029 wallet and row GEM/WON prices from
+   `OJNList.dat` table 3 (commit 9bbca9d).
 5. Shell paint/flow/staging — DONE for rows + pagers + buys;
    entry/exit paths still OPEN.
+
+## Privacy static sweep (#402)
+
+The Music Shop is a local side screen: `visit_side(MusicShop)` stages
+this seat's art and no control code or request in the 5000 shop family
+names another seat's shop. Guard `music_shop_has_no_visitor_request_in_the_shop_family`
+sweeps ids 5000..=5100 and pins 5012 as the only known request there.
+This is a NA-DESIGN result, not a passed visitor cell: no executable
+press or visitor wire frame exists to grade.
