@@ -148,6 +148,11 @@ impl PendingOutbox {
     pub(crate) fn take_equip_send(&mut self) -> Option<EquipItem> {
         self.pending_equip.take()
     }
+    /// Put a failed equip send back so the next session paint retries
+    /// the same body instead of losing the wire apply.
+    pub(crate) fn requeue_equip_send(&mut self, equip: EquipItem) {
+        self.pending_equip = Some(equip);
+    }
     /// Whether an equip send is queued for the session bridge.
     #[must_use]
     pub(crate) fn has_pending_equip_send(&self) -> bool {

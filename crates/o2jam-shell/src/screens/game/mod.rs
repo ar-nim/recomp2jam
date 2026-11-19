@@ -4885,6 +4885,12 @@ impl ScreenGame {
         self.outbox.take_equip_send()
     }
 
+    /// Restore an equip body whose send failed so the session retries
+    /// the same apply on the next paint.
+    pub fn requeue_equip_send(&mut self, equip: EquipItem) {
+        self.outbox.requeue_equip_send(equip);
+    }
+
     /// Whether an equip send is queued for the session bridge.
     #[must_use]
     pub fn has_pending_equip_send(&self) -> bool {
@@ -11974,6 +11980,14 @@ mod game_tests {
         let send = game.take_equip_send().expect("apply queues the equip send");
         assert_eq!((send.slot, send.item_id), (0, 1));
         assert!(game.take_equip_send().is_none());
+        // A failed gateway send restores the same body for the next
+        // session paint; the shell does not silently lose the apply.
+        game.requeue_equip_send(send);
+        assert!(game.has_pending_equip_send());
+        assert_eq!(
+            game.take_equip_send().map(|send| (send.slot, send.item_id)),
+            Some((0, 1))
+        );
         // The staged worn set mirrors the commit (slot 0 wears 1).
         game.ingest_snapshot(&InputSnapshot::click_at(251, 11));
         game.ingest_snapshot(&InputSnapshot::click_at(451, 11));

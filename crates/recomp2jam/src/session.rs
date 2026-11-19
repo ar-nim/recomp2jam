@@ -152,7 +152,8 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase, SyncMusicPurchaseResponse,
+    EquipItem, EquipItemResponse, SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase,
+    SyncMusicPurchaseResponse,
 };
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
@@ -362,6 +363,15 @@ struct MusicBuyAttempt {
     deadline: Instant,
 }
 
+/// Pending equip apply (ticket #419): the 5004 send plus its 5005
+/// verdict. The reply's tail roles are still OPEN, so the leg only
+/// drains it; the shell owns the local figure restage.
+#[derive(Debug, Clone, Copy)]
+struct EquipAttempt {
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
 /// Pending gift-list fetch (ticket #201): the 5017 send plus the 5018
 /// answer resolve on the per-frame poll. The 5018 body is exe-ignored
 /// (`docs/gifts.md`); the drain only clears the attempt. A timeout
@@ -518,6 +528,9 @@ pub struct OnlineSession {
     /// Live gift claim (`None` while no MOVE claim is in flight; the
     /// per-frame [`Self::poll_gift_claim`] owns it).
     gift_claim_attempt: Option<GiftClaimAttempt>,
+    /// Live equip apply (`None` while no 5004 apply is in flight; the
+    /// per-frame [`Self::poll_equip`] owns it).
+    equip_attempt: Option<EquipAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -592,6 +605,7 @@ impl OnlineSession {
             music_buy_attempt: None,
             gift_list_attempt: None,
             gift_claim_attempt: None,
+            equip_attempt: None,
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -2424,6 +2438,76 @@ impl OnlineSession {
         Some(attempt)
     }
 
+    /// Send the shell's queued equip apply (5004) and open its reply
+    /// leg. The shell already mirrors the worn set locally, so a
+    /// silent server keeps the local restage but retries on the next
+    /// paint when the send itself fails.
+    fn flush_equip(&mut self) {
+        if self.equip_attempt.is_some() {
+            return;
+        }
+        let Some(equip) = self.game.take_equip_send() else {
+            return;
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(EquipItem::COMMAND, &equip.encode_body())
+        {
+            tracing::warn!(%source, "equip send failed");
+            self.game.requeue_equip_send(equip);
+            return;
+        }
+        self.equip_attempt = Some(EquipAttempt {
+            deadline: Instant::now() + PENDING_WIRE_WINDOW,
+        });
+    }
+
+    /// Per-frame equip leg: drain the 5005 verdict under a short IO
+    /// window, then let the normal drains resume. Off MyRoom the
+    /// attempt drops, so a late answer cannot fold into another scene.
+    fn poll_equip(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom) {
+            if self.equip_attempt.take().is_some() {
+                tracing::debug!("equip reply left behind leaving the MyRoom side; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.equip_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("equip timed out with no server answer; staying on MyRoom");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "equip", |session| {
+            if let Some(kept) = session.drain_equip(attempt) {
+                session.equip_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one equip attempt leg: drain until the socket goes quiet.
+    /// The 5005 tail is wire-present but unpinned for local paint, so
+    /// the body is validated only; the attempt clears on any reply.
+    fn drain_equip(&mut self, attempt: EquipAttempt) -> Option<EquipAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == EquipItemResponse::COMMAND => {
+                    if EquipItemResponse::decode_body(&frame.payload).is_err() {
+                        tracing::debug!(id = frame.id, "dropping undecodable equip reply");
+                    }
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-equip frame in equip drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
     fn flush_gift_list(&mut self) {
         if self.gift_list_attempt.is_some() {
             return;
@@ -3344,6 +3428,7 @@ impl OnlineSession {
             || self.music_buy_attempt.is_some()
             || self.gift_list_attempt.is_some()
             || self.gift_claim_attempt.is_some()
+            || self.equip_attempt.is_some()
     }
 
     /// Drain one frame's gateway traffic before the canvas paints it.
@@ -4410,6 +4495,98 @@ pub(super) mod session_tests {
 
         assert!(session.gift_list_attempt.is_none());
         assert!(session.gift_claim_attempt.is_none());
+    }
+
+    #[test]
+    fn myroom_equip_sends_5004_through_scripted_gateway() {
+        // Live caller chain (#419, EQUIP-APPLY x peer):
+        //   window::WindowHandler -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_equip
+        //   -> take_equip_send (5004) -> OnlineSession::poll_attempts.
+        // Tier 2 scripted gateway; the 5004 body shape is statically
+        // pinned in docs/equip.md (the exe press itself stays OPEN).
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::gift::GetGiftMessageListResponse;
+        use o2jam_net::shop::{EquipItem, EquipItemResponse};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let entry = read_frame(&mut stream);
+            assert_eq!(entry.id, 5017);
+            let empty = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &empty.encode_body()))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5004);
+            let equip = EquipItem::decode_body(&frame.payload).unwrap();
+            assert_eq!((equip.slot, equip.item_id), (0, 1));
+            let reply = EquipItemResponse {
+                result: 0,
+                tail: None,
+            };
+            stream
+                .write_all(&encode_frame(5005, &reply.encode_body()))
+                .unwrap();
+        });
+
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        let placement = |code: u32, x: i32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 0,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Item".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![1],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        game.load_side_scene(
+            vec![
+                placement(o2jam_shell::screens::side::MYROOM_BAG_FIRST_CODE, 10),
+                placement(o2jam_shell::screens::side::MYROOM_APPLY_CODE, 60),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.ingest_snapshot(&InputSnapshot::click_at(20, 15));
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 15));
+        assert!(game.has_pending_equip_send());
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| !s.game.has_pending_equip_send());
+        let _ = server.join();
+        assert!(!session.game.has_pending_equip_send());
     }
 
     #[test]

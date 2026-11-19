@@ -33,6 +33,8 @@ impl OnlineSession {
         self.poll_shop_buy();
         self.flush_music_buy();
         self.poll_music_buy();
+        self.flush_equip();
+        self.poll_equip();
         self.flush_gift_list();
         self.poll_gift_list();
         self.flush_gift_claim();
