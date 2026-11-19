@@ -6578,6 +6578,185 @@ mod side_tests {
         assert_eq!(layout.pitch, 20);
     }
 
+    /// Native rect of one authored control, read from the `.bnd` the
+    /// ControlList block binds (never from staging output).
+    fn authored_dialog_rect(placed: &o2jam_file::PlacedControl<'_>) -> Rect {
+        let corners = placed.rect.expect("ordinal pairing always yields a rect");
+        Rect {
+            x: i32::try_from(corners.x1.min(corners.x2)).unwrap_or(i32::MAX),
+            y: i32::try_from(corners.y1.min(corners.y2)).unwrap_or(i32::MAX),
+            w: corners.x2.abs_diff(corners.x1),
+            h: corners.y2.abs_diff(corners.y1),
+        }
+    }
+
+    /// True while one staged rect is the authored rect itself or a
+    /// `SET` clone inside its parent box (the exe's clone write-back).
+    fn rect_is_bound_or_cloned(authored: Rect, staged: Rect) -> bool {
+        if staged == authored {
+            return true;
+        }
+        let right = authored
+            .x
+            .saturating_add(i32::try_from(authored.w).unwrap_or(0));
+        let bottom = authored
+            .y
+            .saturating_add(i32::try_from(authored.h).unwrap_or(0));
+        let staged_right = staged
+            .x
+            .saturating_add(i32::try_from(staged.w).unwrap_or(0));
+        let staged_bottom = staged
+            .y
+            .saturating_add(i32::try_from(staged.h).unwrap_or(0));
+        authored.x <= staged.x
+            && staged_right <= right
+            && authored.y <= staged.y
+            && staged_bottom <= bottom
+    }
+
+    /// One authored control's staged rect must be its own, or a clone
+    /// contained in its parent box.
+    fn assert_control_keeps_its_rect(
+        id: &str,
+        expected: Rect,
+        staged_art: &crate::staging::StagedArt,
+    ) {
+        let staged: Vec<_> = staged_art
+            .placements
+            .iter()
+            .filter(|candidate| candidate.id == id)
+            .collect();
+        assert!(
+            staged
+                .iter()
+                .any(|candidate| rect_is_bound_or_cloned(expected, candidate.rect)),
+            "{id} must stage at its ordinal rect {expected:?}, got {:?}",
+            staged
+                .iter()
+                .map(|candidate| candidate.rect)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Every `SET` member must sit at its parent's origin plus the
+    /// template-local rect the ControlList authored for that member.
+    fn assert_set_clones_keep_their_origins(
+        block: &o2jam_file::ControlBlock,
+        authored: &[o2jam_file::PlacedControl<'_>],
+        staged_art: &crate::staging::StagedArt,
+    ) {
+        for set in &block.sets {
+            let Some(group) = set.params.get(1).copied().filter(|code| *code != 0) else {
+                continue;
+            };
+            let codes: Vec<u32> = set
+                .entries
+                .iter()
+                .filter(|entry| crate::avatar::entry_takes_rect(entry) && entry.sprite.is_some())
+                .map(|entry| entry.code)
+                .collect();
+            let members: Vec<_> = authored
+                .iter()
+                .filter(|placed| codes.contains(&placed.entry.code))
+                .collect();
+            let parents: Vec<_> = staged_art
+                .placements
+                .iter()
+                .filter(|placed| placed.role == PlacementRole::Single)
+                .filter(|placed| crate::avatar::set_group_key(placed.code) == group)
+                .collect();
+            assert!(
+                !members.is_empty() && !parents.is_empty(),
+                "SET group {group:#x} stages"
+            );
+            for parent in parents {
+                for member in &members {
+                    let template = authored_dialog_rect(member);
+                    let expected = Rect {
+                        x: parent.rect.x.saturating_add(template.x),
+                        y: parent.rect.y.saturating_add(template.y),
+                        w: template.w,
+                        h: template.h,
+                    };
+                    assert!(
+                        staged_art.placements.iter().any(|candidate| {
+                            candidate.role == PlacementRole::Clone
+                                && candidate.id == parent.id
+                                && candidate.code == member.entry.code
+                                && candidate.rect == expected
+                        }),
+                        "{} clone of {} must land at {expected:?}",
+                        member.entry.id,
+                        parent.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn song_dialog_controls_keep_their_ordinal_paired_rects() {
+        // Ticket #404: every authored `DAILOG_SELECTMUSIC` control sits
+        // on its own code-ordinal `.bnd` rect. Expected rects come from
+        // an independent ControlList + bind parse; staging must place
+        // each control there, or clone it inside a parent's box per the
+        // exe's `SET` write-back. CI has no game data: skip cleanly.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        let Ok(archive) = std::fs::read(path) else {
+            println!("skip: missing installed Interface1.opi");
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).expect("opi parses");
+        let list_entry = o2jam_file::find_opi_entry(&entries, "ControlList_Interface.txt")
+            .expect("control list exists");
+        let body = o2jam_file::opi_entry_body(&archive, list_entry).expect("body reads");
+        let text = o2jam_file::decode_control_text(body).expect("control text decodes");
+        let list = o2jam_file::parse_control_list(&text).expect("control list parses");
+        let block = list
+            .blocks
+            .iter()
+            .find(|block| block.name == super::SELECT_MUSIC_DIALOG_BLOCK)
+            .expect("song-dialog block exists");
+        let bind_name = block.bound_file.as_ref().expect("block binds a .bnd");
+        let bind_entry =
+            o2jam_file::find_opi_entry(&entries, bind_name).expect("bound .bnd entry exists");
+        let bind_body = o2jam_file::opi_entry_body(&archive, bind_entry).expect("bind body reads");
+        let bind = o2jam_file::parse_bnd(bind_body).expect("bind parses");
+        let authored: Vec<_> = o2jam_file::pair_entries_with_rects(block, &bind)
+            .into_iter()
+            .collect();
+        assert_eq!(authored.len(), 134, "7.55 block inventory");
+
+        let staged_art = crate::staging::stage_dialog(
+            &archive,
+            crate::staging::Dialog::SelectMusic,
+            crate::staging::StageContext::default(),
+        )
+        .art
+        .expect("song dialog stages");
+        let set_member_codes: Vec<u32> = block
+            .sets
+            .iter()
+            .flat_map(|set| set.entries.iter())
+            .filter(|entry| crate::avatar::entry_takes_rect(entry))
+            .map(|entry| entry.code)
+            .collect();
+        for placed in &authored {
+            if !crate::avatar::entry_takes_rect(placed.entry)
+                || set_member_codes.contains(&placed.entry.code)
+            {
+                continue; // containers claim no rect; SET members become clones
+            }
+            assert_control_keeps_its_rect(
+                &placed.entry.id,
+                authored_dialog_rect(placed),
+                &staged_art,
+            );
+        }
+        assert_set_clones_keep_their_origins(block, &authored, &staged_art);
+    }
+
     #[test]
     fn select_chosung_layout_falls_back_without_index_buttons() {
         assert_eq!(select_chosung_layout(&[]), None);
