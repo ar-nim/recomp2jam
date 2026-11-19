@@ -39,7 +39,7 @@ Full sha256 values are stated once here; cells use the aliases.
 | **P15** `~/scratch/no-response/f1-playing-qualified/citation.txt` | `8773f5cc0efb9486e782e230423d3a0439cb6182f20f22ffd790a5939d1e8517` | Wedge pack: Loading pixels up, no 4014/play pixels, render thread wait. State-path claim only |
 | Cover file | `47eb357866f37c6ef39afe048125106ed296ee3f50b44f87b409a5a8a250af06` | Decrypted 800×600 JPEG from the selected `o2ma757.ojn`; P2 differs by MAE 3.18 / PSNR 26.66 dB (#355/#360 close) |
 | Static `S1` | `docs/lifecycle.md` §9, files `0x1718b0` (ev `66e60d16…`), `0xf8b80` (ev `d2a69b45…`), `0x12180` (ev `011eab73…`), `0x14db40` (ev `0ee1373d…`), `0xe47a0` (ev `68d920c2…`) | Exe dossier chain: validate → stage → OJN decrypt → codec init → gate screen; no wall durations |
-| Static `S2` | `docs/gdi-text.md:100`, `docs/loading-type.md`, ev `68d920c2…`; VA `0x4e47a0+0x524`/`+0x528`/`+0x52c` | Trebuchet 27×65 w400 / Arial 7×14 w400 / Gulimche 6×12 w400 descriptors. Caption-to-face and Arial consumer stay OPEN |
+| Static `S2` | `docs/gdi-text.md:100`, `docs/loading-type.md`, ev `68d920c2…`; object words `+0x524`/`+0x528`/`+0x52c`; Lane D REA `ev_3cd0316ec59611a50887e5ae714f6adcfea61a51bf34ad8b2380eb8fd85b4f39` | Trebuchet 27×65 w400 / Arial 7×14 w400 / Gulimche 6×12 w400 descriptors. REA confirms `FUN_004e47a0` creates all three and stores them at object words `[0x149]`/`[0x14a]`/`[0x14b]`. The offsets are object-relative, not virtual addresses (a direct xref probe at `0x4e47cc4` is outside memory). No text-draw call in the gate function reads those words; caption-to-face and Arial consumer stay OPEN |
 | Static `S3` | `docs/net-protocol.md` §4, lines 103/116/170 | 4011/4013/4012/4048/4049 layout; 4011 carries no cover field |
 | Owner `O1` | #355 close 2026-11-18T17:30Z; #360 close comment; #340 findings `~/scratch/loading-bar-findings.md` | Cover source is the selected OJN JPEG, credits are baked into it; the invented green bar is hidden because qualified exe crops have 0 green-dominant pixels in `(200,272,320,28)` |
 | Negative `N1` | `docs/parity/verify-wine.md:15`, `~/scratch/ja-b-findings.md` | Older observation says "bead progress pills, 3-KEY badge, Artist/Remix/Pattern credits"; kept as a contradiction with the #340 crop, not used to reintroduce a green HUD |
@@ -159,7 +159,9 @@ Ranked by player visibility × reachability:
 3. `L-REFUSAL` / `L-ARM` / `L-INPUT` — failure and edge behavior. Static pins
    name the mechanisms; no qualified exe frame or memory read exists.
 4. `L-REA-FONT` — separate runtime Trebuchet/Arial ink from credit text baked
-   into the JPEG; the Arial consumer has no dossier.
+   into the JPEG. Lane D pinned font creation at `FUN_004e47a0`
+   (`ev_3cd0316…`), but the gate function has no text-draw consumer; a cover
+   with no baked credits is still needed before any runtime-credit story.
 5. `L-INTERNAL-TIMING` — instrument the four static legs; P4 only brackets
    them with wire-visible proxies.
 
@@ -179,7 +181,11 @@ Contradictions preserved:
   to match our painter.
 - P11's on-disk hash differs from the hash quoted in #355's close and the
   #294 matrix (`456c0090…`); the reported Loading values agree. Both hashes
-  are named in §1.
+  are named in §1. Lane D added no fresh pixels: the REA font-creation
+  dossier does not resolve which runtime caption, if any, uses Arial.
+- N1's "bead progress pills" remains resolved as art in P2; the live
+  Memoryer fixture probe (`db1a395d…`) carries no Loading frame and changes
+  no Loading cell.
 - Static `docs/parity/loading-gate.md` still marks the bar/caption rects and
   the four-leg wall pacing OPEN. Those seams are not re-graded by a green
   guard in this matrix.
