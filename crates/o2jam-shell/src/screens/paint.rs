@@ -9160,6 +9160,91 @@ mod paint_tests {
         assert_figure_fills_slot(&buf, &bare, slot);
     }
 
+    /// Ticket #375: the same player-visible waiting-seat painter must
+    /// ink the bare arms/hands for user 1's face-only wire. The old
+    /// body+face composition is the red comparison; the fallback kit
+    /// adds item 31's one-image arms. Diff pixels name the painted
+    /// hands region, not just a stacker run count.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> WindowHandler::paint
+    ///   -> Shell::paint_backbuffer -> ScreenGame::paint_at
+    ///   -> paint_waiting_scene -> paint_waiting_seat_avatar
+    ///   -> paint_figure_in_seat_slot -> AvatarFigure::paint_visible_centered.
+    /// Archives absent -> skipped (CI has no game data).
+    #[test]
+    fn waiting_seat_paints_bare_arms_for_the_face_only_row() {
+        let mut face_only = [0i32; 17];
+        face_only[11] = 35;
+        let Some(full) = stacked_figure_for_row(&face_only, true) else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let Some(old) = stacked_figure_for_row(&[30, 35], true) else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let slot = Rect {
+            x: 37,
+            y: 55,
+            w: 123,
+            h: 150,
+        };
+        let placements = vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: WAITING_SEAT_PARENT_IDS[0].to_owned(),
+                code: 0x1601_5022,
+                sprite: None,
+                rect: slot,
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: WAITING_AVATAR_SLOT_ID.to_owned(),
+                code: 0x1670_002E,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 123,
+                    h: 150,
+                },
+            },
+        ];
+        let paint = |figure: &AvatarFigure| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_waiting_seat_avatar(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &placements,
+                Some(figure),
+                0,
+            );
+            buf
+        };
+        let with_arms = paint(&full);
+        let without_arms = paint(&old);
+        let mut arm_pixels = 0;
+        for y in slot.y..slot.y + slot.h as i32 {
+            for x in slot.x..slot.x + slot.w as i32 {
+                let at = (y as usize) * 800 + (x as usize);
+                if with_arms[at] != 0 && with_arms[at] != without_arms[at] {
+                    arm_pixels += 1;
+                }
+            }
+        }
+        // The pinned arm sprite has 298 opaque pixels; half the count
+        // is far above the old composition's zero painted arm pixels.
+        const MIN_VISIBLE_ARM_PIXELS: usize = 149;
+        assert!(
+            arm_pixels >= MIN_VISIBLE_ARM_PIXELS,
+            "the face-only wire paints the bare arm/hand pixels ({arm_pixels})"
+        );
+    }
+
     #[test]
     fn room_user_panel_paints_default_body_for_the_face_only_row() {
         // Ticket #243 supersedes #171 round 2: the live face-only wire

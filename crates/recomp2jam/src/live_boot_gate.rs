@@ -715,11 +715,13 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
-    /// Ticket #243: the live tester's empty body slot still carries
-    /// the default face (item 35, `Equip12`, wire slot 11), so the exe
-    /// paints the naked default body under it. The #336 pins the kit:
-    /// item 30 body under item 35 face (EV-336-A..D, `docs/equip.md`).
-    /// The scripted hero carries that face-only wire table.
+    /// Ticket #243/#375: the live tester's empty body slot still
+    /// carries the default face (item 35, `Equip12`, wire slot 11), so
+    /// the exe paints the naked default kit under it: item 30 body,
+    /// item 31 bare arms (one image), item 35 face. The #336 pins the
+    /// body and face (EV-336-A..D); #375 pins the arms from the exe
+    /// crop diff (`docs/equip.md`). The scripted hero carries that
+    /// face-only wire table.
     ///
     /// Live caller chain:
     ///   main.rs::run_play -> setup_online
@@ -766,8 +768,12 @@ mod live_boot_gate_tests {
                 .as_ref(),
         )
         .unwrap();
-        let pinned = connect::stack_worn_figure(&archive, &[30, 35], true).unwrap();
-        assert_eq!(pinned.len(), 24, "body and face each carry 12 frames");
+        let pinned = connect::stack_worn_figure(&archive, &[30, 31, 35], true).unwrap();
+        assert_eq!(
+            pinned.len(),
+            25,
+            "body and face carry 12 frames each, bare arms one"
+        );
 
         let room = game.room_avatar().expect("room card stages a figure");
         assert_eq!(room.len(), pinned.len(), "room card stages the default kit");

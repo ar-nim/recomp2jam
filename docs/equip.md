@@ -134,12 +134,12 @@ step), restage VA `0x52b480` (file `0x12b480`), paint VA `0x52b9b0`
 Behavior: when the equipped rows contain no body-type item (type word
 `0x01000000`, local table rows 30 and 761), `load_worn_figure` stages
 default body 30 beneath the worn pieces, plus default face 35 for a
-male wearer or 36 (`여자얼굴 기본`) for a female wearer. Ids already
-equipped are not staged twice, so a face-only kit gains only the body
-and a kit with item 30 is unchanged. The fallback lives at the shared
-compose seam, so live seats, the card/room figure, and the shop pane
-all use it. A face-only kit is the live case; an all-zero table gets
-the same default pair.
+male wearer or 36 (`여자얼굴 기본`) for a female wearer, and bare arms 31
+(`왼팔`, #375 below). Ids already equipped are not staged twice, so a
+face-only kit gains the body, arms, and face; a kit with item 30 is
+unchanged. The fallback lives at the shared compose seam, so live
+seats, the card/room figure, and the shop pane all use it. A face-only
+kit is the live case; an all-zero table gets the same default trio.
 
 Guards: `empty_equipment_stages_the_pinned_default_naked_kit` and
 `equipped_figure_keeps_its_own_layers_without_default_fallback`
@@ -147,6 +147,39 @@ Guards: `empty_equipment_stages_the_pinned_default_naked_kit` and
 `live_boot_empty_body_slot_stages_the_default_naked_figure` (scripted
 gateway boot with the face-only wire table, skipped when
 `install-root` is absent). No copyrighted bytes were added.
+
+## Bare arms in the default kit (#375, 2026-11-19)
+
+The #243 trio above was incomplete: item 30's `01M13T0000001.ojs`
+holds torso/legs/feet and no arm pixels in any of its 12 frames, so
+user 1's face-only wire (`Equip12 = 35`, read-only local DB check)
+painted a torso with no forearms or hands. The missing pixels come
+from item **31** (`왼팔`, type `0x0100001`), whose idle slot 2 is
+`01MI13LA0000001.ojs`: one 43x43 image at anchor `(128,121)` carrying
+both bare arms and hands. Rows 32 (`왼손`) and 33 (`오른팔`) are
+instrument-pose art with no idle variant and are not part of this kit.
+
+Oracle: the p223ab exe/Rust waiting-seat crops of the same avatar
+(`~/scratch/p223ab/exe2/cadence/state-00.png`, SHA-256
+`f8d03a6f5…f9633a9e`, and `~/scratch/p223ab/rust2/cadence/state-00.png`,
+SHA-256 `c4264dbd…f5591`). Decoding the installed 7.55 sprites at
+their stored anchors and fitting to the exe crop gives translation
+`(-115,-70)`, breathing frame 4, mean absolute per-channel error **0.9**
+over the arm sprite's 298 opaque pixels; the current body+face model
+misses those pixels by **152.9**. The Rust crop at its own fit
+`(-112,-75)` has no arm pixels (85.5 with the arm model, 93.5 without).
+This localizes the divergence to item 31 and rules out an idle frame
+index error (clue discarded in `~/scratch/p375-findings.md`).
+
+Fix: `compose_worn_rows` prepends item 31 between the default body and
+face. Guards: `face_only_wire_kit_stages_the_default_bare_arms`
+(synthetic sprites) and `live_face_only_kit_stages_the_pinned_arm_sprite`
+(installed `avatar.opa`, skipped when absent), both red on the old
+fallback (`[1,1]` / `[12,12]` versus expected `[1,1,1]` / `[12,1,12]`).
+`waiting_seat_paints_bare_arms_for_the_face_only_row` pins the visible
+waiting-seat painter: zero arm/hand diff pixels before the fix, 200+
+after. The scripted live boot guard pins the 25-layer composition.
+Version pin as above: `AngelO2Jam.exe` SHA-256 `83a04541…72c823b`.
 
 ## Worn-figure animation (pinned: 66 ms step, 48-step phase)
 

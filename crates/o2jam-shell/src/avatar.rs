@@ -824,6 +824,11 @@ const BODY_ITEM_TYPE: u32 = 0x0100_0000;
 /// offset `6,129,704`, anchor `(133,110)`) and the exe offsets in
 /// `docs/equip.md` (EV-336-D).
 const DEFAULT_BODY_ITEM_ID: u32 = 30;
+/// Bare arms and hands paired with that body: row 31 (`왼팔`) idle sprite
+/// `01MI13LA0000001.ojs`, anchor `(128,121)`, 43x43, one image. The
+/// body sprite has no arm pixels; p375's exe crop matches this sprite
+/// at 0.9 mean per-channel error over its 298 arm pixels.
+const DEFAULT_ARM_ITEM_ID: u32 = 31;
 /// Default male face of that kit (`01M160000001.ojs`, anchor `(134,81)`).
 const DEFAULT_MALE_FACE_ITEM_ID: u32 = 35;
 /// Female parity of the default face (local `Itemdata_Korea.dat` row
@@ -831,9 +836,10 @@ const DEFAULT_MALE_FACE_ITEM_ID: u32 = 35;
 const DEFAULT_FEMALE_FACE_ITEM_ID: u32 = 36;
 
 /// Rows the shared stacker composes: the equipped set, or the exe's
-/// naked default kit prepended when the set has no body item. Ids the
-/// kit already wears are not staged twice. Missing table rows are
-/// skipped like any other unresolved item.
+/// naked default kit (body 30, bare arms 31, face 35/36) prepended
+/// when the set has no body item. Ids the kit already wears are not
+/// staged twice. Missing table rows are skipped like any other
+/// unresolved item.
 fn compose_worn_rows<'a>(
     equipped: Vec<&'a o2jam_file::AvatarItemRow>,
     rows: &HashMap<u32, &'a o2jam_file::AvatarItemRow>,
@@ -847,8 +853,8 @@ fn compose_worn_rows<'a>(
     } else {
         DEFAULT_FEMALE_FACE_ITEM_ID
     };
-    let mut composed = Vec::with_capacity(equipped.len() + 2);
-    for id in [DEFAULT_BODY_ITEM_ID, face_id] {
+    let mut composed = Vec::with_capacity(equipped.len() + 3);
+    for id in [DEFAULT_BODY_ITEM_ID, DEFAULT_ARM_ITEM_ID, face_id] {
         if !equipped.iter().any(|row| row.item_id == id) {
             if let Some(row) = rows.get(&id) {
                 composed.push(*row);
@@ -904,7 +910,8 @@ pub fn avatar_item_by_id(
 /// (in slot order) resolve the item row, pick its wear bodies (one per
 /// part block in that pose, [`pick_wear_sprites`]), and stack every
 /// decodable body as layers. A set with no body-type item composes the
-/// exe's naked default kit ([`compose_worn_rows`]) beneath the worn
+/// exe's naked default kit (body, bare arms, face;
+/// [`compose_worn_rows`]) beneath the worn
 /// pieces; a set with a body item keeps its own composition.
 /// Unresolvable pieces — unknown ids, missing archive entries,
 /// non-sprite or undecodable bodies — are skipped, never fatal: one
@@ -2678,6 +2685,115 @@ mod avatar_figure_tests {
         assert_eq!(face_only.len(), 2, "face-only wire gains the default body");
         assert_eq!(face_only.layer(0).unwrap().image.words, vec![0, 0x7C00]);
         assert_eq!(face_only.layer(1).unwrap().image.words, vec![0x03E0]);
+    }
+
+    /// Ticket #375: user 1's face-only wire kit must paint the exe's
+    /// bare arms and hands. Item 30 has no arm pixels in any of its 12
+    /// frames; item 31 (`왼팔`) idle slot 2 holds both arms in one
+    /// image. The #243 fallback must stage that companion row as well
+    /// as the body and the face.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> stage_online_identity
+    ///   -> connect::stack_worn_figure -> o2jam_shell::load_worn_figure
+    ///   -> compose_worn_rows -> pick_wear_sprites -> AvatarFigure::paint.
+    /// Archives absent -> N/A (synthetic archive and table).
+    #[test]
+    fn face_only_wire_kit_stages_the_default_bare_arms() {
+        let body = sprite55_blob(1, 0, 1, 1, &[0, 0x7C]);
+        let arms = sprite55_blob(1, 0, 2, 1, &[0, 0, 0xE0, 0x03]);
+        let face = sprite55_blob(1, 0, 1, 1, &[0x1F, 0]);
+        let archive = opa_blob(&[
+            ("default-body.ojs", &body),
+            ("default-arms.ojs", &arms),
+            ("male-face.ojs", &face),
+        ]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![
+                item_row(
+                    30,
+                    &[
+                        "icon.oji",
+                        "icon.oji",
+                        "default-body.oji",
+                        "default-body.oji",
+                    ],
+                ),
+                item_row(31, &["icon.oji", "icon.oji", "default-arms.oji"]),
+                item_row(35, &["icon.oji", "icon.oji", "male-face.oji"]),
+            ],
+        };
+        let mut wire = [0; 17];
+        wire[11] = 35;
+
+        let figure = load_worn_figure(&archive, &table, &wire, true);
+
+        assert_eq!(
+            figure.part_lens(),
+            &[1, 1, 1],
+            "the default kit stages body, bare arms, and face"
+        );
+        assert_eq!(
+            figure.layer(1).map(|layer| layer.image.words.clone()),
+            Some(vec![0, 0x03E0]),
+            "the face-only kit paints the item 31 arm body"
+        );
+    }
+
+    /// Ticket #375: live 7.55 sprite check for the same user-1 wire
+    /// (`Equip12 = 35`, all other equip cells zero). The exe's arm/hand
+    /// pixels match `01MI13LA0000001.ojs` at anchor `(128, 121)`,
+    /// 43x43, one image (p375 exe-crop pixel diff, mean per-channel
+    /// error 0.9 over 298 arm pixels).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> stage_online_identity
+    ///   -> connect::stack_worn_figure -> o2jam_shell::load_worn_figure
+    ///   -> compose_worn_rows -> pick_wear_sprites.
+    /// Archives absent -> skipped (CI has no game data).
+    #[test]
+    fn live_face_only_kit_stages_the_pinned_arm_sprite() {
+        let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "Itemdata_Korea.dat")
+            .expect("avatar.opa carries the item table");
+        let table_bytes = &archive[entry.data_offset..entry.data_offset + entry.size as usize];
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).unwrap();
+        let mut wire = [0; 17];
+        wire[11] = 35;
+
+        let figure = load_worn_figure(&archive, &table, &wire, true);
+
+        assert_eq!(
+            figure.part_lens(),
+            &[12, 1, 12],
+            "body 30, one-image arms 31, face 35"
+        );
+        let arm_layer = figure.layer(12).expect("bare arm body run");
+        assert_eq!(
+            (
+                arm_layer.dx,
+                arm_layer.dy,
+                arm_layer.image.w,
+                arm_layer.image.h
+            ),
+            (128, 121, 43, 43),
+            "bare arm sprite at its pinned anchor"
+        );
+        assert!(
+            arm_layer
+                .image
+                .words
+                .iter()
+                .any(|&word| word != arm_layer.colorkey),
+            "the bare arm sprite carries visible pixels"
+        );
     }
 
     /// Ticket #243: a kit with a body item keeps its own layers. The
