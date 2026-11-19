@@ -73,6 +73,7 @@ use super::side::{
     SHOP_ITEMGIFT_IDS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
+use crate::staging::MessengerSheet;
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
@@ -800,6 +801,10 @@ pub struct ScreenGame {
     /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
     /// `avatar.opa` for the Result screen. `None` paints no figure.
     room_avatar: Option<AvatarFigure>,
+    /// Messenger sheets parked by the live boot, keyed by block. The
+    /// qualified packs never mount a sheet, so these placements carry
+    /// geometry only — no painter and no input ownership (ADR-0012).
+    messenger_art: HashMap<MessengerSheet, SceneArt>,
     scene_art: [Option<SceneArt>; 12],
 }
 
@@ -1064,6 +1069,7 @@ impl ScreenGame {
             waiting_figures: std::array::from_fn(|_| None),
             avatar_source: None,
             room_avatar: None,
+            messenger_art: HashMap::new(),
             scene_art: std::array::from_fn(|_| None),
         }
     }
@@ -4195,6 +4201,30 @@ impl ScreenGame {
         let art = self.scene_art[scene_index(screen)].get_or_insert_with(SceneArt::default);
         art.figures.extend(figures);
         self
+    }
+
+    /// Stage one Messenger sheet's parsed rects in a hidden slot:
+    /// the live boot parks them here so geometry stays data-driven,
+    /// but no sheet paints or owns input until an exe mount pin
+    /// exists (spec #315 story 12; ADR-0012).
+    pub fn load_messenger_sheet(&mut self, sheet: MessengerSheet, art: SceneArt) -> &mut Self {
+        self.messenger_art.insert(sheet, art);
+        self
+    }
+
+    /// Staged rects for one Messenger sheet, for geometry guards.
+    #[must_use]
+    pub fn messenger_sheet_placements(&self, sheet: MessengerSheet) -> &[ScenePlacement] {
+        self.messenger_art
+            .get(&sheet)
+            .map_or(&[], |art| art.placements.as_slice())
+    }
+
+    /// True while one Messenger sheet's rects are staged. The live
+    /// boot gate asserts all six park before any sheet can open.
+    #[must_use]
+    pub fn messenger_sheet_staged(&self, sheet: MessengerSheet) -> bool {
+        self.messenger_art.contains_key(&sheet)
     }
 
     /// Staged placements for one screen, if any (read-only accessor

@@ -1,6 +1,7 @@
 //! Window screens: scene painters plus the [`ScreenGame`] loop.
 
 pub mod game;
+pub mod messenger;
 pub mod paint;
 mod select_paint;
 pub mod side;

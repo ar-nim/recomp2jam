@@ -1115,6 +1115,58 @@ fn cash_charge_sheet_stages_the_b8_frame_client_and_close() {
     assert!(art.dialog.figures.contains_key("ChargeCash_Btn_Close.ojs"));
 }
 
+/// Spec #315 story 12: the six `DIALOG_MESSENGER_*` blocks stage at
+/// their parsed `.bnd` rects (77/6/7/13/6/5). The B8 pack never mounts
+/// these sheets, so this guard pins geometry only — never a live mount.
+/// Install data is local-only: CI skips cleanly.
+#[test]
+fn messenger_sheet_rows_stage_the_pinned_rect_counts() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_interface_scenes -> stage_messenger_sheets ->
+    // staging::stage_messenger_sheet -> resolve_bound_row ->
+    // o2jam_file::parse_bnd (this guard reads the same six blocks).
+    // No sheet paints at boot; the staged geometry is the whole claim.
+    // Archives absent -> skip cleanly (CI has no game data).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let expected_counts = [77usize, 6, 7, 13, 6, 5];
+    assert_eq!(MESSENGER_SHEETS.len(), expected_counts.len());
+    for (sheet, expected) in MESSENGER_SHEETS.into_iter().zip(expected_counts) {
+        let block = sheet.block_name();
+        let row = StageRow {
+            state: State::Planet,
+            block: Some(block),
+            archive: StagingArchive::Interface,
+            arm: PlacementArm::Bound,
+            extra_sprites: &[],
+        };
+        let mut report = StageReport::default();
+        let resolved = resolve_bound_row(&interface, &row, &mut report)
+            .unwrap_or_else(|| panic!("{block} did not resolve"));
+        assert_eq!(
+            resolved.bind.rects.len(),
+            expected,
+            "{block} parsed rect count"
+        );
+        let staged = stage_messenger_sheet(&interface, sheet, StageContext::default());
+        assert!(staged.misses.is_empty(), "{block} staged with misses");
+        let art = staged
+            .art
+            .unwrap_or_else(|| panic!("{block} staged nothing"));
+        // `SET` groups clone template members, so placement count can
+        // exceed the parsed rect count; every placement comes from the
+        // same bound arm the host states use.
+        assert!(
+            art.placements.len() >= expected,
+            "{block} staged placements"
+        );
+    }
+}
+
 #[test]
 fn install_loader_reads_archives_from_given_root() {
     let root = test_scratch_root("reads");
