@@ -21,9 +21,10 @@ mod live_boot_gate_tests {
     use o2jam_net::frame::decode_frame;
     use o2jam_net::{
         AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, JoinedRoom,
-        Request, RoomList, WireMessage, HEADER_LEN,
+        Request, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
     };
     use o2jam_render::Frame as RenderFrame;
+    use o2jam_shell::screens::game::PlanetModal;
     use o2jam_shell::screens::side::{MyRoomPanel, PlanetOptionTab};
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::{GameLoop, Screen};
@@ -72,6 +73,14 @@ mod live_boot_gate_tests {
     fn spawn_boot_gateway_with_equipment(
         equipment: [i32; 17],
     ) -> (u16, thread::JoinHandle<CharacterInfo>) {
+        spawn_boot_gateway_with_rooms(equipment, Vec::new())
+    }
+
+    /// Same boot, but the 2003 reply carries `rooms` (empty or live).
+    fn spawn_boot_gateway_with_rooms(
+        equipment: [i32; 17],
+        rooms: Vec<RoomListEntry>,
+    ) -> (u16, thread::JoinHandle<CharacterInfo>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -95,8 +104,7 @@ mod live_boot_gate_tests {
             };
             stream.write_all(&entered.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
-            let rooms = RoomList { rooms: vec![] };
-            stream.write_all(&rooms.encode()).unwrap();
+            stream.write_all(&RoomList { rooms }.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
             let hero = CharacterInfo {
                 nickname: "gate".to_owned(),
@@ -250,6 +258,137 @@ mod live_boot_gate_tests {
         );
         let served = server.join().unwrap();
         assert_eq!(served.nickname, "gate");
+    }
+
+    /// One synthetic 2003 row; `has_password` stays false so a click
+    /// on the first band enters Waiting instead of opening a dialog.
+    fn listed_room(number: i32, title: &str) -> RoomListEntry {
+        RoomListEntry {
+            number,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 0,
+            max_level: 0,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        }
+    }
+
+    /// Walk a booted game from the splash to the Room lobby.
+    fn enter_room_lobby(game: &mut o2jam_shell::ScreenGame) {
+        use o2jam_shell::MenuKey;
+        // The scripted gateway lists no channels; stage one active row
+        // so the offline menu walk has a channel to enter. Rooms stay
+        // exactly what the 2003 reply staged.
+        game.set_channels(vec![o2jam_net::ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 100,
+            population: 5,
+            active: true,
+        }]);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        // The scripted gateway has no relay, so the boot arms the
+        // relay-down notice over the channel frame (#348); dismiss
+        // it before the Enter that opens the Room lobby.
+        assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
+        game.menu_key(MenuKey::Back, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    /// Live caller chain:
+    ///   main.rs::run_play (--window --online) -> setup_online
+    ///   -> connect_and_login_with_transport -> 2003 RoomList reply
+    ///   -> stage_online_rooms -> ScreenGame::set_rooms.
+    /// An empty 2003 after a non-empty one must clear the old rows:
+    /// the exe's empty channel has no clickable room row.
+    #[test]
+    fn empty_2003_on_online_entry_clears_stale_clickable_rows() {
+        let (port, server) = spawn_boot_gateway_with_rooms([0; 17], Vec::new());
+        let host = Some("127.0.0.1".to_owned());
+        let token = Some("gate".to_owned());
+        let mut game = o2jam_shell::ScreenGame::new();
+        game.set_rooms(vec![listed_room(3, "Stale")]);
+        let _transport = setup_online(
+            &mut game,
+            true,
+            &host,
+            Some(7),
+            &token,
+            None,
+            port,
+            Some(1),
+            Some(2),
+            None,
+            "",
+            None,
+            0,
+            0,
+            0,
+        )
+        .unwrap()
+        .expect("online entry returns the live transport");
+        assert!(
+            game.listed_rooms().is_empty(),
+            "an empty 2003 reply must replace the stale room rows"
+        );
+        enter_room_lobby(&mut game);
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 154));
+        assert_eq!(
+            game.screen(),
+            Screen::Room,
+            "no stale row may stay clickable after an empty list"
+        );
+        server.join().unwrap();
+    }
+
+    /// Same live entry with a non-empty 2003: the staged list is
+    /// exactly the wire rows, never a mix with previously staged ones.
+    #[test]
+    fn non_empty_2003_on_online_entry_replaces_stale_rows_with_wire_rows() {
+        let wire_rooms = vec![listed_room(3, "WireOne"), listed_room(7, "WireTwo")];
+        let (port, server) = spawn_boot_gateway_with_rooms([0; 17], wire_rooms.clone());
+        let host = Some("127.0.0.1".to_owned());
+        let token = Some("gate".to_owned());
+        let mut game = o2jam_shell::ScreenGame::new();
+        game.set_rooms(vec![listed_room(5, "Stale")]);
+        let _transport = setup_online(
+            &mut game,
+            true,
+            &host,
+            Some(7),
+            &token,
+            None,
+            port,
+            Some(1),
+            Some(2),
+            None,
+            "",
+            None,
+            0,
+            0,
+            0,
+        )
+        .unwrap()
+        .expect("online entry returns the live transport");
+        let titles: Vec<&str> = game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["WireOne", "WireTwo"]);
+        server.join().unwrap();
     }
 
     /// Ticket #356 live chain: `live_boot_gate` test ->

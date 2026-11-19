@@ -604,10 +604,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(&mut game, report.character.as_ref());
     stage_channel_list_after_relay_gate(&mut game, report.channels, relay_down);
-    if !report.rooms.is_empty() {
-        tracing::info!(rooms = report.rooms.len(), "rooms listed");
-        game.set_rooms(report.rooms);
-    }
+    stage_online_rooms(&mut game, report.rooms);
     let pending_room = opts
         .join_room
         .map(|number| (number, opts.room_password.clone()));
@@ -1474,11 +1471,19 @@ fn setup_online(
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(game, report.character.as_ref());
     stage_channel_list_after_relay_gate(game, report.channels, relay_down);
-    if !report.rooms.is_empty() {
-        tracing::info!(rooms = report.rooms.len(), "rooms listed");
-        game.set_rooms(report.rooms);
-    }
+    stage_online_rooms(game, report.rooms);
     Ok(Some((gateway, pending_room, pending_song)))
+}
+
+/// Replace the Room-lobby rows with the 2003 reply on every online
+/// entry, empty reply included. A channel re-entry that finds no rooms
+/// must not keep the previous list: the exe's empty channel has no
+/// clickable room row (#376). `set_rooms` drops free slots too.
+fn stage_online_rooms(game: &mut o2jam_shell::ScreenGame, rooms: Vec<o2jam_net::RoomListEntry>) {
+    if !rooms.is_empty() {
+        tracing::info!(rooms = rooms.len(), "rooms listed");
+    }
+    game.set_rooms(rooms);
 }
 
 /// Stage the fetched character identity (`GetCharacterInfo` 2001) into

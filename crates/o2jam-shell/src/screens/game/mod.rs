@@ -38,19 +38,19 @@ use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
     list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
     paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
-    paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_hover,
-    paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_myroom_data,
+    paint_myroom_figure, paint_payment_notice, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -6034,25 +6034,23 @@ impl ScreenGame {
         // while the chrome buttons repaint on hover), so both staged
         // arms take the hovered code.
         let hovered_code = self.hovered_room_control().map(|control| control.code);
-        match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
-            (Some(art), false) => {
-                paint_room_scene_with_hover(
-                    frame,
-                    &self.rooms,
-                    self.room_highlight,
-                    art,
-                    hovered_code,
-                    self.hovered_room_panel(),
-                );
-            }
-            (Some(art), true) => {
-                paint_lobby_backdrop_live(frame, Screen::Room, art, |placed| {
-                    room_chrome_visible(placed.code)
-                });
-                paint_room_hover(frame, art, hovered_code);
-            }
-            (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
-            (None, true) => paint_screen(frame, Screen::Room),
+        // Both staged arms share one painter: its clone-instance filter
+        // uses the live row count, so an empty list hides every authored
+        // `SET 0x11` template clone (the exe's empty channel shows no
+        // example rows), while chrome hover still repaints.
+        if let Some(art) = self.scene_art(Screen::Room) {
+            paint_room_scene_with_hover(
+                frame,
+                &self.rooms,
+                self.room_highlight,
+                art,
+                hovered_code,
+                self.hovered_room_panel(),
+            );
+        } else if self.rooms.is_empty() {
+            paint_screen(frame, Screen::Room);
+        } else {
+            paint_room_list(frame, &self.rooms, self.room_highlight);
         }
         // The lobby chat panel: live main-room rows plus the draft at
         // the staged `IDC_LIST_SROOM_CHAT`/`IDC_EDIT_SROOM_CHAT` rects
@@ -8914,6 +8912,74 @@ mod game_tests {
         assert_eq!(room_pixel(&mut game, 752, 581), hover);
         game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
+    }
+
+    #[test]
+    fn empty_room_list_hides_the_authored_row_template_clones() {
+        // Live caller chain: main.rs::run_online/run_play -> 2003 reply ->
+        // ScreenGame::set_rooms -> ScreenGame::paint_room ->
+        // paint_room_scene_with_hover -> clone_instance_live. The
+        // `SET 0x11` row template clones carry the sheet's example ink
+        // (EX05/NEW/3KEY/...); with no live rows the exe shows none of
+        // it. Synthetic one-pixel clone, no game data.
+        let mut game = hover_empty_room_game();
+        game.load_scene(
+            Screen::Room,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                    code: 0x1301_201B,
+                    sprite: Some("Room_Panel.ojs".to_owned()),
+                    rect: Rect {
+                        x: 26,
+                        y: 82,
+                        w: 288,
+                        h: 91,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Clone,
+                    id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                    code: 0x1350_002E,
+                    sprite: Some("Room_Template.ojs".to_owned()),
+                    rect: Rect {
+                        x: 100,
+                        y: 100,
+                        w: 8,
+                        h: 8,
+                    },
+                },
+            ],
+            HashMap::from([
+                ("Room_Panel.ojs".to_owned(), solid_figure(288, 91, 0x03E0)),
+                ("Room_Template.ojs".to_owned(), solid_figure(8, 8, 0x001F)),
+            ]),
+        );
+        assert!(game.listed_rooms().is_empty());
+        let panel_ink = pack_xrgb(0x00, 0xFF, 0x00);
+        let template_ink = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(
+            room_pixel(&mut game, 60, 100),
+            panel_ink,
+            "the empty row panels themselves stay painted"
+        );
+        assert_ne!(
+            room_pixel(&mut game, 102, 102),
+            template_ink,
+            "the empty list must not paint the authored template clone"
+        );
+        game.set_rooms(two_rooms());
+        assert_eq!(
+            room_pixel(&mut game, 60, 100),
+            panel_ink,
+            "the row panels stay painted with live rows too"
+        );
+        assert_eq!(
+            room_pixel(&mut game, 102, 102),
+            template_ink,
+            "one live row makes the first template clone paint"
+        );
     }
 
     #[test]
