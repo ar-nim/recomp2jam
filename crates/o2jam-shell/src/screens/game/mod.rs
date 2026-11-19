@@ -18018,6 +18018,22 @@ mod game_tests {
     }
 
     #[test]
+    fn music_shop_row_pick_feedback_stages_cart_without_a_buy_wire() {
+        // Seam proof for the client half of #412: the routed row
+        // press shows its cart feedback but must not send 5010;
+        // only the cart BUYITEM commit does. The exe's own press
+        // frames and 5010 tap stay OPEN (`E-T`/`E-W-5010`).
+        use o2jam_net::shop::SyncMusicPurchase;
+        let mut game = open_music_shop_board(7);
+        game.ingest_snapshot(&InputSnapshot::click_at(19, 105));
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        assert_eq!(game.take_music_buy(), None, "a row pick is not a buy");
+        game.ingest_snapshot(&InputSnapshot::click_at(424, 529));
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
     fn music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010() {
         // The MS_EX row stages the song into the cart; the cart
         // BUYITEM commits it through the same pinned 5010 send.

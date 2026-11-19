@@ -156,3 +156,12 @@ The right-panel buttons `0x1A200016..18` stage, but the one captured
 press frame exists. Guard `music_shop_rank_buttons_stay_inert_until_a_press_pairs_them`
 pins that state. Song-board sort directions and rank-page pairings
 stay ASSUMED until the interaction sweep (`E-T`) names them.
+
+## Row pick / cart buy (#412)
+
+`music_shop_row_pick_feedback_stages_cart_without_a_buy_wire` pins
+the client half of the loop through the routed click seam: an `MS_EX`
+row stages the cart and queues no 5010; `BUYITEM` queues exactly one
+5010 send. No exe row-pick or BUYITEM press frame exists yet (the
+pinned BUYITEM rect showed no visible button), so the exe feedback
+arm stays OPEN (`E-T`/`E-W-5010`).
