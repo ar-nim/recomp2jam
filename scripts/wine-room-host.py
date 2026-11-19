@@ -7,7 +7,11 @@ room paints no row, so the Wine leg's room/waiting/loading scenes need a
 host outside the exe. This script is that host: it authorises as one
 Memoryer account, creates `--title`, sets the room music, waits for the
 guest's `0BBC` join event, then sends `4010` StartGame plus its own
-`4012` ConfirmMusicLoaded, and holds the session with `6001` pings.
+`4012` ConfirmMusicLoaded, the master's eleven `4048` tick-sync frames
+(#378: without them Memoryer never broadcasts `4050` and the guest stays
+on Loading), and a reactive `4016` score submission when the guest
+submits (#378: the result table needs every tracked member's 4016).
+The session is held with `6001` pings.
 
 Framing and bodies are the documented wire shapes
 (`docs/net-protocol.md`, `[u16 len][u16 id][body]`, null-terminated
@@ -88,8 +92,16 @@ SYNC_MEMBER_MUSIC_STATE = 4036
 SET_DOWNLOAD_PROGRESS = 4038
 START_GAME = 4010
 CONFIRM_MUSIC_LOADED = 4012
+TEST_NETWORK_LATENCY = 4048
+SUBMIT_SCORE = 4016
+SCORE_SUBMISSION_EVENT = 4017
 JOIN_WAITING_EVENT = 0x0BBC
 ROOM_SPEED = 1
+MASTER_MEMBER_ID = 0
+MASTER_LIFE = 255  # 4016 carries life as u8; master idle means alive
+LATENCY_PING_COUNT = 11
+LATENCY_LAST_SEQUENCE = LATENCY_PING_COUNT - 1
+LATENCY_TICK_STEP = 256
 
 
 def frame(opcode: int, body: bytes) -> bytes:
@@ -261,12 +273,63 @@ def create_room(sock, frames, log, title: str, music_id: int) -> None:
     log.write("host arena 0 (flaps stay off: an in-room arena change trips the Wine DXSurface error)")
 
 
+def encode_latency_ping(tick: int, sequence: int) -> bytes:
+    """Encode the master's 4048 tick-sync frame in exe wire order."""
+    last = int(sequence == LATENCY_LAST_SEQUENCE)
+    return struct.pack(
+        "<iiiii", MASTER_MEMBER_ID, 0, tick + sequence * LATENCY_TICK_STEP,
+        sequence, last,
+    )
+
+
+def send_master_latency_sync(sock, log) -> None:
+    """Sync the master tick so the server releases 4050 to the guest.
+
+    Memoryer fires `AllUserSynced` only after every tracked member's final
+    4048. Without the master's burst the guest stays on Loading forever.
+    """
+    tick = int(time.monotonic() * 1000)
+    for sequence in range(LATENCY_PING_COUNT):
+        send(sock, TEST_NETWORK_LATENCY, encode_latency_ping(tick, sequence))
+    log.write(
+        f"host master latency sync sent {LATENCY_PING_COUNT}x"
+        f" {TEST_NETWORK_LATENCY:04X}"
+    )
+
+
+def encode_master_score() -> bytes:
+    """Encode an idle master's 4016: no judged notes, life still full."""
+    tallies = (0, 0, 0, 0, 0, 0, 0)
+    return struct.pack("<7HIBBi", *tallies, 0, MASTER_LIFE, ROOM_SPEED, 0)
+
+
+def submit_master_score_if_guest_finished(
+    sock, opcode: int, body: bytes, already_submitted: bool, log
+) -> bool:
+    """Complete the two-member score table once the guest submits.
+
+    The server sends 4018 only when every tracked member has submitted
+    4016. The idle master submits a zero score, never a guessed guest row.
+    """
+    if already_submitted or opcode != SCORE_SUBMISSION_EVENT:
+        return already_submitted
+    if not body or body[0] == MASTER_MEMBER_ID:
+        return already_submitted
+    send(sock, SUBMIT_SCORE, encode_master_score())
+    log.write(
+        f"host master score submitted {SUBMIT_SCORE:04X}"
+        f" after guest {SCORE_SUBMISSION_EVENT:04X}"
+    )
+    return True
+
+
 def send_start(sock, log) -> None:
     send(sock, SYNC_MEMBER_MUSIC_STATE, bytes([0]))
     send(sock, SET_DOWNLOAD_PROGRESS, bytes([100, 0]))
     send(sock, START_GAME, b"")
     send(sock, CONFIRM_MUSIC_LOADED, struct.pack("<iB", 0, ROOM_SPEED))
-    log.write("host start sent 4010+4012")
+    send_master_latency_sync(sock, log)
+    log.write("host start sent 4010+4012 and master 4048 sync")
 
 
 def take_commands(cmd_file: Path) -> list[str]:
@@ -339,6 +402,7 @@ def hold_session(session: HostSession, log: Log, start_delay: float, hold: float
                  stop_file: Path, cmd_file: Path) -> None:
     joined_at: float | None = None
     started = False
+    score_submitted = False
     opened_at = time.time()
     idle_pings = 0
     deadline = opened_at + hold
@@ -375,10 +439,14 @@ def hold_session(session: HostSession, log: Log, start_delay: float, hold: float
             if opcode == JOIN_WAITING_EVENT:
                 joined_at = time.time()
                 log.write("host guest JOINED")
-            elif opcode != PING:
-                log.write(
-                    f"host opcode {opcode:04X} len={len(body)} "
-                    f"t+{time.time() - opened_at:.1f}s hex={body[:64].hex()}"
+            else:
+                if opcode != PING:
+                    log.write(
+                        f"host opcode {opcode:04X} len={len(body)} "
+                        f"t+{time.time() - opened_at:.1f}s hex={body[:64].hex()}"
+                    )
+                score_submitted = submit_master_score_if_guest_finished(
+                    session.sock, opcode, body, score_submitted, log
                 )
         if joined_at is not None and not started and time.time() - joined_at >= start_delay:
             send_start(session.sock, log)
