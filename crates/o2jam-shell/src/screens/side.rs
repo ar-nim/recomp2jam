@@ -507,8 +507,13 @@ pub struct ShopGood {
     pub item_id: u32,
     /// Korean item name.
     pub name: String,
-    /// Parsed price (inks the WON cell; the GEM join is OPEN).
+    /// Parsed price (inks the WON cell).
     pub price: u32,
+    /// Exe's second price (entry `+0x18`, inks the GEM cell). Stays
+    /// `None` in the parsed catalog: the gifted boot showed gem `0`
+    /// beside won `4500`, so no table→entry map is pinned yet. Only
+    /// an explicitly staged pinned word may set this (#395 partial).
+    pub gem_price: Option<u32>,
 }
 
 /// Staged shop goods in table order; empty without catalog data.
@@ -521,6 +526,7 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
             item_id: row.item_id,
             name: row.name.clone(),
             price: row.price,
+            gem_price: None,
         })
         .collect()
 }

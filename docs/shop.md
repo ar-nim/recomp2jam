@@ -138,6 +138,11 @@ room slot).
   and queue nothing. Gift send has no TCP shape (web-only
   `gift_input.aspx`, `docs/gifts.md`); `Dialog_GiftView.bnd`
   stages nowhere (census bucket E, `docs/bnd-consumption.md`).
+- Gem price (#395, partial): `ShopGood::gem_price` is an explicit
+  `Option<u32>` and the staged `ITEMGEM1..8` cells ink it when a word
+  is pinned. The parsed catalog still stages `None`: the gifted boot
+  reads won `4500` / gem `0`, so no table-word → entry `+0x18` map is
+  evidenced. No gem price is invented; the story stays PARTIAL.
 - Balances: `MGASH` paints the `o2_cash` word (`--` until the 5001
   prefix folds; the cell→word join stays OPEN — `cash_point` /
   `item_cash` are the named alternatives). `CHECKMONEY` sums the
