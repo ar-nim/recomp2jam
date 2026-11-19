@@ -66,6 +66,19 @@ The senior puts the grant in the brief; every write outside it stays senior work
   steering.
 - Rule of thumb: if the correction changes what to do, respawn; if it
   changes only how, steer.
+- **Delivery check:** after ANY stop, interrupt, or send, run a `status` check
+  before relying on the steer. A send only queues text; it does not prove the
+  junior consumed it. Confirm the agent is in the state the correction needs
+  (working with the steer applied, or freshly respawned with the corrected
+  premise) and quote that status output in the report.
+- **Time-critical corrections get a respawn, not a queue.** Stop the agent and
+  spawn a fresh one carrying the full correction; a queued follow-up in a
+  stopped or finished agent has no consumer. Check status after the stop and
+  after the spawn.
+- Retro 2026-11-19: the owner's 640x480 desktop-size correction and later
+  resume steers both sat as queued follow-ups in stopped or finished agents.
+  Once the owner had to point out the agent would never receive the steer.
+  The senior assumed delivery and never checked status.
 
 ## Show two, then delegate
 
