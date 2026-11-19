@@ -4716,8 +4716,15 @@ impl ScreenGame {
     /// own settings and reports whether EXIT closed it, so the game
     /// keeps ownership of the modal.
     fn click_options_dialog(&mut self, x: i32, y: i32) {
+        let volume_before = self.options_dialog.settings().bgm_music();
         if self.options_dialog.click(x, y) {
             self.planet_board.close_modal();
+        }
+        // The dialog sits over the lobby: a BGMusic slider move must
+        // re-cue the running scene track at its new gain without a
+        // scene change. Other edits keep their existing paths.
+        if self.options_dialog.settings().bgm_music() != volume_before {
+            self.apply_scene_bgm();
         }
     }
 
@@ -15845,8 +15852,11 @@ mod game_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
+        // Re-based when Game DEFAULT began restoring the exe raw
+        // `LongnoteMode` 3 instead of the old stand-in 0; the observed
+        // state otherwise stays byte-for-byte identical.
         assert_eq!(
-            hash, 0x6C32_EBA2_9BF8_54AD,
+            hash, 0xBB2F_B224_2B51_A752,
             "options outputs drifted: {observed}"
         );
     }
@@ -15872,6 +15882,102 @@ mod game_tests {
             game.lane_bindings().map(|binds| binds[0]),
             Some(KeyCode::KeyA),
             "the window syncs the rebound lane"
+        );
+    }
+
+    #[test]
+    fn key_tab_rebinds_all_seven_lanes_to_their_dik_codes() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::capture_raw_key
+        // -> ScreenGame::options_dialog.rebind_armed_lane ->
+        // OptionsSettings::rebind_lane. The exe builds its 37-byte key
+        // table (input object +0x344) from `Key`/`KEY_1..7` at VA
+        // 0x543290; lanes live at indexes 1..7, so every persisted DIK
+        // must be the code for the key that answered the lane.
+        use crate::options::OPTION_LANES;
+        use winit::keyboard::KeyCode;
+        let binds = [
+            KeyCode::KeyQ,
+            KeyCode::KeyW,
+            KeyCode::KeyE,
+            KeyCode::KeyR,
+            KeyCode::KeyT,
+            KeyCode::KeyY,
+            KeyCode::KeyU,
+        ];
+        let expected_dik = [0x10u8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16];
+        let buttons: Vec<(u32, i32, i32)> = (0..OPTION_LANES)
+            .map(|lane| {
+                (
+                    OPTION_KEY_LANE_FIRST + u32::try_from(lane).unwrap_or(0),
+                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100,
+                )
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        for (lane, code) in binds.iter().enumerate() {
+            let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
+            click_button(&mut game, x, 100);
+            assert_eq!(
+                game.option_rebind_armed(),
+                Some(lane),
+                "KEY{} arms lane {lane}",
+                lane + 1
+            );
+            assert!(game.capture_raw_key(*code, true));
+        }
+        assert_eq!(game.options().lane_keys(), binds);
+        assert_eq!(
+            game.options().lane_dik(),
+            expected_dik,
+            "KEY_1..7 must hold the DIK codes from the exe key table"
+        );
+    }
+
+    #[test]
+    fn three_key_lane_buttons_arm_lanes_zero_through_three() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::capture_raw_key
+        // -> ScreenGame::options_dialog.rebind_armed_lane ->
+        // OptionsSettings::rebind_lane. `3KEY_1..4` sits at the four
+        // staged rects next to `KEY1..7` on the exe Key sheet; each
+        // click arms the lane with the same rebind capture. Which four
+        // playable lanes the 3-key mode uses stays OPEN (no exe pin).
+        use super::super::side::OPTION_KEY_3KEY_FIRST;
+        use winit::keyboard::KeyCode;
+        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC, KeyCode::KeyV];
+        let buttons: Vec<(u32, i32, i32)> = (0..4u32)
+            .map(|lane| {
+                (
+                    OPTION_KEY_3KEY_FIRST + lane,
+                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100,
+                )
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        for (lane, code) in binds.iter().enumerate() {
+            let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
+            click_button(&mut game, x, 100);
+            assert_eq!(
+                game.option_rebind_armed(),
+                Some(lane),
+                "3KEY{} arms lane {lane}",
+                lane + 1
+            );
+            assert!(game.capture_raw_key(*code, true));
+        }
+        assert_eq!(
+            game.options().lane_keys()[..4],
+            binds,
+            "the first four lanes answer the 3KEY binds"
         );
     }
 
@@ -15925,6 +16031,58 @@ mod game_tests {
             game.options().game_effect(),
             255,
             "steps saturate at the byte ceiling"
+        );
+    }
+
+    #[test]
+    fn sound_tab_four_sliders_step_by_eight_and_stay_in_byte_bounds() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> OptionsDialog::click_sound_tab ->
+        // OptionsSettings::step_*_volume. The four Sound keys are pinned;
+        // which slider writes which key stays ours-by-design (SAVE-diff OPEN).
+        use super::super::side::{
+            OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
+            OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
+            OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+        };
+        let pairs = [
+            (OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP),
+            (OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP),
+            (OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP),
+            (OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP),
+        ];
+        let buttons: Vec<(u32, i32, i32)> = pairs
+            .iter()
+            .enumerate()
+            .flat_map(|(index, (down, up))| {
+                let y = 100 + 40 * i32::try_from(index).unwrap_or(0);
+                [(*down, 100, y), (*up, 140, y)]
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        stage_option_buttons(&mut game, PlanetOptionTab::Sound, &buttons);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        for index in 0..pairs.len() {
+            let y = 100 + 40 * i32::try_from(index).unwrap_or(0);
+            click_button(&mut game, 100, y);
+            click_button(&mut game, 140, y);
+            for _ in 0..32 {
+                click_button(&mut game, 100, y);
+            }
+            click_button(&mut game, 140, y);
+        }
+        assert_eq!(
+            [
+                game.options().bgm_music(),
+                game.options().bg_effect(),
+                game.options().game_music(),
+                game.options().game_effect(),
+            ],
+            [crate::options::SOUND_SLIDER_STEP; 4],
+            "each slider steps 8 and saturates at both byte bounds"
         );
     }
 
@@ -15983,6 +16141,65 @@ mod game_tests {
         );
         click_button(&mut game, 140, 100);
         assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+    }
+
+    #[test]
+    fn options_tab_switches_open_each_own_staged_sheet() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::apply_pointer_down -> click_dispatch -> click_planet
+        // -> click_planet_modal -> click_options_dialog -> OptionsDialog::click
+        // -> PlanetOptionTab::switch_tab. The six switch codes belong to
+        // their own sheets: a code pressed on a foreign sheet answers
+        // nothing (its rect is not staged there).
+        use super::super::side::{
+            OPTION_GAME_KEYSET, OPTION_GAME_SOUNDSET, OPTION_KEY_GAMESET, OPTION_KEY_SOUNDSET,
+            OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET,
+        };
+        let cases = [
+            (
+                PlanetOptionTab::Key,
+                OPTION_KEY_SOUNDSET,
+                PlanetOptionTab::Sound,
+            ),
+            (
+                PlanetOptionTab::Key,
+                OPTION_KEY_GAMESET,
+                PlanetOptionTab::Game,
+            ),
+            (
+                PlanetOptionTab::Sound,
+                OPTION_SOUND_KEYSET,
+                PlanetOptionTab::Key,
+            ),
+            (
+                PlanetOptionTab::Sound,
+                OPTION_SOUND_GAMESET,
+                PlanetOptionTab::Game,
+            ),
+            (
+                PlanetOptionTab::Game,
+                OPTION_GAME_KEYSET,
+                PlanetOptionTab::Key,
+            ),
+            (
+                PlanetOptionTab::Game,
+                OPTION_GAME_SOUNDSET,
+                PlanetOptionTab::Sound,
+            ),
+        ];
+        for (owner, code, expected) in cases {
+            let mut game = ScreenGame::new();
+            stage_option_buttons(&mut game, owner, &[(code, 100, 100)]);
+            open_options(&mut game);
+            game.switch_option_tab(owner);
+            click_button(&mut game, 100, 100);
+            assert_eq!(
+                game.planet_option_tab(),
+                expected,
+                "{owner:?} {code:#010X} must open its own sheet"
+            );
+        }
     }
 
     #[test]
@@ -16083,6 +16300,39 @@ mod game_tests {
     }
 
     #[test]
+    fn game_tab_default_restores_the_pinned_longnote_raw_default() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> OptionsDialog::click ->
+        // OptionsSettings::reset_game. The exe's `LONGNOTEMODE` read
+        // default is 3 (file `0x16fb06`); DEFAULT must put that raw
+        // value back, not a different stand-in that happens to behave
+        // the same through the `== 1` consumer.
+        use super::super::side::OPTION_GAME_LONGNOTE_USED;
+        use crate::options::DEFAULT_LONGNOTE_MODE;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[
+                (OPTION_GAME_LONGNOTE_USED, 100, 100),
+                (PlanetOptionTab::Game.default_code(), 140, 100),
+            ],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        assert!(game.options().longnote_used());
+        click_button(&mut game, 140, 100);
+        assert_eq!(
+            game.options().longnote_mode(),
+            DEFAULT_LONGNOTE_MODE,
+            "Game DEFAULT restores the exe raw default, not 0"
+        );
+    }
+
+    #[test]
     fn longnote_mode_snapshots_at_playing_entry() {
         let mut game = ScreenGame::new();
         assert_eq!(game.play_longnote_mode(), None);
@@ -16131,7 +16381,13 @@ mod game_tests {
         )]);
         let mut game = ScreenGame::new();
         game.with_audio(Box::new(probe), bank);
-        game.load_chart(vec![(2, 5000, 7), (2, 6000, 7)]);
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_key -> GameLoop::lane_key ->
+        // ScreenGame::strike_at -> pump_sounds ->
+        // AudioBackend::play_key. The Sound tab edits the same GameEffect
+        // value the strike mixer reads, so a stepped slider changes the
+        // next strike gain without a scene change.
+        game.load_chart(vec![(2, 5000, 7), (2, 6000, 7), (2, 7000, 7)]);
         for next in [
             Screen::Planet,
             Screen::Channel,
@@ -16145,12 +16401,21 @@ mod game_tests {
         game.strike_at(2, 5000);
         assert_eq!(gains.borrow().len(), 1);
         assert!((gains.borrow()[0] - 1.0).abs() < 1e-6);
+        game.options_mut().step_game_effect(false);
+        let stepped_gain = f32::from(255 - crate::options::SOUND_SLIDER_STEP) / 255.0;
+        game.strike_at(2, 6000);
+        assert_eq!(gains.borrow().len(), 2);
+        assert!(
+            (gains.borrow()[1] - stepped_gain).abs() < 1e-6,
+            "one slider step scales the next strike: {:?}",
+            gains.borrow()
+        );
         for _ in 0..64 {
             game.options_mut().step_game_effect(false);
         }
-        game.strike_at(2, 6000);
-        assert_eq!(gains.borrow().len(), 2);
-        assert!(gains.borrow()[1].abs() < 1e-6, "muted effect stays silent");
+        game.strike_at(2, 7000);
+        assert_eq!(gains.borrow().len(), 3);
+        assert!(gains.borrow()[2].abs() < 1e-6, "muted effect stays silent");
     }
 
     #[test]
@@ -16203,6 +16468,81 @@ mod game_tests {
         game.enter(Screen::Channel);
         // 1000 * 247 / 255 = 968.6, rounds to 969.
         assert_eq!(peaks.borrow().last(), Some(&969));
+    }
+
+    #[test]
+    fn bgmusic_slider_re_cues_the_lobby_track_without_a_scene_change() {
+        // Live chain: main.rs::run_online -> run_windowed_session ->
+        // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
+        // -> click_options_dialog -> apply_scene_bgm ->
+        // AudioBackend::set_scene_bgm. The slider is a dialog over the
+        // lobby, so the sounding cue must change on the click itself.
+        use super::super::side::OPTION_SOUND_BG_MUSIC_DOWN;
+        use o2jam_audio::{AudioBackend, AudioError, PcmSamples};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct PeakProbe {
+            peaks: Rc<RefCell<Vec<i32>>>,
+        }
+        impl AudioBackend for PeakProbe {
+            fn play_pcm(&mut self, _pcm: &PcmSamples) -> Result<(), AudioError> {
+                Ok(())
+            }
+            fn set_scene_bgm(
+                &mut self,
+                pcm: Option<&PcmSamples>,
+                _repeat: bool,
+            ) -> Result<(), AudioError> {
+                let peak = pcm.map_or(0, |pcm| {
+                    pcm.samples
+                        .iter()
+                        .map(|sample| i32::from(*sample).abs())
+                        .max()
+                        .unwrap_or(0)
+                });
+                self.peaks.borrow_mut().push(peak);
+                Ok(())
+            }
+            fn samples_played(&self) -> u64 {
+                0
+            }
+        }
+        let peaks = Rc::new(RefCell::new(Vec::new()));
+        let probe = PeakProbe {
+            peaks: Rc::clone(&peaks),
+        };
+        let mut bank = vec![None; 10];
+        // `SceneBgm::resolve` indexes record id minus one: slot 8 is
+        // record 9, the Planet loop.
+        bank[8] = Some(PcmSamples {
+            samples: vec![1000i16; 441],
+            sample_rate: 44100,
+            channels: 1,
+        });
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(probe), HashMap::new());
+        game.stage_scene_bgm(bank);
+        game.enter(Screen::Planet);
+        assert_eq!(peaks.borrow().last(), Some(&1000));
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[(OPTION_SOUND_BG_MUSIC_DOWN, 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        click_button(&mut game, 100, 100);
+        // 1000 * 247 / 255 rounds to 969; no scene entry in between.
+        assert_eq!(
+            peaks.borrow().last(),
+            Some(&969),
+            "the slider re-cues the running lobby track"
+        );
+        assert_eq!(
+            game.options().bgm_music(),
+            255 - crate::options::SOUND_SLIDER_STEP
+        );
     }
 
     #[test]

@@ -35,13 +35,16 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
   `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by 8 inside 0–255.
   GameEffect drives the live key-strike gain; BGMusic scales the
-  lobby scene-BGM cue. The in-song mix path stays OPEN.
+  lobby scene-BGM cue and re-cues the running track on the slider click
+  (no scene change needed). The in-song mix path stays OPEN.
 - Game tab: NoteType1/2 → 0/1, guides Long/Middle/Short/NoUse →
   3/2/1/0, EQ Yes/No → 1/0, ModeFull/Win → 1/2, Longnote
   Used/None → 1/0, effects High/Normal/Low → in-memory 0/1/2.
 - SAVE commits to `option.ini` beside the install root (stays
   open); EXIT/Escape close without saving; DEFAULT restores the
-  tab's exe defaults. Settings load at boot; a restart keeps them.
+  tab's exe defaults (Game's raw `LongnoteMode` goes back to its
+  pinned read default 3, which the `== 1` consumer reads as off).
+  Settings load at boot; a restart keeps them.
 - `LongnoteMode` snapshots into the play setup at Playing entry
   (mirrors the exe `+0x17d8` cache): later edits never reach the
   running song.
@@ -63,7 +66,13 @@ except where noted), all with writer twins
 | `NOTE`/`NoteType` | 0, clamp 0–2 else 0 | play `+0xeb4` | file `0x1713c7` | file `0x171447` |
 | `NOTE`/`NoteTail` | 2, clamp 0–4 else 2 | global `0x67feac` | file `0x16bf47` | file `0x16bfd0` |
 | `LONGNOTEMODE`/`LongnoteMode` (`Option.ini`) | 3 | play `+0x17d8` | file `0x16fb06` | — |
-| `Key`/`KEY_1..7` | DIK SDF Space JKL | key-table `+0x345..` | claims B37 | `0x1435xx` family |
+| `Key`/`KEY_1..7` | DIK SDF Space JKL | input object `+0x344`, lanes at indexes 1..7; builder VA `0x543290` / file `0x143290` | VA `0x543290` | `0x1435xx` family |
+
+The key builder also rebuilds the 0x80-byte DIK→lane reverse map at VA
+`0x67ebb0` (file `0x27ebb0`); the polled consumer `FUN_005441b0` (VA
+`0x5441b0`) and buffered thread `FUN_00544ca0` (VA `0x544ca0`) read
+the two tables. Their config→runtime handoff in this client stays OPEN;
+the older `0x173290` file-offset label is contradicted by the fresh pin.
 
 Consumers: `Mode` 1/2 arms drive the window apply (file `0x3a06c`);
 `NoteType` 0 vs nonzero branch (file `0x171480`, folds at
@@ -92,14 +101,46 @@ consumer (file `0x16E372`).
 
 Guards: `options::tests::*` (13: mapping, clamps, round-trip,
 DIK), `options_key_tab_rebind_answers_on_the_new_lane`,
+`three_key_lane_buttons_arm_lanes_zero_through_three` (same live chain as
+the 7-lane rebind; the 4-button arm is the whole behavior, 3-key lane
+mapping stays OPEN),
+`key_tab_rebinds_all_seven_lanes_to_their_dik_codes` (seam suffices: the
+dialog-to-DIK mapping is the whole behavior; live chain `main.rs::run_online`
+→ `run_windowed_session` → `window::InputHandler::route_key` →
+`GameLoop::capture_raw_key` → `OptionsSettings::rebind_lane`),
 `options_key_tab_rebind_refuses_unmappable_keys`,
 `options_sound_tab_steps_move_volumes_with_exe_bounds`,
+`sound_tab_four_sliders_step_by_eight_and_stay_in_byte_bounds` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `OptionsDialog::click_sound_tab` →
+`OptionsSettings::step_*_volume`),
 `options_game_tab_buttons_map_to_the_pinned_ini_values`,
 `options_tab_switches_ride_the_staged_codes`,
+`options_tab_switches_open_each_own_staged_sheet` (all six sheet-owned
+switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::apply_pointer_down` → `click_dispatch` → `click_planet` →
+`click_planet_modal` → `click_options_dialog` → `OptionsDialog::click` →
+`PlanetOptionTab::switch_tab`),
 `options_save_commits_beside_the_install_root`,
 `options_exit_closes_without_saving`,
 `options_default_restores_the_exe_defaults_per_tab`,
+`game_tab_default_restores_the_pinned_longnote_raw_default` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `OptionsDialog::click` → `OptionsSettings::reset_game`),
 `longnote_mode_snapshots_at_playing_entry`,
-`key_strikes_play_at_the_game_effect_gain`,
+`key_strikes_play_at_the_game_effect_gain` (unity → one step → mute,
+  live chain: `main.rs::run_online` → `run_windowed_session` →
+  `window::InputHandler::route_key` → `GameLoop::lane_key` →
+  `ScreenGame::strike_at` → `pump_sounds` → `AudioBackend::play_key`),
 `scene_bgm_cue_scales_with_the_bgmusic_volume`,
+`bgmusic_slider_re_cues_the_lobby_track_without_a_scene_change` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+`ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+`click_options_dialog` → `apply_scene_bgm` → `AudioBackend::set_scene_bgm`),
 `option_tabs_stage_all_three_sheets_when_archives_present`.
