@@ -18,6 +18,10 @@ use crate::avatar::{
     LOADING_SPRITE, PLAYING_BACKDROP_CODE,
 };
 use crate::screen::Screen;
+use crate::screens::messenger::{
+    MESSENGER_FRIENDADD_BLOCK, MESSENGER_INFORMATION_BLOCK, MESSENGER_MAIN_BLOCK,
+    MESSENGER_NOTE_BLOCK, MESSENGER_POPUPMENU_BLOCK, MESSENGER_QUESTION_BLOCK,
+};
 use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
     PlanetOptionTab, SideScreen, CASH_CHARGE_DIALOG_BLOCK, CHANNEL_INFO_DIALOG_BLOCK,
@@ -455,6 +459,63 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
     },
 ];
 
+/// One of the six Messenger sheets staged from its `BOUND` block.
+/// The 7.55 ControlList declares 77/6/7/13/6/5 rects for these sheets;
+/// spec #315 story 12 stages them at those parsed rects. These are
+/// geometry declarations only: the qualified B8/B6 packs never mount
+/// a Messenger sheet, so no sheet paints or owns input until an exe
+/// mount pin exists (`N-MOUNT`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessengerSheet {
+    /// Main sheet: 77 rects, friend/note and four chat tabs.
+    Main,
+    /// Friend-add sheet: 6 rects.
+    FriendAdd,
+    /// Question sheet: 7 rects.
+    Question,
+    /// Note sheet: 13 rects.
+    Note,
+    /// PopUpMenu sheet: 6 rects.
+    PopUpMenu,
+    /// Information sheet: 5 rects.
+    Information,
+}
+
+impl MessengerSheet {
+    /// `ControlList_Interface.txt` block this sheet stages.
+    #[must_use]
+    pub const fn block_name(self) -> &'static str {
+        match self {
+            Self::Main => MESSENGER_MAIN_BLOCK,
+            Self::FriendAdd => MESSENGER_FRIENDADD_BLOCK,
+            Self::Question => MESSENGER_QUESTION_BLOCK,
+            Self::Note => MESSENGER_NOTE_BLOCK,
+            Self::PopUpMenu => MESSENGER_POPUPMENU_BLOCK,
+            Self::Information => MESSENGER_INFORMATION_BLOCK,
+        }
+    }
+
+    /// Sheet for a block name, if the family stages it.
+    #[must_use]
+    pub fn from_block(name: &str) -> Option<Self> {
+        MESSENGER_SHEETS
+            .iter()
+            .copied()
+            .find(|sheet| sheet.block_name() == name)
+    }
+}
+
+/// All six sheets in ControlList order. The live boot stages each
+/// into its own game slot; nothing here claims a live mount.
+pub const MESSENGER_SHEETS: [MessengerSheet; 6] = [
+    MessengerSheet::Main,
+    MessengerSheet::FriendAdd,
+    MessengerSheet::Question,
+    MessengerSheet::Note,
+    MessengerSheet::PopUpMenu,
+    MessengerSheet::Information,
+];
+
 /// One declaration row per exe-literal bind load: a `.bnd` file the
 /// exe stages by name (files `0x24aba7`/`0x24b080`,
 /// `docs/bnd-semantics.md`), with no `ControlList` block to pair it —
@@ -879,6 +940,29 @@ fn resolve_bound_row(
         block: block.clone(),
         bind,
     })
+}
+
+/// Stage one Messenger sheet through the same bound-row path every
+/// dialog uses. No dialog row is needed: the sheet's own `BOUND` block
+/// and `.bnd` are the geometry source (ADR-0003). Paint wiring stays
+/// off — the exe never mounts these sheets in the pinned packs.
+#[must_use]
+pub fn stage_messenger_sheet(
+    archive: &[u8],
+    sheet: MessengerSheet,
+    ctx: StageContext,
+) -> StageReport {
+    stage_bound_row(
+        archive,
+        &StageRow {
+            state: State::Planet,
+            block: Some(sheet.block_name()),
+            archive: StagingArchive::Interface,
+            arm: PlacementArm::Bound,
+            extra_sprites: &[],
+        },
+        ctx,
+    )
 }
 
 /// Stage one bound row: the Block paired with its `.bnd`, plus the

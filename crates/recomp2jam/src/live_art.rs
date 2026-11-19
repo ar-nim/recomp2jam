@@ -20,12 +20,14 @@ use std::path::PathBuf;
 
 use o2jam_shell::avatar::load_archive_sprite;
 use o2jam_shell::avatar::PlayingArtMode;
-use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE, ROOM_HOVER_SPRITE};
+use o2jam_shell::screens::paint::{
+    SceneArt, DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE, ROOM_HOVER_SPRITE,
+};
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
     read_install_archives, stage_byname_sheet, stage_cash_charge, stage_dialog,
-    stage_room_hover_overlay, stage_state, Dialog, StageContext, StagingArchive, State,
-    BYNAME_TABLE,
+    stage_messenger_sheet, stage_room_hover_overlay, stage_state, Dialog, StageContext,
+    StagingArchive, State, BYNAME_TABLE, MESSENGER_SHEETS,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -85,6 +87,27 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_planet_dialogs(game, archive);
     stage_payment_sheets(game, archive);
     stage_cash_charge_sheet(game, archive);
+    stage_messenger_sheets(game, archive);
+}
+
+/// Park all six Messenger sheets beside the live scenes: each block
+/// stages its own `.bnd` rects through the bound arm, but the B8/B6
+/// packs never mount one, so no painter consumes them yet (#622;
+/// `N-MOUNT` stays OPEN). A miss keeps that sheet unstaged, never
+/// an invented placement.
+fn stage_messenger_sheets(game: &mut ScreenGame, archive: &[u8]) {
+    let ctx = StageContext::default();
+    for sheet in MESSENGER_SHEETS {
+        if let Some(art) = stage_messenger_sheet(archive, sheet, ctx).art {
+            game.load_messenger_sheet(
+                sheet,
+                SceneArt {
+                    placements: art.placements,
+                    figures: art.figures,
+                },
+            );
+        }
+    }
 }
 
 /// Stage the planet-board modal sheets: all three options tabs

@@ -29,7 +29,9 @@ mod live_boot_gate_tests {
         MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
     };
     use o2jam_shell::screens::SideScreen;
-    use o2jam_shell::staging::{read_install_archives, stage_state, StageContext, State};
+    use o2jam_shell::staging::{
+        read_install_archives, stage_state, MessengerSheet, StageContext, State, MESSENGER_SHEETS,
+    };
     use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
     use crate::{
@@ -192,6 +194,27 @@ mod live_boot_gate_tests {
             game.payment_art_staged(),
             "live boot stages the payment sheets"
         );
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // connect::connect_and_login_with_transport ->
+        // assemble_online_session -> session::OnlineSession::stage_live_art
+        // -> live_art::stage_live_scenes -> stage_interface_scenes ->
+        // stage_messenger_sheets -> ScreenGame::load_messenger_sheet
+        // (the slot this gate inspects). Geometry only; no sheet opens.
+        for sheet in MESSENGER_SHEETS {
+            assert!(
+                game.messenger_sheet_staged(sheet),
+                "live boot parks the {} sheet rects",
+                sheet.block_name()
+            );
+            // The parsed rect count is pinned in the staging guard;
+            // `SET` clones add placements in MAIN, so only geometry
+            // presence is asserted here.
+            assert!(
+                !game.messenger_sheet_placements(sheet).is_empty(),
+                "parked {} sheet carries placements",
+                sheet.block_name()
+            );
+        }
         if playing_present() {
             assert!(
                 game.tutorial_art_staged(),
@@ -208,6 +231,17 @@ mod live_boot_gate_tests {
                 );
             }
         }
+        // No sheet opens at boot: the pinned packs never mount one
+        // and no messenger wire shape exists (story 12 is geometry
+        // only; N-MOUNT stays OPEN).
+        assert!(
+            !game.messenger_liveness_open(),
+            "staging never opens a Messenger sheet"
+        );
+        assert_eq!(
+            MessengerSheet::from_block("DIALOG_MESSENGER_MAIN"),
+            Some(MessengerSheet::Main)
+        );
         let hero = game
             .myroom_character()
             .expect("live boot stages the fetched character info");
