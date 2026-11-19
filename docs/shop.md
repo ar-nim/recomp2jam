@@ -47,7 +47,12 @@ Active non-self codes cover `0x01..0xBA` with no gaps/dups, so
 ## Entry and exit evidence
 
 `IDC_BUTTON_SSHOP_BACK` + `IDC_BUTTON_SSHOP_GOMYROOM` name
-back/myroom targets; no `EXIT` id exists in-block. Room side
+back/myroom targets; no `EXIT` id exists in-block. The tapped BACK
+frame (`~/scratch/evidence-shops/gifted-boot/exe/shop-back.png`,
+`ff522720…ef29b270`, wire `94b2ea8f…a2508`) leaves the side and emits
+`C2S 5007` with an empty body, followed by `5028 → 5029`. The full-
+bleed rect 0 pairs with code ordinal 1 (`0x1420_0001`); our client
+queues the same exit on that press. Room side
 `IDC_BUTTON_SROOM_ITEMSHOP 0X13200008` (`Room_ItemShop.ojs`)
 names the inbound button. Names only — no transition claimed.
 

@@ -245,7 +245,7 @@ impl ShopState {
                 false
             }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
-            ShopAction::OpenCashCharge => false,
+            ShopAction::OpenCashCharge | ShopAction::BackToLobby => false,
             ShopAction::CartBuy => !self.shop_cart.is_empty(),
             ShopAction::ItemPrev => {
                 self.shop_page = self.shop_page.saturating_sub(1);

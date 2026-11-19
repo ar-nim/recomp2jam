@@ -152,8 +152,8 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, SellItemResponse, SyncItemPurchase, SyncItemPurchaseReply,
-    SyncMusicPurchase, SyncMusicPurchaseResponse,
+    EquipItem, EquipItemResponse, ExitShop, SellItemResponse, SyncItemPurchase,
+    SyncItemPurchaseReply, SyncMusicPurchase, SyncMusicPurchaseResponse,
 };
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
@@ -2308,6 +2308,19 @@ impl OnlineSession {
         }
     }
 
+    /// Send one queued BACK exit (5007 empty body). The shell has
+    /// already returned to the lobby; a failed send warns and drops the
+    /// queue, since the local transition cannot be retried by another
+    /// press on a side screen that is no longer open.
+    fn flush_exit_shop(&mut self) {
+        if self.game.take_exit_shop().is_none() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(ExitShop::COMMAND, &[]) {
+            tracing::warn!(%source, "shop exit send failed after BACK");
+        }
+    }
+
     fn flush_shop_buy(&mut self) {
         // A buy already in flight must not be re-sent; leave any
         // queued commit staged so it retries once the reply lands.
@@ -3490,6 +3503,7 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
         self.flush_channel_logout();
+        self.flush_exit_shop();
         self.poll_attempts();
         self.poll_sell_response();
         if self.game.screen() == Screen::Room {
@@ -4456,6 +4470,54 @@ pub(super) mod session_tests {
         assert_eq!(caption(MYROOM_MUSICCASH_CODE), Some("42"));
         assert_eq!(caption(MYROOM_ITEMCASH_CODE), Some("77"));
         assert!(session.game.shop_cart().is_empty());
+    }
+
+    #[test]
+    fn item_shop_back_sends_the_empty_5007_exit() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> flush_exit_shop ->
+        //   ScreenGame::take_exit_shop (queued by click_shop BACK) ->
+        //   GatewayConnection::send_frame(5007, []).
+        // Tap `ff522720…ef29b270` and wire `94b2ea8f…a2508`.
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let exit = read_frame(&mut stream);
+            assert_eq!(exit.id, 5007);
+            assert!(exit.payload.is_empty(), "5007 carries an empty body");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(757, 580);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.side(), None);
     }
 
     #[test]

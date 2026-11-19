@@ -322,6 +322,12 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 // semantics stay display-only OPEN (next step: SendInput sweep on
 // the live shop per the `~/scratch/planet-verify/` recipe).
 
+/// Full-bleed BACK rect (`State_ItemShop.bnd` rect 0, code ordinal 1):
+/// the tapped BACK press at `(757,580)` leaves the shop and emits the
+/// empty `C2S 5007` (`ff522720…ef29b270`, wire `94b2ea8f…a2508`).
+/// Code `0x1420_0001` follows the pinned `(code & 0xFFF) - 1` ordinal
+/// pairing from `docs/shop.md`; no separate `EXIT` id exists in-block.
+pub const SHOP_BACK_CODE: u32 = 0x1420_0001;
 /// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
 /// contiguously through `+7` (block walk + staged dump).
 pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
@@ -538,6 +544,8 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Full-bleed BACK plate: leave the side and send `ExitShop` 5007.
+    BackToLobby,
     /// Item-list scroll pager stepped back.
     ItemPrev,
     /// Item-list scroll pager stepped forward.
@@ -604,6 +612,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
         SHOP_CHARGE_MONEY_CODE => Some(ShopAction::OpenCashCharge),
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
+        SHOP_BACK_CODE => Some(ShopAction::BackToLobby),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
@@ -809,8 +818,9 @@ pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
 pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
-/// return is pinned by the bnd arm; the 5007 ExitShop send stays
-/// OPEN until a qualified BACK capture taps it (#399).
+/// return is pinned by the bnd arm; the shared 5007 ExitShop send is
+/// pinned by the Item Shop BACK tap (`94b2ea8f…a2508`), but a music
+/// shop BACK frame is still OPEN (#399).
 pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;

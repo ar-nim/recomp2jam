@@ -196,6 +196,13 @@ impl WireMessage for EquipItemResponse {
 // the common tail (VA `0x4f4051`, file `0xf4051`) transmits it unchanged.
 empty_message!(SyncItemPurchase, 5000);
 
+// `ExitShop` 5007 is the empty C→S frame the tapped BACK press emits
+// (frame `ff522720…ef29b270`, wire `94b2ea8f…a2508`, 20:35:18). The
+// opcode is named in `docs/net-protocol.md`; unlike 5000 there is no
+// static send-site offset pinned yet, so the live tap carries this
+// type. Memoryer answers with a wallet refresh (5028 → 5029).
+empty_message!(ExitShop, 5007);
+
 // `SyncMusicPurchase` 5010 (song-shop buy request) sends a bare header:
 // the `0x138a`-based send builder (file `0xa4df0`) case at index 8
 // (`0x138a` + 8 = `0x1392` = 5010) is the empty-send case — opcode
@@ -1359,6 +1366,17 @@ mod tests {
             ShopRestockPair::decode_prefix(&[0x01; 7]),
             Err(Error::TruncatedMessage { need: 8, have: 7 })
         );
+    }
+
+    #[test]
+    fn exit_shop_encodes_bare_frame() {
+        // Tapped BACK wire `94b2ea8f…a2508`: C2S 5007 has an empty
+        // body, immediately followed by a 5028/5029 wallet refresh.
+        let exit = ExitShop.encode();
+        assert_eq!(exit, vec![0x04, 0x00, 0x8F, 0x13]);
+        let frame = decode_frame(&exit).unwrap();
+        assert_eq!(frame.id, 5007);
+        assert_eq!(ExitShop::decode_frame(&frame), Ok(ExitShop));
     }
 
     #[test]

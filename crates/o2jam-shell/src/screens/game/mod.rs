@@ -5517,6 +5517,12 @@ impl ScreenGame {
         self.outbox.take_shop_buy()
     }
 
+    /// Queued shop exit for the session bridge, if any (5007). The
+    /// session sends the empty body once and clears the queue.
+    pub fn take_exit_shop(&mut self) -> Option<o2jam_net::shop::ExitShop> {
+        self.outbox.take_exit_shop()
+    }
+
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
     /// commits a non-empty cart through the pinned 5000 send, both
@@ -5534,6 +5540,13 @@ impl ScreenGame {
         };
         let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
         match action {
+            ShopAction::BackToLobby => {
+                // The tap leaves the side and emits the empty 5007;
+                // the session owns the wire, the shell owns the return.
+                if self.leave_side() {
+                    self.outbox.pending_exit_shop = Some(o2jam_net::shop::ExitShop);
+                }
+            }
             ShopAction::OpenCashCharge => {
                 // The charge plate leaves the shop board and opens
                 // the Cash Charge view from the same lobby (b8).
@@ -7129,6 +7142,9 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
             .map_or(u64::MAX, |modal| modal as u64),
     );
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
+    if game.outbox.pending_exit_shop.is_some() {
+        hash_u64(&mut hash, 5_007);
+    }
     hash_u64(
         &mut hash,
         game.outbox.pending_music_buy.map_or(0, |_| 5_010),
@@ -17830,6 +17846,43 @@ mod game_tests {
         assert_eq!(game.shop_try_on(), Some(2));
         assert!(game.leave_side());
         assert_eq!(game.shop_try_on(), None);
+    }
+
+    #[test]
+    fn item_shop_back_button_returns_and_queues_empty_5007() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> OnlineSession::paint
+        //   -> ScreenGame::click_shop(BACK plate) -> leave_side +
+        //   PendingOutbox::pending_exit_shop -> OnlineSession::
+        //   flush_exit_shop -> GatewayConnection::send_frame(5007, []).
+        // Tapped exe frame `ff522720…ef29b270` and wire
+        // `94b2ea8f…a2508` pin the return and the empty C2S 5007.
+        use super::super::side::{SideScreen, SHOP_BACK_CODE};
+        use o2jam_net::shop::ExitShop;
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+
+        game.click_shop(757, 580);
+        assert_eq!(game.side(), None, "BACK leaves the Item Shop side");
+        assert_eq!(game.take_exit_shop(), Some(ExitShop));
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
+        assert!(game.take_shop_buy().is_none());
     }
 
     #[test]
