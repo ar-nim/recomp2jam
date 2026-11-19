@@ -87,7 +87,8 @@
 //! sends), and a battle (Live) result entry posts `GetLiveState` 4042
 //! (`0xfca`, empty, the exe's battle-global-gated send). The solo
 //! entry's event-ticket web call (`ticket_add.php?USER_INDEX_ID=<index>`,
-//! file `0x24a338`) is an HTTP GET, not a gateway frame — it stays
+//! URL string file `0x24a2d0` / VA `0x64a2d0`; the old `0x24a338`
+//! pin named `PointNum.ojs` art) is an HTTP GET, not a gateway frame — it stays
 //! OPEN until the shell owns a web seam, and the gateway is never
 //! asked to stand in for it. Retry-while-siblings-ready stays
 //! server-side (the block string VA `0x64a3a0` is pinned in
@@ -204,6 +205,17 @@ const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// still never stalls the frame loop — a late table retries on the
 /// next paint while Result stays up.
 const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
+/// The exe's 4017 member guard accepts slots `< 8` (compare at file
+/// `0x15fbb6`, REA `ev_a395ece8…`); later slots never reach its UI
+/// queue. Our trace mirror applies the same bound.
+const SUBMITTER_MEMBER_LIMIT: usize = 8;
+/// REA pin of the exe's UI event queue (REA `ev_f56c417…`).
+#[cfg(test)]
+const RESULT_UI_QUEUE_ADDRESS: u32 = 0x478d50;
+/// The two vftable entries whose `0xFB1` arms consume 4017 notices:
+/// the Playing states, not Result (REA `ev_17e20066…` / `ev_8299e310…`).
+#[cfg(test)]
+const RESULT_4017_PLAYING_VTABLE_ENTRIES: [u32; 2] = [0x64ae1c, 0x64b3dc];
 /// Resting gateway timeout outside the stats section: the transport
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
@@ -582,6 +594,16 @@ pub struct OnlineSession {
     /// seat never sent an active row). Mirrors the exe's member record
     /// at the offsets pinned in `docs/net-protocol.md` §4c.
     result_records: [Option<ResultMemberRecord>; 8],
+    /// Eight 4040 place bytes from the last rank frame (`None` until
+    /// one arrives). The exe writes these to slot `+0x217d`, but no
+    /// gameplay reader is pinned; this mirror accounts for the wire
+    /// words without inventing a rank-column source (#665).
+    last_rank_places: Option<[u8; 8]>,
+    /// Last 4017 submitter slot in member range (`None` until one
+    /// arrives). The exe forwards accepted slots into its UI queue
+    /// but no Result-side consumer is pinned, so this stays a trace
+    /// instead of an invented marker (#667/#679).
+    last_submitter_slot: Option<u8>,
 }
 
 impl OnlineSession {
@@ -626,6 +648,8 @@ impl OnlineSession {
             ready_echoes: [None; 8],
             deferred_frames: VecDeque::new(),
             result_records: [None; 8],
+            last_rank_places: None,
+            last_submitter_slot: None,
         }
     }
 
@@ -1304,6 +1328,23 @@ impl OnlineSession {
     #[must_use]
     pub fn result_record(&self, member_id: u8) -> Option<&ResultMemberRecord> {
         self.result_records.get(usize::from(member_id))?.as_ref()
+    }
+
+    /// Last decoded 4040 place bytes (`None` while no rank frame
+    /// arrived). Read-back for the write-side guard; no painter reads
+    /// these words, matching the exe's missing gameplay reader.
+    #[cfg(test)]
+    #[must_use]
+    pub fn last_rank_places(&self) -> Option<[u8; 8]> {
+        self.last_rank_places
+    }
+
+    /// Last 4017 slot in member range (`None` while none arrived).
+    /// Read-back for the trace guard; no Result painter consumes it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn last_submitter_slot(&self) -> Option<u8> {
+        self.last_submitter_slot
     }
 
     /// Transmit the pending chat draft as 3011.
@@ -2232,11 +2273,22 @@ impl OnlineSession {
     }
 
     /// Fold one 4017 frame: the submitting member is traced (no totals
-    /// ride this broadcast — those arrive with 4018).
+    /// ride this broadcast — those arrive with 4018). The exe handler
+    /// (file `0x15fba0`, `ev_246be0b6…`) drops slots `>= 8` before the
+    /// UI queue push; slots outside the eight member records get the
+    /// same treatment here. REA finds the queue's consumers in the two
+    /// Playing states, not in Result (`ev_16b2e797…`, `ev_f56c417…`).
     fn apply_score_submission(&mut self, frame: &Frame) {
         match ScoreSubmission::decode_frame(frame) {
-            Ok(submitted) => {
+            Ok(submitted) if usize::from(submitted.member_id) < SUBMITTER_MEMBER_LIMIT => {
+                self.last_submitter_slot = Some(submitted.member_id);
                 tracing::debug!(member = submitted.member_id, "tally submitted");
+            }
+            Ok(submitted) => {
+                tracing::debug!(
+                    member = submitted.member_id,
+                    "dropping out-of-range submitter"
+                );
             }
             Err(source) => {
                 tracing::debug!(id = frame.id, %source, "dropping undecodable tally notice");
@@ -2257,11 +2309,16 @@ impl OnlineSession {
         self.stage_server_totals(&completed);
     }
 
-    /// Fold one 4040 frame: decoded and validated (the places mirror
-    /// the entry order the 4018 table already stages), then traced.
+    /// Fold one 4040 frame: decode the eight place bytes, keep them
+    /// for read-back, then trace them. The exe handler (VA `0x559a60`,
+    /// file `0x159a60`, `ev_41a169ae…`) forwards each place through the
+    /// notify writer (VA `0x5414a0`, `ev_aad816d4…`) into slot `+0x217d`;
+    /// a whole-image byte sweep (`ev_94ff31c9…`) finds no gameplay
+    /// reader, so the rank column keeps its own source (#665/#680).
     fn apply_rank_update(&mut self, frame: &Frame) {
         match GameRankUpdate::decode_frame(frame) {
             Ok(ranks) => {
+                self.last_rank_places = Some(ranks.member_ranks);
                 tracing::debug!(?ranks.member_ranks, "rank places");
             }
             Err(source) => {
@@ -3807,6 +3864,7 @@ pub(super) mod session_tests {
 
     use super::{
         level_for_difficulty, listed_room_from_created, saturate_bonus, OnlineSession, SongChoice,
+        RESULT_4017_PLAYING_VTABLE_ENTRIES, RESULT_UI_QUEUE_ADDRESS,
     };
 
     /// One whole frame off the fake server's socket.
@@ -7091,6 +7149,339 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Result);
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn result_ui_has_no_submitter_marker_from_4017() {
+        // #679: REA finds the queue's type-0x12 consumers in the two
+        // Playing states, never in Result. The 0xFB1 arm checks a
+        // member byte at `+0x33` and writes a member state/animation;
+        // it does not name a Result marker. Keep our Result rows
+        // independent of the submitter slot until a two-member frame
+        // with a non-zero slot says otherwise.
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
+        assert_eq!(RESULT_UI_QUEUE_ADDRESS, 0x478d50);
+        assert_eq!(RESULT_4017_PLAYING_VTABLE_ENTRIES, [0x64ae1c, 0x64b3dc]);
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(&ScoreSubmission { member_id: 3 }.encode())
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 4,
+                        experience: 3000,
+                        result: MatchResult::Lose,
+                        gem: 12_000,
+                        cash_point: 0,
+                        speed: 3,
+                        long_note_score: 90,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(1).is_some());
+        server.join().unwrap();
+
+        assert_eq!(session.last_submitter_slot(), Some(3));
+        let rows = session.game.result_rank_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].judgements, Some([11, 22, 33, 44]));
+        assert_eq!(rows[0].score, Some(777));
+        assert_eq!(rows[1].judgements, Some([50, 0, 0, 0]));
+        assert_eq!(rows[1].score, Some(50_000));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[1].rank, None);
+    }
+
+    #[test]
+    fn score_submission_traces_a_valid_submitter_and_drops_slot_eight_or_more() {
+        // #667: the exe's 4017 handler (file `0x15fba0`) reads one
+        // member byte, drops it when the slot is not `< 8`, and
+        // forwards the rest into the UI queue at `0x478d50`. We have
+        // no Result consumer for that notice; this guard pins the
+        // traced slot on our side of the seam, including the guard.
+        use o2jam_net::{MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(&ScoreSubmission { member_id: 2 }.encode())
+                .unwrap();
+            stream
+                .write_all(&ScoreSubmission { member_id: 9 }.encode())
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![ScoreEntry {
+                    member_id: 0,
+                    active: true,
+                    cool: 11,
+                    good: 22,
+                    bad: 33,
+                    miss: 44,
+                    max_combo: 55,
+                    jam: 66,
+                    score: 777,
+                    reward: 88,
+                    level: 3,
+                    experience: 2000,
+                    result: MatchResult::Win,
+                    gem: 11_000,
+                    cash_point: 125,
+                    speed: 2,
+                    long_note_score: 60,
+                }],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(0).is_some());
+        server.join().unwrap();
+        assert_eq!(session.last_submitter_slot(), Some(2));
+    }
+
+    #[test]
+    fn rank_update_traces_the_eight_place_bytes_from_the_gateway() {
+        // #665: the exe's 4040 handler stores one place byte per seat
+        // at `+0x217d` (handler file `0x159a60`, writer file `0x1414ad`).
+        // Our gateway never emits it, so a scripted 4040 is the only
+        // way to prove the decoder's eight bytes are accounted for
+        // instead of silently traced and forgotten.
+        use o2jam_net::{GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry};
+        let places = [0u8, 0xff, 1, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(
+                    &GameRankUpdate {
+                        member_ranks: places,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![ScoreEntry {
+                    member_id: 0,
+                    active: true,
+                    cool: 11,
+                    good: 22,
+                    bad: 33,
+                    miss: 44,
+                    max_combo: 55,
+                    jam: 66,
+                    score: 777,
+                    reward: 88,
+                    level: 3,
+                    experience: 2000,
+                    result: MatchResult::Win,
+                    gem: 11_000,
+                    cash_point: 125,
+                    speed: 2,
+                    long_note_score: 60,
+                }],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.last_rank_places().is_some());
+        server.join().unwrap();
+        assert_eq!(session.last_rank_places(), Some(places));
+    }
+
+    #[test]
+    fn result_rank_column_ignores_the_4040_place_bytes() {
+        // #680: the 4040 place bytes land at slot `+0x217d`, while the
+        // rank column reads the locally computed table at `+0x10d2c`.
+        // A scripted place that names seat 0 as first must not ink a
+        // rank digit; the two-member replay that would confirm this on
+        // the exe remains OPEN.
+        use o2jam_net::{
+            GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry, RESULT_RANK_COLUMN_OFFSET,
+            RESULT_RANK_PLACE_OFFSET,
+        };
+        assert_eq!(RESULT_RANK_PLACE_OFFSET, 0x217d);
+        assert_eq!(RESULT_RANK_COLUMN_OFFSET, 0x10d2c);
+        let places = [0u8, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            stream
+                .write_all(
+                    &GameRankUpdate {
+                        member_ranks: places,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let completed = ScoreCompleted {
+                room_master: 0,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 11,
+                        good: 22,
+                        bad: 33,
+                        miss: 44,
+                        max_combo: 55,
+                        jam: 66,
+                        score: 777,
+                        reward: 88,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11_000,
+                        cash_point: 125,
+                        speed: 2,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 4,
+                        experience: 3000,
+                        result: MatchResult::Lose,
+                        gem: 12_000,
+                        cash_point: 0,
+                        speed: 3,
+                        long_note_score: 90,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_until(&mut session, |session| session.result_record(1).is_some());
+        server.join().unwrap();
+
+        assert_eq!(session.last_rank_places(), Some(places));
+        let rows = session.game.result_rank_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].rank, None, "no rank digit from a 4040 place");
+        assert_eq!(rows[1].rank, None, "no rank digit from a 4040 place");
+        assert_eq!(rows[0].score, Some(777));
+        assert_eq!(rows[1].score, Some(50_000));
     }
 
     #[test]

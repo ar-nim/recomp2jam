@@ -37,7 +37,7 @@ and were not re-opened by the loss).
 | MAX COMBO | text `%4d` at (505, 130), value `0x77ee5c` | `ev_615e034c…` |
 | JAM COMBO | text `%4d` at (596, 130), value `0x77ee4c` | `ev_615e034c…` |
 | Life readout | digit-sprite cells, 24 px pitch, last cell x=460, y=77, digit 1 kerned +5; font = `PointNum.ojs` (`this+0x10d10`) | `ev_615e034c…`, `ev_48c71a81…` |
-| Total score | text `%8d` at (605, 533), value `0x77cd2c` | `ev_615e034c…` |
+| TOTAL GEM readout | text `%8d` at (605, 533), value `0x77cd2c` (self record `+0x2c`), not played points | `ev_615e034c…`; live bands below |
 | Bottom counter | digit-sprite cells, 24 px pitch, last cell x=176, y=536; font = `Result_NumFont_Blue.ojs` (`this+0x10d0c`) | `ev_615e034c…`, `ev_63391623…` |
 | Per-member rows | rank x=91, name x=128, COOL/GOOD/BAD/MISS x=230, combo pair x=416, score x=530, bonus x=626, speed x=685; 22 px row pitch | `ev_88c3ca31…` |
 | WIN/LOSE verdict | `Result_WinLose.ojs` frames 0–3 at y=190; frame picked in `FUN_004c3120` | `ev_38f32576…`, `ev_bb4e402e…` |
@@ -142,7 +142,14 @@ least-significant digit rightmost, digit 1 shifted +5 px):
   (cells 292/316/340/364/388/412/436/460).
 - Bottom counter: value = `0x76fc66`, y=536, last cell x=176.
 
-Total score: `%8d` ← `0x77cd2c` at (605, 533), Arial.
+TOTAL GEM: `%8d` ← `0x77cd2c` at (605, 533), Arial. Contradiction
+recorded (exe is oracle): older notes called this "total score", but
+`0x77cd2c` is the self member record base `0x77cd00` plus `0x2c`, the
+4018 gem word. The two qualified solo frames show `15527` (frame
+`3ea6c481…4df7e4`, 4018 gem `0x3ca7`) and `626` (frame `5f812efe…4f608`,
+4018 gem `0x272`) while their C2S 4016 score words differ (`0x1877` /
+`0x9cb1`), so the panel field tracks the gem word, not the submitted
+score (#421).
 
 Grade: `FUN_004c4dd0` compares score `0x77ee60` against
 `this+0x10d14` × 0.30/0.50/0.70/0.80/0.90/0.95 (f64 constants at

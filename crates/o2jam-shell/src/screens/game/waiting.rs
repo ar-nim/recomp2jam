@@ -6,6 +6,20 @@ use o2jam_net::play::SetRoomMusic;
 use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::{CreateRoom, ExitPlaying, JoinRoom, Ready, SetRoomTeam, StartGame};
 
+/// Qualified boot-3 Result/RETRY manifest (#418). The checked #294
+/// story claimed Waiting re-entry; these frames show the personal-room
+/// backdrop instead. Pins live here beside the queued 4010 they name.
+#[cfg(test)]
+pub(crate) const RESULT_RETRY_MANIFEST_SHA256: &str =
+    "96b37640e15536e66379cbb3e688ad714636df794207aa37a08553014afed01d";
+/// Frame hashes at +0.3/+1/+3 s after the RETRY click (MyRoom pixels).
+#[cfg(test)]
+pub(crate) const RESULT_RETRY_BACKDROP_FRAME_SHA256S: [&str; 3] = [
+    "4a89faa5f7bc9655256d25d2c5680276c09be953e93a2c1418ea8bdc5c31e633",
+    "74e6a2aeb39a8136cf8f06a3c21f1e9b7db3024aae329ac5589f949a38e84d3d",
+    "c2ad594a44b115f7ea87b74dcd033776fa222af2f0bb89e59ec8ae0fda959feb",
+];
+
 /// Queued session-bridge sends behind the shell screens (#139
 /// cluster 1: the Data Clump of all thirteen `pending_*` wire
 /// queues). Every queueing arm stages its pinned body here and the
