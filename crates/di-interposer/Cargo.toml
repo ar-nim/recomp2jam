@@ -1,0 +1,15 @@
+[package]
+name = "di-interposer"
+description = "Schedule-to-DirectInput feed compiler for the 7.55 exe leg (t699)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+
+[dev-dependencies]

@@ -60,6 +60,9 @@ Wire: `o2jam-net/src/frame.rs`, `message.rs`, `play.rs`, `relay.rs`.
   Next: windowed online as the default path.
 - **`o2jam-dump`** (now: `identify` + hexdump + `run_*` dispatch over tested
   library fns). Later: full `dump-ojm`/`dump-ojn` printers.
+- **`di-interposer`** (now: `<ms>:<DIK>` schedule parser, press/release feed
+  compiler, binary feed encoder; paired with the PE32 `dinput.dll` stand-in in
+  `tools/di-interposer/`). Feeds the exe leg of chart replay (#699).
 
 ## Key decisions
 
