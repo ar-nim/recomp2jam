@@ -125,8 +125,36 @@ pub enum LoadingGateCue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoadingGatePhase {
     Idle,
-    CoverUp { entered_at: Instant },
-    ConfirmSent { sent_at: Instant },
+    CoverUp {
+        entered_at: Instant,
+    },
+    Ready {
+        entered_at: Instant,
+        armed_at: Instant,
+    },
+    ConfirmSent {
+        sent_at: Instant,
+    },
+}
+
+/// Observable arm state of the joined Loading gate (#608). The gate
+/// walks cover -> chart armed -> 4012 posted; the exe pins the wire
+/// correlate (4011, then C2S 4012, then S2C 4013, P3/P13) but no
+/// stopped-state read of its arm word exists yet, so this is our
+/// state, never an exe memory claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadingGateArm {
+    /// No start broadcast has armed the gate.
+    Idle,
+    /// Cover is up; the chart gate has not armed yet.
+    AwaitingChart,
+    /// Chart staged and audio ready; confirm waits for the wall span.
+    ChartArmed {
+        entered_at: Instant,
+        armed_at: Instant,
+    },
+    /// 4012 posted; the Playing leg still waits.
+    ConfirmPosted { sent_at: Instant },
 }
 
 /// Wall pacing of the joined Loading gate, driven by explicit paint
@@ -163,6 +191,35 @@ impl LoadingGatePacing {
         !matches!(self.phase, LoadingGatePhase::Idle)
     }
 
+    /// Latch the chart arm at one explicit paint instant. Only the
+    /// cover phase accepts it; a failed or still-staged chart never
+    /// opens the 4012 send.
+    pub fn arm_chart_at(&mut self, now: Instant) {
+        if let LoadingGatePhase::CoverUp { entered_at } = self.phase {
+            self.phase = LoadingGatePhase::Ready {
+                entered_at,
+                armed_at: now,
+            };
+        }
+    }
+
+    /// Expose the arm latch for guards and gate telemetry.
+    #[must_use]
+    pub const fn arm_state(&self) -> LoadingGateArm {
+        match self.phase {
+            LoadingGatePhase::Idle => LoadingGateArm::Idle,
+            LoadingGatePhase::CoverUp { .. } => LoadingGateArm::AwaitingChart,
+            LoadingGatePhase::Ready {
+                entered_at,
+                armed_at,
+            } => LoadingGateArm::ChartArmed {
+                entered_at,
+                armed_at,
+            },
+            LoadingGatePhase::ConfirmSent { sent_at } => LoadingGateArm::ConfirmPosted { sent_at },
+        }
+    }
+
     /// Re-arm a failed 4012 at this instant, so the retry keeps the
     /// same hold and never enters Playing on a dead socket.
     pub fn retry_confirm_at(&mut self, now: Instant) {
@@ -185,8 +242,8 @@ impl LoadingGatePacing {
     #[must_use]
     pub fn advance_at(&mut self, now: Instant) -> LoadingGateCue {
         match self.phase {
-            LoadingGatePhase::Idle => LoadingGateCue::None,
-            LoadingGatePhase::CoverUp { entered_at } => {
+            LoadingGatePhase::Idle | LoadingGatePhase::CoverUp { .. } => LoadingGateCue::None,
+            LoadingGatePhase::Ready { entered_at, .. } => {
                 if now.saturating_duration_since(entered_at) >= LOADING_CONFIRM_AFTER_START {
                     self.phase = LoadingGatePhase::ConfirmSent { sent_at: now };
                     LoadingGateCue::SendConfirm
@@ -659,6 +716,7 @@ mod tests {
             LoadingGateCue::None,
             "the cover is up before the confirm on the solo gate"
         );
+        gate.arm_chart_at(start + LOADING_COVER_VISIBLE_LATEST);
         assert_eq!(
             gate.advance_at(start + LOADING_CONFIRM_AFTER_START - Duration::from_millis(1)),
             LoadingGateCue::None
@@ -696,6 +754,7 @@ mod tests {
         let start = Instant::now();
         let mut gate = LoadingGatePacing::default();
         gate.enter_at(start);
+        gate.arm_chart_at(start);
         let confirmed = start + LOADING_CONFIRM_AFTER_START;
         assert_eq!(gate.advance_at(confirmed), LoadingGateCue::SendConfirm);
         let handoff = confirmed + LOADING_PLAYING_AFTER_CONFIRM;
@@ -711,6 +770,44 @@ mod tests {
         assert_eq!(
             gate.advance_at(handoff + LOADING_PLAYING_AFTER_CONFIRM),
             LoadingGateCue::EnterPlaying
+        );
+    }
+
+    /// #608: the arm latch is observable, and an unarmed gate never
+    /// posts 4012 even after the wall span has passed.
+    #[test]
+    fn chart_arm_state_walks_cover_ready_and_confirm() {
+        use std::time::{Duration, Instant};
+
+        use super::{LoadingGateArm, LoadingGateCue, LoadingGatePacing};
+
+        let start = Instant::now();
+        let mut gate = LoadingGatePacing::default();
+        assert_eq!(gate.arm_state(), LoadingGateArm::Idle);
+
+        gate.enter_at(start);
+        assert_eq!(gate.arm_state(), LoadingGateArm::AwaitingChart);
+        assert_eq!(
+            gate.advance_at(start + Duration::from_secs(1)),
+            LoadingGateCue::None,
+            "a wall span never replaces the chart arm"
+        );
+
+        let armed_at = start + Duration::from_millis(50);
+        gate.arm_chart_at(armed_at);
+        assert_eq!(
+            gate.arm_state(),
+            LoadingGateArm::ChartArmed {
+                entered_at: start,
+                armed_at,
+            }
+        );
+
+        let confirmed = start + Duration::from_millis(700);
+        assert_eq!(gate.advance_at(confirmed), LoadingGateCue::SendConfirm);
+        assert_eq!(
+            gate.arm_state(),
+            LoadingGateArm::ConfirmPosted { sent_at: confirmed }
         );
     }
 
