@@ -91,8 +91,10 @@ or level→cell source is pinned (next step: gateway replay
 pinning the price words plus a rig capture of the DIFF cell at a
 known song). TITLE/DIFF/BPM sorts (`0x80..0x82`) reuse the
 catalog sort keys with ASSUMED ascending directions (same named
-next step as lanking). PRICE (`0x83`), 3KEY/7KEY filters, MYALL
-owned-list pager, search, TOP100, gift, and download stay
+next step as lanking). The TOP100 arm (`0x7D..0x84`) stages its
+chrome and records its pressed control (#408 below); ranking
+contents stay OPEN. PRICE (`0x83`) semantics, 3KEY/7KEY filters,
+MYALL owned-list pager, search, gift, and download stay
 display-only OPEN (next step: SendInput sweep on the live board
 per the `~/scratch/planet-verify/` recipe). Per-row GEM_BUY/
 WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and the cart
@@ -113,9 +115,29 @@ sort or page turn clears the row; no wire send or ownership claim is
 attached. Guard: `music_shop_row_pick_inks_the_staged_row_chrome` (red
 before the painter was wired: no pixel delta in the picked row).
 
+## TOP100 board chrome (#408, 2026-11-20)
+
+The `0x1A20007D..0x84` arm stages eight `State_MShop.bnd` rects:
+TOP100 `(248,0)-(347,37)`, 3KEY `(18,84)-(75,105)`, 7KEY
+`(75,84)-(133,105)`, the four header sorts (TITLE/DIFF/BPM at
+`0x80..0x82` keep their wired actions; PRICE `0x83` at
+`(310,84)-(372,105)`), and SELECTALL `(436,31)-(488,51)`. A press on
+the arm now hit-tests through `music_shop_action_at`; the three
+sort codes keep their existing actions, and the other controls
+record a client-only `Top100Chrome` press. `paint_music_shop_top100_chrome`
+inks a narrow band inside the pressed staged rect. No ranking rows,
+sort meanings, or wire source are invented: the qualified exe press
+frame `5ddfd9d3…` shows only the pointer and web-banner caption,
+so rank contents and a live shop capture remain OPEN (`E-W-5011`).
+Guards: `music_shop_top100_arm_stages_eight_rects_and_answer_each_press`
+(real `.bnd`, skips without install-root),
+`music_shop_top100_button_answers_its_pinned_rect`,
+`music_shop_top100_press_reaches_staged_chrome_without_a_wire`,
+`music_shop_top100_press_inks_only_the_pressed_staged_rect`.
+
 ## OPEN
 
-TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179).
+TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).
 
 1. Rect contents → placements — DONE (138 rects, ordinal pairing).
 2. Album-art source + GEM/WON buy semantics — PARTIAL: per-row

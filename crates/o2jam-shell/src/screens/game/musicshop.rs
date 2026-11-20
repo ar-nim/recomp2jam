@@ -50,6 +50,11 @@ pub(crate) struct MusicShopState {
     /// (`param_b`/`param_a`); the boot stages them once with the
     /// catalog, and a table without a song leaves its cells blank.
     pub(crate) music_shop_prices: HashMap<u32, MusicShopPrice>,
+    /// Last pressed TOP100 board-chrome control code (`None` until a
+    /// press). The qualified exe frame shows no ranking board, so
+    /// this marks a client-only press inside the staged rect — never
+    /// a standing, a sort, or a wire request (#408).
+    pub(crate) music_shop_top100_pressed: Option<u32>,
 }
 
 impl MusicShopState {
@@ -62,6 +67,7 @@ impl MusicShopState {
         self.music_shop_page = 0;
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
+        self.music_shop_top100_pressed = None;
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -131,6 +137,11 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Last pressed TOP100 board-chrome control code, if any.
+    pub(crate) fn top100_pressed(&self) -> Option<u32> {
+        self.music_shop_top100_pressed
     }
 
     /// Checked song-shop cart ids in pick order.
@@ -213,15 +224,21 @@ impl MusicShopState {
                 false
             }
             MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
+            MusicShopAction::Top100Chrome { code } => {
+                self.music_shop_top100_pressed = Some(code);
+                false
+            }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
                 self.music_shop_page = 0;
                 self.music_shop_selected_row = None;
+                self.music_shop_top100_pressed = None;
                 false
             }
             MusicShopAction::MsPrev => {
                 self.music_shop_page = self.music_shop_page.saturating_sub(1);
                 self.music_shop_selected_row = None;
+                self.music_shop_top100_pressed = None;
                 false
             }
             MusicShopAction::MsNext => {
@@ -233,6 +250,7 @@ impl MusicShopState {
                 {
                     self.music_shop_page = self.music_shop_page.saturating_add(1);
                     self.music_shop_selected_row = None;
+                    self.music_shop_top100_pressed = None;
                 }
                 false
             }

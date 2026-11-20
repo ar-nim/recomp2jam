@@ -1743,6 +1743,43 @@ fn shop_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> 
 /// paints nothing (ADR-0003).
 const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
 
+/// Client-only marker for the pressed TOP100 board-chrome control:
+/// a thin band inside that control's staged `State_MShop.bnd` rect.
+/// The qualified press frame shows no ranking board (`docs/musicshop.md`),
+/// so this inks no standing, sort, or wire claim. Ours-by-design tone,
+/// staged geometry only (ADR-0003).
+const MUSIC_SHOP_TOP100_TONE: u32 = pack_xrgb(0xE2, 0x8A, 0x3C);
+
+/// Ink the pressed TOP100 board control (if any) at its staged rect.
+/// A missing rect or no press paints nothing.
+pub fn paint_music_shop_top100_chrome(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    pressed_code: Option<u32>,
+) {
+    let Some(code) = pressed_code else {
+        return;
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    let band_height = 2_u32.min(rect.h);
+    if band_height == 0 {
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: rect.x,
+            y: rect.y + i32::try_from(rect.h - band_height).unwrap_or(0),
+            w: rect.w,
+            h: band_height,
+        },
+        MUSIC_SHOP_TOP100_TONE,
+    );
+}
+
 pub fn paint_music_shop_row_selection(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -4121,6 +4158,38 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn music_shop_top100_press_inks_only_the_pressed_staged_rect() {
+        // #408: the board chrome marker rides the staged control
+        // rects, never a ranking row or an invented panel. No press
+        // paints nothing; pressing SELECTALL leaves the TOP100 button
+        // untouched (and vice versa).
+        use super::super::side::{MSHOP_TOP100_CODE, MSHOP_TOP100_LAST_CODE};
+        let placements = vec![
+            shop_placement(MSHOP_TOP100_CODE, 248, 0, 99, 37),
+            shop_placement(MSHOP_TOP100_LAST_CODE, 436, 31, 52, 20),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        paint_music_shop_top100_chrome(&mut frame, &placements, None);
+        assert!(!frame.buf.contains(&MUSIC_SHOP_TOP100_TONE));
+
+        let top100_band = 35 * 800 + 250;
+        let selectall_band = 49 * 800 + 440;
+        paint_music_shop_top100_chrome(&mut frame, &placements, Some(MSHOP_TOP100_CODE));
+        assert_eq!(frame.buf[top100_band], MUSIC_SHOP_TOP100_TONE);
+        assert_eq!(frame.buf[selectall_band], 0, "unpressed arm stays unmarked");
+
+        frame.buf.fill(0);
+        paint_music_shop_top100_chrome(&mut frame, &placements, Some(MSHOP_TOP100_LAST_CODE));
+        assert_eq!(frame.buf[selectall_band], MUSIC_SHOP_TOP100_TONE);
+        assert_eq!(frame.buf[top100_band], 0, "TOP100 button stays unmarked");
     }
 
     #[test]

@@ -40,20 +40,20 @@ use super::paint::{
     list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_wallet,
-    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT,
+    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
+    paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
+    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
+    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt, ChannelChatMessage,
+    LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -6056,6 +6056,14 @@ impl ScreenGame {
         self.music_shop.selected_row()
     }
 
+    /// Last pressed TOP100 board-chrome control code (#408). A
+    /// client-only press marker inside its staged rect; no ranking
+    /// content or wire source is claimed.
+    #[must_use]
+    pub fn music_shop_top100_pressed(&self) -> Option<u32> {
+        self.music_shop.top100_pressed()
+    }
+
     /// Checked song-shop cart ids in pick order.
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
@@ -6276,6 +6284,11 @@ impl ScreenGame {
                 frame,
                 &self.side_placements,
                 self.music_shop.selected_row(),
+            );
+            paint_music_shop_top100_chrome(
+                frame,
+                &self.side_placements,
+                self.music_shop.top100_pressed(),
             );
             paint_music_shop_board(
                 frame,
@@ -7597,6 +7610,9 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
         &mut hash,
         game.outbox.pending_music_buy.map_or(0, |_| 5_010),
     );
+    if let Some(code) = game.music_shop_top100_pressed() {
+        hash_u64(&mut hash, u64::from(code));
+    }
     hash
 }
 
@@ -19941,6 +19957,68 @@ mod game_tests {
             .map(|row| row.song.song_id)
             .collect();
         assert_eq!(owned, vec![757]);
+    }
+
+    #[test]
+    fn music_shop_top100_press_reaches_staged_chrome_without_a_wire() {
+        // Live caller chain: main.rs::run_play -> setup_online (or the
+        // offline arm) -> stage_live_art -> live_art::stage_interface_scenes
+        // -> ScreenGame::load_scene stages State_MShop -> visit_side(MusicShop)
+        // mounts side_placements -> GameLoop::mouse_click -> click_music_shop
+        // -> music_shop_action_at -> MusicShopState::apply_action
+        // (Top100Chrome) -> paint_at -> paint_side ->
+        // paint_music_shop_top100_chrome. No 5011 rank source exists; the
+        // press must not queue a buy or invent standings (#408).
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let top100_rect = Rect {
+            x: 248,
+            y: 0,
+            w: 99,
+            h: 37,
+        };
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MSHOP_TOP100_CODE,
+                sprite: None,
+                rect: top100_rect,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MusicShop));
+        let mut before = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut before,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+
+        game.click_music_shop(297, 18);
+        assert_eq!(
+            game.music_shop_top100_pressed(),
+            Some(MSHOP_TOP100_CODE),
+            "the staged TOP100 button records its press"
+        );
+        assert!(game.take_music_buy().is_none(), "chrome queues no 5010");
+
+        let mut after = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut after,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let band = 35 * 800 + 250;
+        assert_ne!(before[band], after[band], "press inks the staged band");
+        let outside = 20 * 800 + 400;
+        assert_eq!(before[outside], after[outside], "no chrome outside");
     }
 
     #[test]
