@@ -714,7 +714,7 @@ Every live proof names its pair, manifest, and artifacts. Guards pin a
 behavior only when they name the live caller chain from boot or state why
 the seam test suffices; seam-green alone never closes a player-visible
 ticket (`docs/live-path-reachability.md`,
-`docs/agents/triage-labels.md` rules 7-8). Synthetic input guards keep
+`docs/agents/triage-labels.md` rule 7). Synthetic input guards keep
 passing with no game data (#233 story 20).
 
 ## Cross references

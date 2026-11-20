@@ -314,8 +314,7 @@ Guarded conflicts and pushes (retro 2026-11-20, paint_channel):
    rewrite. The paint_channel merge was pushed after `gate=101`; e54e41d was
    the fix-forward.
 
-See `docs/agents/issue-tracker.md` (merge protocol) for the full
-sequence.
+The issue-tracker copy is a pointer; this section is canonical.
 
 ## Land-or-rebase timing pointer
 

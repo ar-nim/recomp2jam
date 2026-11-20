@@ -124,9 +124,7 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    criterion with its command and output (`docs/agents/issue-tracker.md`,
    "Acceptance-criteria review before any close"). Any NOT MET or OPEN blocks
    the close; green gates alone never tick a box. The close-handoff steps in
-   `docs/agents/delegation.md` ("Verify, don't trust") are mandatory too:
-   ancestor check on the branch under test, and the main checkout back on
-   `main` at end of work (retro #175).
+   `docs/agents/delegation.md` ("Verify, don't trust") are mandatory too.
 3. File tracker issues sequentially through `scripts/issue-create.sh` (the
    mandated creation path) and read back the title per number; never run
    parallel creates or assume their output order (#487).
@@ -153,32 +151,22 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    with its PASS and FAIL lines recorded in the same closing report.
 
 6. Every commit hash in any tracker comment (issue body or later comment)
-   must resolve via `git cat-file -t <sha>` and print `commit` at posting time,
-   not merely once at close. Re-check after each rebase and before every
-   `gh issue comment` or body edit. Failure mode prevented: an agent stalls on
-   "commit not found" when a later step (or a reviewer) tries to resolve the
-   cited object, because the hash was mistyped or never existed (precedent:
-   #167 cited `ea4e098b`, which resolves to nothing; both that token and the
-   historically quoted `ea4f098` fail verification in this checkout, so treat
-   the older record as UNVERIFIED and search `git log --all` for the subject).
-   A token that fails is replaced by a verified SHA from
-   `git log --all` or marked explicitly UNVERIFIED with the rebased-away branch
-   name. Version stamps that only look like hashes (for example `v: 9692d41`
-   in the parity ledger) are labeled as stamps, not commits.
-   Verify a replacement with `git rev-parse <sha>` (full 40-hex form),
-   `git cat-file -t <sha>` (`commit`), and `git show -s --format='%H %s' <sha>`
-   (subject matches the claim); add `git merge-base --is-ancestor <sha> HEAD`
-   when the commit must be on the current line. Cite the full SHA in the
-   correction. Post a correction comment on the affected issue; do not let a
-   stale token stand in a closed comment's history (retro #309,
-   `docs/retro-queue.md`).
-   `scripts/tracker-audit.sh` cannot enforce this rule: it reads issue text
-   and checks guard names against `crates/`, with no git-object check and no
-   posting hook. The reviewer check is the enforcement point.
+   must resolve via `git cat-file -t <sha>` and print `commit` at posting
+   time. Re-check after each rebase and before every `gh issue comment` or
+   body edit. Verify a replacement with `git rev-parse <sha>` (full form),
+   `git cat-file -t <sha>` (`commit`), and `git show -s --format='%H %s'
+   <sha>` (subject matches the claim); add `git merge-base --is-ancestor
+   <sha> HEAD` when the commit must be on the current line. A token that
+   fails is replaced by a verified SHA from `git log --all` or marked
+   explicitly UNVERIFIED. Version stamps that only look like hashes are
+   labeled as stamps, not commits. Post a correction comment on the
+   affected issue; do not let a stale token stand in a closed comment's
+   history (retro #309). `scripts/tracker-audit.sh` cannot enforce this
+   rule; the reviewer check at posting time is the enforcement point.
 
 
-7. **Live-path reachability for behavior guards.** Every guard named under
-   `## Guards` carries, in the same closing comment, one of:
+7. **Live-path reachability for player-visible closes.** Every guard named
+   under `## Guards` carries, in the same closing comment, one of:
    - a **live caller chain** from boot to the guarded code, using real entry
      and function names (for example `main.rs::run_play` â†’ `setup_online` â†’
      `connect::connect_and_login_with_transport` â†’ `stage_online_identity` â†’
@@ -191,12 +179,12 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    Precedent: #191/#192/#193 closed on green seam guards while the features
    stayed broken live â€” the guards never named the live chain.
 
-8. **Player-visible close leg.** A player-visible ticket closes only after a
-   live/behavior confirmation leg: owner playtest, a headless live-path walk
-   (`live_boot_gate`, `session_walk`, `live_stats`), or a scripted-gateway round
-   trip through the real boot entry. Seam guards alone never close such a
-   ticket. Docs and presentational fixes use the `(none -- docs: ...)`
-   / `(none -- presentational: ...)` exemption from rule 5 and skip this leg.
+   The close itself then needs a **confirmation leg**: owner playtest, a
+   headless live-path walk (`live_boot_gate`, `session_walk`, `live_stats`),
+   or a scripted-gateway round trip through the real boot entry. Seam guards
+   alone never close a player-visible ticket. Docs and presentational fixes
+   use the `(none -- docs: ...)` / `(none -- presentational: ...)` exemption
+   from rule 5 and skip this leg.
 
 ## Edit tracker
 

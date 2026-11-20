@@ -33,10 +33,8 @@ himself, against the actual implementation, BEFORE merging or closing:
 4. Post the criterion-by-criterion table in the merge/close comment so the
    owner can audit it. Tick the boxes only for MET criteria.
 5. Run the close-handoff steps from `docs/agents/delegation.md` ("Verify,
-   don't trust"): the fix commit passes
-   `git merge-base --is-ancestor <fix-sha> <branch-under-test>`, and the main
-   checkout is back on `main` at end of work (retro #175: the owner's false
-   "fix failed" came from a binary built without the fix).
+   don't trust"): ancestor check on the branch under test, and the main
+   checkout back on `main` at end of work.
 
 Historical tickets with `## Acceptance criteria` were found closed with all
 boxes blank (the 2026-11-17 acceptance audit); this rule is the guard against
@@ -46,17 +44,12 @@ Infer the repo from `git remote -v`; `gh` does this automatically when run insid
 
 ## Merge protocol (multi-agent pushes)
 
-Retro 2026-11-12: two merge mistakes cost a session — a `git add -A`
-during conflict resolution swept a subagent's uncommitted work-in-progress
-into a merge, and a resolved merge was committed without compiling.
-
-1. Resolve conflicts; stage **only the conflicted paths and regenerated
-   files** — never `git add -A` (the working tree may hold someone else's
-   live edits).
-2. Run `cargo check --workspace` **before** committing the merge.
-3. Commit the merge, then run the full gates.
-4. Remove implementer worktrees only **after every spawned subagent has
-   reported** — check first; a live agent's worktree is not debris.
+The full merge-conflict discipline lives in `docs/agents/delegation.md`
+("Merge-conflict discipline" — canonical). Its two hard rules, kept here
+because they were learned twice (retro 2026-11-12): stage only the conflicted
+paths, never `git add -A`; run `cargo check --workspace` before committing
+the merge. Remove implementer worktrees only **after every spawned subagent
+has reported** — a live agent's worktree is not debris.
 
 ## Implementer brief template
 
@@ -87,7 +80,7 @@ Every subagent brief carries, at minimum:
   before any tracker write (see `docs/agents/delegation.md`).
 - Behavior guards (any test named under `## Guards`) must carry a live
   caller chain from boot or a seam-suffices note per
-  `docs/live-path-reachability.md` (close discipline rules 7-8 in
+  `docs/live-path-reachability.md` (close discipline rule 7 in
   `docs/agents/triage-labels.md`). Seam-green alone never closes a
   player-visible ticket.
 
