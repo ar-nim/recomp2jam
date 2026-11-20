@@ -2814,18 +2814,20 @@ impl OnlineSession {
     }
 
     /// Move one gift-claim attempt leg: drain until the socket goes
-    /// quiet, folding a successful 5024 verdict into the staged bag.
-    /// Returns the attempt while it still awaits an answer.
+    /// quiet, folding a valid 5024 answer into the staged bag. The
+    /// exe gates the success path on the validity word alone (file
+    /// `0xa6135`); the verdict byte is Memoryer-only and never read
+    /// (file `0xa6156`). Returns the attempt while it awaits an answer.
     fn drain_gift_claim(&mut self, attempt: GiftClaimAttempt) -> Option<GiftClaimAttempt> {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == 5024 => {
                     match ClaimGiftResponse::decode_body(&frame.payload) {
-                        Ok(response)
-                            if !response.invalid
-                                && response.result_code
-                                    == o2jam_net::gift::ClaimGiftResult::Success.as_u8() =>
-                        {
+                        Ok(response) if !response.invalid => {
+                            tracing::debug!(
+                                verdict = response.result_code,
+                                "valid gift claim; verdict byte ignored like the exe"
+                            );
                             self.game.apply_gift_claim_success(attempt.gift_id);
                         }
                         Ok(_) => {
@@ -5371,20 +5373,18 @@ pub(super) mod session_tests {
         assert!(session.gift_claim_attempt.is_none());
     }
 
-    #[test]
-    fn gift_claim_unknown_error_keeps_the_present_box_row() {
-        // Live caller chain:
-        //   OnlineSession::paint -> flush_gift_claim (5023) ->
-        //   poll_gift_claim -> drain_gift_claim (5024 verdict 4) — the
-        //   success-only bag fold stays closed. Tier 2 scripted gateway
-        //   with the live `9c9af74a…50d67` failure body `0000000004`.
+    /// Stage one present-box gift and answer its MOVE press with a
+    /// scripted 5024 body. The exe's 5024 success path (file `0xa6156`)
+    /// reads the validity word only; the verdict byte stays
+    /// Memoryer-only, so callers supply the body verbatim.
+    fn gift_claim_reply_session(reply_body: [u8; 5]) -> (OnlineSession, thread::JoinHandle<()>) {
         use o2jam_net::frame::encode_frame;
         use o2jam_render::Rect;
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
         use o2jam_shell::screens::side::SideScreen;
         use std::collections::HashMap;
 
-        let (port, server) = fake_gateway(|mut stream| {
+        let (port, server) = fake_gateway(move |mut stream| {
             use o2jam_net::gift::GetGiftMessageListResponse;
             assert_eq!(read_frame(&mut stream).id, 5017);
             let empty = GetGiftMessageListResponse {
@@ -5395,9 +5395,7 @@ pub(super) mod session_tests {
                 .write_all(&encode_frame(5018, &empty.encode_body()))
                 .unwrap();
             assert_eq!(read_frame(&mut stream).id, 5023);
-            stream
-                .write_all(&encode_frame(5024, &[0, 0, 0, 0, 4]))
-                .unwrap();
+            stream.write_all(&encode_frame(5024, &reply_body)).unwrap();
         });
 
         let area = |code: u32, x: i32| ScenePlacement {
@@ -5451,13 +5449,48 @@ pub(super) mod session_tests {
         game.click_myroom_side(101, 11);
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        let mut session = OnlineSession::new(game, gateway);
+        (OnlineSession::new(game, gateway), server)
+    }
+
+    #[test]
+    fn valid_5024_with_memoryer_verdict_four_moves_the_gift_into_the_bag() {
+        // Live caller chain:
+        //   OnlineSession::paint -> flush_gift_claim (5023) ->
+        //   poll_gift_claim -> drain_gift_claim (5024 valid body
+        //   `0000000004`) -> ScreenGame::apply_gift_claim_success.
+        // The exe's 5024 handler never reads the verdict slot
+        // (`0x14(%ebp)`, `o2jam-net/gift.rs`); only the validity word
+        // gates its success path. Tier 2 scripted gateway.
+        let (mut session, server) = gift_claim_reply_session([0, 0, 0, 0, 4]);
+        paint_until(&mut session, |s| {
+            s.gift_claim_attempt.is_none()
+                && s.game
+                    .myroom_character()
+                    .is_some_and(|hero| hero.inventory.contains(&1))
+        });
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert!(
+            hero.item_gifts.is_empty(),
+            "valid claim empties the box row"
+        );
+        assert!(hero.inventory.contains(&1), "claimed item lands in the bag");
+    }
+
+    #[test]
+    fn invalid_5024_keeps_the_present_box_row() {
+        // Live caller chain: OnlineSession::paint -> flush_gift_claim ->
+        // poll_gift_claim -> drain_gift_claim (invalid 5024). The exe's
+        // validity gate (file `0xa6135`) sends this reply down the error
+        // path, so the staged gift stays in the box.
+        let (mut session, server) = gift_claim_reply_session([1, 0, 0, 0, 4]);
         paint_until(&mut session, |s| s.gift_claim_attempt.is_none());
         server.join().unwrap();
 
         let hero = session.game.myroom_character().expect("staged character");
-        assert_eq!(hero.item_gifts.len(), 1, "failed claim keeps the gift row");
-        assert!(!hero.inventory.contains(&1), "failed claim mints no item");
+        assert_eq!(hero.item_gifts.len(), 1, "invalid reply keeps the gift row");
+        assert!(!hero.inventory.contains(&1), "invalid reply mints no item");
     }
 
     pub(super) fn entry_channel() -> o2jam_net::ChannelState {
