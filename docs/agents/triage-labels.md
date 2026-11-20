@@ -112,6 +112,22 @@ state or one cross-cutting domain. Rules:
   loading overlay, and 27 dialog blocks. Dead legacy stems
   (`StateRoom`, Bulletin, MyCapsule, Top100) get no spec (ADR-0012).
 
+## Gate tiers (owner 2026-11-20)
+
+`scripts/gate-check.sh` is tiered so the expensive suite runs where it
+catches things, not everywhere:
+
+- **Per ticket (lanes):** `gate-check.sh --no-push --quick [-- <crates>]` —
+  fmt + clippy + the affected crates' tests. Seconds, run after every commit.
+- **Per merge (senior):** full mode (default) — the whole workspace suite,
+  present arm, plus the hidden install-root arm. This is the tier that
+  catches semantic-merge breaks and missing hidden-arm skips; it is
+  mandatory before every push.
+- **Hidden arm on demand:** `--hidden` when a diff touches data-dependent
+  guards but the run is not a merge; the hidden arm also runs nightly.
+
+A green quick gate never substitutes for the merge gate (rule 2 below).
+
 ## Close discipline
 
 Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53–#56):
