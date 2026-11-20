@@ -6840,6 +6840,15 @@ pub(super) mod session_tests {
         use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
         use std::sync::mpsc;
 
+        // The reveal click at (502,236) hit-tests the channel row through
+        // the staged `.bnd` rects; without game data the click misses and
+        // the wire order assertion has no meaning. Skip the hidden arm.
+        let data_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        if std::fs::metadata(&data_dir).is_err() {
+            return;
+        }
+
         let (ok_pressed, wait_for_ok) = mpsc::channel::<()>();
         let (socket_quiet, wait_for_quiet) = mpsc::channel::<()>();
         let held = vec![
