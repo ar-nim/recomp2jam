@@ -9883,6 +9883,61 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_hover_repaints_its_staged_body_frame_on_the_room_board() {
+        // Spec #313 WAVE5 row: the Room FIRSTSTEP chrome
+        // `0x13200032` repaints `Room_FirstStep.ojs` body frame 0 under
+        // the pointer. EXE pin `docs/hover.md:111`: rest matches
+        // neither frame (31% / 22%), hover matches frame 0 (100%),
+        // rect `660,1-718,32`, hover capture hash `36575039…4009e`.
+        // Live chain: boot -> Channel -> Room -> pointer snapshot ->
+        // `hovered_room_control` -> `paint_room` ->
+        // `paint_room_scene_with_hover` -> `paint_room_hover` frame 0.
+        // A two-record synthetic body keeps the guard data-independent.
+        let rect = Rect {
+            x: 660,
+            y: 1,
+            w: 58,
+            h: 31,
+        };
+        let mut game =
+            room_lobby_with_placements(vec![(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", rect)]);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: Some("Room_FirstStep.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([(
+                "Room_FirstStep.ojs".to_owned(),
+                chrome_two_layer_figure(58, 31),
+            )]),
+        );
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 689, 16), rest);
+        game.ingest_snapshot(&InputSnapshot::motion_to(689, 16));
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(0x1320_0032),
+            "B7's FIRSTSTEP aim resolves the staged chrome"
+        );
+        assert_eq!(
+            room_pixel(&mut game, 689, 16),
+            hover,
+            "hover paints body frame 0"
+        );
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+        assert_eq!(
+            room_pixel(&mut game, 689, 16),
+            rest,
+            "unhover restores the rest body"
+        );
+    }
+
+    #[test]
     fn hovered_room_button_repaints_on_an_empty_room_list() {
         // The exe arms chrome hover on an empty live room — every
         // `docs/hover.md` sweep row shows the six empty row panels
