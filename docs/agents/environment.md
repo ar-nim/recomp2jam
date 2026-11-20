@@ -1,0 +1,81 @@
+# Environment and operational gotchas
+
+Canonical home for the machine, shell, and tooling facts that used to live in
+agent memory. Domain behavior lives in the domain docs (each section here
+points there); this file is the index and the home for the rest.
+
+## Shell
+
+- The default login shell is **fish**; `bash` is installed but must be
+  invoked explicitly for scripts that assume it (`docs/wine-boot.md`).
+
+## Exit codes
+
+- Never `cargo test ... | tail` — the pipeline's exit code is tail's, and a
+  red suite reads green. Run un-piped, or use `pipefail` / `${PIPESTATUS[0]}`.
+
+## Process management
+
+- `pgrep -f` / `pkill -f` patterns self-match the invoking shell's own
+  command line (killed our own shell repeatedly). Use a non-self-matching
+  character class (`pgrep -f "recomp2jam onl[i]ne"`) or track PIDs in files
+  the way `rig-run.sh` does (`docs/rig-runbook.md`).
+
+## Git and worktrees
+
+- Git silently clobbers git-ignored DIRECTORIES when a tracked file or
+  symlink arrives with the same name (2026-11-11: a committed `extracted`
+  symlink destroyed `extracted/`; recovery #101). Trailing-slash .gitignore
+  matches dirs only, not symlinks. Verify worktree symlinks with
+  `readlink -e` after any setup or merge touching them.
+- The install-root hidden-arm shuffle (`mv install-root` aside for the
+  no-data test arm) breaks every concurrent present-arm run machine-wide
+  because the slots share one data dir. Only one agent runs the hidden arm
+  at a time; seniors re-run before believing a single failure
+  (`docs/agents/delegation.md`, parallel-lane section).
+- Every git commit uses the owner identity Arif Rahman Ibrahim. Never
+  override `git user.name/email` or pass `-c user.name` — including when a
+  subagent commits.
+
+## GitHub / tracker
+
+- Issue images: upload them (gist git-push accepts binaries; `gh gist
+  create` rejects them) and embed the raw URL. Never paste a local
+  filesystem path and call it attached (`docs/agents/issue-tracker.md`).
+
+## Subagent orchestration
+
+- Spawning batches of subagents from a script: keep names as a separate
+  tuple field, never destructure a joined string (a destructured name
+  became the first character; agents spawned as c/s/a/r). Print the full
+  spawn result (real name + model).
+- Parallel lanes touching the same file region run sequenced, or budget one
+  rebase round each (`docs/adr/0008-parity-verdicts.md`).
+- A textually clean merge is not a compiling one: semantic conflicts slip
+  through (`docs/agents/delegation.md`, "Merge-conflict discipline" — run
+  the guards, never reconstruct a side from memory).
+- Every subagent brief that involves writing Rust names the clean-code and
+  rust-best-practices skills with their paths and holds their bar; the
+  shorthand "10/10" alone is not enough (owner rule 2026-11-20).
+
+## Rig corrections (brief authors read this)
+
+- There is **no** `scripts/playwright.py`. The blessed shot kit is
+  `scripts/rig-run.sh` + `scripts/rig-wine.sh` + `scripts/wine-scene.py`.
+- The channel doc is `docs/parity/channel.md` (not `docs/specs/`).
+- Boot lanes hold the flock only around active boots, never via long keeper
+  shells (`scripts/lib/rig-live-lock.sh`).
+
+## Static analysis (REA)
+
+- The REA MCP works once the owner enables the `rea` server in Pi Pocket's
+  MCP page. The senior opens `OTwo.exe` via `open_binary` (pinned sha256
+  `83a04541...72c823b`); subagents lack `open_binary`, so with a target open
+  they may use any rea MCP tool, and with no target they use the REA 6.9.0
+  CLI (Ghidra 12.2).
+
+## Desktop repro notes
+
+- The owner desktop is KDE Plasma on Wayland (KWin, Arch). Upstream winit
+  Wayland bugs verified on GNOME/mutter may reproduce differently — always
+  name the compositor in repro notes.
