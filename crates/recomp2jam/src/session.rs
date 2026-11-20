@@ -6348,6 +6348,56 @@ pub(super) mod session_tests {
         assert_eq!(row.user_count, 1);
     }
 
+    /// Row lock badge from the exe CREATE arms (ticket #519).
+    /// `~/scratch/evidence-room/exe-master-locked-5/exe/phases-create.log`
+    /// 03:41:33 logs the locked 2004 body
+    /// `4c4f434b4544505300020001313233340000000000` (flag byte 1,
+    /// password `1234`) beside `lock-02-password-frame.png` sha256
+    /// `b749dc90b242460a9d9f5e172d47cd6f94985cc3e4796fa57ce1189d1a9ee71b`;
+    /// `~/scratch/evidence-room/create-fields-2/exe/wire/room-stage.log`
+    /// 02:27:01 logs the unlocked arm (flag byte 0) beside
+    /// `pass-04-row-unlocked.png` sha256
+    /// `734631eb452bfecc815360d9568841fb8b71a4cb7faf0cbdc3f6acc4e43a196c`.
+    /// Caller chain: boot → Room → scripted 2005 → `apply_room_created`
+    /// → `ScreenGame::upsert_room` → the row's staged lock badge.
+    #[test]
+    fn create_lock_flag_survives_the_2005_broadcast_into_the_row() {
+        use o2jam_net::{CreateRoom, RoomCreated};
+        let pinned_bodies = [
+            (
+                "4c4f434b4544505300020001313233340000000000",
+                "LOCKEDPS",
+                true,
+            ),
+            ("454d505459505300020000310000000000", "EMPTYPS", false),
+        ];
+        for (body_hex, title, locked) in pinned_bodies {
+            let create = CreateRoom::decode_body(&hex_bytes(body_hex)).unwrap();
+            assert_eq!(create.title, title);
+            assert_eq!(create.has_password, locked, "exe lock flag");
+            let created = RoomCreated {
+                number: 0,
+                title: create.title.clone(),
+                key_mode: create.key_mode,
+                game_mode: create.game_mode,
+                has_password: create.has_password,
+                min_level: create.min_level,
+                max_level: create.max_level,
+                premium: create.premium,
+                room_type: 0,
+            };
+            let (mut session, server) = room_session(move |mut stream| {
+                stream.write_all(&created.encode()).unwrap();
+                assert_quiet(&mut stream);
+            });
+            paint_until(&mut session, |s| s.game.listed_rooms().len() == 1);
+            let row = &session.game.listed_rooms()[0];
+            assert_eq!(row.title, title);
+            assert_eq!(row.has_password, locked, "row lock badge");
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     fn room_created_broadcast_stages_a_live_row_for_a_peer_already_in_room() {
         // Live caller chain: `Shell::run` -> `OnlineSession::paint` ->
