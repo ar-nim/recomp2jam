@@ -12928,4 +12928,97 @@ pub(super) mod session_tests {
         master_server.join().unwrap();
         peer_server.join().unwrap();
     }
+
+    /// Ticket #693 re-scope (W6 W-c, trace `W6FC-DIALOG-02`): a peer
+    /// joins through its own `3002`/`3003` pair while the master's
+    /// CREATE ROOM sheet stays up. The master's frame and wire stay
+    /// unchanged; no master-side `3004`/`3003` join event is claimed,
+    /// staged, or wired by this guard.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> assemble_online_session -> paint ->
+    ///   ScreenGame::ingest_snapshot -> click_room_control(Create) ->
+    ///   open_create_room_dialog (master sheet stays up) ||
+    ///   peer: MenuKey::Confirm -> begin_room_join -> poll_room_join ->
+    ///   JoinRoom 3002 -> JoinRoomResponse 3003 -> resolve_room_join.
+    #[test]
+    fn peer_join_pair_leaves_the_create_room_sheet_and_master_frame_unchanged() {
+        use o2jam_net::rooms::{JoinRoom, JoinRoomResponse};
+        use o2jam_net::Request;
+        use o2jam_shell::screens::side::RoomDialog;
+
+        let answer = hex_bytes(LIVE_JOIN_ANSWER_HEX);
+        let decoded = JoinRoomResponse::decode_body(&answer).unwrap();
+        assert_eq!(decoded.result_code, 0);
+        let room = decoded.room.expect("the 3003 body carries the member rows");
+        let members: Vec<&str> = room
+            .slots
+            .iter()
+            .filter_map(|slot| slot.member.as_ref())
+            .map(|member| member.nickname.as_str())
+            .collect();
+        assert!(
+            members.contains(&"tester"),
+            "the pinned 3003 names the master member, got {members:?}"
+        );
+
+        let (mut master, master_rx, master_server) = recording_room_client(vec![]);
+        // The rig's 방만들기 click routes through click_room_control(Create)
+        // to this same dialog entry; the scripted leg mounts it directly
+        // so the peer's wire pair is the only stimulus under test.
+        master.game_mut().open_create_room_dialog();
+        assert_eq!(
+            master.game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the staged CREATE button opened the master sheet"
+        );
+        let master_before = painted_game_frame(&mut master);
+
+        let (mut peer, peer_server) = room_session(move |mut stream| {
+            let request = read_frame(&mut stream);
+            assert_eq!(request.id, Request::JoinWaiting.id());
+            let join = JoinRoom::decode_body(&request.payload).unwrap();
+            assert_eq!(join.number, 0);
+            assert!(join.password.is_empty());
+            stream
+                .write_all(&encode_frame(3003, &answer))
+                .expect("the scripted peer reply reaches the joiner");
+            assert_quiet(&mut stream);
+        });
+        peer.set_pending_room_join(0, "");
+        peer.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut peer, |session| {
+            session.game.screen() == Screen::Waiting
+                && session
+                    .game
+                    .staged_waiting_member(0)
+                    .is_some_and(|member| member.nickname == "tester")
+        });
+        peer_server.join().unwrap();
+
+        let master_after = painted_game_frame(&mut master);
+        assert_eq!(
+            master_after, master_before,
+            "the peer join repaints nothing under the master's CREATE sheet"
+        );
+        assert_eq!(
+            master.game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the master sheet survives the peer join"
+        );
+        assert!(
+            master.game.staged_waiting_member(1).is_none(),
+            "no master-side join event is staged from the peer's 3003"
+        );
+        let master_join_ops: Vec<u16> = master_rx
+            .try_iter()
+            .filter(|id| matches!(id, 3003 | 3004))
+            .collect();
+        assert!(
+            master_join_ops.is_empty(),
+            "the master socket sees no join event, got {master_join_ops:?}"
+        );
+        drop(master);
+        master_server.join().unwrap();
+    }
 }
