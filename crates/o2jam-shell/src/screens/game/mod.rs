@@ -25483,6 +25483,90 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_tutorial_key_press_lights_its_cap_and_left_highway_glow() {
+        // Spec #313 WAVE5 row: one lane key lights its own cap AND
+        // changes the left-highway glow; the other six lanes stay at
+        // rest and all judgement tallies stay zero. Boot2 pack
+        // `989abc137caec5cb429d98d1b0e19c094032fc1c900a350c423f6ae0e82c088f`
+        // pins the down/up frames (`28d1ca44…1a`, `be76f41d…3a`,
+        // `d662b505…3e`) and the zero HUD. Live chain: boot ->
+        // Channel -> Room -> staged FIRSTSTEP -> Tutorial -> lane key
+        // -> `lane_key` -> `paint_tutorial_scene` frame swap.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for lane in 0..7usize {
+            let name = format!("KeyEffect_Tutorial_{}.ojs", lane + 1);
+            let mut figure = AvatarFigure::default();
+            for frame in 0..5 {
+                let word = if frame == 0 {
+                    0x7FFFu16
+                } else {
+                    0x0400u16 + lane as u16
+                };
+                let pixels = word.to_le_bytes().repeat(2);
+                for dy in [487, 520] {
+                    figure.push_layer(crate::avatar::FigureLayer {
+                        image: o2jam_render::Rgb555Image::decode(&pixels, 2, 1).unwrap(),
+                        dx: 100 + (lane as i32) * 20,
+                        dy,
+                        colorkey: 0x0000,
+                    });
+                }
+            }
+            placements.push(ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(name.clone()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            });
+            figures.insert(name, figure);
+        }
+        game.load_tutorial_scene(placements, figures);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let ink = |buf: &[u32], lane: usize, dy: usize| buf[dy * 800 + 101 + lane * 20];
+        let rest = paint(&mut game);
+
+        game.lane_key(2, true);
+        let pressed = paint(&mut game);
+        assert_ne!(ink(&pressed, 2, 487), ink(&rest, 2, 487), "lane 2 cap");
+        assert_ne!(ink(&pressed, 2, 520), ink(&rest, 2, 520), "left glow");
+        for lane in (0..7).filter(|lane| *lane != 2) {
+            assert_eq!(ink(&pressed, lane, 487), ink(&rest, lane, 487));
+            assert_eq!(ink(&pressed, lane, 520), ink(&rest, lane, 520));
+        }
+        assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
+
+        game.lane_key(2, false);
+        let released = paint(&mut game);
+        assert_eq!(ink(&released, 2, 487), ink(&rest, 2, 487));
+        assert_eq!(ink(&released, 2, 520), ink(&rest, 2, 520));
+    }
+
+    #[test]
     fn staged_room_control_without_a_target_records_a_labelled_noop() {
         // Ticket #34: `QUICKJOIN` stands in for the staged controls
         // with no evidenced target yet (`FIRSTSTEP` now enters the
