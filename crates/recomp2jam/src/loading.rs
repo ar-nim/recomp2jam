@@ -667,6 +667,34 @@ mod tests {
         );
     }
 
+    /// #598 wall-trace pin: two qualified solo boots bracket the gate
+    /// entirely before 4012 creates the cover, then hand off inside a
+    /// 232-396 ms window after the confirm. The guard fails if a pacing
+    /// constant drifts off the cited observation.
+    #[test]
+    fn solo_gate_wall_trace_brackets_bound_the_pacing_spans() {
+        use super::{
+            LOADING_CONFIRM_AFTER_START, LOADING_COVER_VISIBLE_EARLIEST,
+            LOADING_COVER_VISIBLE_LATEST, LOADING_PLAYING_AFTER_CONFIRM,
+            LOADING_PLAYING_EARLIEST_AFTER_CONFIRM, LOADING_PLAYING_LATEST_AFTER_CONFIRM,
+        };
+
+        assert_eq!(LOADING_COVER_VISIBLE_EARLIEST.as_millis(), 198);
+        assert_eq!(LOADING_COVER_VISIBLE_LATEST.as_millis(), 291);
+        assert_eq!(LOADING_CONFIRM_AFTER_START.as_millis(), 660);
+        assert_eq!(LOADING_PLAYING_EARLIEST_AFTER_CONFIRM.as_millis(), 232);
+        assert_eq!(LOADING_PLAYING_LATEST_AFTER_CONFIRM.as_millis(), 396);
+        assert!(
+            LOADING_COVER_VISIBLE_LATEST < LOADING_CONFIRM_AFTER_START,
+            "the cover paints before the confirm"
+        );
+        assert!(
+            LOADING_PLAYING_EARLIEST_AFTER_CONFIRM <= LOADING_PLAYING_AFTER_CONFIRM
+                && LOADING_PLAYING_AFTER_CONFIRM <= LOADING_PLAYING_LATEST_AFTER_CONFIRM,
+            "the handoff stays inside the observed bracket"
+        );
+    }
+
     #[test]
     fn null_backend_silent_gain_leaves_the_clock() {
         use o2jam_audio::{AudioBackend, NullBackend};
