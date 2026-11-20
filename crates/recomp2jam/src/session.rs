@@ -180,8 +180,8 @@ mod press;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
-    load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
-    LOADING_GATE_STEPS,
+    load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, LoadingGateCue,
+    LoadingGatePacing, PreparedChart, LOADING_GATE_STEPS,
 };
 use press::{EntryEcho, PressDisposition};
 
@@ -488,6 +488,14 @@ struct CatalogRow {
     artist: String,
 }
 
+/// Why the joined gate cannot post 4012 yet (ERRORS-09: no guessed
+/// speed, no silent send). Both cases hold Loading with a retry.
+#[derive(Debug)]
+enum BlockedLoadingConfirm {
+    NoSpeed,
+    Gateway(o2jam_net::Error),
+}
+
 /// Waiting-room session: shell game plus its gateway transport.
 ///
 /// Single-threaded by construction (the blocking gateway and the game
@@ -570,6 +578,9 @@ pub struct OnlineSession {
     /// `true` once this Loading visit sent 4012 (cleared on
     /// leaving Loading, so the next song confirms again).
     loaded_sent: bool,
+    /// Wall pacing of the joined gate: cover first, then 4012 at the
+    /// pinned span, then Playing after the confirm.
+    loading_pacing: LoadingGatePacing,
     /// `true` once this Result visit sent the tally triple
     /// (cleared on leaving Result, so the next song tallies again).
     tally_sent: bool,
@@ -642,6 +653,7 @@ impl OnlineSession {
             guest_ready: false,
             start_announced: false,
             loaded_sent: false,
+            loading_pacing: LoadingGatePacing::default(),
             tally_sent: false,
             silent_audio: true,
             slot_actions: [None; 8],
@@ -2065,30 +2077,43 @@ impl OnlineSession {
     /// speed waits too (never an invented one). Without a join the
     /// offline walk keeps its local enter with no packet.
     fn confirm_loading(&mut self) {
-        if !self.joined_waiting {
-            self.game.menu_key(MenuKey::Confirm, true);
+        if !self.joined_waiting || self.loaded_sent {
+            self.enter_playing_from_loading();
             return;
         }
-        if self.loaded_sent {
-            self.game.menu_key(MenuKey::Confirm, true);
-            return;
+        match self.send_loading_confirm() {
+            Ok(()) => {
+                self.loading_pacing.clear();
+                self.enter_playing_from_loading();
+            }
+            Err(BlockedLoadingConfirm::NoSpeed) => {
+                tracing::warn!("loaded send blocked: no staged speed; Confirm retries it");
+            }
+            Err(BlockedLoadingConfirm::Gateway(source)) => {
+                tracing::warn!(%source, "loaded send failed; Confirm retries it");
+                self.loading_pacing.retry_confirm_at(Instant::now());
+            }
         }
-        let Some(speed) = self.tally_speed() else {
-            tracing::warn!("loaded send blocked: no staged speed; Confirm retries it");
-            return;
-        };
+    }
+
+    /// Post the pinned 4012 shape and latch it. A failure returns the
+    /// reason so both the user Confirm and the timed gate can hold.
+    fn send_loading_confirm(&mut self) -> Result<(), BlockedLoadingConfirm> {
+        let speed = self.tally_speed().ok_or(BlockedLoadingConfirm::NoSpeed)?;
         let loaded = ConfirmMusicLoaded {
             power_skill_id: 0,
             speed,
         };
-        if let Err(source) = self
-            .gateway
+        self.gateway
             .send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
-        {
-            tracing::warn!(%source, "loaded send failed; Confirm retries it");
-            return;
-        }
+            .map_err(BlockedLoadingConfirm::Gateway)?;
         self.loaded_sent = true;
+        Ok(())
+    }
+
+    /// The shell owns the Loading -> Playing edge; both the explicit
+    /// Confirm and the clocked gate take it through the same call.
+    fn enter_playing_from_loading(&mut self) {
         self.game.menu_key(MenuKey::Confirm, true);
     }
 
@@ -2983,6 +3008,36 @@ impl OnlineSession {
         }
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
+            if self.joined_waiting && self.game.screen() == Screen::Loading {
+                self.arm_loading_gate_at(Instant::now());
+            }
+        }
+    }
+
+    /// Arm the joined gate at one explicit instant. The shell's live
+    /// caller passes the paint clock; guards pass synthetic instants so
+    /// the pinned spans need no sleeps.
+    fn arm_loading_gate_at(&mut self, now: Instant) {
+        self.loading_pacing.enter_at(now);
+    }
+
+    /// One clocked gate advance from `paint`. The cover is already up
+    /// on the transition frame; the confirm holds until the measured
+    /// span, and Playing waits for the posted 4012.
+    fn advance_loading_gate_at(&mut self, now: Instant) {
+        if self.game.screen() != Screen::Loading {
+            self.loading_pacing.clear();
+            return;
+        }
+        match self.loading_pacing.advance_at(now) {
+            LoadingGateCue::None => {}
+            LoadingGateCue::SendConfirm => {
+                if let Err(reason) = self.send_loading_confirm() {
+                    tracing::warn!(?reason, "timed loaded send failed; gate holds and retries");
+                    self.loading_pacing.retry_confirm_at(now);
+                }
+            }
+            LoadingGateCue::EnterPlaying => self.enter_playing_from_loading(),
         }
     }
 
@@ -3641,6 +3696,7 @@ impl OnlineSession {
         }
         self.poll_tally();
         self.flush_result_wire();
+        self.advance_loading_gate_at(Instant::now());
     }
 }
 
@@ -7247,6 +7303,65 @@ pub(super) mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Playing);
+    }
+
+    /// #581/#598 live caller chain: `Shell::paint_backbuffer` ->
+    /// `OnlineSession::paint` -> `poll_wire` ->
+    /// `advance_loading_gate_at`. The wall-trace pins (solo-gate-02,
+    /// 10 fps watcher) put 4012 at 660.5 ms after 4011 and the first
+    /// Playing frame 232-396 ms later. Synthetic instants prove the
+    /// spans without sleeping; the gateway is a scripted loopback.
+    #[test]
+    fn paced_joined_gate_sends_4012_before_it_enters_playing() {
+        use crate::loading::{LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM};
+        use o2jam_net::{ConfirmMusicLoaded, Request};
+
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(
+                ConfirmMusicLoaded::decode_body(&loaded.payload).unwrap(),
+                ConfirmMusicLoaded {
+                    power_skill_id: 0,
+                    speed: 1,
+                }
+            );
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.screen(), Screen::Loading);
+
+        let entered = Instant::now();
+        session.arm_loading_gate_at(entered);
+        session.advance_loading_gate_at(
+            entered + LOADING_CONFIRM_AFTER_START - Duration::from_millis(1),
+        );
+        assert_eq!(session.game.screen(), Screen::Loading, "hold before 4012");
+
+        let confirmed = entered + LOADING_CONFIRM_AFTER_START;
+        session.advance_loading_gate_at(confirmed);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Loading,
+            "the confirm does not create Playing"
+        );
+        session.advance_loading_gate_at(
+            confirmed + LOADING_PLAYING_AFTER_CONFIRM - Duration::from_millis(1),
+        );
+        assert_eq!(session.game.screen(), Screen::Loading, "hold after 4012");
+        session.advance_loading_gate_at(confirmed + LOADING_PLAYING_AFTER_CONFIRM);
+        assert_eq!(session.game.screen(), Screen::Playing);
+        server.join().unwrap();
     }
 
     #[test]
