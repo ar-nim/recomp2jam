@@ -9656,6 +9656,88 @@ pub(super) mod session_tests {
         assert_eq!(peer.team, 1);
     }
 
+    /// Ticket #570 paint arm: the master's cover 1 shows the joined
+    /// peer's figure, not just the seat's red status mark. Wire pin:
+    /// `~/scratch/p379-live/tap-master.log` 3004 seat 1 `tester2` beside
+    /// master frame `d42617e1…`; the spec row names the figure parity as
+    /// the remaining gap. Live caller chain: `OnlineSession::paint` ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` -> `apply_user_joined`
+    /// -> `ScreenGame::seat_waiting_member` -> `GameLoop::paint` ->
+    /// `ScreenGame::paint_at` -> `paint_waiting` ->
+    /// `paint_waiting_seat_avatars`. The one-pixel figure and seat art
+    /// are synthetic, so the hidden-install-root arm is N/A here: the
+    /// wire-to-seat staging is guarded above, this pins the paint arm.
+    #[test]
+    fn joined_peer_figure_paints_in_the_master_seat_slot() {
+        use o2jam_render::{pack_xrgb, Rect, Rgb555Image};
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::{AvatarFigure, FigureLayer};
+        use std::collections::HashMap;
+
+        let body = hex_bytes(LIVE_JOIN_BROADCAST_HEX);
+        let (mut session, server) =
+            joined_waiting_session(created_host_snapshot(), move |mut stream| {
+                stream.write_all(&encode_frame(3004, &body)).unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(1).is_some()
+        });
+        // Seat 1's parent plus the shared avatar template: the painter
+        // adds the parent origin to the template rect (owner rule f38f3).
+        let seat_art = vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_EXTEND2".to_owned(),
+                code: 0x1601_5023,
+                sprite: None,
+                rect: Rect {
+                    x: 200,
+                    y: 55,
+                    w: 123,
+                    h: 150,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_IMAGE_SWAIT_AVATAR".to_owned(),
+                code: 0x1670_002E,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 123,
+                    h: 150,
+                },
+            },
+        ];
+        session
+            .game
+            .load_scene(Screen::Waiting, seat_art, HashMap::new());
+        let peer_pixel = 129 * 800 + 261; // slot centre: y uses (150 - 1) / 2
+        let red = pack_xrgb(255, 0, 0);
+        assert_ne!(
+            painted_game_frame(&mut session)[peer_pixel],
+            red,
+            "an unstaged figure leaves the cover plate alone"
+        );
+
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        session.game.set_waiting_avatar(1, figure);
+        assert_eq!(
+            painted_game_frame(&mut session)[peer_pixel],
+            red,
+            "the joined peer's figure covers seat 1 on the master"
+        );
+        server.join().unwrap();
+    }
+
     /// #551 wire arm: the 3004 seat id is the only live count source
     /// on the master. A vacant seat raises the headcount; a replayed
     /// broadcast for the same seat replaces the member in place and
