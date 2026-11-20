@@ -266,6 +266,12 @@ const START_BROADCAST_COMMAND: u16 = 4011;
 const MUSIC_SOURCE_ENV: &str = "O2JAM_MUSIC_SOURCE";
 /// 4011 `StartResult::Success` (Memoryer `StartGameEventData`).
 const START_RESULT_SUCCESS: i32 = 0;
+/// 2009 `RoomUserCountChanged`: Memoryer sends no such frame to a
+/// channel observer (p379 taps `d66d693d…01ca7`/`1c9dbcdb…8e119`;
+/// probe `0c917c9f…7299d` saw pings only). The join count arrives in
+/// 3003 for the joiner and 3004 for the master, never in a board row
+/// update, so a scripted 2009 is a labeled no-op — no local mutation.
+const ROOM_USER_COUNT_EVENT_COMMAND: u16 = 2009;
 
 /// The result word a 4011 broadcast carries (`i32`, Memoryer
 /// `StartGameEventData.Result`): `None` for a body too short to hold
@@ -3478,6 +3484,9 @@ impl OnlineSession {
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
             id if id == RoomList::COMMAND => self.apply_room_list(&frame),
+            id if id == ROOM_USER_COUNT_EVENT_COMMAND => {
+                tracing::debug!(id, "no observer user-count event; row count unchanged");
+            }
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
@@ -6741,6 +6750,69 @@ pub(super) mod session_tests {
             );
             server.join().unwrap();
         }
+    }
+
+    /// Ticket #508: a join sends 3004 to the master and 3003 to the
+    /// joiner, but never 2009 to a channel observer. The evidence-room
+    /// tap (`~/scratch/evidence-room/row-state-3/`) shows the observer
+    /// frame still `(1/8)` after the pinned 3004 body arrived; the
+    /// 1004-bearing probe `0c917c9f…7299d` saw no 2009 either. So this
+    /// guard pins the exe behavior: the observer's local count must not
+    /// move without a 2009 frame.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` (Channel) ->
+    /// `drain_lobby_chat` -> `apply_lobby_frame` -> skip -> no row write.
+    #[test]
+    fn channel_observer_join_broadcast_does_not_mutate_the_local_row_count() {
+        let join = hex_bytes(EVIDENCE_ROOM_JOIN_BROADCAST_HEX);
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&encode_frame(3004, &join)).unwrap();
+            assert_quiet(&mut stream);
+        });
+        let channel = o2jam_net::ChannelState {
+            gateway_id: 0,
+            channel_id: 0,
+            capacity: 8,
+            population: 1,
+            active: true,
+        };
+        session.game_mut().set_channels(vec![channel]);
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P379ROOM")]);
+        let before = painted_game_frame(&mut session);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        let after = painted_game_frame(&mut session);
+
+        assert_eq!(before, after, "no count repaint from a join event");
+        assert_eq!(session.game.channel_rows(), &[channel]);
+        assert_eq!(session.game.listed_rooms()[0].user_count, 1);
+        server.join().unwrap();
+    }
+
+    /// The named no-op for the opcode the exe never sends to an
+    /// observer: even a scripted 2009 frame leaves the row count alone.
+    /// The body here is synthetic (no exe body was captured), so this
+    /// pins only the absence of a local mutation, not a wire layout.
+    #[test]
+    fn hypothetical_2009_frame_is_a_no_op_on_the_channel_observer() {
+        let (mut session, server) = channel_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2009, &[0, 0, 0, 0, 8, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P379ROOM")]);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.listed_rooms()[0].user_count, 1);
+        server.join().unwrap();
     }
 
     #[test]
