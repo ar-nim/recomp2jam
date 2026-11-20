@@ -6,6 +6,7 @@ mod chat;
 mod lanking;
 mod musicshop;
 mod options;
+mod options_key_labels;
 mod planet;
 mod result_records;
 mod room_fuse;
@@ -6454,11 +6455,20 @@ impl ScreenGame {
                 paint_planet_quit(frame, self.planet_quit_art.as_ref());
             }
             Some(PlanetModal::Options) => {
-                paint_planet_options(
-                    frame,
-                    self.options_dialog.staged_art(),
-                    self.options_dialog.tab(),
-                );
+                let dialog = &self.options_dialog;
+                if dialog.tab() == PlanetOptionTab::Key {
+                    options_key_labels::paint_option_key_tab(
+                        frame,
+                        dialog.staged_art(),
+                        options_key_labels::KeyCaptions {
+                            lane_dik: dialog.settings().lane_dik(),
+                            three_key: dialog.settings().three_key(),
+                            armed_lane: dialog.rebind_armed(),
+                        },
+                    );
+                } else {
+                    paint_planet_options(frame, dialog.staged_art(), dialog.tab());
+                }
             }
             Some(PlanetModal::RelayDown) => {
                 paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
