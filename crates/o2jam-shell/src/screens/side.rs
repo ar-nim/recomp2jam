@@ -7495,8 +7495,9 @@ mod side_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
+        // G cell now inks the wallet gem (5029 ↔ exe G frame pin).
         assert_eq!(
-            hash, 0x29DF_F88C_A23B_2CFF,
+            hash, 0x8E0C_970A_B6FB_5CB4,
             "MyRoom outputs drifted: {observed}"
         );
     }

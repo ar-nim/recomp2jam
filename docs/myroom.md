@@ -244,7 +244,16 @@ its source, never to "the data":
   precedent — the 7.55 room capture shows `Exp.` there), WINRATION
   (`0x1540_003C`, exe spelling) paints integer percent from staged
   wins/battles (`0%` with no battles; percent sign and zero-battles
-  fallback ours-by-design). Control names pinned from the shipped
+  fallback ours-by-design). The G readout (`MGAME 0x1540_003F`, bnd
+  rect (685,421)-(780,434)) now inks the shared wallet's gem word:
+  the hash-pinned exe frames `b095a915…` (G 15527) and `929c4817…`
+  (G 626) match the live 5029 words `a73c0000` and `72020000` in
+  `~/scratch/evidence-shops/uid1-server.jsonl` /
+  `uid2-server.jsonl`. Guard:
+  `myroom_money_captions_read_the_single_wallet` (red before the
+  mapping: `None` vs `Some("15527")`). The W cell (`O2JAM 0x40`)
+  stays unpainted until a distinct cash sample separates the wallet
+  words. Control names pinned from the shipped
   `ControlList_Interface.txt` block dump (O2MONEY `0x10`,
   CHARGEMONEY `0x11`, NEXTUPEXP `0x3B`, WINRATION `0x3C`, RANK
   `0x3D`, GUILD `0x3E`, MGAME `0x3F`, O2JAM `0x40`,
@@ -270,8 +279,9 @@ its source, never to "the data":
   image-only; NOTICE stays unpainted like waiting NOTICE. Vacate
   (ITEMSELL) keeps its #200 local-clear + restage with no wire send.
   Guard: `myroom_p0_controls_answer_nothing_and_queue_no_wire`.
-- Amber stand-in kept: highlight rendering still OPEN (no rig pins
-  the real frames).
+- Highlight uses the archive's `Myroom_MybagSelect.oji` body on a
+  populated staged cell only; the amber stand-in is gone (see the
+  #305 note above).
 
 ## OPEN
 
@@ -285,12 +295,14 @@ its source, never to "the data":
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
    or gateway replay naming the entry fetch.
 4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
-   MGAME/O2JAM money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
+   O2JAM W money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
    NOTICE content). WINRATION value source pinned (wins/battles),
    format ours-by-design; NEXTUPEXP paints experience per the room
-   precedent (single-capture pin). Next step: rig capture of the
+   precedent (single-capture pin); MGAME G money inks the wallet gem
+   word (known-stats pair above). Next step: rig capture of the
    userinfo plate at known stats naming each remaining rect's source
-   and format.
+   and format — for W in particular, a wallet sample with unequal
+   gem and cash words.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
 6. Vacate clears the staged worn slot locally and restages but
