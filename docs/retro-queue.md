@@ -185,3 +185,48 @@ Findings and the rules that now carry them:
   --check-only, preflight server identity in pack provenance. Attended
   exe-run recipe: ~/scratch/owner-exe-run.sh (windowed virtual desktop
   needs Decorated=Y + Managed=Y in HKCU\Software\Wine\X11 Driver).
+
+## 2026-11-20 — failed-guard merge incident (paint_channel, #348 differential guard)
+
+Two parallel lanes rewrote `paint_channel` from different bases and their
+work first met at the merge:
+
+- `b8c8643` (dialogs lane, merged `dd48068`): the #348 relay-notice fix —
+  board + dialog stay behind the one-OK sheet — with a new DIFFERENTIAL
+  guard (`relay_notice_paints_the_board_and_dialog_behind_the_sheet`). The
+  guard paints a held-rows frame and an empty frame and asserts one pixel
+  DIFFERS; the empty frame's value (`0x000000`, the lobby-backdrop
+  fallback) is part of the pinned expectation.
+- `295e1de` (channel2 lane, branch `cb2/channel-waiting-2`, older base):
+  held relay rows paint via `paint_rows` instead of deferring to OK.
+
+The textual merge conflicted; the resolution combined both intents and
+added a THIRD arm for an unpinned edge case (pending rows drained while
+the dialog is still open). That arm painted the dialog body where the
+guard encodes the backdrop fallback, flipped the empty-case pixel to
+`0xff00`, and made held == empty — guard failed left `0xff00` right
+`0xff00`. The broken merge was pushed before the gate result was known
+(`;`-chained push after `gate=101`; red main until fix-forward `e54e41d`).
+
+Findings and the rules that now carry them:
+
+1. **Resolve conflicts by the named guard, never by intuition.** The
+   differential guard was the executable spec of the fallback behavior;
+   the "helpful" third arm was unpinned speculation (evidence discipline
+   says that case stays OPEN). Rule: after resolving any conflict in
+   guarded code, run the named guards before composing the resolution;
+   resolutions must not add unpinned behavior. Memory lesson `da526`
+   (pending owner approval). Fix-forward: `e54e41d`.
+2. **A push chained with `;` after gates bypasses a red result.** Rule:
+   push only after `gate-check` rc=0 is observed in the same output; a
+   red gate never reaches origin (if it does: fix-forward immediately,
+   no force, no history rewrite). Same lesson `da526`.
+3. **Differential guards encode the negative case too.** A pixel-equality
+   failure can mean the OTHER frame changed (here EMPTY moved, not HELD) —
+   debug by dumping both sides of the assert before touching the fix.
+   Landed in the systematic-debugging practice; method log in the
+   e54e41d commit message.
+
+Verification record: guard solo ok; fmt 0; clippy 0; present arm rc=0;
+hidden arm rc=0 with `readlink -e` symlink integrity; `gate-check
+--no-push` rc=0; all on `e54e41d` before its push.
