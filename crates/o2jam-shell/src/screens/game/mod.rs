@@ -17791,6 +17791,53 @@ mod game_tests {
         );
     }
 
+    /// Spec #316 story 20: an app-wide Information sheet has no exe
+    /// open cue pin, so mounting and dismissing it must leave the Room
+    /// BGM latched. This is a client-side negative invariant, not an
+    /// audio parity claim. Live chain: boot relay probe ->
+    /// `set_room_no_response_relay_down` -> 07DA tracked node ->
+    /// `pump_room_user_list_fuse_at` -> `paint_room_no_response_dialog`
+    /// -> information OK -> `post_room_no_response_dismissal` ->
+    /// `pump_dialog_queue`; audio only rides `apply_bgm_cue` on scene
+    /// entry and side visits.
+    #[test]
+    fn app_wide_information_sheet_mounts_and_dismisses_without_a_cue() {
+        use std::time::{Duration, Instant};
+
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(CueLog {
+                inner: o2jam_audio::NullBackend::new(),
+                pushes: Rc::clone(&pushes),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
+        walk_to_lobby(&mut game, Screen::Room);
+        let host_pushes = pushes.borrow().clone();
+        let host_cue = game.scene_bgm_selection();
+        assert_eq!(host_cue.map(|cue| cue.record), Some(3), "Room cue");
+
+        game.set_room_no_response_relay_down(true);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        assert!(game.pump_room_user_list_fuse_at(now));
+        assert!(game.room_no_response_dialog_open(), "fuse sheet is up");
+        assert_eq!(*pushes.borrow(), host_pushes, "mount cues nothing");
+        assert_eq!(game.scene_bgm_selection(), host_cue, "same latched track");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        assert_eq!(game.room_no_response_dismissal_queued(), Some(100));
+        assert!(game.pump_dialog_queue());
+        assert!(!game.room_no_response_dialog_open());
+        assert_eq!(*pushes.borrow(), host_pushes, "dismiss cues nothing");
+        assert_eq!(game.scene_bgm_selection(), host_cue);
+    }
+
     fn lanking_record(song_id: u32, bpm: f32, title: &str, artist: &str) -> Vec<u8> {
         let mut rec = vec![0u8; 300];
         rec[8..11].copy_from_slice(b"ojn");

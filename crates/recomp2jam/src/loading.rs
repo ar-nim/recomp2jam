@@ -14,6 +14,7 @@
 //! See [`RESULT_GRADES_VERIFIED`].
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use o2jam_audio::PcmSamples;
@@ -79,6 +80,115 @@ pub fn loading_status(
         title: title.to_owned(),
         artist: artist.to_owned(),
     })
+}
+
+/// Last frame of Waiting after the host's `4010` on the qualified solo
+/// wall trace (`solo-gate-02` pack, 10 fps watcher).
+pub const LOADING_COVER_VISIBLE_EARLIEST: Duration = Duration::from_millis(198);
+/// First full-bleed Loading frame after `4010` on the same trace.
+pub const LOADING_COVER_VISIBLE_LATEST: Duration = Duration::from_millis(291);
+/// Wall span from the `4011` observation to C2S `4012` (660.488 ms in the
+/// pack; the earlier pack measured 606.051 ms). The cover is already up at
+/// the lower bracket, so the confirm never creates the frame.
+pub const LOADING_CONFIRM_AFTER_START: Duration = Duration::from_millis(660);
+/// Lower bracket for the handoff: the last Loading frame still paints at
+/// 904.191 ms, i.e. 232 ms after the 672.192 ms confirm observation.
+pub const LOADING_PLAYING_EARLIEST_AFTER_CONFIRM: Duration = Duration::from_millis(232);
+/// Upper bracket: the first Playing frame sits at 1,068.015 ms, i.e.
+/// 396 ms after the confirm observation.
+pub const LOADING_PLAYING_LATEST_AFTER_CONFIRM: Duration = Duration::from_millis(396);
+/// Handoff point inside the observed 232-396 ms bracket. The exact
+/// in-process instant stays OPEN; no exe pin picks one value in the range.
+pub const LOADING_PLAYING_AFTER_CONFIRM: Duration = Duration::from_millis(300);
+
+// Bracket pins for the #598 wall-trace guard; the pacing state machine
+// uses the measured spans, not the bracket ends.
+#[allow(dead_code)]
+const _: [Duration; 4] = [
+    LOADING_COVER_VISIBLE_EARLIEST,
+    LOADING_COVER_VISIBLE_LATEST,
+    LOADING_PLAYING_EARLIEST_AFTER_CONFIRM,
+    LOADING_PLAYING_LATEST_AFTER_CONFIRM,
+];
+
+/// Outward effect of one clocked Loading-gate advance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadingGateCue {
+    /// Keep painting the staged cover; nothing goes on the wire.
+    None,
+    /// Post `ConfirmMusicLoaded` 4012; stay in Loading for now.
+    SendConfirm,
+    /// Enter Playing only after the confirm has been posted.
+    EnterPlaying,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadingGatePhase {
+    Idle,
+    CoverUp { entered_at: Instant },
+    ConfirmSent { sent_at: Instant },
+}
+
+/// Wall pacing of the joined Loading gate, driven by explicit paint
+/// instants. The exe's four internal legs have no in-process timing pin,
+/// so these spans are wire/frame proxies from two qualified solo boots;
+/// the exact handoff inside the last bracket stays OPEN.
+#[derive(Debug)]
+pub struct LoadingGatePacing {
+    phase: LoadingGatePhase,
+}
+
+impl Default for LoadingGatePacing {
+    fn default() -> Self {
+        Self {
+            phase: LoadingGatePhase::Idle,
+        }
+    }
+}
+
+impl LoadingGatePacing {
+    /// Arm the gate when the shell enters Loading on a start broadcast.
+    pub fn enter_at(&mut self, now: Instant) {
+        self.phase = LoadingGatePhase::CoverUp { entered_at: now };
+    }
+
+    /// Drop the arm when Loading ends (or a user Confirm owns the send).
+    pub fn clear(&mut self) {
+        self.phase = LoadingGatePhase::Idle;
+    }
+
+    /// Re-arm a failed 4012 at this instant, so the retry keeps the
+    /// same hold and never enters Playing on a dead socket.
+    pub fn retry_confirm_at(&mut self, now: Instant) {
+        if matches!(self.phase, LoadingGatePhase::ConfirmSent { .. }) {
+            self.phase = LoadingGatePhase::CoverUp { entered_at: now };
+        }
+    }
+
+    /// One clocked advance. Each outward cue fires once; a later advance
+    /// in the same phase is a no-op.
+    #[must_use]
+    pub fn advance_at(&mut self, now: Instant) -> LoadingGateCue {
+        match self.phase {
+            LoadingGatePhase::Idle => LoadingGateCue::None,
+            LoadingGatePhase::CoverUp { entered_at } => {
+                if now.saturating_duration_since(entered_at) >= LOADING_CONFIRM_AFTER_START {
+                    self.phase = LoadingGatePhase::ConfirmSent { sent_at: now };
+                    LoadingGateCue::SendConfirm
+                } else {
+                    LoadingGateCue::None
+                }
+            }
+            LoadingGatePhase::ConfirmSent { sent_at } => {
+                if now.saturating_duration_since(sent_at) >= LOADING_PLAYING_AFTER_CONFIRM {
+                    self.phase = LoadingGatePhase::Idle;
+                    LoadingGateCue::EnterPlaying
+                } else {
+                    LoadingGateCue::None
+                }
+            }
+        }
+    }
 }
 
 /// Live loading status for one gate phase (`0` = gate entered,
@@ -511,6 +621,78 @@ mod tests {
         };
         backend.play_pcm(&pcm).unwrap();
         assert_eq!(backend.samples_played(), 50);
+    }
+
+    /// RED proof for #581/#598: the exe's solo gate paints the cover
+    /// before the confirm, sends 4012 at the 660.5 ms wall-trace span,
+    /// and only enters Playing 232-396 ms after that send.
+    #[test]
+    fn solo_gate_pacing_holds_through_the_wall_trace_windows() {
+        use std::time::{Duration, Instant};
+
+        use super::{
+            LoadingGateCue, LoadingGatePacing, LOADING_CONFIRM_AFTER_START,
+            LOADING_COVER_VISIBLE_LATEST, LOADING_PLAYING_AFTER_CONFIRM,
+        };
+
+        let start = Instant::now();
+        let mut gate = LoadingGatePacing::default();
+        gate.enter_at(start);
+
+        assert_eq!(
+            gate.advance_at(start + LOADING_COVER_VISIBLE_LATEST),
+            LoadingGateCue::None,
+            "the cover is up before the confirm on the solo gate"
+        );
+        assert_eq!(
+            gate.advance_at(start + LOADING_CONFIRM_AFTER_START - Duration::from_millis(1)),
+            LoadingGateCue::None
+        );
+        assert_eq!(
+            gate.advance_at(start + LOADING_CONFIRM_AFTER_START),
+            LoadingGateCue::SendConfirm
+        );
+        let confirmed = start + LOADING_CONFIRM_AFTER_START;
+        assert_eq!(
+            gate.advance_at(confirmed + LOADING_PLAYING_AFTER_CONFIRM - Duration::from_millis(1)),
+            LoadingGateCue::None
+        );
+        assert_eq!(
+            gate.advance_at(confirmed + LOADING_PLAYING_AFTER_CONFIRM),
+            LoadingGateCue::EnterPlaying
+        );
+        assert_eq!(
+            gate.advance_at(confirmed + Duration::from_secs(1)),
+            LoadingGateCue::None
+        );
+    }
+
+    /// #598 wall-trace pin: two qualified solo boots bracket the gate
+    /// entirely before 4012 creates the cover, then hand off inside a
+    /// 232-396 ms window after the confirm. The guard fails if a pacing
+    /// constant drifts off the cited observation.
+    #[test]
+    fn solo_gate_wall_trace_brackets_bound_the_pacing_spans() {
+        use super::{
+            LOADING_CONFIRM_AFTER_START, LOADING_COVER_VISIBLE_EARLIEST,
+            LOADING_COVER_VISIBLE_LATEST, LOADING_PLAYING_AFTER_CONFIRM,
+            LOADING_PLAYING_EARLIEST_AFTER_CONFIRM, LOADING_PLAYING_LATEST_AFTER_CONFIRM,
+        };
+
+        assert_eq!(LOADING_COVER_VISIBLE_EARLIEST.as_millis(), 198);
+        assert_eq!(LOADING_COVER_VISIBLE_LATEST.as_millis(), 291);
+        assert_eq!(LOADING_CONFIRM_AFTER_START.as_millis(), 660);
+        assert_eq!(LOADING_PLAYING_EARLIEST_AFTER_CONFIRM.as_millis(), 232);
+        assert_eq!(LOADING_PLAYING_LATEST_AFTER_CONFIRM.as_millis(), 396);
+        assert!(
+            LOADING_COVER_VISIBLE_LATEST < LOADING_CONFIRM_AFTER_START,
+            "the cover paints before the confirm"
+        );
+        assert!(
+            LOADING_PLAYING_EARLIEST_AFTER_CONFIRM <= LOADING_PLAYING_AFTER_CONFIRM
+                && LOADING_PLAYING_AFTER_CONFIRM <= LOADING_PLAYING_LATEST_AFTER_CONFIRM,
+            "the handoff stays inside the observed bracket"
+        );
     }
 
     #[test]
