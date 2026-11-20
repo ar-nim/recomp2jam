@@ -635,6 +635,15 @@ pub const SHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1450_0081;
 pub const SHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1450_0080;
 pub const SHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1450_0083;
 pub const SHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1450_0082;
+/// Cart-add sheet block (`DIALOG_SHOPPINGBAG_ADD`, 7 `Dialog_Shopping_Add.bnd`
+/// rects, spec #316 story 11). The block stages geometry only: no
+/// qualified cart-add frame pins a live mount or a wire opcode.
+pub const SHOPPINGBAG_ADD_DIALOG_BLOCK: &str = "DIALOG_SHOPPINGBAG_ADD";
+/// Why the cart-add sheet stays parked: the exe's row pick is pinned
+/// only to the SHOPPING BAG panel face (audit D4), not to this sheet;
+/// 5001 has no verdict field and 5000 carries no item id, so a sheet
+/// mount or a per-item add frame would be invented.
+pub const SHOPPINGBAG_ADD_NEXT_STEP: &str = "Capture a qualified exe ITEMBUY press with Dialog_Shopping_Add.bnd mounted, or a 5000/5001 body naming the added item, before mounting the sheet or sending an add opcode; the pinned row-pick panel switch stays local";
 /// Next evidence step for a staged shop gift control press: the gift
 /// send has no TCP shape (web-only `gift_input.aspx`, `docs/gifts.md`),
 /// `Dialog_GiftView.bnd` stages nowhere (census bucket E,

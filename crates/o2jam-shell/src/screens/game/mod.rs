@@ -890,6 +890,10 @@ pub struct ScreenGame {
     /// qualified packs never mount a sheet, so these placements carry
     /// geometry only — no painter and no input ownership (ADR-0012).
     messenger_art: HashMap<MessengerSheet, SceneArt>,
+    /// Cart-add sheet rects parked by the live boot. The row pick is
+    /// pinned only to the SHOPPING BAG panel face (audit D4), so no
+    /// painter mounts this sheet and no add opcode is invented (#685).
+    shopping_bag_add_art: Option<SceneArt>,
     scene_art: [Option<SceneArt>; 12],
 }
 
@@ -1161,6 +1165,7 @@ impl ScreenGame {
             avatar_source: None,
             room_avatar: None,
             messenger_art: HashMap::new(),
+            shopping_bag_add_art: None,
             scene_art: std::array::from_fn(|_| None),
         }
     }
@@ -4502,6 +4507,21 @@ impl ScreenGame {
     #[must_use]
     pub fn messenger_sheet_staged(&self, sheet: MessengerSheet) -> bool {
         self.messenger_art.contains_key(&sheet)
+    }
+
+    /// Park one cart-add sheet's parsed rects: the live boot stages the
+    /// geometry, but no painter consumes it until an exe mount pin exists
+    /// (`SHOPPINGBAG_ADD_NEXT_STEP`, spec #316 story 11).
+    pub fn load_shopping_bag_add_sheet(&mut self, art: SceneArt) -> &mut Self {
+        self.shopping_bag_add_art = Some(art);
+        self
+    }
+
+    /// True while the cart-add sheet's rects are staged. Geometry only:
+    /// no mount, no wire, and no input ownership (ADR-0012).
+    #[must_use]
+    pub fn shopping_bag_add_art_staged(&self) -> bool {
+        self.shopping_bag_add_art.is_some()
     }
 
     /// Staged placements for one screen, if any (read-only accessor
@@ -19287,6 +19307,54 @@ mod game_tests {
         game.click_shop(18, 564);
         assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
         assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn cart_add_opens_the_cart_face_without_mounting_the_parked_sheet() {
+        // Spec #316 story 11. Live caller chain: boot stages the sheet
+        // through `stage_shopping_bag_add_parked` (install-backed guard);
+        // the snapshot click goes click_shop -> shop_action_at at the
+        // exe's `SHOP_CHILD_ORIGIN_Y` hit offset -> ShopState::toggle_row
+        // -> paint_side_scene_live -> shop_panel_kept. The parked sheet
+        // has no painter, and BUYITEM alone queues the pinned 5000.
+        let mut game = open_shop_board(2);
+        let cart_add_sprite = "cart-add.ojs";
+        game.load_shopping_bag_add_sheet(SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_DIALOG_SHOPPINGBAG_ADD".to_owned(),
+                code: 0,
+                sprite: Some(cart_add_sprite.to_owned()),
+                rect: Rect {
+                    x: 100,
+                    y: 100,
+                    w: 40,
+                    h: 40,
+                },
+            }],
+            figures: HashMap::from([(cart_add_sprite.to_owned(), solid_test_figure([0, 0x7C]))]),
+        });
+        assert!(game.shopping_bag_add_art_staged());
+        game.click_shop(221, 188);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        assert_eq!(game.shop_cart(), vec![1]);
+        assert_eq!(game.take_shop_buy(), None, "a row pick is not a purchase");
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            !(100..140).any(|y| (100..140).any(|x| {
+                near_xrgb(buf[y * 800 + x], pack_xrgb(0xFF, 0, 0))
+            })),
+            "the parked sheet never mounts on a cart add"
+        );
+        assert!(super::super::side::SHOPPINGBAG_ADD_NEXT_STEP.contains("Dialog_Shopping_Add.bnd"));
     }
 
     #[test]

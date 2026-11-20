@@ -26,9 +26,9 @@ use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
     shop_child_geometry, PlanetOptionTab, ShopChildGeometry, SideScreen, CASH_CHARGE_DIALOG_BLOCK,
     CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK,
-    PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK, SHOP_CHILD_ORIGIN_Y,
-    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
-    TUTORIAL_RECEPTOR_SPRITES,
+    PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+    SHOPPINGBAG_ADD_DIALOG_BLOCK, SHOP_CHILD_ORIGIN_Y, TUTORIAL_BACKGROUND_SPRITE,
+    TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -961,24 +961,22 @@ fn resolve_bound_row(
     })
 }
 
-/// Stage one Messenger sheet through the same bound-row path every
+/// Stage one parked dialog sheet through the same bound-row path every
 /// dialog uses. No dialog row is needed: the sheet's own `BOUND` block
-/// and `.bnd` are the geometry source (ADR-0003). The frame placement
-/// keeps its parsed origin; every child rect is authored relative to
-/// that frame and is staged at `frame + child` (spec #315 story 13).
-/// Paint wiring stays off — the exe never mounts these sheets in the
-/// pinned packs.
-#[must_use]
-pub fn stage_messenger_sheet(
+/// and `.bnd` are the geometry source (ADR-0003). The frame keeps its
+/// parsed origin; children authored relative to it stage at
+/// `frame + child`. Paint wiring stays off until an exe mount pin exists.
+fn stage_parked_sheet(
     archive: &[u8],
-    sheet: MessengerSheet,
+    state: State,
+    block: &'static str,
     ctx: StageContext,
 ) -> StageReport {
     let mut report = stage_bound_row(
         archive,
         &StageRow {
-            state: State::Planet,
-            block: Some(sheet.block_name()),
+            state,
+            block: Some(block),
             archive: StagingArchive::Interface,
             arm: PlacementArm::Bound,
             extra_sprites: &[],
@@ -989,6 +987,26 @@ pub fn stage_messenger_sheet(
         stage_at_parent_origin(art);
     }
     report
+}
+
+/// Stage one Messenger sheet's rects (spec #315 story 13). The B8/B6
+/// packs never mount these sheets, so the game parks the geometry.
+#[must_use]
+pub fn stage_messenger_sheet(
+    archive: &[u8],
+    sheet: MessengerSheet,
+    ctx: StageContext,
+) -> StageReport {
+    stage_parked_sheet(archive, State::Planet, sheet.block_name(), ctx)
+}
+
+/// Stage the `DIALOG_SHOPPINGBAG_ADD` rects (spec #316 story 11). The
+/// audit D4 row pick is pinned only to the SHOPPING BAG panel face, so
+/// the sheet parks beside the live shop: seven parent-relative rects,
+/// no mount and no add opcode (`SHOPPINGBAG_ADD_NEXT_STEP`).
+#[must_use]
+pub fn stage_shopping_bag_add_sheet(archive: &[u8], ctx: StageContext) -> StageReport {
+    stage_parked_sheet(archive, State::Shop, SHOPPINGBAG_ADD_DIALOG_BLOCK, ctx)
 }
 
 /// True for the sheet's frame placement: the bound `Dialog_*` body

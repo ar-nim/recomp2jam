@@ -142,6 +142,14 @@ room slot).
   and queue nothing. Gift send has no TCP shape (web-only
   `gift_input.aspx`, `docs/gifts.md`); `Dialog_GiftView.bnd`
   stages nowhere (census bucket E, `docs/bnd-consumption.md`).
+- Cart add (#685): the live boot parks the seven parent-relative
+  `Dialog_Shopping_Add.bnd` rects in a hidden slot; no painter mounts
+  them. The exe pin is the D4 row-pick face switch (MY BAG → SHOPPING
+  BAG), so `ITEMBUY` checks the row and switches the face locally while
+  `BUYITEM` alone queues the pinned empty 5000. A sheet mount or a
+  per-item add opcode would be invented (`SHOPPINGBAG_ADD_NEXT_STEP`).
+  Guards: `cart_add_opens_the_cart_face_without_mounting_the_parked_sheet`,
+  `shopping_bag_add_sheet_stages_seven_parent_relative_rects`.
 - Gem price (#395, partial): `ShopGood::gem_price` is an explicit
   `Option<u32>` and the staged `ITEMGEM1..8` cells ink it when a word
   is pinned. The parsed catalog still stages `None`: the gifted boot
