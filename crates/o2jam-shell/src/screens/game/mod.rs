@@ -16637,6 +16637,189 @@ mod game_tests {
         );
     }
 
+    /// Synthetic sheet body: one blue block at the parsed backdrop
+    /// anchor. Real `Dialog_*` bodies carry their frame origin as the
+    /// record anchor (dumped from installed `Interface1.opi`), and the
+    /// base pass paints them there. The block is 40x40 so a wrongly
+    /// shifted copy cannot overlap the real one and hide from the
+    /// blob count.
+    fn dialog_body_figure(anchor_x: i32, anchor_y: i32) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(
+                &0x001F_u16.to_le_bytes().repeat(40 * 40),
+                40,
+                40,
+            )
+            .expect("synthetic dialog body"),
+            dx: anchor_x,
+            dy: anchor_y,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    /// One staged `Dialog_*` frame with a real archive's non-zero
+    /// control code and parsed origin. `code` matters: the frame-state
+    /// repaint walks every coded placement, so a code-less frame never
+    /// reaches the arm that duplicates it.
+    fn coded_dialog_backdrop(code: u32, origin_x: i32, origin_y: i32) -> ScenePlacement {
+        ScenePlacement {
+            role: PlacementRole::Single,
+            id: "dialog-backdrop".to_owned(),
+            code,
+            sprite: Some("Dialog_test.ojs".to_owned()),
+            rect: Rect {
+                x: origin_x,
+                y: origin_y,
+                w: 40,
+                h: 40,
+            },
+        }
+    }
+
+    /// Top-left corners of the distinct painted dialog bodies. One
+    /// corner means one body region; two corners mean the sheet was
+    /// painted twice at different origins.
+    fn painted_dialog_body_origins(game: &mut ScreenGame) -> Vec<(usize, usize)> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let ink = pack_xrgb(0, 0, 255);
+        let is_body = |pixel: u32| near_xrgb(pixel, ink);
+        (0..600)
+            .flat_map(|y| (0..800).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                is_body(buf[y * 800 + x])
+                    && (x == 0 || !is_body(buf[y * 800 + x - 1]))
+                    && (y == 0 || !is_body(buf[(y - 1) * 800 + x]))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn create_room_sheet_paints_one_body_when_hovered_and_reopened() {
+        // Ticket #729. Live caller chain: boot stages Dialog_CreateRoom
+        // -> Room create press -> pointer over bare sheet ->
+        // `paint_dialog_frame_states`. The parsed backdrop anchor is
+        // (188,71) and its archive code is `0x24100001`; synthetic ink
+        // keeps the guard independent of install-root.
+        let mut game = hover_room_lobby();
+        game.load_create_room_scene(
+            vec![
+                coded_dialog_backdrop(0x2410_0001, 188, 71),
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "create-cancel".to_owned(),
+                    code: 0x2420_0003,
+                    sprite: Some("CreateRoom_Cancel.ojs".to_owned()),
+                    rect: Rect {
+                        x: 342,
+                        y: 0,
+                        w: 48,
+                        h: 37,
+                    },
+                },
+            ],
+            HashMap::from([
+                ("Dialog_test.ojs".to_owned(), dialog_body_figure(188, 71)),
+                (
+                    "CreateRoom_Cancel.ojs".to_owned(),
+                    solid_figure(48, 37, 0x03E0),
+                ),
+            ]),
+        );
+
+        game.open_create_room_dialog();
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(188, 71)],
+            "first open paints one body at the parsed origin"
+        );
+
+        // Bare sheet area: the backdrop's own coded rect wins the
+        // hover because no smaller control contains the pointer.
+        game.ingest_snapshot(&InputSnapshot::motion_to(380, 150));
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(188, 71)],
+            "hovering the sheet must not repaint a second body"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(380, 150));
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(188, 71)],
+            "pressing the sheet must not repaint a second body"
+        );
+
+        // Real CANCEL rect (342,0) + origin (188,71): (530,71).
+        game.click_room_dialog(540, 80);
+        assert_eq!(game.room_dialog(), None);
+        game.open_create_room_dialog();
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(188, 71)],
+            "reopen paints one body at the parsed origin"
+        );
+    }
+
+    #[test]
+    fn options_sheets_paint_one_body_on_hover_and_tab_switches() {
+        // Ticket #729. Live caller chain: gear press -> Options modal
+        // -> pointer over bare sheet / tab switch -> planet modal paint
+        // -> `paint_dialog_frame_states`. All three parsed tab
+        // backdrops anchor at (217,42); one body per painted frame.
+        let mut game = ScreenGame::new();
+        for (tab, code) in [
+            (PlanetOptionTab::Sound, 0x2610_0001_u32),
+            (PlanetOptionTab::Key, 0x2510_0001),
+            (PlanetOptionTab::Game, 0x2F10_0001),
+        ] {
+            let placements = vec![coded_dialog_backdrop(code, 217, 42)];
+            let figures =
+                HashMap::from([("Dialog_test.ojs".to_owned(), dialog_body_figure(217, 42))]);
+            if tab == PlanetOptionTab::Sound {
+                game.load_planet_option_scene(placements, figures);
+            } else {
+                game.load_planet_option_tab(tab, placements, figures);
+            }
+        }
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(217, 42)],
+            "first tab paints one body at the parsed origin"
+        );
+        game.ingest_snapshot(&InputSnapshot::motion_to(440, 90));
+        assert_eq!(
+            painted_dialog_body_origins(&mut game),
+            vec![(217, 42)],
+            "hovering the sheet must not repaint a second body"
+        );
+        for tab in [
+            PlanetOptionTab::Key,
+            PlanetOptionTab::Game,
+            PlanetOptionTab::Sound,
+        ] {
+            game.switch_option_tab(tab);
+            assert_eq!(
+                painted_dialog_body_origins(&mut game),
+                vec![(217, 42)],
+                "{tab:?} paints one body at the parsed origin"
+            );
+        }
+    }
+
     #[test]
     fn power_disc_opens_quit_confirm_and_ok_quits() {
         let mut game = ScreenGame::new();
