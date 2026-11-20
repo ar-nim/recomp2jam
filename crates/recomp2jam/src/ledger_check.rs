@@ -806,6 +806,26 @@ mod tests {
         );
     }
 
+    /// Story 18 of #313: a reviewer must be able to read every OPEN
+    /// Tutorial arm and see the next evidence step beside it. The guard
+    /// reads the committed parity row (CARGO_MANIFEST_DIR anchored, so
+    /// CI without `install-root` still runs it) and fails on a bare OPEN.
+    #[test]
+    fn tutorial_open_verdicts_name_their_next_evidence_step() {
+        let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let row = std::fs::read_to_string(docs_root.join("parity/tutorial.md"))
+            .expect("docs/parity/tutorial.md");
+        let bare: Vec<&str> = row
+            .lines()
+            .filter(|line| line.contains("OPEN"))
+            .filter(|line| !line.to_ascii_lowercase().contains("next step"))
+            .collect();
+        assert!(
+            bare.is_empty(),
+            "OPEN arms must name a next evidence step: {bare:#?}"
+        );
+    }
+
     #[test]
     fn parity_index_links_every_section_file() {
         let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
