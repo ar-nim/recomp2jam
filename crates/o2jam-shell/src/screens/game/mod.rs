@@ -44,18 +44,18 @@ use super::paint::{
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
     paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
-    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt, ChannelChatMessage,
-    LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
+    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -64,8 +64,8 @@ use super::side::{
     myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions, myroom_gift_page,
     myroom_gift_pages, myroom_gift_views, myroom_identity_captions, myroom_panel_kept,
     myroom_record_slot, myroom_wallet_captions, paint_side_scene, paint_side_scene_live,
-    paint_tutorial_scene, password_action_at, payment_side_notice, planet_action_at,
-    select_chrome_action_at, select_filter_button_id, select_filter_choice_at, select_music_rows,
+    paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
+    select_filter_button_id, select_filter_choice_at, select_music_rows,
     select_music_songs_with_labels, select_row_hit, shop_action_at, shop_panel_kept,
     shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
     CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
@@ -6321,15 +6321,13 @@ impl ScreenGame {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
         // The exe's Cash Charge frame paints over its staged host
-        // board; the billing views complete no web call, so the
-        // unwired notice inks inside the staged web client rect
-        // (largest staged rect on the unstaged stand-in). Every
-        // other side screen paints art alone.
+        // board. Its client area and both billing views hold embedded IE
+        // pages whose content does not survive; they stay blank by owner
+        // pin (`docs/agents/environment.md`). No notice is invented.
         if self.side == Some(SideScreen::Payment) {
             if let Some(art) = self.cash_charge_art.as_ref() {
                 paint_cash_charge_frame(frame, &art.dialog);
             }
-            paint_payment_notice(frame, &self.side_placements, &payment_side_notice());
         }
         // The lanking overlay inks rows, ranks, and the picked
         // caption into staged TEXT rects over the bound art;
@@ -13815,10 +13813,10 @@ mod game_tests {
     }
 
     #[test]
-    fn payment_side_paints_the_unwired_billing_notice() {
-        // The billing views complete no web call, so the side
-        // screen inks the unwired notice into its largest staged
-        // rect instead of painting art alone.
+    fn payment_views_leave_the_embedded_web_client_blank() {
+        // Owner pin (`docs/agents/environment.md`): the 7.55 embedded-IE
+        // page content is gone, so both billing views render blank there.
+        // The shell must not invent a notice inside the staged web client.
         let mut game = payment_open_overlay();
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -13830,19 +13828,15 @@ mod game_tests {
             0,
         );
         assert!(
-            region_has_ink(&buf, 800, 100, 100, 200, 60),
-            "notice missing from the largest staged rect"
-        );
-        assert!(
-            !region_has_ink(&buf, 800, 10, 10, 40, 20),
-            "notice leaked outside the largest staged rect"
+            !region_has_ink(&buf, 800, 100, 100, 200, 60),
+            "the staged web client must stay blank"
         );
     }
 
     #[test]
-    fn payment_side_without_staged_rects_paints_no_notice() {
-        // No staged geometry: the miss path paints nothing
-        // (ADR-0003 — never a literal fallback rect).
+    fn payment_side_without_staged_rects_paints_nothing() {
+        // No staged geometry and no invented notice: the miss path
+        // paints nothing (ADR-0003 — no literal fallback rect).
         let mut bare = ScreenGame::new();
         walk_to_lobby(&mut bare, Screen::Waiting);
         bare.load_side_scene(Vec::new(), HashMap::new());
@@ -13879,8 +13873,8 @@ mod game_tests {
         // Hand-driven billing/tutorial pass (trace
         // `fixtures/input-trace/payment-tutorial-hand-session.json`,
         // smoke note `docs/smoke/payment-tutorial-hand-session.md`):
-        // Waiting opens the Payment overlay (notice ink proven by
-        // `payment_side_paints_the_unwired_billing_notice`, silence
+        // Waiting opens the Payment overlay (blank web client proven by
+        // `payment_views_leave_the_embedded_web_client_blank`, silence
         // by `payment_entry_queues_no_wire_call`), BACK returns to
         // the lobby, then the Tutorial overlay opens over its
         // staged backdrop and BACK returns again.

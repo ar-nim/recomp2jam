@@ -4459,20 +4459,6 @@ pub fn payment_view_caption(label: &PaymentLabel) -> String {
     format!("{} {}", label.block, label.url_path())
 }
 
-/// Plain stall label painted over the Payment side screen: the exe
-/// opens web billing views here (lifecycle §12) and this client
-/// queues no web call, so the screen names the stall instead of
-/// staying a silent dead view.
-pub const PAYMENT_UNWIRED_NOTICE: &str = "BILLING UNWIRED";
-
-/// Notice text shown on the Payment side screen: the stall label
-/// plus both lifecycle-verified billing pages, so neither view
-/// reads as a working shop.
-#[must_use]
-pub fn payment_side_notice() -> String {
-    format!("{PAYMENT_UNWIRED_NOTICE} {PAYMENT_PAGE} {GIFT_PAGE}")
-}
-
 /// Next evidence step for the dimmed Planet TUTORIAL plate, the only
 /// tutorial entry arm still OPEN. Static pin `S-PLAY-B3`
 /// (`docs/captures/static-play/pins.md`) shows the plate is disabled at
@@ -7506,17 +7492,6 @@ mod side_tests {
             Some(ShopAction::OpenCashCharge)
         );
         assert_eq!(shop_action_at(std::slice::from_ref(&plate), 92, 339), None);
-    }
-
-    #[test]
-    fn payment_side_states_the_unwired_billing_notice() {
-        // The billing views complete no web call, so the side
-        // screen must name the stall instead of painting art
-        // alone: the notice cites both lifecycle-verified pages.
-        let notice = payment_side_notice();
-        assert!(notice.contains(PAYMENT_UNWIRED_NOTICE), "{notice}");
-        assert!(notice.contains(PAYMENT_PAGE), "{notice}");
-        assert!(notice.contains(GIFT_PAGE), "{notice}");
     }
 
     #[test]

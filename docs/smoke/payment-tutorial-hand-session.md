@@ -15,12 +15,13 @@ assertions.
 ## What was stepped, what happened
 
 Waiting → `visit_side(Payment)` opens the billing overlay over
-two synthetic staged rects. The overlay inks the unwired-billing
-notice (`BILLING UNWIRED payment_input.aspx gift_input.aspx`)
-into the largest staged rect and leaves the small rect blank
-(guard `payment_side_paints_the_unwired_billing_notice`); with no
-staged rects nothing paints (guard
-`payment_side_without_staged_rects_paints_no_notice` — ADR-0003,
+two synthetic staged rects. Both billing views stage their bound
+chrome and the embedded-IE client area stays blank by owner pin
+(`docs/agents/environment.md`; guard
+`payment_views_leave_the_embedded_web_client_blank`, install-backed
+guard `billing_and_gift_web_sheets_stage_only_their_bound_chrome`);
+with no staged rects nothing paints (guard
+`payment_side_without_staged_rects_paints_nothing` — ADR-0003,
 never a literal fallback rect). Entry queues nothing on any send
 seam (equip/gift-claim/gift-list/create/join/music/team/ready all
 `None` — guard `payment_entry_queues_no_wire_call`), so the run
