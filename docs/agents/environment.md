@@ -74,6 +74,17 @@ for a quieter machine, never re-run into the OOM.
   rust-best-practices skills with their paths and holds their bar; the
   shorthand "10/10" alone is not enough (owner rule 2026-11-20).
 
+## Web surfaces (owner pin 2026-11-20)
+
+The original client embeds Internet Explorer pages in some surfaces
+(payment pages, the TOP100 board content, ticket/gift web views). The
+original page content does not survive - no remnants exist - so these
+surfaces are EXPECTED to render blank. Blank is correct, not a parity
+gap: no audit, lane, or reviewer should file blank web surfaces as bugs.
+A labeled stub is a later build item (parked in the tracker); until then
+"the code works" is the bar - the surrounding chrome, navigation, and
+wire behavior stay pinned as usual.
+
 ## Rig corrections (brief authors read this)
 
 - Every test reading install-root skips cleanly when the archives are
