@@ -19,8 +19,9 @@ Both cells are OPEN, tier R+G (milestone-3 gating). Source rows:
   third trace). B53 machinery landed (#100).
 - **Timing** — exe paces on the wall clock (B38, ev `efdaac19…`;
   ADR-0001 records the sample-clock deviation). Shell: backend-sample
-  song clock; B52 equivalence replay landed (#99); per-frame bg-effect
-  loop file `0x550db0` (ev `4164031c…`) still unproven.
+  song clock; B52 equivalence replay landed (#99); file `0x550db0`
+  (ev `4164031c…`) is a boot-time OJM bank loader, not a per-frame
+  effect (observer REA `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`).
 
 Dependencies are closed: #64 (exe GUI drive), #62 (input-log flush),
 #59 (timed holds ride the wall clock). Rig exists (`scripts/rig-run.sh`
@@ -108,12 +109,13 @@ rig capture for the measured duration):
    (`song_clock_equivalence_replay_stays_inside_the_pinned_windows`,
    44.1/48/96 kHz, negative half-rate control) already holds the
    equivalence shape.
-2. **REA trace of the per-frame bg-effect loop** (no rig): dossier the
-   loop at file `0x550db0` (ev `4164031c…`) — arming call, per-frame
-   cadence, what it paints. If the trace shows the loop drives
-   judgement-adjacent state, that state joins this cell's guard plan;
-   if it is paint-only, the row says so and the guard is a shell
-   frame-cadence test.
+2. **REA trace of `0x550db0` — closed as refuted** (no rig): the observer
+   exe's sole caller chain runs from PE entry `0x5fb3b8` through sound
+   init `0x5a5710` to a boot-time seven-bank OJM loader; there is no
+   per-frame cadence or paint call to dossier (sha256
+   `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`,
+   REA `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`).
+   No frame-cadence guard follows from this VA.
 
 Guard plan: keep `song_clock_totals_backend_samples_not_wall_time` and
 the B52 equivalence guard; add the live-divergence number guard (or an
@@ -131,8 +133,8 @@ tier R+G, the two legs above, guard plan, rig slot claim
   pair above; feeds #76.
 - B52 live-device divergence number — OPEN; next step: null-sink wall
   trace replay above.
-- Per-frame bg-effect loop semantics — OPEN; next step: REA dossier of
-  file `0x550db0` above.
+- `0x550db0` semantics — CLOSED as a boot-time seven-bank OJM loader,
+  not a per-frame effect (REA `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`).
 - DI device GUID path + per-class vtable identity — OPEN (A46 note);
   next step: Input leg-2 dossier.
 - Per-lane integer scroll speeds + exe judgement row 480 — OPEN scale

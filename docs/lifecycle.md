@@ -159,8 +159,12 @@ Dossier-covered sequence:
    lines) — calls the OJN wrapper `0x412890`, validation `0x5718b0`,
    event pump setup, 25-slot init `0x573890` (ev `1d728802…`), and exit
    paths.
-3. Per-frame background-effect loop `0x550db0` (file `0x150db0`,
-   ev `4164031c…`) — pumps the event queue via `0x54ebe0`/`0x54eca0`
+3. Boot-time OJM bank loader `0x550db0` (file `0x150db0`,
+   ev `4164031c…`) — one call per bank (0..6) at sound-device init,
+   sole caller chain from the PE entry (REA
+   `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`,
+   exe sha256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`);
+   the old per-frame-effect label is refuted. It pumps the event queue via `0x54ebe0`/`0x54eca0`
    (recursive queue consumer, ev `1601a757…`, reads records through
    `0x412620`), dispatches codes `< 0x34` through record reader `0x54ef60`
    (file `0x14ef60`, ev `f96b0fe5…`) and `< 0x17` through `0x54f580`

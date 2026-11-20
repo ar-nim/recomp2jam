@@ -130,7 +130,8 @@ Pulled from the matrices' live-lane lists. No action was taken on any item.
 - #178 story 23 — gem price cell is blank while exe prints a second price
   `0`; spec-tracked, no issue. Need the entry `+0x18` price pin before paint.
 - #293 story 8 — re-pin or retract the rig-runbook's "60 judged" claim;
-  stories 11/12 need REA consumer dossiers for `0x550db0` and `0x67fe8c`.
+  story 11's `0x550db0` dossier is closed as a boot-time OJM bank loader;
+  story 12 still needs the `0x67fe8c` consumer dossier.
 - #292 — exe 4011 cover-source read (#355 acceptance) and Arial 7x14 credit
   consumer read at `0x4e47a0+0x528` (#360 acceptance); c1 proves pixels, not
   value sources.
