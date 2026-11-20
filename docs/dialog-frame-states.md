@@ -24,7 +24,7 @@ hover or press frame yet.
 | `DIALOG_CHARGECASH` (X close over the Item Shop board) | No — b8 pins geometry only (`docs/parity/payment.md`) | Boot-3 X hover plus held-down crop with the b8 frame behind it |
 | `DIALOG_CHANNEL_INFO` | No — rest and hover **row bar** are pinned, not dialog button frames (`docs/parity/channel.md`) | Hover/press X, scroll arrows and enter faces in one qualified capture |
 | `DIALOG_QUESTION2`, `DIALOG_WHISPER`, `DIALOG_EMOTION`, `DIALOG_CHANGETITLE`, `DIALOG_CHANGENICKNAME`, `DIALOG_MUSICINFO`, `DIALOG_SKILLIINFO`, `DIALOG_EVENT`, `DIALOG_CONFERENCE`, `DIALOG_GIFTVIEW`, `DIALOG_SHOPPINGBAG_ADD` | No — these parks have no live mount frame at all (ADR-0012 census) | First pin a live exe mount per sheet, then capture rest/hover/press in that host |
-| Six `DIALOG_MESSENGER_*` sheets | No — geometry-only parks (#622) | Qualified mount capture, then the per-control A/B pair |
+| Six `DIALOG_MESSENGER_*` sheets | No — geometry-only parks (#622); census in `docs/messenger-frame-states.md` | Qualified mount capture, then the per-control A/B pair |
 
 ## Composition rules
 
