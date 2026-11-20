@@ -216,6 +216,40 @@ identity-only join, host `NORMAL + 3KEY DRUM` — select NORMAL then 7KEY
 (the sequence that makes CREATE OK fire), then click 3KEY DRUM before
 OK. Scratch recipe: `~/scratch/result-harness/scripts/run-two-exe-identity-726.sh`.
 
+### CREATE entrance preflight (#731)
+
+A Wine boot that must click the exe's CREATE button needs **both** injector
+artifacts in the same `RIG_WINE_INJECTOR_DIR` used by `rig-wine.sh launch`:
+
+```bash
+bash scripts/rig-wine.sh build-injector "$RIG_WINE_INJECTOR_DIR"
+bash scripts/rig-wine.sh build-relay-fastfail "$RIG_WINE_INJECTOR_DIR"
+export RELAY_FASTFAIL_LOG="$OUT_DIR/interposer.log"
+```
+
+Building only `sendinput-helper.exe.so` drops the LD_PRELOAD interposer: the
+exe's relay connect blocks 35.785 s, `07DA`/`07E8` slip from ~0.6 s to ~36 s
+after room entry, the no-response fuse modal fires in that window, and its
+OK sends `FFF0` before CREATE can open. The board then stays byte-identical
+under every CREATE aim. This is rig drift, not a shell/staging regression.
+
+Preflight guard (fail the boot before driving pixels): require
+`$RIG_WINE_INJECTOR_DIR/relay-fastfail.so` to exist. After boot, require
+`connect 203.238.136.52:7788 -> ECONNREFUSED` in `interposer.log` and C2S
+`07DA`/`07E8` within ~1 s of `03EC` on the wire tap. If either is missing,
+stop: clicking CREATE early does not help (the button is inert before the
+user-list gate) and clicking the fuse OK ends the session.
+
+With the gate green, click the staged room CREATE centre (native 800x600;
+`(556,389)` at `a9873ab`, from code `0x13200007` / rect `(508,372) 96x35`).
+The create-sheet OK is child-relative `(209,396)` plus back origin `(188,71)`
+= `(397,467)`. Keep the popup discipline: read popup state from a frame,
+use the popup-aware OK only, never blind Escape. Type the title through
+`rig-wine.sh send type` (UNICODE), then select NORMAL → 7KEY → 3KEY DRUM
+before OK. Qualified proof: `~/scratch/create-wall/cw-qualified-proof/`
+(`2004` on the tap, C2S `4000`, Waiting frame
+`cw-05-create-proof.png` sha256 `ddc5a0c9…`).
+
 ### Committed capture records (#308)
 
 A committed record such as `docs/captures/t240/` is a hash-pinned pointer,
