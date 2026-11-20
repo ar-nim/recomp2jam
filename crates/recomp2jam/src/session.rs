@@ -8536,6 +8536,348 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
+    /// #730 terminal arm: the live caller chain is Waiting Confirm →
+    /// START 4010 → 4011 → Loading Confirm → 4012 → Playing, then the
+    /// window's `GameLoop::paint` (never the explicit-clock `paint_at`
+    /// shortcut used by `play_one_note_to_result`). The guards below
+    /// walk that chain and read the 4016 the session posts on Result.
+    mod live_terminal_state {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        use o2jam_audio::{AudioBackend, NullBackend, PcmSamples};
+        use o2jam_net::SubmitScore;
+
+        use super::*;
+
+        /// A clock-only sink whose pushed key-sound frames are the only
+        /// song position it reports. This is the 7.55 probe's stall:
+        /// Playing cues no scene BGM, so once the last key sample drains
+        /// the device clock parks short of the chart's 1.5 s outro.
+        struct StalledKeyClock {
+            inner: NullBackend,
+            pushed_frames: Arc<AtomicU64>,
+        }
+
+        impl AudioBackend for StalledKeyClock {
+            fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
+                let frames = u64::try_from(pcm.samples.len() / usize::from(pcm.channels.max(1)))
+                    .unwrap_or(0);
+                self.pushed_frames.fetch_add(frames, Ordering::Relaxed);
+                self.inner.play_pcm(pcm)
+            }
+
+            fn samples_played(&self) -> u64 {
+                self.pushed_frames.load(Ordering::Relaxed)
+            }
+        }
+
+        /// Attach one short key sample and expose the sink's counter so
+        /// a guard can prove the sample clock stayed short of the end.
+        fn attach_stalled_key_bank(session: &mut OnlineSession) -> Arc<AtomicU64> {
+            let pushed_frames = Arc::new(AtomicU64::new(0));
+            let backend = StalledKeyClock {
+                inner: NullBackend::new(),
+                pushed_frames: Arc::clone(&pushed_frames),
+            };
+            let bank = std::collections::HashMap::from([(
+                7u32,
+                PcmSamples {
+                    samples: vec![0i16; 4_410],
+                    sample_rate: 44_100,
+                    channels: 1,
+                },
+            )]);
+            session.game_mut().with_audio(Box::new(backend), bank);
+            pushed_frames
+        }
+
+        /// Drive the joined session from Waiting to Playing over the
+        /// wire, with no staged loading-gate shortcut past 4012.
+        fn walk_joined_to_playing(session: &mut OnlineSession) {
+            session.menu_key(MenuKey::Confirm, true);
+            paint_until(session, |session| session.game.screen() == Screen::Loading);
+            assert_eq!(session.game.screen(), Screen::Loading);
+            session.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Playing);
+        }
+
+        /// Rebase the wall floor past the chart outro without a sleep,
+        /// then spend the remaining frames on the live paint path.
+        fn spend_outro(session: &mut OnlineSession) {
+            session
+                .game_mut()
+                .set_playing_wall_elapsed(Duration::from_millis(2_000));
+            paint_frame(session);
+            assert_eq!(session.game.screen(), Screen::Result, "chart never ended");
+        }
+
+        /// Collect the gateway's frames after 4012 until the client
+        /// drops at guard end. Unlike
+        /// `assert_quiet`, this records the tally instead of forbidding
+        /// all traffic: 4014 jam/life ticks share the socket.
+        fn read_frames_after_loaded(stream: &mut TcpStream) -> Vec<Frame> {
+            assert_eq!(read_frame(stream).id, Request::StartGame.id());
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(read_frame(stream).id, Request::ConfirmMusicLoaded.id());
+            // The chart-end guard rebases the wall floor past the
+            // outro with no frames in flight; read until the client
+            // drops instead of treating a quiet socket as the end.
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut frames = Vec::new();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut rest = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                if stream.read_exact(&mut rest).is_err() {
+                    break;
+                }
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&rest);
+                if let Ok(frame) = decode_frame(&bytes) {
+                    frames.push(frame);
+                }
+            }
+            frames
+        }
+
+        /// First pinned 4016 body from the recorded gateway frames.
+        fn recorded_tally(frames: &[Frame]) -> SubmitScore {
+            let frame = frames
+                .iter()
+                .find(|frame| frame.id == Request::SubmitScore.id())
+                .expect("Result must post C2S 4016");
+            SubmitScore::decode_body(&frame.payload).expect("4016 body")
+        }
+
+        #[test]
+        fn chart_end_walk_reaches_result_and_posts_4016_without_a_fixed_clock() {
+            // Live caller chain: joined Waiting Confirm → 4010/4011 →
+            // Loading Confirm → 4012 → Playing; the whole chart is
+            // struck at its onsets, then only `GameLoop::paint` spends
+            // the outro. No `paint_at`, no fixed clock, no end-song
+            // shortcut. The key-sound clock parks at 300 ms while the
+            // chart ends at 1,500 ms, so only the wall-time terminal
+            // floor can carry the chart-end arm (#730).
+            let recorded = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&recorded);
+            let (mut session, server) =
+                joined_waiting_session(joined_snapshot(), move |mut stream| {
+                    *sink.lock().unwrap() = read_frames_after_loaded(&mut stream);
+                });
+            let pushed_frames = attach_stalled_key_bank(&mut session);
+            walk_joined_to_playing(&mut session);
+            let chart = [(0u8, 0u64), (1, 1), (2, 2)];
+            session.game_mut().load_chart(
+                chart
+                    .iter()
+                    .map(|(lane, at_ms)| (*lane, *at_ms, 7u32))
+                    .collect(),
+            );
+            for (lane, at_ms) in chart {
+                session.game_mut().strike_at(usize::from(lane), at_ms);
+            }
+            assert!(
+                pushed_frames.load(Ordering::Relaxed) < 44_100,
+                "sample clock must stall short of the chart's 1.5 s outro"
+            );
+            assert_eq!(session.game.screen(), Screen::Playing);
+
+            spend_outro(&mut session);
+            paint_frame(&mut session);
+            drop(session);
+            server.join().unwrap();
+
+            let frames = recorded.lock().unwrap();
+            let tally = recorded_tally(&frames);
+            assert_eq!(tally.cool, 3, "every chart onset was struck");
+            assert_eq!(tally.miss, 0);
+            assert_eq!(frames.iter().filter(|f| f.id == 4016).count(), 1);
+        }
+
+        #[test]
+        fn empty_life_arm_posts_the_pinned_game_over_tally_body() {
+            // The exe master's empty-life leg (`result-probe-findings`
+            // w7) emptied the bar 20 Misses in and posted 4016 with
+            // tallies 0/0/20/0, life 0, speed 1. The chart clock is
+            // nowhere near its end here, so only the life arm can
+            // reach Result. Same live chain, same window paints.
+            let recorded = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&recorded);
+            let (mut session, server) =
+                joined_waiting_session(joined_snapshot(), move |mut stream| {
+                    *sink.lock().unwrap() = read_frames_after_loaded(&mut stream);
+                });
+            walk_joined_to_playing(&mut session);
+            let chart: Vec<_> = (0..20u64).map(|index| (0u8, index * 100, 7u32)).collect();
+            session.game_mut().load_chart(chart);
+            // One empty strike past the last onset expires every head
+            // as a Miss on the same verified advance path.
+            session.game_mut().strike_at(6, 10_000);
+            assert_eq!(session.game.live_play().life(), 0);
+            assert_eq!(session.game.screen(), Screen::Playing);
+
+            paint_frame(&mut session);
+            assert_eq!(session.game.screen(), Screen::Result);
+            paint_frame(&mut session);
+            drop(session);
+            server.join().unwrap();
+
+            let frames = recorded.lock().unwrap();
+            let tally = recorded_tally(&frames);
+            assert_eq!(tally.cool, 0);
+            assert_eq!(tally.good, 0);
+            assert_eq!(tally.bad, 0);
+            assert_eq!(tally.miss, 20);
+            assert_eq!(tally.life, 0);
+            assert_eq!(tally.speed, 1);
+            assert_eq!(tally.score, 0);
+            assert_eq!(tally.long_note_score, 0);
+            let expected = [
+                0u8, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            ];
+            let frame = frames
+                .iter()
+                .find(|frame| frame.id == 4016)
+                .expect("4016 frame");
+            assert_eq!(frame.payload, expected, "pinned 24-byte 4016 body");
+        }
+
+        /// Script one gateway socket through START and loaded confirm,
+        /// then record every frame until that client drops. The
+        /// two-client guard needs two independent recordings, so it
+        /// owns the listener instead of `fake_gateway`'s one socket.
+        fn script_one_client(stream: &mut TcpStream) -> Vec<Frame> {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            assert_eq!(read_frame(stream).id, Request::StartGame.id());
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(read_frame(stream).id, Request::ConfirmMusicLoaded.id());
+            let mut frames = Vec::new();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                if stream.read_exact(&mut header).is_err() {
+                    break;
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut rest = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                if stream.read_exact(&mut rest).is_err() {
+                    break;
+                }
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&rest);
+                if let Ok(frame) = decode_frame(&bytes) {
+                    frames.push(frame);
+                }
+            }
+            frames
+        }
+
+        /// A joined Waiting session connected to `port`, staged exactly
+        /// like `joined_waiting_session` but with a caller-owned socket.
+        fn joined_waiting_client(port: u16) -> OnlineSession {
+            let mut game = ScreenGame::new();
+            game.menu_key(MenuKey::Back, true);
+            game.click_planet(136, 88);
+            game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(game.screen(), Screen::Room);
+            let gateway = GatewayConnection::connect(("127.0.0.1", port)).unwrap();
+            let mut session = OnlineSession::new(game, gateway);
+            let room = joined_snapshot();
+            session.game.set_joined_room(room.clone());
+            session.joined_room = Some(room);
+            session.joined_waiting = true;
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Waiting);
+            stage_armed_loading(session.game_mut());
+            session
+        }
+
+        #[test]
+        fn two_scripted_clients_reach_chart_end_and_both_submit_4016() {
+            // One scripted gateway, two joined clients, each with its
+            // own key-sound clock that parks before the chart outro.
+            // Both walk the live chain and both must leave Playing on
+            // chart-end; one client's Result alone cannot satisfy the
+            // server's both-submissions gate (`result-probe-findings`
+            // w7). No exe, no install data: this guard runs with
+            // install-root hidden.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let recordings = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&recordings);
+            let server = thread::spawn(move || {
+                // One reader per socket: a single reader would block on
+                // the first client's live socket and never accept the
+                // second client's START.
+                let mut clients = Vec::new();
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    clients.push(thread::spawn(move || script_one_client(&mut stream)));
+                }
+                for client in clients {
+                    sink.lock().unwrap().push(client.join().unwrap());
+                }
+            });
+
+            let mut first = joined_waiting_client(port);
+            let mut second = joined_waiting_client(port);
+            attach_stalled_key_bank(&mut first);
+            attach_stalled_key_bank(&mut second);
+            walk_joined_to_playing(&mut first);
+            walk_joined_to_playing(&mut second);
+            let chart = [(0u8, 0u64), (1, 1), (2, 2)];
+            for session in [&mut first, &mut second] {
+                session.game_mut().load_chart(
+                    chart
+                        .iter()
+                        .map(|(lane, at_ms)| (*lane, *at_ms, 7u32))
+                        .collect(),
+                );
+                for (lane, at_ms) in chart {
+                    session.game_mut().strike_at(usize::from(lane), at_ms);
+                }
+            }
+            for session in [&mut first, &mut second] {
+                session
+                    .game_mut()
+                    .set_playing_wall_elapsed(Duration::from_millis(2_000));
+            }
+            paint_frame(&mut first);
+            paint_frame(&mut second);
+            assert_eq!(first.game.screen(), Screen::Result);
+            assert_eq!(second.game.screen(), Screen::Result);
+            paint_frame(&mut first);
+            paint_frame(&mut second);
+            drop(first);
+            drop(second);
+            server.join().unwrap();
+
+            let recordings = recordings.lock().unwrap();
+            assert_eq!(recordings.len(), 2, "both clients reached the gateway");
+            for client_frames in recordings.iter() {
+                let tally = recorded_tally(client_frames);
+                assert_eq!(tally.cool, 3);
+                assert_eq!(tally.miss, 0);
+                assert_eq!(
+                    client_frames
+                        .iter()
+                        .filter(|frame| frame.id == Request::SubmitScore.id())
+                        .count(),
+                    1,
+                    "each client submits once"
+                );
+            }
+        }
+    }
+
     #[test]
     fn result_ui_has_no_submitter_marker_from_4017() {
         // #679: REA finds the queue's type-0x12 consumers in the two
