@@ -3931,6 +3931,12 @@ impl GameLoop for OnlineSession {
     }
 
     fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        // The joined Loading gate advances on paint clocks. Without a
+        // repaint request the window parks on the cover, so a peer
+        // waiting for the timer-driven 4012 never reaches Playing.
+        if self.game.screen() == Screen::Loading && self.loading_pacing.is_active() {
+            return Some(SESSION_POLL_HEARTBEAT);
+        }
         if let Some(gap) = self.game.idle_repaint_interval() {
             return Some(gap);
         }
@@ -4029,6 +4035,7 @@ fn level_for_difficulty(difficulty: u8) -> usize {
 pub(super) mod session_tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -4330,6 +4337,21 @@ pub(super) mod session_tests {
             .unwrap();
         let mut header = [0u8; 4];
         assert!(stream.read_exact(&mut header).is_err());
+    }
+
+    /// First opcode a client posts, or `None` on a bounded wait. Scripted
+    /// servers report through a channel so a stalled client fails the
+    /// test instead of panicking inside the server thread.
+    pub(super) fn first_opcode(stream: &mut TcpStream) -> Option<u16> {
+        stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+        let mut header = [0u8; HEADER_LEN];
+        stream.read_exact(&mut header).ok()?;
+        let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+        let mut bytes = header.to_vec();
+        let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+        stream.read_exact(&mut body).ok()?;
+        bytes.extend_from_slice(&body);
+        decode_frame(&bytes).ok().map(|frame| frame.id)
     }
 
     #[test]
@@ -8158,6 +8180,116 @@ pub(super) mod session_tests {
         session.advance_loading_gate_at(confirmed + LOADING_PLAYING_AFTER_CONFIRM);
         assert_eq!(session.game.screen(), Screen::Playing);
         server.join().unwrap();
+    }
+
+    /// #725 live chain: `run_windowed_session` -> `Shell::about_to_wait`
+    /// -> `GameLoop::idle_repaint_interval` -> `OnlineSession::paint` ->
+    /// `poll_wire` -> `advance_loading_gate_at`. A guest gets no Confirm
+    /// after START, so the wall-paced gate needs the window to repaint
+    /// while the cover is up. Without that heartbeat the peer stays on
+    /// Loading and never posts 4014 (#723 boot 1).
+    #[test]
+    fn guest_loading_gate_keeps_the_window_repainting_after_start_broadcast() {
+        use super::SESSION_POLL_HEARTBEAT;
+
+        let (loaded_send, loaded_recv) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let _ = loaded_send.send(first_opcode(&mut stream));
+        });
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        assert_eq!(
+            session.idle_repaint_interval(),
+            Some(SESSION_POLL_HEARTBEAT),
+            "the armed joined gate must keep the window repainting"
+        );
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Playing
+        });
+        assert_eq!(session.game.screen(), Screen::Playing);
+        assert_eq!(
+            loaded_recv.recv_timeout(Duration::from_secs(4)).unwrap(),
+            Some(Request::ConfirmMusicLoaded.id())
+        );
+        server.join().unwrap();
+    }
+
+    /// #725 headless two-client walk: one master and one joined peer, each
+    /// on its own scripted gateway, painted only when its own idle
+    /// heartbeat says the window would repaint. The master driver presses
+    /// Confirm on its Loading cover; the peer gets no input after START,
+    /// so both seats must reach Playing from the live gate alone.
+    #[test]
+    fn two_client_gateway_walk_reaches_playing_on_master_and_peer_without_peer_input() {
+        let (started_send, started_recv) = mpsc::channel();
+        let (master_loaded_send, master_loaded_recv) = mpsc::channel();
+        let (peer_loaded_send, peer_loaded_recv) = mpsc::channel();
+        let (mut master, master_server) =
+            joined_waiting_session(joined_snapshot(), move |mut stream| {
+                assert_eq!(read_frame(&mut stream).id, 4010);
+                stream.write_all(&encode_frame(4011, &[])).unwrap();
+                started_send.send(()).unwrap();
+                let _ = master_loaded_send.send(first_opcode(&mut stream));
+            });
+        let (mut peer, peer_server) =
+            joined_waiting_session(guest_snapshot(), move |mut stream| {
+                started_recv.recv().unwrap();
+                stream.write_all(&encode_frame(4011, &[])).unwrap();
+                let _ = peer_loaded_send.send(first_opcode(&mut stream));
+            });
+
+        // Paint only when the real window would request a redraw. `None`
+        // parks the loop until input; a parked peer is the #723 stall.
+        fn paint_when_due(session: &mut OnlineSession, due: &mut Option<Instant>, now: Instant) {
+            match *due {
+                None => return,
+                Some(deadline) if now < deadline => return,
+                Some(_) => {}
+            }
+            paint_frame(session);
+            *due = session.idle_repaint_interval().map(|gap| now + gap);
+        }
+
+        master.menu_key(MenuKey::Confirm, true);
+        let first_paint = Instant::now();
+        let mut master_due = Some(first_paint);
+        let mut peer_due = Some(first_paint);
+
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while (master.game.screen() != Screen::Playing || peer.game.screen() != Screen::Playing)
+            && Instant::now() < deadline
+        {
+            let now = Instant::now();
+            paint_when_due(&mut master, &mut master_due, now);
+            if master.game.screen() == Screen::Loading {
+                master.menu_key(MenuKey::Confirm, true);
+                master_due = Some(now);
+            }
+            paint_when_due(&mut peer, &mut peer_due, now);
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(master.game.screen(), Screen::Playing, "master never played");
+        assert_eq!(
+            peer.game.screen(),
+            Screen::Playing,
+            "peer parked on Loading without an input-driven repaint"
+        );
+        assert_eq!(
+            peer.idle_repaint_interval(),
+            Some(Duration::from_nanos(o2jam_shell::TICK_NANOS))
+        );
+        for (seat, loaded) in [("master", &master_loaded_recv), ("peer", &peer_loaded_recv)] {
+            assert_eq!(
+                loaded.recv_timeout(Duration::from_secs(4)).unwrap(),
+                Some(Request::ConfirmMusicLoaded.id()),
+                "{seat} must post its own 4012"
+            );
+        }
+        master_server.join().unwrap();
+        peer_server.join().unwrap();
     }
 
     /// #602: a blocked 4012 leaves the gate in Loading and latches no

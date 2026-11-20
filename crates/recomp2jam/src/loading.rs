@@ -157,6 +157,12 @@ impl LoadingGatePacing {
         self.phase = LoadingGatePhase::Idle;
     }
 
+    /// `true` while the wall-paced confirm still needs paint clocks.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        !matches!(self.phase, LoadingGatePhase::Idle)
+    }
+
     /// Re-arm a failed 4012 at this instant, so the retry keeps the
     /// same hold and never enters Playing on a dead socket.
     pub fn retry_confirm_at(&mut self, now: Instant) {
