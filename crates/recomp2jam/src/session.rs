@@ -3204,6 +3204,15 @@ impl OnlineSession {
         };
         self.game
             .set_room_music(event.music_id, event.difficulty, event.speed);
+        // The session mirror feeds the speed a guest sends on Loading
+        // Confirm and the song a later join stages; leaving it at the
+        // old snapshot would make the peer's wire disagree with its
+        // own captions after the master's echo (#541).
+        if let Some(room) = self.joined_room.as_mut() {
+            room.music_id = event.music_id;
+            room.difficulty = event.difficulty;
+            room.speed = event.speed;
+        }
         self.announce_music_state();
     }
 
@@ -8472,6 +8481,49 @@ pub(super) mod session_tests {
             session.game.staged_waiting_member(0).unwrap().nickname,
             "tester"
         );
+    }
+
+    #[test]
+    fn a_joining_peer_keeps_the_master_seated_across_a_song_and_speed_echo() {
+        // Ticket #541 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint ->
+        //   poll_channel_login / room join -> 3003 snapshot ->
+        //   ScreenGame::set_joined_room -> poll_waiting_chat ->
+        //   drain_waiting_chat -> apply_waiting_music_changed (4001) ->
+        //   ScreenGame::set_room_music -> paint_waiting_seat_avatars.
+        // Wire pin: qualified c3 `waiting.png` guest frame plus the
+        // `full01/tap.log` 4000/4001 pick echo; the peer's own 3003
+        // carries the master seat, which the later echo must not drop.
+        let answer = hex_bytes(LIVE_JOIN_ANSWER_HEX);
+        let (mut session, server) = room_session(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 3002);
+            stream.write_all(&encode_frame(3003, &answer)).unwrap();
+            let echo = WaitingMusicChanged {
+                music_id: 757,
+                difficulty: 0,
+                speed: 6,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateMusicState.id());
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(0, "");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting && session.game.room_music_id() == Some(757)
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session
+                .game
+                .staged_waiting_member(0)
+                .expect("master stays seated")
+                .nickname,
+            "tester"
+        );
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert_eq!(room.music_id, 757, "room song follows the echo");
+        assert_eq!(room.speed, 6, "room speed follows the echo");
     }
 
     #[test]
