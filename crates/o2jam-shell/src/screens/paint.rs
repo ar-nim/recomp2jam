@@ -1743,6 +1743,43 @@ fn shop_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> 
 /// paints nothing (ADR-0003).
 const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
 
+/// Client-only marker for the pressed TOP100 board-chrome control:
+/// a thin band inside that control's staged `State_MShop.bnd` rect.
+/// The qualified press frame shows no ranking board (`docs/musicshop.md`),
+/// so this inks no standing, sort, or wire claim. Ours-by-design tone,
+/// staged geometry only (ADR-0003).
+const MUSIC_SHOP_TOP100_TONE: u32 = pack_xrgb(0xE2, 0x8A, 0x3C);
+
+/// Ink the pressed TOP100 board control (if any) at its staged rect.
+/// A missing rect or no press paints nothing.
+pub fn paint_music_shop_top100_chrome(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    pressed_code: Option<u32>,
+) {
+    let Some(code) = pressed_code else {
+        return;
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    let band_height = 2_u32.min(rect.h);
+    if band_height == 0 {
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: rect.x,
+            y: rect.y + i32::try_from(rect.h - band_height).unwrap_or(0),
+            w: rect.w,
+            h: band_height,
+        },
+        MUSIC_SHOP_TOP100_TONE,
+    );
+}
+
 pub fn paint_music_shop_row_selection(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -3510,6 +3547,27 @@ pub(crate) fn background_of(screen: Screen) -> u32 {
     }
 }
 
+/// Label for the no-archive Item Shop card (#388). The offline walk
+/// has no gateway session, so the flat fallback must say so; the
+/// staged 7.55 board never carries this word.
+pub(crate) const SHOP_OFFLINE_MARKER: &str = "OFFLINE STAND-IN";
+/// Marker ink, distinct from the card/title colors so a guard can
+/// pin the label itself rather than the card fill.
+pub(crate) const SHOP_OFFLINE_MARKER_INK: u32 = pack_xrgb(0x80, 0x20, 0x80);
+
+/// Paint the offline stand-in label under the fallback card title.
+fn paint_shop_offline_marker(frame: &mut Frame<'_>) {
+    let title_y = title_origin(frame, title_of(Screen::Shop)).1 + 14;
+    let marker_x = frame.w as i32 / 2 - text_width(SHOP_OFFLINE_MARKER) as i32 / 2;
+    draw_text(
+        frame,
+        marker_x,
+        title_y,
+        SHOP_OFFLINE_MARKER,
+        SHOP_OFFLINE_MARKER_INK,
+    );
+}
+
 /// Title drawn on each lobby card.
 fn title_of(screen: Screen) -> &'static str {
     match screen {
@@ -3545,6 +3603,9 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
         Screen::Result => paint_result(frame, &o2jam_game::Score::default(), &[], None, None),
+    }
+    if screen == Screen::Shop {
+        paint_shop_offline_marker(frame);
     }
 }
 
@@ -4124,6 +4185,38 @@ mod paint_tests {
     }
 
     #[test]
+    fn music_shop_top100_press_inks_only_the_pressed_staged_rect() {
+        // #408: the board chrome marker rides the staged control
+        // rects, never a ranking row or an invented panel. No press
+        // paints nothing; pressing SELECTALL leaves the TOP100 button
+        // untouched (and vice versa).
+        use super::super::side::{MSHOP_TOP100_CODE, MSHOP_TOP100_LAST_CODE};
+        let placements = vec![
+            shop_placement(MSHOP_TOP100_CODE, 248, 0, 99, 37),
+            shop_placement(MSHOP_TOP100_LAST_CODE, 436, 31, 52, 20),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        paint_music_shop_top100_chrome(&mut frame, &placements, None);
+        assert!(!frame.buf.contains(&MUSIC_SHOP_TOP100_TONE));
+
+        let top100_band = 35 * 800 + 250;
+        let selectall_band = 49 * 800 + 440;
+        paint_music_shop_top100_chrome(&mut frame, &placements, Some(MSHOP_TOP100_CODE));
+        assert_eq!(frame.buf[top100_band], MUSIC_SHOP_TOP100_TONE);
+        assert_eq!(frame.buf[selectall_band], 0, "unpressed arm stays unmarked");
+
+        frame.buf.fill(0);
+        paint_music_shop_top100_chrome(&mut frame, &placements, Some(MSHOP_TOP100_LAST_CODE));
+        assert_eq!(frame.buf[selectall_band], MUSIC_SHOP_TOP100_TONE);
+        assert_eq!(frame.buf[top100_band], 0, "TOP100 button stays unmarked");
+    }
+
+    #[test]
     fn music_shop_staged_art_paints_at_anchor() {
         // Synthetic staged figure (red pixel): unreachable screens
         // still paint through their scene function directly.
@@ -4184,6 +4277,40 @@ mod paint_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!buf.contains(&pack_xrgb(0x20, 0x60, 0xC0)));
         assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn shop_no_archive_fallback_carries_the_offline_stand_in_marker() {
+        // #388: with no archive, the Item Shop card is a labeled
+        // stand-in, never an online-shop claim. The marker ink is
+        // distinct so the guard pins the label itself, not the card
+        // fill. The staged-art path stays unlabeled.
+        let mut fallback = vec![0u32; 160 * 120];
+        paint_screen(
+            &mut Frame {
+                buf: &mut fallback,
+                w: 160,
+                h: 120,
+            },
+            Screen::Shop,
+        );
+        assert!(
+            fallback.contains(&SHOP_OFFLINE_MARKER_INK),
+            "no-archive Item Shop fallback must paint its OFFLINE STAND-IN marker"
+        );
+        let mut staged = vec![0u32; 160 * 120];
+        paint_shop_scene(
+            &mut Frame {
+                buf: &mut staged,
+                w: 160,
+                h: 120,
+            },
+            &corner_art(),
+        );
+        assert!(
+            !staged.contains(&SHOP_OFFLINE_MARKER_INK),
+            "staged 7.55 shop art must not carry the fallback marker"
+        );
     }
 
     #[test]

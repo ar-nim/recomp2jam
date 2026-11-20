@@ -533,10 +533,16 @@ pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
 /// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
-/// Music-shop TOP100 (`0x1A20007D`, `docs/musicshop.md`): music-shop
-/// chrome only per the #181 verdict — the item shop owns no TOP100
-/// arm, so this code never dispatches on the item side.
+/// Music-shop TOP100 board button (`0x1A20007D`, `docs/musicshop.md`):
+/// music-shop chrome only per the #181 verdict — the item shop owns no
+/// TOP100 arm, so this code never dispatches on the item side. The
+/// qualified press frame changes only the pointer and web-banner
+/// caption; no ranking content is inferred from the button.
 pub const MSHOP_TOP100_CODE: u32 = 0x1A20_007D;
+/// Last control in the TOP100 board chrome arm (`SELECTALL`,
+/// `0x1A200084`). Codes `0x7D..0x84` pair with eight `State_MShop.bnd`
+/// rects (button, 3KEY/7KEY, four sort headers, SELECTALL).
+pub const MSHOP_TOP100_LAST_CODE: u32 = 0x1A20_0084;
 /// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): commits the cart through
 /// the pinned empty `SyncItemPurchase` 5000 send.
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
@@ -862,10 +868,14 @@ fn rect_union(first: Rect, second: Rect) -> Rect {
 // pinning the price words plus a rig capture of the DIFF cell at
 // a known song). TITLE/DIFF/BPM sorts (`0x80..0x82`) reuse the
 // catalog sort keys with ASSUMED ascending directions (same named
-// next step as lanking); PRICE (`0x83`), 3KEY/7KEY filters, MYALL
-// owned-list pager, search, TOP100, cart rows, gift, and download
-// stay display-only OPEN (next step: SendInput sweep on the live
-// board per the `~/scratch/planet-verify/` recipe). Per-row
+// next step as lanking); the TOP100 arm (`0x7D..0x84`) stages its eight
+// bound chrome rects and records the pressed control (#408) — the
+// qualified press frame shows no ranking board, so standings stay
+// OPEN (next step: a live board frame plus a 5011 response). PRICE
+// (`0x83`) and 3KEY/7KEY filter semantics, MYALL owned-list pager,
+// search, cart rows, gift, and download stay display-only OPEN
+// (next step: SendInput sweep on the live board per the
+// `~/scratch/planet-verify/` recipe). Per-row
 // GEM_BUY/WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and
 // the cart BUYITEM (`0x5D`) queue the pinned empty
 // `SyncMusicPurchase` 5010 send; the 5011 answer shape is untraced,
@@ -1048,9 +1058,10 @@ pub fn music_shop_buy_caption(row: &MusicShopRow) -> String {
 }
 
 /// One song-shop click the exe codes name: row picks, per-row buys,
-/// sorts, the shop-list pager, and the cart buy. Everything else
-/// (PRICE sort, filters, MYALL pager, search, TOP100, cart rows,
-/// gift, download) lands nowhere.
+/// sorts, the shop-list pager, and the cart buy. The TOP100 board
+/// arm records its pressed control but carries no ranking data. All
+/// other chrome (MYALL pager, search, cart rows, gift, download)
+/// lands nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MusicShopAction {
     /// Song-row `MS_EX` hit area picked (0-based on the page).
@@ -1059,6 +1070,11 @@ pub enum MusicShopAction {
     BuyRow { slot: usize, gem: bool },
     /// A sort button answered.
     Sort(LankingSort),
+    /// A TOP100 board-chrome control was pressed. Carries the staged
+    /// control code (`0x1A20007D..0x84`); the exe press frame pins no
+    /// ranking board, so this records a client-only press marker and
+    /// never stages standings or queues a wire request (#408).
+    Top100Chrome { code: u32 },
     /// Shop-list pager stepped back.
     MsPrev,
     /// Shop-list pager stepped forward.
@@ -1103,6 +1119,9 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
     }
+    if (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&code) {
+        return Some(MusicShopAction::Top100Chrome { code });
+    }
     match code {
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
@@ -1130,6 +1149,20 @@ fn music_shop_row(code: u32) -> Option<MusicShopAction> {
     let slot = code.checked_sub(MSHOP_EX_FIRST_CODE)?;
     let slot = usize::try_from(slot).ok()?;
     (slot < MSHOP_SONG_ROWS).then_some(MusicShopAction::SelectRow(slot))
+}
+
+/// Staged TOP100 board-chrome rects in code order (the eight
+/// `State_MShop.bnd` controls `0x1A20007D..0x84`). Empty when the
+/// board arm is unstaged — no fallback literals (ADR-0003).
+#[must_use]
+pub fn music_shop_top100_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut rects: Vec<(u32, Rect)> = placements
+        .iter()
+        .filter(|placed| (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&placed.code))
+        .map(|placed| (placed.code, placed.rect))
+        .collect();
+    rects.sort_by_key(|(code, _)| *code);
+    rects.into_iter().map(|(_, rect)| rect).collect()
 }
 
 /// Staged song-row hit areas in top-to-bottom order (the five
@@ -5822,6 +5855,112 @@ mod side_tests {
         // list, and search/TOP100 stay unevidenced: all land nowhere.
         assert_eq!(music_shop_action_at(&placements, 311, 85), None);
         assert_eq!(music_shop_action_at(&placements, 519, 315), None);
+    }
+
+    #[test]
+    fn music_shop_top100_arm_stages_eight_rects_and_answer_each_press() {
+        // Real 7.55 bytes (skips without install-root): #408/#181 pin
+        // the TOP100 arm to `State_MShop.bnd` codes `0x7D..0x84`. Every
+        // staged rect must answer a hit-test; the qualified press frame
+        // pins no ranking board, so only chrome is claimed here.
+        use crate::staging::{stage_state, StageContext, State};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        let Ok(archive) = std::fs::read(path) else {
+            println!("skip: missing installed Interface1.opi");
+            return;
+        };
+        let staged = stage_state(&archive, State::MusicShop, StageContext::default())
+            .art
+            .expect("music-shop state stages with real bytes");
+        let rects = music_shop_top100_rects(&staged.placements);
+        assert_eq!(
+            rects,
+            vec![
+                Rect {
+                    x: 248,
+                    y: 0,
+                    w: 99,
+                    h: 37
+                },
+                Rect {
+                    x: 18,
+                    y: 84,
+                    w: 57,
+                    h: 21
+                },
+                Rect {
+                    x: 75,
+                    y: 84,
+                    w: 58,
+                    h: 21
+                },
+                Rect {
+                    x: 133,
+                    y: 84,
+                    w: 59,
+                    h: 21
+                },
+                Rect {
+                    x: 192,
+                    y: 84,
+                    w: 60,
+                    h: 21
+                },
+                Rect {
+                    x: 252,
+                    y: 84,
+                    w: 58,
+                    h: 21
+                },
+                Rect {
+                    x: 310,
+                    y: 84,
+                    w: 62,
+                    h: 21
+                },
+                Rect {
+                    x: 436,
+                    y: 31,
+                    w: 52,
+                    h: 20
+                },
+            ]
+        );
+        for rect in rects {
+            let center_x = rect.x + rect.w as i32 / 2;
+            let center_y = rect.y + rect.h as i32 / 2;
+            assert_ne!(
+                music_shop_action_at(&staged.placements, center_x, center_y),
+                None,
+                "staged TOP100 rect {rect:?} must answer a press"
+            );
+        }
+    }
+
+    #[test]
+    fn music_shop_top100_button_answers_its_pinned_rect() {
+        // Seam arm: the pressed code travels from the staged button
+        // rect to the board state without an install-root read.
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: MSHOP_TOP100_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 248,
+                y: 0,
+                w: 99,
+                h: 37,
+            },
+        }];
+        assert_eq!(
+            music_shop_action_at(&placements, 297, 18),
+            Some(MusicShopAction::Top100Chrome {
+                code: MSHOP_TOP100_CODE
+            })
+        );
+        assert_eq!(music_shop_action_at(&placements, 400, 18), None);
     }
 
     #[test]
