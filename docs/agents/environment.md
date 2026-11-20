@@ -100,6 +100,10 @@ wire behavior stay pinned as usual.
   of its worktree and packs, never redone blind
   (`docs/agents/delegation.md`, "Resume discipline").
 
+- NEVER blind-Escape a booting client (W6 finding 2026-11-21): bare
+  Escape froze the Wine desktop mid-boot; the NORMAL-mode popup needs the
+  popup-aware OK at its pinned face - verify the popup state from a frame
+  before any key.
 - There is **no** `scripts/playwright.py`. The blessed shot kit is
   `scripts/rig-run.sh` + `scripts/rig-wine.sh` + `scripts/wine-scene.py`.
 - The channel doc is `docs/parity/channel.md` (not `docs/specs/`).
