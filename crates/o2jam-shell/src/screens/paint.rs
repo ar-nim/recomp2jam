@@ -3547,6 +3547,27 @@ pub(crate) fn background_of(screen: Screen) -> u32 {
     }
 }
 
+/// Label for the no-archive Item Shop card (#388). The offline walk
+/// has no gateway session, so the flat fallback must say so; the
+/// staged 7.55 board never carries this word.
+pub(crate) const SHOP_OFFLINE_MARKER: &str = "OFFLINE STAND-IN";
+/// Marker ink, distinct from the card/title colors so a guard can
+/// pin the label itself rather than the card fill.
+pub(crate) const SHOP_OFFLINE_MARKER_INK: u32 = pack_xrgb(0x80, 0x20, 0x80);
+
+/// Paint the offline stand-in label under the fallback card title.
+fn paint_shop_offline_marker(frame: &mut Frame<'_>) {
+    let title_y = title_origin(frame, title_of(Screen::Shop)).1 + 14;
+    let marker_x = frame.w as i32 / 2 - text_width(SHOP_OFFLINE_MARKER) as i32 / 2;
+    draw_text(
+        frame,
+        marker_x,
+        title_y,
+        SHOP_OFFLINE_MARKER,
+        SHOP_OFFLINE_MARKER_INK,
+    );
+}
+
 /// Title drawn on each lobby card.
 fn title_of(screen: Screen) -> &'static str {
     match screen {
@@ -3582,6 +3603,9 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
         Screen::Result => paint_result(frame, &o2jam_game::Score::default(), &[], None, None),
+    }
+    if screen == Screen::Shop {
+        paint_shop_offline_marker(frame);
     }
 }
 
@@ -4253,6 +4277,40 @@ mod paint_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!buf.contains(&pack_xrgb(0x20, 0x60, 0xC0)));
         assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn shop_no_archive_fallback_carries_the_offline_stand_in_marker() {
+        // #388: with no archive, the Item Shop card is a labeled
+        // stand-in, never an online-shop claim. The marker ink is
+        // distinct so the guard pins the label itself, not the card
+        // fill. The staged-art path stays unlabeled.
+        let mut fallback = vec![0u32; 160 * 120];
+        paint_screen(
+            &mut Frame {
+                buf: &mut fallback,
+                w: 160,
+                h: 120,
+            },
+            Screen::Shop,
+        );
+        assert!(
+            fallback.contains(&SHOP_OFFLINE_MARKER_INK),
+            "no-archive Item Shop fallback must paint its OFFLINE STAND-IN marker"
+        );
+        let mut staged = vec![0u32; 160 * 120];
+        paint_shop_scene(
+            &mut Frame {
+                buf: &mut staged,
+                w: 160,
+                h: 120,
+            },
+            &corner_art(),
+        );
+        assert!(
+            !staged.contains(&SHOP_OFFLINE_MARKER_INK),
+            "staged 7.55 shop art must not carry the fallback marker"
+        );
     }
 
     #[test]

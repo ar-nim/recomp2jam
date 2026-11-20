@@ -191,6 +191,16 @@ claimed. Next evidence step: a rig capture of the same catalog ids with
 matched `avatar.opa` before any 1:1 hash comparison. `MYBAGITEM` icons
 (slot 1) stay OPEN; `ITEMGEM` cells stay OPEN (#178 story 23).
 
+## Offline fallback marker (#388, 2026-11-20)
+
+With no installed art, `paint_screen(Screen::Shop)` paints the flat
+`SHOP` card plus the `OFFLINE STAND-IN` marker. The marker is a
+presentation label for the offline/window seam (NA-DESIGN: no gateway
+session, no passed 7.55 behavior), not an online-shop claim; the
+staged 7.55 board path (`paint_shop_scene`) never carries it. Guard:
+`shop_no_archive_fallback_carries_the_offline_stand_in_marker`
+(marker ink present on the fallback card, absent on staged art).
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.
