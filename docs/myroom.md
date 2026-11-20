@@ -226,7 +226,12 @@ its source, never to "the data":
   equipment cell, ours-by-design) and restages the figure through
   the #193 hook; queues nothing (send shape still OPEN). Guards:
   `myroom_vacate_clears_the_selected_slot_and_restages`,
-  `myroom_vacate_queues_no_wire_send`.
+  `myroom_vacate_queues_no_wire_send`, and the live-channel-login
+  assertion in `live_boot_myroom_data_path_paints_on_channel_login`
+  (install-root skip) that clicks the bnd-paired ITEMSELL control at
+  (25,491)-(110,534) and checks the worn slot clears. The guard was
+  red-proved by disabling `apply_myroom_vacate`: the live assertion
+  failed with equipment[0] still set.
 - Equip restage unchanged (guard annotated, still green).
 - Slot-filter counts for the next agent: 11 slot buttons
   (`0X15200005..0F`) vs 16 slot images with Korean slot comments
