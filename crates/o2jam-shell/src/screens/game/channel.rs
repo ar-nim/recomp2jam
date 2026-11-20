@@ -172,8 +172,24 @@ impl ChannelScene {
     /// Paint the live rows, highlight, and enter faces: the staged
     /// dialog path with art, or the flat fallback without it. The
     /// screen seam still chooses the surrounding scene art.
+    /// Test-only shortcut for a scene painting its own interactive rows.
+    #[cfg(test)]
     pub(crate) fn paint(
         &self,
+        frame: &mut Frame<'_>,
+        art: Option<&SceneArt>,
+        board: Option<StagedPlanetBoard<'_>>,
+        hovered_row: Option<usize>,
+    ) {
+        self.paint_rows(&self.rows, frame, art, board, hovered_row);
+    }
+
+    /// Paint an explicit list while keeping the interactive rows (`self.rows`)
+    /// unchanged. The relay notice uses this to show boot-held rows behind
+    /// its sheet without making them clickable (#348 composition arm).
+    pub(crate) fn paint_rows(
+        &self,
+        rows: &[ChannelState],
         frame: &mut Frame<'_>,
         art: Option<&SceneArt>,
         board: Option<StagedPlanetBoard<'_>>,
@@ -182,14 +198,14 @@ impl ChannelScene {
         match art {
             Some(art) => paint_channel_scene(
                 frame,
-                &self.rows,
+                rows,
                 self.top,
                 self.highlight,
                 art,
                 board,
                 hovered_row,
             ),
-            None => paint_channel_list(frame, &self.rows, self.top, self.highlight),
+            None => paint_channel_list(frame, rows, self.top, self.highlight),
         }
     }
 }

@@ -328,9 +328,13 @@ source the engine stays idle.
 - `crates/o2jam-shell/src/screens/game/mod.rs` `begin_music_download`
   is the kick the session calls; `pump_music_downloads` advances the
   queue and restages the scanned availability into every catalog row,
-  so a promoted song becomes selectable again. The download notice
-  (`WAITING_START_DOWNLOAD_NOTICE`, VA `0x6459e8`) stands in for the
-  download bar (`Wait_Downloding.ojs`), whose geometry stays OPEN.
+  so a promoted song becomes selectable again. A `music-state=4` seat
+  now arms the staged `Wait_Downloding.ojs` badge and its bar at the
+  Waiting seat-template `.bnd` rects (matched-ab-339 `4037 0004`;
+  ticket #559). `4039` percentages stage per seat, but the bar's
+  frame/fill mapping stays OPEN: no synthetic fill is painted. The
+  separate `WAITING_START_DOWNLOAD_NOTICE` (VA `0x6459e8`) still
+  covers the local START refusal.
 - `crates/recomp2jam/src/connect.rs`: `run_song_flow` sends the honest
   `UpdateMusicState` 4025 (`Ready 0` when the install has the chart
   file, `NoMusic 1` when not) instead of the old blind

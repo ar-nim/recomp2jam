@@ -657,6 +657,8 @@ pub(crate) struct StagedSeat {
     pub(crate) playing: bool,
     /// The room names a song (`JoinedRoom.music_id` nonzero).
     pub(crate) has_song: bool,
+    /// This member's `4035`/`4037` music-state byte says a download runs.
+    pub(crate) downloading: bool,
 }
 
 /// Seat parents of the `SET 0x0C 0x00015000` seat template, in seat
@@ -691,6 +693,10 @@ enum SeatIndicator {
     NoSong,
     /// `Wait_Playing.ojs`: the member is playing.
     Playing,
+    /// `Wait_Downloding.ojs`: the member is downloading the room song.
+    DownloadingBadge,
+    /// `Wait_Downloding_Bar.ojs`: the same member's download bar.
+    DownloadingBar,
 }
 
 impl SeatIndicator {
@@ -702,6 +708,8 @@ impl SeatIndicator {
             SeatIndicator::ReadyPlate => "Wait_ReadyText.ojs",
             SeatIndicator::NoSong => "Wait_NoMusicImage.ojs",
             SeatIndicator::Playing => "Wait_Playing.ojs",
+            SeatIndicator::DownloadingBadge => "Wait_Downloding.ojs",
+            SeatIndicator::DownloadingBar => "Wait_Downloding_Bar.ojs",
         }
     }
 
@@ -717,6 +725,9 @@ impl SeatIndicator {
             SeatIndicator::ReadyPlate => seat.ready.then_some(1),
             SeatIndicator::NoSong => (!seat.has_song).then_some(1),
             SeatIndicator::Playing => seat.playing.then_some(1),
+            SeatIndicator::DownloadingBadge | SeatIndicator::DownloadingBar => {
+                seat.downloading.then_some(1)
+            }
         }
     }
 }
@@ -726,8 +737,8 @@ impl SeatIndicator {
 ///
 /// - `Wait_PCRoomMark.ojs` — PC-room badge; the wire carries no
 ///   matching field (OPEN: find the flag the exe reads).
-/// - `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` — song download
-///   progress; the shell models no download (OPEN).
+/// - `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` — the member's
+///   `music-state=4` download badge and bar, pinned by matched-ab-339.
 /// - `Waiting_P2P_Image.ojs` — P2P versus banner; needs the room's
 ///   venue class (OPEN).
 /// - `Wait_NoGemImage.ojs` — gem-less marker; `RoomMember.gem` exists,
@@ -739,6 +750,8 @@ fn seat_indicator(sprite: &str) -> Option<SeatIndicator> {
         SeatIndicator::ReadyPlate,
         SeatIndicator::NoSong,
         SeatIndicator::Playing,
+        SeatIndicator::DownloadingBadge,
+        SeatIndicator::DownloadingBar,
     ]
     .into_iter()
     .find(|indicator| indicator.sprite() == sprite)
@@ -776,7 +789,11 @@ fn waiting_seat_clone_live(placed: &ScenePlacement, seats: &[StagedSeat]) -> boo
 /// Paint every armed seat indicator at its clone rect with the seat's
 /// frame. The clone base pass already painted frame 0 there, so this
 /// pass owns the live frame; unarmed bodies were filtered out above.
-fn paint_waiting_seat_marks(frame: &mut Frame<'_>, seats: &[StagedSeat], art: &SceneArt) {
+pub(crate) fn paint_waiting_seat_marks(
+    frame: &mut Frame<'_>,
+    seats: &[StagedSeat],
+    art: &SceneArt,
+) {
     for placed in &art.placements {
         let Some(index) = seat_clone_index(placed) else {
             continue;
@@ -808,6 +825,12 @@ fn paint_waiting_seat_marks(frame: &mut Frame<'_>, seats: &[StagedSeat], art: &S
             Some(layer.colorkey),
         );
     }
+}
+
+/// Wire `music-state=4` is the exe's downloading marker (§2 of
+/// `docs/music-availability.md`; the 4037 body `0004` in matched-ab-339).
+fn is_downloading(member: &o2jam_net::RoomMember) -> bool {
+    member.music_state == o2jam_net::MusicState::Downloading.code()
 }
 
 /// Staged seats in cover order: wire slot `i` owns cover `i`, and our
@@ -844,6 +867,7 @@ pub(crate) fn staged_seats(room: &JoinedRoom, local_name: Option<&str>) -> Vec<S
             master: own_slot.is_some_and(|member| member.master),
             playing: own_slot.is_some_and(|member| member.playing_state != 0),
             has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
+            downloading: own_slot.is_some_and(is_downloading),
         };
     }
     seats
@@ -863,6 +887,7 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             master: member.master,
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
+            downloading: is_downloading(member),
         },
         None if slot.state_code == RoomSlotState::Locked as i32 => StagedSeat {
             name: String::new(),
@@ -875,6 +900,7 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             master: false,
             playing: false,
             has_song: false,
+            downloading: false,
         },
         None => empty_staged_seat(),
     }
@@ -893,6 +919,7 @@ fn empty_staged_seat() -> StagedSeat {
         master: false,
         playing: false,
         has_song: false,
+        downloading: false,
     }
 }
 

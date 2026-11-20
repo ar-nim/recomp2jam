@@ -23,8 +23,10 @@ mod live_boot_gate_tests {
         AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, CharacterInfo, Frame,
         Gender, JoinedRoom, Request, Response, RoomList, RoomListEntry, WireMessage, HEADER_LEN,
     };
-    use o2jam_render::{pack_xrgb, Frame as RenderFrame};
+    use o2jam_render::{pack_xrgb, Frame as RenderFrame, Rgb555Image};
+    use o2jam_shell::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
     use o2jam_shell::screens::game::PlanetModal;
+    use o2jam_shell::screens::paint::{unbound_scene_placements, CHANNEL_DIALOG_SPRITE};
     use o2jam_shell::screens::side::{
         MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_VACATE_CODE,
     };
@@ -1360,6 +1362,79 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
+    /// One solid-colour sprite layer, colourkey white so every pixel paints.
+    fn solid_figure(w: usize, h: usize, word: [u8; 2], dx: i32, dy: i32) -> AvatarFigure {
+        let mut pixels = vec![0u8; w * h * 2];
+        for pixel in pixels.as_chunks_mut::<2>().0 {
+            pixel.copy_from_slice(&word);
+        }
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&pixels, w, h).unwrap(),
+            dx,
+            dy,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    /// Stage a synthetic Planet board, Channel dialog and one-OK sheet:
+    /// the three layers the exe keeps behind the relay notice (#244 pack
+    /// `baf781b8…`). No game data, so CI runs the same path.
+    fn stage_relay_notice_layers(game: &mut o2jam_shell::ScreenGame) {
+        game.load_scene(
+            Screen::Planet,
+            unbound_scene_placements(&["Board_Backdrop.ojs".to_owned()]),
+            [(
+                "Board_Backdrop.ojs".to_owned(),
+                solid_figure(800, 600, [0x1F, 0x00], 0, 0),
+            )]
+            .into(),
+        );
+        game.load_scene(
+            Screen::Channel,
+            Vec::new(),
+            [(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(800, 466, [0xE0, 0x03], 0, 0),
+            )]
+            .into(),
+        );
+        game.load_relay_down_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "information".to_owned(),
+                code: 0,
+                sprite: Some("Dialog_Information.ojs".to_owned()),
+                rect: o2jam_render::Rect {
+                    x: 241,
+                    y: 206,
+                    w: 100,
+                    h: 60,
+                },
+            }],
+            [(
+                "Dialog_Information.ojs".to_owned(),
+                solid_figure(100, 60, [0x00, 0x7C], 241, 206),
+            )]
+            .into(),
+        );
+    }
+
+    /// Paint one frame through the live path at 800x600.
+    fn paint_relay_frame(game: &mut o2jam_shell::ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut RenderFrame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf
+    }
+
     /// Ticket #244 with the #348 boundary: `run_online` ->
     /// `relay_gate::relay_down_now` ->
     /// `stage_channel_list_after_relay_gate` ->
@@ -1445,6 +1520,55 @@ mod live_boot_gate_tests {
         assert!(game.dismiss_relay_down_dialog());
         assert_eq!(game.channel_rows(), channels, "OK reveals the held rows");
         assert_eq!(game.screen(), Screen::Channel, "OK keeps the channel frame");
+    }
+
+    /// Relay-notice composition: the exe's `baf781b8…` frame keeps the
+    /// Planet board, Channel dialog and held rows visible behind the
+    /// one-OK sheet; our wave-2 frame `deee19d9…` showed black.
+    /// Live chain: `run_online` -> `stage_channel_list_after_relay_gate`
+    /// -> `hold_channel_rows_for_relay_notice` -> `enter_screen(Channel)`
+    /// -> `open_relay_down_dialog` -> `ScreenGame::paint_at` ->
+    /// `paint_channel` -> `paint_channel_scene` (board + dialog + held
+    /// rows) -> `paint_planet_modal` -> `paint_relay_down_dialog`.
+    #[test]
+    fn relay_notice_paints_the_board_and_dialog_behind_the_sheet() {
+        let channels = vec![ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 1,
+            active: true,
+        }];
+        let mut held = o2jam_shell::ScreenGame::new();
+        stage_relay_notice_layers(&mut held);
+        held.hold_channel_rows_for_relay_notice(channels);
+        assert!(held.enter_screen(Screen::Planet));
+        assert!(held.enter_screen(Screen::Channel));
+        assert_eq!(held.planet_modal(), Some(PlanetModal::RelayDown));
+
+        let mut empty = o2jam_shell::ScreenGame::new();
+        stage_relay_notice_layers(&mut empty);
+        empty.hold_channel_rows_for_relay_notice(Vec::new());
+        assert!(empty.enter_screen(Screen::Planet));
+        assert!(empty.enter_screen(Screen::Channel));
+
+        let held_frame = paint_relay_frame(&mut held);
+        let empty_frame = paint_relay_frame(&mut empty);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        assert_eq!(held_frame[550 * 800 + 700], blue, "board MENU strip");
+        assert_eq!(held_frame[100 * 800 + 700], green, "dialog body");
+        assert_eq!(held_frame[220 * 800 + 250], red, "one-OK sheet");
+        assert_ne!(
+            held_frame[400 * 800 + 250],
+            empty_frame[400 * 800 + 250],
+            "held rows paint behind the notice"
+        );
+        assert!(
+            held.channel_rows().is_empty(),
+            "held rows stay non-interactive until OK"
+        );
     }
 
     /// Ticket #504: the relay-down notice's wire half. Live chain:
