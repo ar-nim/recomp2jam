@@ -6943,6 +6943,12 @@ pub(super) mod session_tests {
             bytes[4..8].copy_from_slice(&id.to_le_bytes());
             bytes[20..24].copy_from_slice(&bpm.to_le_bytes());
             bytes[112..117].copy_from_slice(title);
+            // `OjnListEntry::is_song` admits a row only when it names
+            // an `o2maNNN.ojm` chart; without it the catalog BPM map
+            // stays empty and the echo guard compares two `-0-`
+            // captions instead of two tempos (#553).
+            let chart = format!("o2ma{id}.ojm");
+            bytes[240..240 + chart.len()].copy_from_slice(chart.as_bytes());
             bytes
         };
         let mut catalog = record(757, 124.0, b"First");
@@ -6971,6 +6977,11 @@ pub(super) mod session_tests {
 
     #[test]
     fn a_4001_room_echo_keeps_the_staged_pick_on_bpm_and_speed_captions() {
+        // Ticket #553 (master and peer captions follow the room echo):
+        // the master half is this guard; the peer half is
+        // `a_joining_peer_keeps_the_master_seated_across_a_song_and_speed_echo`,
+        // which pins the same 4001 into the session mirror. Both read
+        // `ScreenGame::waiting_song`/`waiting_level` at paint time.
         // Ticket #535 live chain: `main.rs::run_play` -> `OnlineSession::paint`
         // (Waiting) -> `poll_waiting_chat` -> `drain_waiting_chat` ->
         // `apply_waiting_music_changed` -> `ScreenGame::set_room_music` ->
