@@ -231,11 +231,15 @@ pub struct RoomControlNoop {
 /// tree has not traced yet: the exe `CStateRoom` click dispatch.
 const HANDLER_STEP: &str =
     "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity/room.md Input row)";
-/// The exe may send a parameter on each tab press, but no pack pins a
-/// 2002 body with one. The press stays a labeled no-op on the wire while
-/// the local row filter is live (#543).
-const ROOM_FILTER_SEND_STEP: &str =
-    "tap 2002 after each mode tab press and pin the filter parameter (#543)";
+/// W-b (`W6FB-PEER-02`) pins the filter as a local view: the master
+/// changed ALL/NORMAL/LIVE while a resident peer's strip and rows
+/// stayed byte-identical and the tap carried no per-click frame. The
+/// press stays a labeled no-op; a new 2002 body would contradict the
+/// exe, so the next step is only a re-capture if the exe changes (#536).
+const ROOM_FILTER_SEND_STEP: &str = concat!(
+    "W6FB-PEER-02: ALL/NORMAL/LIVE filters only the local 2003 rows; ",
+    "a resident peer keeps its strip and rows and the tap is quiet (no 2002). "
+);
 /// Next evidence step for the four chat-tab buttons.
 const CHAT_TAB_STEP: &str =
     "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";

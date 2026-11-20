@@ -12755,4 +12755,177 @@ pub(super) mod session_tests {
         game.pump_dialog_queue();
         assert!(!game.room_no_response_dialog_open());
     }
+
+    /// Hash the resident peer's staged filter strip and rows as one
+    /// value. The exe's W-b frames were byte-identical across every
+    /// master tab click; this is the state-side form of that pin.
+    fn resident_room_view_hash(game: &o2jam_shell::ScreenGame) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", game.room_filter()).hash(&mut hasher);
+        for room in game.listed_rooms() {
+            (
+                room.number,
+                room.title.as_str(),
+                room.game_mode,
+                room.user_count,
+            )
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Room-seat client with a scripted gateway that records every
+    /// opcode it sends. Two of these make the W-b two-client leg.
+    fn recording_room_client(
+        rooms: Vec<o2jam_net::RoomListEntry>,
+    ) -> (OnlineSession, mpsc::Receiver<u16>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(20)))
+                .unwrap();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut bytes = header.to_vec();
+                let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                stream.read_exact(&mut body).unwrap();
+                bytes.extend_from_slice(&body);
+                wire_tx
+                    .send(decode_frame(&bytes).unwrap().id)
+                    .expect("the test reads its wire tap");
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.set_rooms(rooms);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), wire_rx, server)
+    }
+
+    /// Ticket #536 re-scope (W6 W-b, traces `W6FB-PEER-01/02`):
+    /// ALL/NORMAL/LIVE is a local view over the already-staged 2003
+    /// rows. The master's three tab clicks must leave a resident
+    /// peer's strip and rows hash-unchanged and put no per-click
+    /// frame on either socket; keepalives are the only allowed wire.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> assemble_online_session -> paint ->
+    ///   ScreenGame::ingest_snapshot -> click_dispatch ->
+    ///   click_room_control -> RoomControlAction::RoomFilter ->
+    ///   ScreenGame::refresh_visible_rooms (local rows; no wire).
+    /// The peer's second seat is the scripted `recording_room_client`
+    /// above, so the tap covers both clients of one room-list leg.
+    #[test]
+    fn resident_peer_keeps_its_room_filter_and_rows_while_the_master_switches_tabs() {
+        use o2jam_net::{GameMode, RoomListEntry};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        let listed_room = |number, title: &str, game_mode| RoomListEntry {
+            number,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 1,
+            max_level: 99,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        };
+        let normal = listed_room(0, "W6FILTER", GameMode::Normal.as_u8());
+        let live = listed_room(1, "LIVE-ONLY", GameMode::Live.as_u8());
+        let rooms = vec![normal, live];
+        let (mut master, master_rx, master_server) = recording_room_client(rooms.clone());
+        let (mut peer, peer_rx, peer_server) = recording_room_client(rooms);
+        let placements = [(0x1320_1003u32, 25), (0x1320_1004, 75), (0x1320_1005, 125)]
+            .into_iter()
+            .map(|(code, x)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: format!("FILTER_{code:X}"),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 10,
+                    w: 30,
+                    h: 30,
+                },
+            })
+            .collect();
+        master
+            .game_mut()
+            .load_scene(Screen::Room, placements, HashMap::new());
+        let peer_hash = resident_room_view_hash(&peer.game);
+
+        for (x, expected_filter) in [(75, "Normal"), (125, "Live"), (25, "All")] {
+            master.ingest_snapshot(&InputSnapshot::click_at(x, 25));
+            paint_frame(&mut master);
+            paint_frame(&mut peer);
+            assert_eq!(
+                format!("{:?}", master.game.room_filter()),
+                expected_filter,
+                "the master switched to its local {expected_filter} family"
+            );
+            assert_eq!(
+                resident_room_view_hash(&peer.game),
+                peer_hash,
+                "a resident peer keeps its strip and rows on every master tab click"
+            );
+        }
+
+        let noop = master
+            .game
+            .room_control_noop()
+            .expect("the tab press still records its wire step");
+        assert!(
+            noop.next_step.contains("W6FB-PEER-02"),
+            "the no-op names the W-b null wire pin, got {}",
+            noop.next_step
+        );
+        let opcode_filter = |rx: &mpsc::Receiver<u16>| {
+            rx.try_iter()
+                .filter(|id| !matches!(id, 6000 | 6001))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            opcode_filter(&master_rx).is_empty(),
+            "the master's tab clicks put no filter opcode on the wire"
+        );
+        assert!(
+            opcode_filter(&peer_rx).is_empty(),
+            "the resident peer's tap has no filter or join opcode"
+        );
+        drop(master);
+        drop(peer);
+        master_server.join().unwrap();
+        peer_server.join().unwrap();
+    }
 }
