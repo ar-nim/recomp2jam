@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use super::super::paint::{dialog_rect_hit, SceneArt};
+use super::super::paint::{dialog_rect_hit, paint_dialog_scene, SceneArt};
 use super::super::side::{
     PlanetOptionTab, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
     OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
@@ -23,8 +23,9 @@ use super::super::side::{
     OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, OPTION_SOUND_KEYSET,
     PLANET_OPTION_FIRST_TAB,
 };
-use crate::avatar::{AvatarFigure, ScenePlacement};
+use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
 use crate::options::OptionsSettings;
+use o2jam_render::{Frame, Rgb555Image};
 
 /// The options modal as one state cluster: the tab sheets are keyed by
 /// declaration order (Key, Sound, Game), and every click reads the open
@@ -251,8 +252,8 @@ impl OptionsDialog {
     }
 
     /// Sound-tab slider buttons: each Down/Up pair steps its volume
-    /// by the ours-by-design step inside the 0–255 domain (which
-    /// slider writes which `Sound` key is ours-by-design, OPEN).
+    /// by the exe-pinned 4 inside the 0–255 domain (which slider writes
+    /// which `Sound` key stays ours-by-design, OPEN).
     fn click_sound_tab(&mut self, x: i32, y: i32) {
         if self.hit(OPTION_SOUND_BG_MUSIC_DOWN, x, y) {
             self.settings.step_bgm_music(false);
@@ -310,5 +311,174 @@ impl OptionsDialog {
         } else if self.hit(OPTION_GAME_LONGNOTE_NONE, x, y) {
             self.settings.set_longnote_mode(0);
         }
+    }
+}
+
+/// Staged knob controls in exe order (`0x26500013..16`, `0x43b690`,
+/// file `0x3b690`, evidence `ev_aefab8e8…`).
+const SOUND_KNOB_CODES: [u32; 4] = [0x2650_0013, 0x2650_0014, 0x2650_0015, 0x2650_0016];
+
+/// Exe divisors for those knobs: 255, 255, 255, 204 (NoteKey).
+const SOUND_KNOB_DIVISORS: [usize; 4] = [255, 255, 255, 204];
+
+/// Right-cap fill of one staged bar, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KnobFill {
+    /// Bar-art columns still visible after the cap moves left.
+    visible_art_width: usize,
+    /// Exe's `trunc(volume / divisor * track_width)`.
+    filled: usize,
+    /// Unfilled columns of the staged track.
+    remaining: usize,
+}
+
+/// Compute one knob's fill from the staged `.bnd` track width and its
+/// volume word. Integer division is the exe's float-to-int trunc of the
+/// same ratio; the ratio is clamped to the track so the NoteKey
+/// divisor 204 cannot paint past the staged art.
+fn knob_fill(volume: u8, divisor: usize, track_width: usize, art_width: usize) -> KnobFill {
+    let filled = usize::from(volume)
+        .saturating_mul(track_width)
+        .checked_div(divisor)
+        .unwrap_or(0)
+        .min(track_width);
+    let remaining = track_width - filled;
+    KnobFill {
+        visible_art_width: if volume == 0 {
+            0
+        } else {
+            art_width.saturating_sub(remaining)
+        },
+        filled,
+        remaining,
+    }
+}
+
+/// Keep the left `visible_width` columns of a staged bar record. The
+/// exe clips the static bar art at the right cap instead of moving a
+/// record (`docs/captures/t713/findings.md`, `Option_Sound_BGMusicBar.ojs`
+/// rec0 at `(283,179)` and `Option_Sound_GameMusicBar.ojs` rec0 at
+/// `(283,360)`).
+fn crop_bar_figure(figure: &AvatarFigure, visible_width: usize) -> Option<AvatarFigure> {
+    let layer = figure.layer(0)?;
+    let width = visible_width.min(layer.image.w);
+    let mut words = Vec::with_capacity(width.saturating_mul(layer.image.h));
+    for row in 0..layer.image.h {
+        let start = row.checked_mul(layer.image.w)?;
+        let end = start.checked_add(width)?;
+        words.extend_from_slice(layer.image.words.get(start..end)?);
+    }
+    let mut cropped = AvatarFigure::default();
+    cropped.push_layer(FigureLayer {
+        image: Rgb555Image {
+            w: width,
+            h: layer.image.h,
+            words,
+        },
+        dx: layer.dx,
+        dy: layer.dy,
+        colorkey: layer.colorkey,
+    });
+    Some(cropped)
+}
+
+/// Volume word behind each staged knob (the shell's ours-by-design
+/// slider↔key map; the exe's first-knob BGVolume/GameBGVolume coupling
+/// stays OPEN — see `~/scratch/opt-sliders-findings.md`).
+fn sound_knob_volumes(settings: &OptionsSettings) -> [u8; 4] {
+    [
+        settings.bgm_music(),
+        settings.bg_effect(),
+        settings.game_music(),
+        settings.game_effect(),
+    ]
+}
+
+/// Sound-sheet figures with each staged bar clipped to its volume.
+fn sound_bar_figures(art: &SceneArt, settings: &OptionsSettings) -> HashMap<String, AvatarFigure> {
+    let mut figures = art.figures.clone();
+    for ((code, divisor), volume) in SOUND_KNOB_CODES
+        .iter()
+        .zip(SOUND_KNOB_DIVISORS)
+        .zip(sound_knob_volumes(settings))
+    {
+        let Some(placement) = art.placements.iter().find(|placed| placed.code == *code) else {
+            continue;
+        };
+        let Some(sprite) = placement.sprite.as_deref() else {
+            continue;
+        };
+        let Some(figure) = art.figures.get(sprite) else {
+            continue;
+        };
+        let track_width = usize::try_from(placement.rect.w).unwrap_or_default();
+        let Some(layer) = figure.layer(0).filter(|_| track_width > 0) else {
+            continue;
+        };
+        let fill = knob_fill(volume, divisor, track_width, layer.image.w);
+        if fill.visible_art_width == layer.image.w {
+            continue;
+        }
+        if let Some(cropped) = crop_bar_figure(figure, fill.visible_art_width) {
+            figures.insert(sprite.to_owned(), cropped);
+        }
+    }
+    figures
+}
+
+/// Paint the staged Sound sheet with each bar's right cap clipped to
+/// its volume word, in the same back-to-front pass as any other dialog.
+/// Both directions come from the words, never from click state.
+pub(super) fn paint_sound_tab_with_knobs(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    settings: &OptionsSettings,
+) {
+    paint_dialog_scene(
+        frame,
+        &SceneArt {
+            placements: art.placements.clone(),
+            figures: sound_bar_figures(art, settings),
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knob_fill_truncates_the_exe_ratio_from_the_staged_track_width() {
+        // 229 px is the staged BGBAR rect (`Dialog_Option_Sound.bnd`
+        // record 19); 239 px is the BGMusicBar rec0 art width (#713).
+        let full = knob_fill(255, 255, 229, 239);
+        assert_eq!(
+            full,
+            KnobFill {
+                visible_art_width: 239,
+                filled: 229,
+                remaining: 0
+            }
+        );
+        let down = knob_fill(251, 255, 229, 239);
+        assert_eq!(
+            down,
+            KnobFill {
+                visible_art_width: 235,
+                filled: 225,
+                remaining: 4
+            }
+        );
+        let empty = knob_fill(0, 255, 229, 239);
+        assert_eq!(empty.visible_art_width, 0, "volume 0 hides the bar");
+    }
+
+    #[test]
+    fn note_key_knob_uses_divisor_204_and_saturates_at_the_track_end() {
+        assert_eq!(knob_fill(255, 204, 229, 239).remaining, 0);
+        let lowered = knob_fill(200, 204, 229, 239);
+        assert_eq!(lowered.filled, 224);
+        assert_eq!(lowered.remaining, 5);
+        assert_eq!(lowered.visible_art_width, 234);
     }
 }

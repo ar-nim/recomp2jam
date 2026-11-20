@@ -3247,7 +3247,7 @@ pub const OPTION_KEY_7KEY_MODE: u32 = 0x2520_1004;
 pub const OPTION_KEY_TEST: u32 = 0x2520_A005;
 
 /// Sound-tab slider codes (`IDC_BUTTON_DOPTIONSOUND_*`): each pair
-/// steps its volume down/up by the ours-by-design step.
+/// steps its volume down/up by the exe-pinned 4 (`0x43bf30`).
 pub const OPTION_SOUND_BG_MUSIC_DOWN: u32 = 0x2620_0002;
 /// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
 pub const OPTION_SOUND_BG_MUSIC_UP: u32 = 0x2620_0003;

@@ -18,12 +18,14 @@ use o2jam_render::{pack_xrgb, rect_from_corners, Frame};
 use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, PlacementRole, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 use o2jam_shell::screens::side::{
-    ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
+    PlanetOptionTab, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE,
+    ROOM_OPTION_BUTTON_ID,
 };
 use o2jam_shell::staging::{
     read_install_archives, stage_byname_sheet, stage_dialog, stage_state, Dialog, InstallArchives,
     StageContext, State, BYNAME_TABLE,
 };
+use o2jam_shell::InputSnapshot;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 /// Probe frame dimensions (matches the `shots.rs` aspect).
@@ -1202,5 +1204,77 @@ fn master_emblem_stages_only_on_the_creator_seat_with_real_art() {
         ink_at_seat(&mut game, 1),
         star_ink,
         "guest's own slot 1 has no master emblem"
+    );
+}
+
+#[test]
+fn sound_slider_step_repaints_the_real_bar_fill_without_moving_the_record() {
+    // Real 7.55 bytes (skips when install-root is hidden): the #713
+    // capture pinned `Option_Sound_BGMusicBar.ojs` rec0 as a static
+    // record at (283,179) whose right fill cap shortens. Drive the
+    // staged sheet through the live gear -> click_sound_tab -> painter
+    // chain and compare that band across one Down/Up pair.
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some(archive) = install_archives().interface else {
+        println!("skip sound bar repaint: missing {}", path.display());
+        return;
+    };
+    let art = stage_dialog(&archive, Dialog::PlanetOptionSound, StageContext::default())
+        .art
+        .expect("sound sheet stages with real bytes");
+    let mut game = ScreenGame::new();
+    game.load_planet_option_tab(PlanetOptionTab::Sound, art.placements, art.figures);
+    game.load_options(&install_root());
+    game.menu_key(MenuKey::Back, true);
+    game.click_planet(729, 580);
+    assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+
+    let bar_band = |game: &mut ScreenGame| {
+        let mut buf = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: CHANNEL_PROBE_W,
+                h: CHANNEL_PROBE_H,
+            },
+            0,
+        );
+        let mut band = Vec::with_capacity(10 * 240);
+        for y in 179..189 {
+            for x in 283..523 {
+                band.push(buf[y * CHANNEL_PROBE_W + x]);
+            }
+        }
+        band
+    };
+    let full = bar_band(&mut game);
+    assert_eq!(game.options().bgm_music(), 255);
+    // First Down arrow `.bnd` rect (49,159) + the capture's (220,43)
+    // click offset — never the art anchor (217,42).
+    // The last four art columns are already baked into the sheet, so
+    // the first 4-unit step paints no visible delta (#713 null result).
+    // Two steps cross into the bar's distinct right cap.
+    for _ in 0..2 {
+        game.ingest_snapshot(&InputSnapshot::click_at(269, 202));
+    }
+    assert_eq!(game.options().bgm_music(), 247, "each exe step is 4");
+    let lowered = bar_band(&mut game);
+    let changed = lowered
+        .iter()
+        .zip(&full)
+        .filter(|(after, before)| after != before)
+        .count();
+    assert!(
+        changed > 0,
+        "two steps must change the real bar's right cap"
+    );
+    for _ in 0..2 {
+        game.ingest_snapshot(&InputSnapshot::click_at(466, 202));
+    }
+    let restored = bar_band(&mut game);
+    assert!(
+        restored == full,
+        "the Up arrow restores the same bar pixels ({} changed)",
+        restored.iter().zip(&full).filter(|(a, b)| a != b).count()
     );
 }

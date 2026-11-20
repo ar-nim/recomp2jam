@@ -20,7 +20,7 @@ use self::chat::ChatState;
 pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
-use self::options::OptionsDialog;
+use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
 use self::room_fuse::RoomNoResponseFuse;
@@ -6454,11 +6454,19 @@ impl ScreenGame {
                 paint_planet_quit(frame, self.planet_quit_art.as_ref());
             }
             Some(PlanetModal::Options) => {
-                paint_planet_options(
-                    frame,
-                    self.options_dialog.staged_art(),
-                    self.options_dialog.tab(),
-                );
+                let sound_art = (self.options_dialog.tab() == PlanetOptionTab::Sound)
+                    .then(|| self.options_dialog.staged_art())
+                    .flatten()
+                    .filter(|art| art.has_figures());
+                if let Some(art) = sound_art {
+                    paint_sound_tab_with_knobs(frame, art, self.options_dialog.settings());
+                } else {
+                    paint_planet_options(
+                        frame,
+                        self.options_dialog.staged_art(),
+                        self.options_dialog.tab(),
+                    );
+                }
             }
             Some(PlanetModal::RelayDown) => {
                 paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
@@ -16256,10 +16264,10 @@ mod game_tests {
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
         // Re-based when Game DEFAULT began restoring the exe raw
-        // `LongnoteMode` 3 instead of the old stand-in 0; the observed
-        // state otherwise stays byte-for-byte identical.
+        // `LongnoteMode` 3 instead of the old stand-in 0, then again
+        // when the Sound slider step moved from 8 to the exe's 4.
         assert_eq!(
-            hash, 0xBB2F_B224_2B51_A752,
+            hash, 0x858B_5A27_2E51_EA3D,
             "options outputs drifted: {observed}"
         );
     }
@@ -16437,14 +16445,201 @@ mod game_tests {
         );
     }
 
+    /// One synthetic Sound-sheet row: the real `.bnd` track/arrow
+    /// rectangles and the bar record's anchor and sprite name (#713).
+    struct SoundBarRow {
+        bar_code: u32,
+        down: u32,
+        up: u32,
+        bar_y: i32,
+        arrow_y: i32,
+        sprite: &'static str,
+    }
+
+    fn sound_bar_rows() -> [SoundBarRow; 4] {
+        use super::super::side::{
+            OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
+            OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
+            OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+        };
+        [
+            SoundBarRow {
+                bar_code: 0x2650_0013,
+                down: OPTION_SOUND_BG_MUSIC_DOWN,
+                up: OPTION_SOUND_BG_MUSIC_UP,
+                bar_y: 137,
+                arrow_y: 159,
+                sprite: "Option_Sound_BGMusicBar.ojs",
+            },
+            SoundBarRow {
+                bar_code: 0x2650_0014,
+                down: OPTION_SOUND_BG_EFFECT_DOWN,
+                up: OPTION_SOUND_BG_EFFECT_UP,
+                bar_y: 227,
+                arrow_y: 249,
+                sprite: "Option_Sound_BGEffectBar.ojs",
+            },
+            SoundBarRow {
+                bar_code: 0x2650_0015,
+                down: OPTION_SOUND_GAME_MUSIC_DOWN,
+                up: OPTION_SOUND_GAME_MUSIC_UP,
+                bar_y: 318,
+                arrow_y: 340,
+                sprite: "Option_Sound_GameMusicBar.ojs",
+            },
+            SoundBarRow {
+                bar_code: 0x2650_0016,
+                down: OPTION_SOUND_GAME_EFFECT_DOWN,
+                up: OPTION_SOUND_GAME_EFFECT_UP,
+                bar_y: 408,
+                arrow_y: 430,
+                sprite: "Option_Sound_GameEffectBar.ojs",
+            },
+        ]
+    }
+
+    fn stage_sound_row(
+        index: usize,
+        row: &SoundBarRow,
+        placements: &mut Vec<crate::avatar::ScenePlacement>,
+        figures: &mut HashMap<String, AvatarFigure>,
+    ) {
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        let mut bar_figure = AvatarFigure::default();
+        bar_figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&vec![0x7C; 239 * 10 * 2], 239, 10).unwrap(),
+            dx: 66,
+            dy: row.bar_y,
+            colorkey: 0x0000,
+        });
+        figures.insert(row.sprite.to_owned(), bar_figure);
+        let control = |id: String, code: u32, x: i32, sprite: Option<String>| ScenePlacement {
+            id,
+            code,
+            sprite,
+            rect: Rect {
+                x,
+                y: row.arrow_y,
+                w: 71,
+                h: 22,
+            },
+            role: PlacementRole::Single,
+        };
+        placements.push(control(
+            format!("IDC_BUTTON_DOWN_{index}"),
+            row.down,
+            49,
+            None,
+        ));
+        placements.push(control(format!("IDC_BUTTON_UP_{index}"), row.up, 246, None));
+        placements.push(ScenePlacement {
+            id: format!("IDC_IMAGE_BAR_{index}"),
+            code: row.bar_code,
+            sprite: Some(row.sprite.to_owned()),
+            rect: Rect {
+                x: 71,
+                y: row.bar_y,
+                w: 229,
+                h: 10,
+            },
+            role: PlacementRole::Single,
+        });
+    }
+
+    /// Stage the four pinned Sound-sheet bar rows: `Dialog_Option_Sound.ojs`
+    /// rec0 at art origin `(217,42)`, the four bar rec0 bodies anchored at
+    /// `(66,137/227/318/408)`, and each Down/Up pair at its `.bnd` rect
+    /// (click origin +`(220,43)`, #713 geometry).
+    fn stage_sound_bar_scene(game: &mut ScreenGame) {
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        let back_sprite = "Dialog_Option_Sound.ojs";
+        let mut back_figure = AvatarFigure::default();
+        back_figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&vec![0x20; 365 * 515 * 2], 365, 515).unwrap(),
+            dx: 217,
+            dy: 42,
+            colorkey: 0x0000,
+        });
+        let mut figures = HashMap::from([(back_sprite.to_owned(), back_figure)]);
+        let mut placements = vec![ScenePlacement {
+            id: "IDC_BACK_DOPTIONSOUND".to_owned(),
+            code: 0x2610_0001,
+            sprite: Some(back_sprite.to_owned()),
+            rect: Rect {
+                x: 217,
+                y: 42,
+                w: 365,
+                h: 515,
+            },
+            role: PlacementRole::Single,
+        }];
+        for (index, row) in sound_bar_rows().iter().enumerate() {
+            stage_sound_row(index, row, &mut placements, &mut figures);
+        }
+        game.load_planet_option_tab(PlanetOptionTab::Sound, placements, figures);
+    }
+
+    /// Native 800x600 pixel from a painted frame.
+    fn frame_pixel(buf: &[u32], x: usize, y: usize) -> u32 {
+        buf[y * 800 + x]
+    }
+
     #[test]
-    fn sound_tab_four_sliders_step_by_eight_and_stay_in_byte_bounds() {
+    fn sound_slider_steps_repaint_every_right_cap_in_both_directions() {
+        // Live chain: gear -> click_planet_modal -> click_options_dialog ->
+        // OptionsDialog::click_sound_tab -> step_*_volume ->
+        // ScreenGame::paint_planet -> paint_planet_options ->
+        // paint_sound_tab_with_knobs. The #713 captures pin static bar
+        // records with a clipped right cap; all four rows must move.
+        let mut game = ScreenGame::new();
+        stage_sound_bar_scene(&mut game);
+        open_options(&mut game);
+        let paint_cap = |game: &mut ScreenGame, y: usize| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            frame_pixel(&buf, 520, y)
+        };
+        // (cap row, down click, up click, steps to leave the NoteKey
+        // divisor-204 full-end saturation)
+        let rows = [
+            (184, (269, 202), (466, 202), 1),
+            (274, (269, 292), (466, 292), 1),
+            (365, (269, 383), (466, 383), 1),
+            (455, (269, 473), (466, 473), 16),
+        ];
+        for (y, down, up, steps) in rows {
+            let full = paint_cap(&mut game, y);
+            assert_ne!(full, 0, "bar ink at the pinned right cap on row {y}");
+            for _ in 0..steps {
+                game.ingest_snapshot(&InputSnapshot::click_at(down.0, down.1));
+            }
+            let shortened = paint_cap(&mut game, y);
+            assert_ne!(shortened, full, "step must shorten row {y}'s right cap");
+            for _ in 0..steps {
+                game.ingest_snapshot(&InputSnapshot::click_at(up.0, up.1));
+            }
+            let restored = paint_cap(&mut game, y);
+            assert_eq!(restored, full, "up steps restore row {y}'s right cap");
+        }
+    }
+
+    #[test]
+    fn sound_tab_four_sliders_step_by_four_and_stay_in_byte_bounds() {
         // Live chain: main.rs::run_online -> run_windowed_session ->
         // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
         // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
         // -> click_options_dialog -> OptionsDialog::click_sound_tab ->
-        // OptionsSettings::step_*_volume. The four Sound keys are pinned;
-        // which slider writes which key stays ours-by-design (SAVE-diff OPEN).
+        // OptionsSettings::step_*_volume. The exe's slider click arms
+        // (`0x43bf30`, file `0x3bf30`, IDs `0x26200002..09`) step by 4;
+        // our old step-8 guard is rewritten here, not dropped. Which slider
+        // writes which ini key stays ours-by-design (SAVE-diff OPEN).
         use super::super::side::{
             OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
             OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
@@ -16472,7 +16667,7 @@ mod game_tests {
             let y = 100 + 40 * i32::try_from(index).unwrap_or(0);
             click_button(&mut game, 100, y);
             click_button(&mut game, 140, y);
-            for _ in 0..32 {
+            for _ in 0..64 {
                 click_button(&mut game, 100, y);
             }
             click_button(&mut game, 140, y);
@@ -16484,8 +16679,8 @@ mod game_tests {
                 game.options().game_music(),
                 game.options().game_effect(),
             ],
-            [crate::options::SOUND_SLIDER_STEP; 4],
-            "each slider steps 8 and saturates at both byte bounds"
+            [4; 4],
+            "each slider steps by the exe's 4 and saturates at both byte bounds"
         );
     }
 
@@ -16869,8 +17064,8 @@ mod game_tests {
         assert_eq!(peaks.borrow().last(), Some(&1000));
         game.options_mut().step_bgm_music(false);
         game.enter(Screen::Channel);
-        // 1000 * 247 / 255 = 968.6, rounds to 969.
-        assert_eq!(peaks.borrow().last(), Some(&969));
+        // One exe step: 1000 * 251 / 255 = 984.3, rounds to 984.
+        assert_eq!(peaks.borrow().last(), Some(&984));
     }
 
     #[test]
@@ -16936,10 +17131,10 @@ mod game_tests {
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Sound);
         click_button(&mut game, 100, 100);
-        // 1000 * 247 / 255 rounds to 969; no scene entry in between.
+        // One exe step: 1000 * 251 / 255 rounds to 984; no scene entry.
         assert_eq!(
             peaks.borrow().last(),
-            Some(&969),
+            Some(&984),
             "the slider re-cues the running lobby track"
         );
         assert_eq!(
