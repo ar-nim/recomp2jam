@@ -100,9 +100,10 @@ pub trait AudioBackend {
         }
         self.play_pcm(pcm)
     }
-    /// Start (repeat) or stop (`None`) the scene BGM behind the
+    /// Start (repeat) or stop (`None`) the scene BGM alongside the
     /// queued audio (the exe's `play_scene_music` contract, see
-    /// [`SceneBgm`]): a selection replaces the playing one.
+    /// [`SceneBgm`]): a selection replaces the playing one. One-shot
+    /// cues mix over this voice; they never pause or duck it.
     ///
     /// The default counts the cue once through
     /// [`AudioBackend::play_pcm`] (clock-only sinks stay silent and
@@ -259,10 +260,11 @@ fn voice_frames(pcm: &PcmSamples, out_channels: usize, out_rate: u32) -> Vec<f32
     frames
 }
 
-/// A scene-BGM voice behind the queued audio: device-rate frames
-/// converted once at selection time, pulled by the realtime
-/// callback only when the queue is dry. `repeat` wraps the voice
-/// when it ends; a once-voice clears itself when played out.
+/// A scene-BGM voice independent of the one-shot queue: device-rate
+/// frames converted once at selection time and pulled by the realtime
+/// callback on every device sample, even while effects or key sounds
+/// are queued. `repeat` wraps the voice when it ends; a once-voice
+/// clears itself when played out.
 #[derive(Debug)]
 struct LoopVoice {
     frames: Vec<f32>,
@@ -288,8 +290,9 @@ impl PcmQueue {
     /// pending queue starting at the playhead: indices before the
     /// playhead do not exist, so mixing starts at the front of what is
     /// still queued and extends the tail when the voice rings past it.
-    /// Sums clamp to `[-1.0, 1.0]` (no wraparound), matching
-    /// [`SongMixer::mix`]. Never moves `consumed_frames`.
+    /// The BGM is a separate voice and is untouched here. Sums clamp to
+    /// `[-1.0, 1.0]` (no wraparound), matching [`SongMixer::mix`].
+    /// Never moves `consumed_frames`.
     fn mix_at_playhead(&mut self, voice: &[f32]) {
         for (i, sample) in voice.iter().enumerate() {
             match self.buf.get_mut(i) {
@@ -309,14 +312,13 @@ impl PcmQueue {
         self.buf.len()
     }
 
-    /// Pop one pending sample; the BGM voice sounds only when the
-    /// queue is dry; silence when both are dry.
+    /// Pull one device sample: queued one-shots layer over a BGM
+    /// voice that advances on every sample, so an effect cannot pause
+    /// or duck the music. Silence when neither voice has audio.
     fn pop_sample(&mut self) -> f32 {
-        if let Some(sample) = self.buf.pop_front() {
-            sample
-        } else {
-            self.next_bgm_sample().unwrap_or(0.0)
-        }
+        let queued = self.buf.pop_front().unwrap_or(0.0);
+        let bgm = self.next_bgm_sample().unwrap_or(0.0);
+        (queued + bgm).clamp(-1.0, 1.0)
     }
 
     /// Note one fully served device frame (realtime side only).
@@ -325,7 +327,9 @@ impl PcmQueue {
     }
 
     /// Start a scene-BGM voice (the one at a time): a selection
-    /// replaces the playing voice. Empty audio starts no voice.
+    /// replaces the playing voice. It runs in parallel with queued
+    /// one-shots from the first device sample. Empty audio starts no
+    /// voice.
     fn start_bgm(&mut self, pcm: &PcmSamples, out_channels: usize, out_rate: u32, repeat: bool) {
         let frames = voice_frames(pcm, out_channels, out_rate);
         if frames.is_empty() {
@@ -539,9 +543,10 @@ impl CpalBackend {
         Ok(())
     }
 
-    /// Start (repeat) or stop (`None`) the scene BGM behind the
+    /// Start (repeat) or stop (`None`) the scene BGM alongside the
     /// queued audio: the voice converts once here (never in the
-    /// callback) and sounds once the queue drains.
+    /// callback) and sounds on the next device sample, under any
+    /// queued one-shots.
     ///
     /// # Errors
     ///
@@ -563,8 +568,8 @@ impl CpalBackend {
     }
 
     /// Queued-but-unplayed device frames behind the playhead — the
-    /// BGM tail is not counted: it is the (possibly endless) voice
-    /// behind the queue, not queue depth.
+    /// BGM is not counted: it is a (possibly endless) parallel voice,
+    /// not queue depth.
     #[must_use]
     pub fn pending_frames(&self) -> u64 {
         let channels = u64::from(self.channels.max(1));
@@ -1008,6 +1013,67 @@ mod tests {
         assert!((out[0] - 0.5).abs() < 1e-6);
     }
 
+    /// Pull exactly `count` device samples the way the realtime callback
+    /// does: BGM and queued one-shots are read together.
+    fn pull_samples(queue: &mut PcmQueue, count: usize) -> Vec<f32> {
+        (0..count).map(|_| queue.pop_sample()).collect()
+    }
+
+    /// Live caller chain (#721 cue + #718 mix):
+    /// `main.rs::run_play` → `OnlineSession::attach_initial_audio` →
+    /// `SinkChoice::open` → `CpalBackend::set_scene_bgm` → `PcmQueue::start_bgm`;
+    /// `ScreenGame::cue_ui_effect` → `AudioBackend::play_key` →
+    /// `CpalBackend::play_key` → `PcmQueue::mix_at_playhead`; callback →
+    /// `PcmQueue::pop_sample`. No hardware needed for the mixing seam.
+    #[test]
+    fn bgm_keeps_its_sample_sequence_while_a_ui_effect_cue_plays() {
+        let mut queue = PcmQueue::default();
+        let bgm = mono_pcm(&[8192, -8192, 12288, -12288]);
+        queue.start_bgm(&bgm, 1, 44_100, true);
+        assert_eq!(pull_samples(&mut queue, 2), [0.25, -0.25]);
+
+        let effect = voice_frames(&mono_pcm(&[4096, 4096, 4096, 4096]), 1, 44_100);
+        queue.mix_at_playhead(&effect);
+
+        let heard = pull_samples(&mut queue, 4);
+        let bgm_under_effect = [12288i16, -12288, 8192, -8192];
+        let expected: Vec<f32> = bgm_under_effect
+            .iter()
+            .zip(&effect)
+            .map(|(sample, effect)| f32::from(*sample) / 32768.0 + effect)
+            .collect();
+        assert_eq!(heard, expected);
+        assert_eq!(pull_samples(&mut queue, 2), [0.375, -0.375]);
+    }
+
+    /// Live chain: same cue path as the single-effect guard above; two
+    /// `ScreenGame::cue_ui_effect` calls land in quick succession.
+    #[test]
+    fn two_overlapping_ui_effect_cues_mix_over_continuous_bgm() {
+        let mut queue = PcmQueue::default();
+        queue.start_bgm(&mono_pcm(&[8192, -8192, 12288, -12288]), 1, 44_100, true);
+        let first_effect = voice_frames(&mono_pcm(&[4096; 6]), 1, 44_100);
+        queue.mix_at_playhead(&first_effect);
+        assert_eq!(pull_samples(&mut queue, 1), [0.375]);
+
+        let second_effect = voice_frames(&mono_pcm(&[-2048; 4]), 1, 44_100);
+        queue.mix_at_playhead(&second_effect);
+
+        let heard = pull_samples(&mut queue, 5);
+        let bgm_samples = [-8192i16, 12288, -12288, 8192, -8192];
+        let expected: Vec<f32> = bgm_samples
+            .iter()
+            .zip(&first_effect[1..])
+            .enumerate()
+            .map(|(index, (sample, first))| {
+                let second = second_effect.get(index).copied().unwrap_or(0.0);
+                f32::from(*sample) / 32768.0 + first + second
+            })
+            .collect();
+        assert_eq!(heard, expected);
+        assert_eq!(pull_samples(&mut queue, 1), [0.375]);
+    }
+
     #[test]
     fn looping_bgm_repeats_until_replaced() {
         let mut queue = PcmQueue::default();
@@ -1041,11 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn queued_audio_sounds_before_the_bgm_tail() {
+    fn queued_audio_layers_over_the_bgm_voice() {
         let mut queue = PcmQueue::default();
         queue.push_pcm(&mono_pcm(&[8192]), 1, 44100);
         queue.start_bgm(&mono_pcm(&[16384]), 1, 44100, true);
-        assert_eq!(queue.pop_sample(), 0.25);
+        assert_eq!(queue.pop_sample(), 0.75);
         assert_eq!(queue.pop_sample(), 0.5);
     }
 
