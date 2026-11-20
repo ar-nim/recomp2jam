@@ -2522,7 +2522,7 @@ pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
 /// `docs/bnd-semantics.md:41`); the fallback is only the
 /// archive-less stand-in. There is exactly one `OK` (#244 capture).
 pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
-    paint_information_sheet(frame, art, RELAY_DOWN_MESSAGE_CP949);
+    paint_information_message(frame, art, RELAY_DOWN_MESSAGE_CP949);
 }
 
 /// Room-state no-response sheet (#367): the very same staged
@@ -2530,11 +2530,14 @@ pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
 /// `0x21400003`. Geometry still comes only from the parsed `.bnd`
 /// rects (owner rule `f38f3`); the fallback is archive-less only.
 pub fn paint_room_no_response_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
-    paint_information_sheet(frame, art, NO_RESPONSE_MESSAGE_CP949);
+    paint_information_message(frame, art, NO_RESPONSE_MESSAGE_CP949);
 }
 
-/// One-OK sheet painter shared by the relay notice and Room fuse.
-fn paint_information_sheet(frame: &mut Frame<'_>, art: Option<&SceneArt>, message: &[u8]) {
+/// One-OK sheet painter shared by the relay notice, the Room fuse, and
+/// the refused channel enter (#717). The caller owns the exact CP949
+/// bytes; geometry comes only from the staged `.bnd` rects or the
+/// archive-less fallback rect.
+pub fn paint_information_message(frame: &mut Frame<'_>, art: Option<&SceneArt>, message: &[u8]) {
     if let Some(art) = art.filter(|art| art.has_figures()) {
         paint_dialog_scene(frame, art);
         let origin = dialog_origin(&art.placements);

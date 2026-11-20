@@ -37,21 +37,21 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
     list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
-    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
-    paint_music_shop_row_selection, paint_music_shop_wallet, paint_myroom_data,
-    paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_wallet,
+    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice,
+    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
+    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -370,6 +370,10 @@ pub enum PlanetModal {
     /// Relay-unavailable notice (`Dialog_Information`, one OK):
     /// OK reveals the staged Channel dialog (#244).
     RelayDown,
+    /// Refused channel enter (`Dialog_Information`, one OK): the
+    /// result-specific 1005 text (#717). OK leaves the Channel
+    /// dialog and its rows unchanged.
+    ChannelEnterRefused,
 }
 
 /// The shell's Space lane (`crate::lane_key(3)`): while the fuse's
@@ -686,8 +690,12 @@ pub struct ScreenGame {
     /// paints instead).
     planet_quit_art: Option<SceneArt>,
     /// Staged one-OK information sheet for the relay-unavailable
-    /// notice (`Dialog_Information.bnd`, #244).
+    /// notice and the refused-enter notice (`Dialog_Information.bnd`,
+    /// #244/#717).
     relay_down_art: Option<SceneArt>,
+    /// CP949 text the 1005 handler pinned for the open refused-enter
+    /// sheet (#717). `None` outside that sheet.
+    channel_refusal_message: Option<&'static [u8]>,
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
@@ -1081,6 +1089,7 @@ impl ScreenGame {
             play_longnote: None,
             planet_quit_art: None,
             relay_down_art: None,
+            channel_refusal_message: None,
             relay_down_pending_channels: Vec::new(),
             relay_down_notice_pending: false,
             member_download_progress: [None; 8],
@@ -1545,6 +1554,41 @@ impl ScreenGame {
         self.planet_board.close_modal();
         let channels = std::mem::take(&mut self.relay_down_pending_channels);
         self.set_channels(channels);
+        true
+    }
+
+    /// Post the pinned one-OK Information sheet for a refused channel
+    /// enter (#717). The wire handler owns the result-to-text mapping;
+    /// this owner only holds that text and the modal. No sound cue, row
+    /// edit, or highlight write belongs to this edge.
+    pub fn open_channel_refusal_dialog(&mut self, message: &'static [u8]) -> &mut Self {
+        self.channel_refusal_message = Some(message);
+        self.planet_board
+            .open_modal(PlanetModal::ChannelEnterRefused);
+        self
+    }
+
+    /// Text pinned on the open refused-enter sheet, for guards (#717).
+    #[must_use]
+    pub const fn channel_refusal_message(&self) -> Option<&'static [u8]> {
+        self.channel_refusal_message
+    }
+
+    /// True while a refused-enter sheet owns the Channel dialog (#717).
+    #[must_use]
+    pub fn channel_refusal_dialog_open(&self) -> bool {
+        self.planet_modal() == Some(PlanetModal::ChannelEnterRefused)
+    }
+
+    /// OK (or Back) on a refused-enter sheet: close it and leave the
+    /// Channel dialog, rows, highlight, and sound state as they were.
+    /// Returns `false` when no refusal sheet was open.
+    pub fn dismiss_channel_refusal_dialog(&mut self) -> bool {
+        if !self.channel_refusal_dialog_open() {
+            return false;
+        }
+        self.planet_board.close_modal();
+        self.channel_refusal_message = None;
         true
     }
 
@@ -4856,6 +4900,10 @@ impl ScreenGame {
                 self.dismiss_relay_down_dialog();
             }
             Some(PlanetModal::RelayDown) => {}
+            Some(PlanetModal::ChannelEnterRefused) if self.information_ok_hit(x, y) => {
+                self.dismiss_channel_refusal_dialog();
+            }
+            Some(PlanetModal::ChannelEnterRefused) => {}
             None => {}
         }
     }
@@ -6404,6 +6452,11 @@ impl ScreenGame {
             Some(PlanetModal::RelayDown) => {
                 paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
             }
+            Some(PlanetModal::ChannelEnterRefused) => {
+                if let Some(message) = self.channel_refusal_message {
+                    paint_information_message(frame, self.relay_down_art.as_ref(), message);
+                }
+            }
             None => {}
         }
     }
@@ -7193,6 +7246,8 @@ impl GameLoop for ScreenGame {
             if key == MenuKey::Back {
                 if self.planet_modal() == Some(PlanetModal::RelayDown) {
                     self.dismiss_relay_down_dialog();
+                } else if self.planet_modal() == Some(PlanetModal::ChannelEnterRefused) {
+                    self.dismiss_channel_refusal_dialog();
                 } else {
                     self.planet_board.close_modal();
                     self.options_dialog.clear_rebind();

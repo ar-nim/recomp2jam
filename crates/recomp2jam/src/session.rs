@@ -185,6 +185,63 @@ use crate::loading::{
 };
 use press::{EntryEcho, PressDisposition};
 
+/// 1005 refusal text at exe VA `0x64d740` (file `0x24d740`):
+/// `채널 허용 인원이 초과된 상태라서 더 이상 들어갈 수 없습니다.\n\n다른 채널을 이용해 주세요.`
+/// REA `ev_4c4e43875c0d39d4029adb3b49c2f4713c64828965311535bc9658595b390554`.
+const CHANNEL_FULL_MESSAGE_CP949: &[u8] = &[
+    0xC3, 0xA4, 0xB3, 0xCE, 0x20, 0xC7, 0xE3, 0xBF, 0xEB, 0x20, 0xC0, 0xCE, 0xBF, 0xF8, 0xC0, 0xCC,
+    0x20, 0xC3, 0xCA, 0xB0, 0xFA, 0xB5, 0xC8, 0x20, 0xBB, 0xF3, 0xC5, 0xC2, 0xB6, 0xF3, 0xBC, 0xAD,
+    0x20, 0xB4, 0xF5, 0x20, 0xC0, 0xCC, 0xBB, 0xF3, 0x20, 0xB5, 0xE9, 0xBE, 0xEE, 0xB0, 0xA5, 0x20,
+    0xBC, 0xF6, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0x0A, 0xB4, 0xD9,
+    0xB8, 0xA5, 0x20, 0xC3, 0xA4, 0xB3, 0xCE, 0xC0, 0xBB, 0x20, 0xC0, 0xCC, 0xBF, 0xEB, 0xC7, 0xD8,
+    0x20, 0xC1, 0xD6, 0xBC, 0xBC, 0xBF, 0xE4, 0x2E,
+];
+
+/// 1005 refusal text at exe VA `0x64d6c8` (file `0x24d6c8`):
+/// `유료곡 대전을 활성화하기 위한 서버입니다. 유료곡이 없으신 분은 입장하실 수 없습니다.\n\n다른 서버를 이용해 주세요.`
+/// REA `ev_a2583cf8b9bfa43458b195d7862f47fdeacae009ad9cbd34d483dc06f7121e37`.
+const CHANNEL_PREMIUM_MESSAGE_CP949: &[u8] = &[
+    0xC0, 0xAF, 0xB7, 0xE1, 0xB0, 0xEE, 0x20, 0xB4, 0xEB, 0xC0, 0xFC, 0xC0, 0xBB, 0x20, 0xC8, 0xB0,
+    0xBC, 0xBA, 0xC8, 0xAD, 0xC7, 0xCF, 0xB1, 0xE2, 0x20, 0xC0, 0xA7, 0xC7, 0xD1, 0x20, 0xBC, 0xAD,
+    0xB9, 0xF6, 0xC0, 0xD4, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x20, 0xC0, 0xAF, 0xB7, 0xE1, 0xB0, 0xEE,
+    0xC0, 0xCC, 0x20, 0xBE, 0xF8, 0xC0, 0xB8, 0xBD, 0xC5, 0x20, 0xBA, 0xD0, 0xC0, 0xBA, 0x20, 0xC0,
+    0xD4, 0xC0, 0xE5, 0xC7, 0xCF, 0xBD, 0xC7, 0x20, 0xBC, 0xF6, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4,
+    0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0x0A, 0xB4, 0xD9, 0xB8, 0xA5, 0x20, 0xBC, 0xAD, 0xB9, 0xF6, 0xB8,
+    0xA6, 0x20, 0xC0, 0xCC, 0xBF, 0xEB, 0xC7, 0xD8, 0x20, 0xC1, 0xD6, 0xBC, 0xBC, 0xBF, 0xE4, 0x2E,
+];
+
+/// 1005 refusal text at exe VA `0x64d6a4` (file `0x24d6a4`):
+/// `사용자 정보를 읽어오지 못했습니다.`
+/// REA `ev_3c7f9db2b1b6ef599ab9785bb312c54bf03032d019aa7e26392776e4d6de60c9`.
+const CHANNEL_USER_INFO_MESSAGE_CP949: &[u8] = &[
+    0xBB, 0xE7, 0xBF, 0xEB, 0xC0, 0xDA, 0x20, 0xC1, 0xA4, 0xBA, 0xB8, 0xB8, 0xA6, 0x20, 0xC0, 0xD0,
+    0xBE, 0xEE, 0xBF, 0xC0, 0xC1, 0xF6, 0x20, 0xB8, 0xF8, 0xC7, 0xDF, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4,
+    0xD9, 0x2E,
+];
+
+/// 1005 refusal text at exe VA `0x64d68c` (file `0x24d68c`):
+/// `채널 정보가 없습니다.`
+/// REA `ev_1bfd3059a4523c59d86d10333711fefad7304e7643cdff23f7e7b24e9f6d09b4`.
+const CHANNEL_NO_CHANNEL_MESSAGE_CP949: &[u8] = &[
+    0xC3, 0xA4, 0xB3, 0xCE, 0x20, 0xC1, 0xA4, 0xBA, 0xB8, 0xB0, 0xA1, 0x20, 0xBE, 0xF8, 0xBD, 0xC0,
+    0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+
+/// Pick the one-OK sheet text the 7.55 1005 handler posts for a failed
+/// enter (VA `0x55a110`, 8-entry table at `0x55a324`). Result 1 reads
+/// the optional `Restricted` word: 1 names the premium text, 0 (or an
+/// absent flag) the full-channel text. Codes past the table use the
+/// full-channel default arm. Success has no sheet.
+fn channel_refusal_message(result_code: u32, restricted: Option<bool>) -> Option<&'static [u8]> {
+    match (result_code, restricted) {
+        (0, _) => None,
+        (1, Some(true)) => Some(CHANNEL_PREMIUM_MESSAGE_CP949),
+        (1, _) | (2..=5, _) | (8.., _) => Some(CHANNEL_FULL_MESSAGE_CP949),
+        (6, _) => Some(CHANNEL_USER_INFO_MESSAGE_CP949),
+        (7, _) => Some(CHANNEL_NO_CHANNEL_MESSAGE_CP949),
+    }
+}
+
 /// Short socket window for the per-frame stats section (one tick send
 /// plus the echo drain): a paint must never stall the frame loop on a
 /// quiet or laggy gateway. A dropped tick retries on the next moved
@@ -1686,6 +1743,14 @@ impl OnlineSession {
                     if ChannelLoginResult::from_code(response.result_code)
                         != Some(ChannelLoginResult::Success)
                     {
+                        // The exe posts a one-OK Information sheet with
+                        // result-specific text (#717), then leaves the
+                        // Channel dialog, rows, and highlight untouched.
+                        if let Some(message) =
+                            channel_refusal_message(response.result_code, response.restricted)
+                        {
+                            self.game.open_channel_refusal_dialog(message);
+                        }
                         tracing::warn!(
                             code = response.result_code,
                             "channel login rejected; staying in Channel"
@@ -5623,6 +5688,231 @@ pub(super) mod session_tests {
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Channel);
         assert!(session.game.myroom_character().is_none());
+    }
+
+    /// #717 live-path seam for a refused 1005: every guard below
+    /// drives the real session from Channel Confirm through
+    /// `begin_channel_login`, the 1004 wire, the scripted 1005 answer,
+    /// `drain_channel_login`, and the shell's Information sheet owner.
+    /// The exe pins the sheet, its text, and the absence of sound,
+    /// highlight, and row changes (`~/scratch/channel-full-findings.md`,
+    /// `docs/parity/channel.md` ticket #717). No install data is read.
+    mod refused_enter {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use std::rc::Rc;
+
+        use o2jam_audio::NullBackend;
+        use o2jam_net::{ChannelLoginResponse, ChannelState, WireMessage};
+
+        use super::*;
+        use crate::session::{
+            CHANNEL_FULL_MESSAGE_CP949, CHANNEL_NO_CHANNEL_MESSAGE_CP949,
+            CHANNEL_PREMIUM_MESSAGE_CP949, CHANNEL_USER_INFO_MESSAGE_CP949,
+        };
+
+        /// Counts every backend emission so a refusal cannot cue sound
+        /// through either the key-sound or the scene-BGM path.
+        struct SoundEmitterLog {
+            inner: NullBackend,
+            calls: Rc<RefCell<usize>>,
+        }
+
+        impl o2jam_audio::AudioBackend for SoundEmitterLog {
+            fn play_pcm(
+                &mut self,
+                pcm: &o2jam_audio::PcmSamples,
+            ) -> Result<(), o2jam_audio::AudioError> {
+                *self.calls.borrow_mut() += 1;
+                self.inner.play_pcm(pcm)
+            }
+
+            fn set_scene_bgm(
+                &mut self,
+                pcm: Option<&o2jam_audio::PcmSamples>,
+                repeat: bool,
+            ) -> Result<(), o2jam_audio::AudioError> {
+                *self.calls.borrow_mut() += 1;
+                self.inner.set_scene_bgm(pcm, repeat)
+            }
+
+            fn samples_played(&self) -> u64 {
+                self.inner.samples_played()
+            }
+        }
+
+        /// Drive one 1005 refusal and assert the pinned sheet plus the
+        /// three null effects. The scripted gateway sends no 2000 and
+        /// hears no frame after the refusal.
+        fn refusal_posts_sheet(
+            result_code: u32,
+            restricted: Option<bool>,
+            expected_text: &'static [u8],
+        ) {
+            let (mut session, server) = channel_session(move |mut stream| {
+                assert_eq!(read_frame(&mut stream).id, 1004);
+                stream
+                    .write_all(
+                        &ChannelLoginResponse {
+                            result_code,
+                            restricted,
+                        }
+                        .encode(),
+                    )
+                    .unwrap();
+                assert_quiet(&mut stream);
+            });
+            let rows = vec![
+                entry_channel(),
+                ChannelState {
+                    channel_id: 10,
+                    ..entry_channel()
+                },
+            ];
+            session.game.set_channels(rows.clone());
+            let sound_calls = Rc::new(RefCell::new(0));
+            session.game.with_audio(
+                Box::new(SoundEmitterLog {
+                    inner: NullBackend::new(),
+                    calls: Rc::clone(&sound_calls),
+                }),
+                HashMap::new(),
+            );
+            let calls_before = *sound_calls.borrow();
+            let cue_before = session.game.scene_bgm_selection();
+            let highlight_before = session.game.highlighted_channel();
+
+            session.menu_key(MenuKey::Confirm, true);
+            paint_until(&mut session, |session| {
+                session.game.channel_refusal_dialog_open()
+            });
+            server.join().unwrap();
+
+            assert_eq!(session.game.screen(), Screen::Channel);
+            assert_eq!(
+                session.game.channel_refusal_message(),
+                Some(expected_text),
+                "result {result_code} (restricted {restricted:?}) posts the pinned text"
+            );
+            assert_eq!(
+                session.game.highlighted_channel(),
+                highlight_before,
+                "the refusal leaves the highlight where it was"
+            );
+            assert_eq!(session.game.channel_rows(), rows, "the rows stay unchanged");
+            assert_eq!(
+                session.game.scene_bgm_selection(),
+                cue_before,
+                "the refusal never recues the scene"
+            );
+            assert_eq!(
+                *sound_calls.borrow(),
+                calls_before,
+                "the refusal emits no sound"
+            );
+        }
+
+        #[test]
+        fn result_one_without_restriction_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(1, Some(false), CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_one_with_restriction_posts_the_premium_sheet() {
+            refusal_posts_sheet(1, Some(true), CHANNEL_PREMIUM_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_two_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(2, None, CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_three_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(3, None, CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_four_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(4, None, CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_five_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(5, None, CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_six_posts_the_user_information_sheet() {
+            refusal_posts_sheet(6, None, CHANNEL_USER_INFO_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_seven_posts_the_no_channel_information_sheet() {
+            refusal_posts_sheet(7, None, CHANNEL_NO_CHANNEL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn result_past_the_table_posts_the_full_channel_sheet() {
+            refusal_posts_sheet(8, None, CHANNEL_FULL_MESSAGE_CP949);
+        }
+
+        #[test]
+        fn successful_login_posts_no_refusal_sheet() {
+            let (mut session, server) =
+                channel_session(|mut stream| answer_entry_login(&mut stream));
+            session.game.set_channels(vec![entry_channel()]);
+            session.menu_key(MenuKey::Confirm, true);
+            paint_until(&mut session, |session| {
+                session.game.screen() == Screen::Room
+            });
+            server.join().unwrap();
+            assert!(!session.game.channel_refusal_dialog_open());
+            assert_eq!(session.game.channel_refusal_message(), None);
+        }
+
+        /// #717 OK composition: the sheet's OK at the Information rect
+        /// sends no frame, closes only the sheet, and leaves the Channel
+        /// dialog, its rows, and its highlight as they were. The exe's
+        /// result-7 pack pins the unchanged row and highlight after OK
+        /// (`~/scratch/channel-full/win3`, `docs/parity/channel.md`).
+        #[test]
+        fn ok_dismisses_the_refusal_without_touching_the_channel_dialog() {
+            let (mut session, server) = channel_session(|mut stream| {
+                assert_eq!(read_frame(&mut stream).id, 1004);
+                stream
+                    .write_all(
+                        &ChannelLoginResponse {
+                            result_code: 7,
+                            restricted: None,
+                        }
+                        .encode(),
+                    )
+                    .unwrap();
+                assert_quiet(&mut stream);
+            });
+            let rows = vec![entry_channel()];
+            session.game.set_channels(rows.clone());
+            session.menu_key(MenuKey::Confirm, true);
+            paint_until(&mut session, |session| {
+                session.game.channel_refusal_dialog_open()
+            });
+            let highlight_before = session.game.highlighted_channel();
+
+            session.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+
+            assert!(!session.game.channel_refusal_dialog_open(), "OK closes");
+            assert_eq!(session.game.channel_refusal_message(), None);
+            assert_eq!(session.game.screen(), Screen::Channel);
+            assert_eq!(session.game.channel_rows(), rows);
+            assert_eq!(session.game.highlighted_channel(), highlight_before);
+            paint_frame(&mut session);
+            assert!(
+                !session.game.channel_refusal_dialog_open(),
+                "OK stays closed"
+            );
+            server.join().unwrap();
+        }
     }
 
     #[test]

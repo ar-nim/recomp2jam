@@ -7,6 +7,8 @@
 | Timing | None documented | n/a (ev: none — no timed dispatch documented) | N/A (R+G, v: 9692d41) (no timed behavior — no dispatch exists to guard; next step: none) |
 | Transitions | `Channel → Room`; hosted by `CStatePlanet` (resolved live 2026-11-09) | `Channel → Room` (row confirm / entry faces); dialog X (bnd-pinned rect (541,151)-(589,189); verified close click (577,171)) closes to `Planet`; hosted by `CStatePlanet` (live memory read 2026-11-09) (ev: `docs/channel-fill.md`; hosted-by live read 2026-11-09) | PASS (R, v: 9692d41) (guards: `flow_allows_every_documented_edge`, `menu_walks_full_session_to_results`, `channel_back_closes_to_the_planet_board`) |
 
+| Refused enter (1005) | One-OK `Dialog_Information` with result-specific CP949 text (#717 section below) | Posts the pinned sheet for every nonzero result; no sound, highlight, or row change; OK dismisses back to the unchanged dialog. Guards: 11 `session::session_tests::refused_enter::*` scripted-gateway tests (per result 1/2/3/4/5/6/7/default, success null, OK composition) | PASS (R+G; no install data needed) |
+
 ## Ticket #92 — row-label value source PINNED (2026-11-11)
 
 Claim D25 is closed without a new rig session: the proxy rewrite its next
@@ -168,3 +170,64 @@ Harness note: the default `online` boot applies the gate. The
 click still measures input delivery on the bare planet board; guard
 `x11_game_args_skip_the_relay_notice_gate` pins that argument. This
 is a trace affordance, not an exe behavior claim.
+
+## Ticket #717 — refused channel-enter notice (evidence pin, 2026-11-20)
+
+Oracle: `OTwo.exe` 7.55, SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`
+(5,029,888 B), Ghidra 12.2 / REA `target-83a045418b62.exe`. Static
+pack and live boot pack are cited in `~/scratch/channel-full-findings.md`
+(`~/scratch/channel-full/win3`). The 1005 handler at VA `0x55a110`
+(file `0x15a110`) selects text through the 8-entry jump table at VA
+`0x55a324` (file `0x15a324`) and posts queue type 1, the one-OK
+`Dialog_Information` sheet (same sheet as #244/#367, geometry from
+`Dialog_Information.bnd` by code-ordinal pairing). Live result-7 frame:
+blue one-OK sheet with `채널 정보가 없습니다.`, OK near (400,365)
+back to the unchanged Channel dialog; the highlighted row keeps its
+enter face. No sound transient, highlight write, or row repaint is
+observed (static chain has no sound dispatch; the statically visible
+"mark row full" arm is superseded by the live observation because
+the notice becomes the top dialog first).
+
+Pin the CP949 strings at their exact VAs (bytes through the NUL;
+VA = file offset + `0x400000`):
+
+| Result | VA / file offset | CP949 text | REA evidence this pin |
+|---|---|---|---|
+| 1 with `Restricted = 0`, 2..=5, codes past 7 (default arm) | `0x64d740` / `0x24d740` | `채널 허용 인원이 초과된 상태라서 더 이상 들어갈 수 없습니다.\n\n다른 채널을 이용해 주세요.` | `ev_4c4e43875c0d39d4029adb3b49c2f4713c64828965311535bc9658595b390554` |
+| 1 with `Restricted = 1` | `0x64d6c8` / `0x24d6c8` | `유료곡 대전을 활성화하기 위한 서버입니다. 유료곡이 없으신 분은 입장하실 수 없습니다.\n\n다른 서버를 이용해 주세요.` | `ev_a2583cf8b9bfa43458b195d7862f47fdeacae009ad9cbd34d483dc06f7121e37` |
+| 6 | `0x64d6a4` / `0x24d6a4` | `사용자 정보를 읽어오지 못했습니다.` | `ev_3c7f9db2b1b6ef599ab9785bb312c54bf03032d019aa7e26392776e4d6de60c9` |
+| 7 | `0x64d68c` / `0x24d68c` | `채널 정보가 없습니다.` | `ev_1bfd3059a4523c59d86d10333711fefad7304e7643cdff23f7e7b24e9f6d09b4` |
+
+Result 0 is success: no sheet, the identity fetch follows. Other
+values of the optional `Restricted` word post no sheet in the exe;
+our wire decoder admits only 0/1, so that arm stays unrepresentable.
+
+Shell behavior at this pin: `OnlineSession::drain_channel_login`
+logged `channel login rejected; staying in Channel` and left the
+dialog unchanged (no sheet); the new guards failed against that
+stand-in. Implementation: the 1005 branch maps the result through
+`channel_refusal_message` and calls
+`ScreenGame::open_channel_refusal_dialog`; the shell posts a
+`PlanetModal::ChannelEnterRefused` sheet over the Channel dialog,
+painting the pinned bytes through the shared Information painter.
+OK (or Back) closes only the sheet. Live caller chain:
+`run_online`/`run_play --online` → `OnlineSession::paint` →
+`poll_channel_login` → `drain_channel_login` → 1004/1005 →
+`open_channel_refusal_dialog` → `ScreenGame::paint` →
+`paint_channel` → `paint_planet_modal` →
+`paint_information_message` → OK click → `click_planet_modal` →
+`dismiss_channel_refusal_dialog` → `paint_channel`. Guards:
+`session::session_tests::refused_enter::result_one_without_restriction_posts_the_full_channel_sheet`,
+`result_one_with_restriction_posts_the_premium_sheet`,
+`result_two/three/four/five_posts_the_full_channel_sheet`,
+`result_six_posts_the_user_information_sheet`,
+`result_seven_posts_the_no_channel_information_sheet`,
+`result_past_the_table_posts_the_full_channel_sheet`,
+`successful_login_posts_no_refusal_sheet`,
+`ok_dismisses_the_refusal_without_touching_the_channel_dialog`.
+Each refusal guard also pins no sound emitter, no highlight change,
+and unchanged rows. The keyboard-confirm fan-out to the channel
+vftable slot stays untouched and OPEN by the channel-full lane's
+pin (next step: stopped-state breakpoint on `0x475260` with a
+focused canvas); this ticket covers the 1005 answer path only.
