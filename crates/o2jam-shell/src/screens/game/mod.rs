@@ -25320,6 +25320,37 @@ mod game_tests {
     }
 
     #[test]
+    fn music_shop_return_to_room_keeps_the_firststep_tutorial_leg_live() {
+        // Spec #313 WAVE5 row: the B7/Boot1 chain
+        // `planet→channel→room→musicshop→tutorial` is one session, so
+        // a MusicShop side visit and its BACK cannot consume the
+        // FIRSTSTEP entry. B7 input log sha256 `78067e13…203f` names
+        // the MusicShop legs; boot1 repeats the chain.
+        // Live chain: boot -> Channel -> Room -> MusicShop side ->
+        // BACK -> Room -> staged FIRSTSTEP -> Tutorial globals ->
+        // exit click -> Room.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        assert_eq!(game.screen(), Screen::Room);
+
+        assert!(game.visit_side(SideScreen::MusicShop));
+        assert_eq!(game.side(), Some(SideScreen::MusicShop));
+        assert!(game.leave_side(), "MusicShop BACK returns to its host");
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.tutorial_chart_globals(), Some(TUTORIAL_CHART_GLOBALS));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
     fn firststep_click_from_boot_staged_room_sets_the_pinned_tutorial_globals() {
         // Live chain: ScreenGame boot → Planet → Channel → Room
         // (`room_lobby_with_control`) → click of staged FIRSTSTEP chrome
