@@ -4,6 +4,11 @@ Canonical home for the machine, shell, and tooling facts that used to live in
 agent memory. Domain behavior lives in the domain docs (each section here
 points there); this file is the index and the home for the rest.
 
+Memory lessons may restate what this file and the other docs carry — that is
+fine as a routing hint. The rule is no DIVERGENCE: when a doc and a lesson
+disagree, the doc wins and the lesson is corrected or removed at the next
+touch. Lessons are pruned for staleness, never for merely duplicating a doc.
+
 ## Shell
 
 - The default login shell is **fish**; `bash` is installed but must be
