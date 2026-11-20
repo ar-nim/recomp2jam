@@ -102,6 +102,20 @@ Before delegating a batch of similar items (guards, backfills, ports):
 This prevents drift across a batch and gives the junior a concrete
 template instead of a description.
 
+## Assumption challenge (owner decision 2026-11-20, #493)
+
+When two technical legs fail on the same player-visible blocker, stop
+spawning legs and challenge the SCENARIO assumptions the legs depend on,
+not the technology. The #327/#328/DRI3 wedge burned three legs; the answer
+was one owner sentence ("just play solo") attacking an assumption no
+technical leg could question.
+
+The challenge is a non-blocking menu, never a pause: one message naming the
+assumptions ("my assumptions: A, B, C — correct me") as a tracker comment
+or chat note. Work continues on legs that do not depend on those
+assumptions; the owner answers in their own time. Legs are counted, not
+hypotheses — parallel legs on the same blocker count toward the two.
+
 ## Thinking escalation
 
 - Start every junior at **medium** thinking.
