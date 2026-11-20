@@ -7424,6 +7424,38 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// #602: a blocked 4012 leaves the gate in Loading and latches no
+    /// send. The joined snapshot has no staged speed after the join
+    /// mirror is cleared, so `send_loading_confirm` refuses to invent
+    /// one; the next Confirm can retry when a speed is staged. Live
+    /// chain: boot -> Waiting START -> 4011 -> `poll_start` -> Loading
+    /// -> `menu_key(Confirm)` -> `confirm_loading` -> `send_loading_confirm`.
+    #[test]
+    fn blocked_loaded_confirm_holds_the_solo_gate_in_loading() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.last_selection = None;
+        session.joined_room = None;
+
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        assert_eq!(session.game.screen(), Screen::Loading);
+
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Loading,
+            "a refused 4012 must not enter Playing"
+        );
+        assert!(!session.loaded_sent, "no send is latched on a failure");
+        server.join().unwrap();
+    }
+
     #[test]
     fn loading_confirm_offline_sends_nothing() {
         let (mut session, server) = waiting_session(|mut stream| {
