@@ -6284,11 +6284,18 @@ impl ScreenGame {
     /// 2013/2014/2019 rows paint below the list in both cases; empty
     /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
-        match (
-            self.scene_art(Screen::Channel),
-            self.channel_scene.rows().is_empty(),
-        ) {
-            (Some(art), false) => self.channel_scene.paint(
+        // The exe's relay-down frame (`baf781b8…`) keeps the planet
+        // board, Channel dialog and its rows behind the one-OK sheet.
+        // Boot-held rows are not interactive (the modal owns input),
+        // but they still paint; deferring them to OK painted black.
+        let rows = if self.planet_modal() == Some(PlanetModal::RelayDown) {
+            &self.relay_down_pending_channels
+        } else {
+            self.channel_scene.rows()
+        };
+        match (self.scene_art(Screen::Channel), rows.is_empty()) {
+            (Some(art), false) => self.channel_scene.paint_rows(
+                rows,
                 frame,
                 Some(art),
                 self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
@@ -6298,13 +6305,13 @@ impl ScreenGame {
                 self.hovered_channel_row(),
             ),
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
-            (None, false) => self.channel_scene.paint(frame, None, None, None),
+            (None, false) => self.channel_scene.paint_rows(rows, frame, None, None, None),
             (None, true) => paint_screen(frame, Screen::Channel),
         }
         paint_channel_chat(
             frame,
             self.chat.panel(LobbyChat::Channel).history(),
-            self.channel_scene.rows().len(),
+            rows.len(),
         );
         // The relay notice opens here, above the channel frame the
         // exe shows behind it (#244 capture, boundary fixed in #348).
