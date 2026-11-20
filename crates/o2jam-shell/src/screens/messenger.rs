@@ -7,6 +7,8 @@
 //! action frame, and no send opcode. This module therefore names the
 //! five buttons without inventing a semantic action or a wire shape.
 
+use super::side::{myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE};
+
 /// One lobby hosting the Messenger control family. The five codes
 /// come from the spec #315 evidence map; only MyRoom has a qualified
 /// exe press pack, so the other four name a capture step instead of
@@ -133,6 +135,40 @@ pub fn popup_menu_noop_label(code: u32) -> Option<&'static str> {
         .map(|index| POPUP_MENU_NOOP_LABELS[index])
 }
 
+/// Every messenger-owned P0 control that still answers nothing. The set
+/// comes from spec #315 M14/M16/M19 and the no-op labels landed in
+/// `02ecfd2` and `e123bfc`. The MyRoom host arm is absent: its B8 pack
+/// replaced that P0 verdict with the liveness sheet.
+pub const MESSENGER_P0_NOOP_CODES: [u32; 8] = [
+    NOTE_SEND_CODE,
+    POPUP_MENU_CODES[0],
+    POPUP_MENU_CODES[1],
+    POPUP_MENU_CODES[2],
+    POPUP_MENU_CODES[3],
+    POPUP_MENU_CODES[4],
+    MYROOM_ALARM_CODE,
+    MYROOM_ALARM_POPUP_CODE,
+];
+
+/// Label that keeps one P0 control inert. `None` off the P0 set.
+#[must_use]
+pub fn messenger_p0_noop_label(code: u32) -> Option<&'static str> {
+    note_noop_label(code)
+        .or_else(|| popup_menu_noop_label(code))
+        .or_else(|| match code {
+            MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => myroom_p0_verdict(code),
+            _ => None,
+        })
+}
+
+/// Exe send pin that would replace a P0 no-op. No pin exists today, so
+/// a dispatch cannot be added without first naming its evidence here;
+/// the P0 guard goes red at that point (`N-P0`).
+#[must_use]
+pub const fn messenger_p0_send_pin(_code: u32) -> Option<&'static str> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +211,56 @@ mod tests {
             popup_menu_noop_label(0x8A20_0007),
             None,
             "backdrop rect has no action label"
+        );
+    }
+
+    #[test]
+    fn messenger_p0_noops_stay_unpinned_and_answer_nothing() {
+        // seam: this is the whole P0 contract. The six Messenger sheets park
+        // with no exe mount (`N-MOUNT`) and no send pack (`N-WIRE`), so no
+        // boot chain can reach a dispatch; the labels and the pin marker are
+        // the complete action surface. Reviewers flip this guard when a pin
+        // lands, before any dispatch is written.
+        use super::super::side::{
+            myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE, MYROOM_MESSENGER_CODE,
+            MYROOM_WEBAVATAR_CODE,
+        };
+        assert_eq!(
+            MESSENGER_P0_NOOP_CODES,
+            [
+                NOTE_SEND_CODE,
+                0x8A20_0002,
+                0x8A20_0003,
+                0x8A20_0004,
+                0x8A20_0005,
+                0x8A20_0006,
+                MYROOM_ALARM_CODE,
+                MYROOM_ALARM_POPUP_CODE,
+            ],
+            "P0 set named by spec #315 M14/M16/M19 and e123bfc"
+        );
+        for code in MESSENGER_P0_NOOP_CODES {
+            let label = messenger_p0_noop_label(code)
+                .unwrap_or_else(|| panic!("P0 control {code:#X} lost its label"));
+            assert!(
+                label.contains("no wire") || label.contains("paints nothing"),
+                "P0 control {code:#X} still answers nothing: {label}"
+            );
+            assert_eq!(
+                messenger_p0_send_pin(code),
+                None,
+                "P0 control {code:#X} has no exe send pin"
+            );
+        }
+        assert_eq!(
+            messenger_p0_noop_label(MYROOM_WEBAVATAR_CODE),
+            None,
+            "a MyRoom P0 outside the Messenger family has no Messenger label"
+        );
+        assert_eq!(
+            myroom_p0_verdict(MYROOM_MESSENGER_CODE),
+            None,
+            "the B8 pack replaced the host P0 arm; the sheet family P0 stays"
         );
     }
 }
