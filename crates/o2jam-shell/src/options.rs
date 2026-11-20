@@ -31,18 +31,21 @@
 //!   object `+0x36168` (file `0x1516d7`).
 //! - `Sound`/`BGVolume` ← `option.ini`, default 255, stored at
 //!   object `+0x3616c` (file `0x1517a7`); written at `0x151745`.
-//! - `MODE`/`Mode` ← `option.ini`, default 0, stored at object
-//!   `+0xa34` (file `0x1a46e0`); the `1`/`2` arms drive the window
-//!   apply at file `0x3a06c` (which is Full vs Win stays OPEN).
-//! - `NoteScreen`/`BlendHalf` ← `option.ini`, default 3, stored at
-//!   object `+0xa3c` (file `0x1a4798`).
-//! - `NOTE`/`NoteType` ← `option.ini`, default 0, clamped 0–2
-//!   (else 0) into play-object `+0xeb4` (file `0x1713c7`); value 2
-//!   is a dead alias of 1 (ticket #18 static hunt: zero-vs-nonzero
-//!   branch file `0x171480`, `cmp $0x2` folds at `0xE1C22`-family).
-//! - `NOTE`/`NoteTail` ← `option.ini`, default 2, clamped 0–4
-//!   (else 2) into the global at `0x67feac` (file `0x16bf47`),
-//!   indexing a five-slot double table at `0x67fe8c`.
+//! - `MODE`/`Mode` ← `option.ini`, raw default 0 rewritten to 2 by
+//!   the exe's load path (`0x43a630`), stored at object `+0xa34`
+//!   (file `0x1a46e0`); the `1`/`2` arms drive the window apply at
+//!   file `0x3a06c`.
+//! - `NoteScreen`/`BlendHalf` ← `option.ini`, raw default 3
+//!   rewritten to 1 by the same load path, stored at object `+0xa3c`
+//!   (file `0x1a4798`).
+//! - `NOTE`/`NoteType` ← `option.ini`, default 0; the exe rewrites
+//!   values above 1 to 0 (`0x43a630`) into play-object `+0xeb4`
+//!   (file `0x1713c7`); value 2 is a dead alias of 1 (ticket #18
+//!   static hunt: zero-vs-nonzero branch file `0x171480`).
+//! - `NOTE`/`NoteTail` ← `option.ini`, default 2; values above 3
+//!   are rewritten to 2 (`0x43a630`) into the global at `0x67feac`
+//!   (file `0x16bf47`), indexing a five-slot double table at
+//!   `0x67fe8c`.
 //! - `LONGNOTEMODE`/`LongnoteMode` ← `Option.ini`, default 3,
 //!   snapshotted into the play object at `+0x17d8` at song setup
 //!   (file `0x16fb06`); the one consumer tests equality with 1
@@ -54,23 +57,19 @@
 //!   and the live BGM-gain application: the exe pins the four keys
 //!   above, not which slider writes which key. Next step: rig
 //!   SAVE-diff (move one slider, SAVE, diff `option.ini`).
-//! - Button→value order on the Game tab (NoteType1→0 vs 1, guide
-//!   Long/Middle/Short/NoUse→3/2/1/0, ModeFull/Win→1/2,
-//!   BlendHalf Yes/No→1/0, Longnote Used/None→1/0): the dialog
-//!   offers exactly two note-type buttons (no third shape — the
-//!   dead alias holds in the UI too) and four guide buttons for
-//!   five tail values, so tail value 4 lights no button. Next step:
-//!   the ticket's exact rig list (one 0-vs-1 shape capture, five
-//!   tail captures, one mode 0-vs-1 A/B plus the
-//!   timing-vs-rendering call) — until then no arm is named
-//!   oval/square and no tail value is named beyond its button.
+//! - Button→value order on the Game tab is now pinned by the
+//!   `CDOptionGame` repaint and click arms (static findings §4–5):
+//!   NoteType1/2→0/1, guide Long/Middle/Short/NoUse→3/2/1/0,
+//!   ModeFull/Win→2/1, BlendHalf Yes/No→1/0, Longnote
+//!   Used/None→1/0. The dialog offers only four guide buttons for
+//!   the five table slots, so tail value 4 lights no button.
+//!   Which shape or window mode each arm draws stays OPEN.
 //! - `Option_Game_EffectHigh/Normal/Low` has no ini key anywhere in
 //!   the sweep: an in-memory selection, never persisted. Next step:
 //!   SAVE-diff rig to find its key, if any.
-//! - `MODE`/`Mode` value 2 (written by the exe's own string path
-//!   when the numeric value is 0) and `BlendHalf` raw value 3 keep
-//!   their exe-mirror load behavior; the effective defaults used
-//!   here (Mode 0, BlendHalf 1) follow the exe's forced values.
+//! - The effective defaults used here (Mode 2, Longnote 1,
+//!   BlendHalf 1) follow the exe's load rewrites. The raw values 0,
+//!   3 and 3 exist only before those rewrites.
 
 use std::ops::RangeInclusive;
 use std::path::Path;
@@ -109,17 +108,18 @@ pub const DEFAULT_NOTE_TYPE: u8 = 0;
 pub const DEFAULT_NOTE_TAIL: u8 = 2;
 
 /// Effective default `NoteScreen`/`BlendHalf`: the exe reads raw
-/// default 3 (file `0x1a4798`) and its string path forces 1, so a
-/// fresh client behaves as 1.
+/// default 3 (`0x1a4798`) and its load path rewrites 3 to 1
+/// (`0x43a630`), so a fresh client behaves as 1.
 pub const DEFAULT_BLEND_HALF: i32 = 1;
 
-/// Exe default `MODE`/`Mode` (file `0x1a46e0`).
-pub const DEFAULT_MODE: i32 = 0;
+/// Effective default `MODE`/`Mode`: the exe reads raw default 0
+/// (`0x1a46e0`) and its load path rewrites 0 to 2 (`0x43a630`).
+pub const DEFAULT_MODE: i32 = 2;
 
-/// Exe default `LONGNOTEMODE`/`LongnoteMode` (file `0x16fb06`):
-/// raw 3, whose only consumer tests equality with 1 — so a fresh
-/// client behaves as off.
-pub const DEFAULT_LONGNOTE_MODE: i32 = 3;
+/// Effective default `LONGNOTEMODE`/`LongnoteMode`: the exe reads
+/// raw default 3 (`0x16fb06`) and its load path rewrites 3 to 1
+/// (`0x43a630`). Its one consumer tests equality with 1.
+pub const DEFAULT_LONGNOTE_MODE: i32 = 1;
 
 /// `option.ini` file name beside the install root (lifecycle §3).
 /// The exe reads `option.ini` for most keys and `Option.ini` for
@@ -154,8 +154,8 @@ pub const fn shape_arm_of_note_type(note_type: u8) -> NoteShapeArm {
 }
 
 /// Note-guide button: the four `DIALOG_OPTION_GAME` guide buttons.
-/// The button→tail-value order is ours-by-design (OPEN, see the
-/// module docs); tail value 4 — the fifth table slot — lights no
+/// The button→tail-value order is pinned by the exe repaint
+/// (`0x3a7c0`); tail value 4 — the fifth table slot — lights no
 /// button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteGuide {
@@ -184,7 +184,7 @@ pub const fn guide_of_note_tail(note_tail: u8) -> Option<NoteGuide> {
 }
 
 /// Raw tail value behind a guide button (inverse of
-/// [`guide_of_note_tail`]; ours-by-design order).
+/// [`guide_of_note_tail`]; exe-pinned order).
 #[must_use]
 pub const fn note_tail_of_guide(guide: NoteGuide) -> u8 {
     match guide {
@@ -424,13 +424,13 @@ pub struct OptionsSettings {
     game_music: u8,
     /// `Sound`/`NoteKeyVolume` (GameEffect slider, ours-by-design).
     game_effect: u8,
-    /// `MODE`/`Mode` (ModeFull/Win buttons, order ours-by-design).
+    /// `MODE`/`Mode` (ModeFull→2, ModeWin→1, exe-pinned).
     mode: i32,
     /// `NoteScreen`/`BlendHalf` (EQ Yes/No buttons → 1/0).
     blend_half: i32,
-    /// `NOTE`/`NoteType`, clamped 0–2 like the exe.
+    /// `NOTE`/`NoteType` (0 or 1 after the exe load rewrite).
     note_type: u8,
-    /// `NOTE`/`NoteTail`, clamped 0–4 like the exe.
+    /// `NOTE`/`NoteTail` (0–3 after the exe load rewrite).
     note_tail: u8,
     /// `LONGNOTEMODE`/`LongnoteMode` raw value (Used→1, None→0;
     /// the one consumer tests equality with 1).
@@ -513,24 +513,28 @@ impl OptionsSettings {
         settings.bg_effect = sound_setting(&sections, "BGVolume", DEFAULT_SOUND_VOLUME);
         settings.game_music = sound_setting(&sections, "NoteBGVolume", DEFAULT_SOUND_VOLUME);
         settings.game_effect = sound_setting(&sections, "NoteKeyVolume", DEFAULT_SOUND_VOLUME);
-        settings.mode = profile_int(&sections, "MODE", "Mode", DEFAULT_MODE);
-        settings.blend_half = profile_int(&sections, "NoteScreen", "BlendHalf", DEFAULT_BLEND_HALF);
+        settings.mode = profile_int(&sections, "MODE", "Mode", 0);
+        if settings.mode == 0 {
+            settings.mode = DEFAULT_MODE;
+        }
+        settings.blend_half = profile_int(&sections, "NoteScreen", "BlendHalf", 3);
+        if settings.blend_half == 3 {
+            settings.blend_half = DEFAULT_BLEND_HALF;
+        }
         settings.note_type = clamped_choice(
             profile_int(&sections, "NOTE", "NoteType", i32::from(DEFAULT_NOTE_TYPE)),
-            0..=2,
+            0..=1,
             DEFAULT_NOTE_TYPE,
         );
         settings.note_tail = clamped_choice(
             profile_int(&sections, "NOTE", "NoteTail", i32::from(DEFAULT_NOTE_TAIL)),
-            0..=4,
+            0..=3,
             DEFAULT_NOTE_TAIL,
         );
-        settings.longnote_mode = profile_int(
-            &sections,
-            "LONGNOTEMODE",
-            "LongnoteMode",
-            DEFAULT_LONGNOTE_MODE,
-        );
+        settings.longnote_mode = profile_int(&sections, "LONGNOTEMODE", "LongnoteMode", 3);
+        if settings.longnote_mode == 3 {
+            settings.longnote_mode = DEFAULT_LONGNOTE_MODE;
+        }
         settings
     }
 
@@ -686,7 +690,7 @@ impl OptionsSettings {
         self.blend_half
     }
 
-    /// `NOTE`/`NoteType` (always 0–2: clamped on load and set).
+    /// `NOTE`/`NoteType` (0 or 1: the exe rewrites values above 1 to 0).
     #[must_use]
     pub const fn note_type(&self) -> u8 {
         self.note_type
@@ -724,9 +728,9 @@ impl OptionsSettings {
         guide_of_note_tail(self.note_tail)
     }
 
-    /// Set `NoteType` with the exe clamp (0–2, else 0).
+    /// Set `NoteType` with the exe clamp (0 or 1, else 0).
     pub fn set_note_type(&mut self, note_type: i32) {
-        self.note_type = if (0..=2).contains(&note_type) {
+        self.note_type = if (0..=1).contains(&note_type) {
             u8::try_from(note_type).unwrap_or(DEFAULT_NOTE_TYPE)
         } else {
             DEFAULT_NOTE_TYPE
@@ -748,8 +752,7 @@ impl OptionsSettings {
         self.longnote_mode = mode;
     }
 
-    /// Set `MODE`/`Mode` raw value (Full/Win button order is
-    /// ours-by-design).
+    /// Set `MODE`/`Mode` raw value (Full→2, Win→1).
     pub fn set_mode(&mut self, mode: i32) {
         self.mode = mode;
     }
@@ -794,17 +797,17 @@ impl OptionsSettings {
     }
 
     /// Restore the exe Game-tab defaults (the Game-tab DEFAULT
-    /// button): `NoteType` 0, `NoteTail` 2, `BlendHalf` 1
-    /// (effective), `Mode` 0 and the pinned raw `LongnoteMode` 3
-    /// (which its `== 1` consumer reads as off). In-memory selections
-    /// return to Normal / 7-key / untested.
+    /// button): `NoteType` 0, `NoteTail` 2, `BlendHalf` 1, `Mode` 2
+    /// and `LongnoteMode` 1 — the effective values after the exe's
+    /// load rewrites. The 7.55 capture also shows the effect row
+    /// moving to High (`0`), so the in-memory effect arm resets too.
     pub fn reset_game(&mut self) {
         self.note_type = DEFAULT_NOTE_TYPE;
         self.note_tail = DEFAULT_NOTE_TAIL;
         self.blend_half = DEFAULT_BLEND_HALF;
         self.mode = DEFAULT_MODE;
         self.longnote_mode = DEFAULT_LONGNOTE_MODE;
-        self.effect_level = 1;
+        self.effect_level = 0;
         self.three_key = false;
         self.key_test = false;
     }
@@ -836,26 +839,23 @@ mod tests {
     }
 
     #[test]
-    fn note_tail_clamps_to_five_slots_defaulting_to_two() {
+    fn ini_load_rewrites_note_tail_above_three_to_two() {
         let settings = OptionsSettings::load_text("[NOTE]\nNoteTail=4\n");
-        assert_eq!(settings.note_tail(), 4);
+        assert_eq!(settings.note_tail(), 2);
         let settings = OptionsSettings::load_text("[NOTE]\nNoteTail=9\n");
-        assert_eq!(
-            settings.note_tail(),
-            2,
-            "out of range falls back to the exe default, like file 0x16bf47"
-        );
+        assert_eq!(settings.note_tail(), 2);
         let settings = OptionsSettings::load_text("[NOTE]\n");
         assert_eq!(settings.note_tail(), 2);
     }
 
     #[test]
-    fn note_type_clamps_to_three_values_defaulting_to_zero() {
+    fn ini_load_rewrites_note_type_above_one_to_zero() {
         let settings = OptionsSettings::load_text("[NOTE]\nNoteType=2\n");
-        assert_eq!(settings.note_type(), 2);
-        assert_eq!(settings.shape_arm(), NoteShapeArm::ArmOneTwo);
+        assert_eq!(settings.note_type(), 0, "the exe folds 2 to 0 on load");
         let settings = OptionsSettings::load_text("[NOTE]\nNoteType=7\n");
         assert_eq!(settings.note_type(), 0);
+        let settings = OptionsSettings::load_text("[NOTE]\nNoteType=1\n");
+        assert_eq!(settings.note_type(), 1);
     }
 
     #[test]
@@ -870,9 +870,28 @@ mod tests {
     }
 
     #[test]
+    fn ini_load_rewrites_the_raw_defaults_of_mode_longnote_and_blend_half() {
+        let settings = OptionsSettings::load_text("");
+        assert_eq!(settings.mode(), 2, "raw Mode 0 is rewritten to 2");
+        assert_eq!(settings.longnote_mode(), 1, "raw 3 is rewritten to 1");
+        assert_eq!(settings.blend_half(), 1, "raw 3 is rewritten to 1");
+        let settings = OptionsSettings::load_text(
+            "[MODE]\nMode=0\n[LONGNOTEMODE]\nLongnoteMode=3\n[NoteScreen]\nBlendHalf=3\n",
+        );
+        assert_eq!(
+            (
+                settings.mode(),
+                settings.longnote_mode(),
+                settings.blend_half()
+            ),
+            (2, 1, 1)
+        );
+    }
+
+    #[test]
     fn longnote_switch_counts_only_value_one_as_used() {
-        let mut settings = OptionsSettings::default();
-        assert!(!settings.longnote_used(), "fresh default 3 behaves as off");
+        let mut settings = OptionsSettings::load_text("[LONGNOTEMODE]\nLongnoteMode=0\n");
+        assert!(!settings.longnote_used(), "raw 0 stays off");
         settings.set_longnote_mode(1);
         assert!(settings.longnote_used());
         settings.set_longnote_mode(0);
@@ -912,7 +931,7 @@ mod tests {
         assert!(!settings.rebind_lane(1, KeyCode::F1));
         settings.step_bgm_music(false);
         settings.set_note_type(1);
-        settings.set_note_tail(4);
+        settings.set_note_tail(3);
         settings.set_longnote_mode(1);
         settings.set_mode(1);
         settings.set_blend_half(0);

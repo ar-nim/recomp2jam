@@ -6458,6 +6458,7 @@ impl ScreenGame {
                     frame,
                     self.options_dialog.staged_art(),
                     self.options_dialog.tab(),
+                    self.options_dialog.settings(),
                 );
             }
             Some(PlanetModal::RelayDown) => {
@@ -16255,11 +16256,12 @@ mod game_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
-        // Re-based when Game DEFAULT began restoring the exe raw
-        // `LongnoteMode` 3 instead of the old stand-in 0; the observed
-        // state otherwise stays byte-for-byte identical.
+        // Re-based for #716: Game DEFAULT now restores the exe's
+        // effective values (Mode 2, LongnoteMode 1, effect High) after
+        // the pinned load rewrites; the observed state otherwise stays
+        // byte-for-byte identical.
         assert_eq!(
-            hash, 0xBB2F_B224_2B51_A752,
+            hash, 0x8B60_31C7_C484_4F2D,
             "options outputs drifted: {observed}"
         );
     }
@@ -16515,7 +16517,7 @@ mod game_tests {
         assert_eq!(game.options().note_type(), 1);
         assert_eq!(game.options().note_tail(), 3);
         assert_eq!(game.options().blend_half(), 0);
-        assert_eq!(game.options().mode(), 2);
+        assert_eq!(game.options().mode(), 1, "ModeWin is 1, ModeFull is 2");
         assert!(game.options().longnote_used());
         assert_eq!(game.options().effect_level(), 2);
     }
@@ -16708,10 +16710,9 @@ mod game_tests {
         // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
         // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
         // -> click_options_dialog -> OptionsDialog::click ->
-        // OptionsSettings::reset_game. The exe's `LONGNOTEMODE` read
-        // default is 3 (file `0x16fb06`); DEFAULT must put that raw
-        // value back, not a different stand-in that happens to behave
-        // the same through the `== 1` consumer.
+        // OptionsSettings::reset_game. The exe reads raw
+        // `LONGNOTEMODE` 3 (file `0x16fb06`) and its load path rewrites
+        // it to 1 (`0x43a630`); DEFAULT must restore the effective 1.
         use super::super::side::OPTION_GAME_LONGNOTE_USED;
         use crate::options::DEFAULT_LONGNOTE_MODE;
         let mut game = ScreenGame::new();
@@ -16731,7 +16732,7 @@ mod game_tests {
         assert_eq!(
             game.options().longnote_mode(),
             DEFAULT_LONGNOTE_MODE,
-            "Game DEFAULT restores the exe raw default, not 0"
+            "Game DEFAULT restores the exe effective default, not 0"
         );
     }
 
@@ -24179,6 +24180,7 @@ mod game_tests {
                 },
                 Some(&scene_art),
                 PlanetOptionTab::Key,
+                &crate::options::OptionsSettings::default(),
             );
             let rect_ink = (0..kh)
                 .flat_map(|dy| (0..kw).map(move |dx| (dy, dx)))

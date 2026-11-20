@@ -273,11 +273,10 @@ impl OptionsDialog {
         }
     }
 
-    /// Game-tab buttons: effect arms (in-memory — no ini key was
-    /// found), EQ Yes/No → 1/0, NoteType1/2 → 0/1, guides →
-    /// 3/2/1/0, ModeFull/Win → 1/2, Longnote Used/None → 1/0.
-    /// Button→value orders are ours-by-design (OPEN, see the
-    /// options module docs).
+    /// Game-tab buttons, pinned by the exe's repaint and click arms
+    /// (`0x3a7c0`/`0x39f40`): effect arms (in-memory — no ini key
+    /// was found), EQ Yes/No → 1/0, NoteType1/2 → 0/1, guides →
+    /// 3/2/1/0, ModeFull/Win → 2/1, Longnote Used/None → 1/0.
     fn click_game_tab(&mut self, x: i32, y: i32) {
         if self.hit(OPTION_GAME_EFFECT_HIGH, x, y) {
             self.settings.set_effect_level(0);
@@ -302,9 +301,9 @@ impl OptionsDialog {
         } else if self.hit(OPTION_GAME_GUIDE_NOUSE, x, y) {
             self.settings.set_note_tail(0);
         } else if self.hit(OPTION_GAME_MODE_FULL, x, y) {
-            self.settings.set_mode(1);
-        } else if self.hit(OPTION_GAME_MODE_WIN, x, y) {
             self.settings.set_mode(2);
+        } else if self.hit(OPTION_GAME_MODE_WIN, x, y) {
+            self.settings.set_mode(1);
         } else if self.hit(OPTION_GAME_LONGNOTE_USED, x, y) {
             self.settings.set_longnote_mode(1);
         } else if self.hit(OPTION_GAME_LONGNOTE_NONE, x, y) {

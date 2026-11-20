@@ -26,6 +26,8 @@
 
 use std::collections::HashMap;
 
+mod options_game;
+
 use super::super::avatar::{
     anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
     paint_placement_layer, paint_scene_figures, paint_scene_figures_live,
@@ -57,6 +59,7 @@ use super::side::{
     SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
     SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
+use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
@@ -2696,8 +2699,17 @@ pub fn paint_information_message(frame: &mut Frame<'_>, art: Option<&SceneArt>, 
 /// pinned to Sound by the b3/b4 captures (see
 /// [`PLANET_OPTION_FIRST_TAB`](super::side::PLANET_OPTION_FIRST_TAB)).
 /// Escape (and the tab's `Option_Exit` button, when staged) closes it.
-pub fn paint_planet_options(frame: &mut Frame<'_>, art: Option<&SceneArt>, tab: PlanetOptionTab) {
+pub fn paint_planet_options(
+    frame: &mut Frame<'_>,
+    art: Option<&SceneArt>,
+    tab: PlanetOptionTab,
+    settings: &OptionsSettings,
+) {
     if let Some(art) = art.filter(|art| art.has_figures()) {
+        if tab == PlanetOptionTab::Game {
+            options_game::paint_game_tab(frame, art, settings);
+            return;
+        }
         paint_dialog_scene(frame, art);
         return;
     }
