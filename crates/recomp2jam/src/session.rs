@@ -6439,6 +6439,13 @@ pub(super) mod session_tests {
     /// `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed`
     /// produces. No exe frame pair was captured (`#380` close
     /// comment), so the live before/after capture stays OPEN.
+    ///
+    /// Ticket #544 live chain (docs/live-path-reachability.md):
+    ///   main.rs::run_play -> OnlineSession::paint (Channel/Room) ->
+    ///   poll_lobby_chat -> drain_lobby_chat -> apply_lobby_frame ->
+    ///   apply_room_removed -> ScreenGame::remove_room -> paint_channel.
+    /// Wire pin: `S2C 2007 len=8 hex=00000000` from the WAVE 1 leg2 tap
+    /// `e326e3f7…`, with the observer's 2003 poll `d4fa3dc6…`.
     #[test]
     fn observer_paint_drops_the_row_named_by_the_2007_disband_broadcast() {
         let (mut session, server) = room_session(|mut stream| {
