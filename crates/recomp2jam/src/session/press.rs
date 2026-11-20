@@ -231,6 +231,8 @@ mod tests {
         ));
     }
 
+    // #397 re-pin: the local web-purchase surface word folds into
+    // the observable hash after the legacy 5000 probe word.
     fn assert_golden_press_sequence(trace: &[String], golden: &[&str]) {
         let expected: Vec<String> = golden.iter().map(|line| (*line).to_owned()).collect();
         assert_eq!(trace, expected, "golden press sequence");
@@ -257,9 +259,9 @@ mod tests {
         assert_golden_press_sequence(
             &trace,
             &[
-                "start|channel|1b56fe73a4404ccc|login=false|join=false|echo=None|ready=false",
-                "down|channel|1b56fe73a4404ccc|login=true|join=false|echo=None|ready=false",
-                "up|channel|1b56fe73a4404ccc|login=true|join=false|echo=None|ready=false",
+                "start|channel|67525c966cf0de4c|login=false|join=false|echo=None|ready=false",
+                "down|channel|67525c966cf0de4c|login=true|join=false|echo=None|ready=false",
+                "up|channel|67525c966cf0de4c|login=true|join=false|echo=None|ready=false",
                 "poll|room|<staged-identity>|login=false|join=false|echo=None|ready=false",
             ],
         );
@@ -292,9 +294,9 @@ mod tests {
         assert_golden_press_sequence(
             &trace,
             &[
-                "start|channel|1b56fe73a4404ccc|login=false|join=false|echo=None|ready=false",
-                "down|room|44189648edbbdbcb|login=false|join=false|echo=Some(Channel { x: 524, y: 246 })|ready=false",
-                "up|room|44189648edbbdbcb|login=false|join=false|echo=None|ready=false",
+                "start|channel|67525c966cf0de4c|login=false|join=false|echo=None|ready=false",
+                "down|room|dbaf443a1345032b|login=false|join=false|echo=Some(Channel { x: 524, y: 246 })|ready=false",
+                "up|room|dbaf443a1345032b|login=false|join=false|echo=None|ready=false",
             ],
         );
     }
@@ -328,10 +330,10 @@ mod tests {
         assert_golden_press_sequence(
             &trace,
             &[
-                "start|room|44189648edbbdbcb|login=false|join=false|echo=None|ready=false",
-                "down|room|44189648edbbdbcb|login=false|join=true|echo=None|ready=false",
-                "up|room|44189648edbbdbcb|login=false|join=true|echo=None|ready=false",
-                "poll|waiting|24960fb268a54468|login=false|join=false|echo=None|ready=false",
+                "start|room|dbaf443a1345032b|login=false|join=false|echo=None|ready=false",
+                "down|room|dbaf443a1345032b|login=false|join=true|echo=None|ready=false",
+                "up|room|dbaf443a1345032b|login=false|join=true|echo=None|ready=false",
+                "poll|waiting|db13fede302be168|login=false|join=false|echo=None|ready=false",
             ],
         );
     }
@@ -364,9 +366,9 @@ mod tests {
         assert_golden_press_sequence(
             &trace,
             &[
-                "start|room|44189648edbbdbcb|login=false|join=false|echo=None|ready=false",
-                "down|waiting|24960fb268a54468|login=false|join=false|echo=Some(Room { x: 400, y: 154 })|ready=false",
-                "up|waiting|24960fb268a54468|login=false|join=false|echo=None|ready=false",
+                "start|room|dbaf443a1345032b|login=false|join=false|echo=None|ready=false",
+                "down|waiting|db13fede302be168|login=false|join=false|echo=Some(Room { x: 400, y: 154 })|ready=false",
+                "up|waiting|db13fede302be168|login=false|join=false|echo=None|ready=false",
             ],
         );
     }
@@ -404,8 +406,8 @@ mod tests {
         assert_golden_press_sequence(
             &trace,
             &[
-                "start|waiting|b191bed28b2e0fbb|login=false|join=false|echo=None|ready=false",
-                "click|waiting|b191bed28b2e0fbb|login=false|join=false|echo=None|ready=false",
+                "start|waiting|5e691c903f11151b|login=false|join=false|echo=None|ready=false",
+                "click|waiting|5e691c903f11151b|login=false|join=false|echo=None|ready=false",
             ],
         );
     }

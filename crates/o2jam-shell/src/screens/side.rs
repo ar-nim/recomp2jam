@@ -403,13 +403,14 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 // staged scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x47`): its LEFT/RIGHT
 // children (`0x48`/`0x49`, `Shop_ItemScroll_Left/Right.ojs`) stage
 // scroll-relative, so hit-testing offsets them by the staged scroll
-// origin — geometry from parsed rects, never literals. The cart
-// commits through `BUYITEM` (`0x70`) as the pinned empty
-// `SyncItemPurchase` 5000 send (file `0xf3fa8`); the 5001 answer is
-// undecodable standalone, so the wire ride stays ASSUMED behind the
-// take-seam (`docs/shop-buy.md`). Filters, set-item, bag, and gift
-// semantics stay display-only OPEN (next step: SendInput sweep on
-// the live shop per the `~/scratch/planet-verify/` recipe).
+// origin — geometry from parsed rects, never literals. Cart
+// `BUYITEM` (`0x70`) opens the local `구입 하기` web purchase surface;
+// W-a found no `C2S 5000` on the exe socket and the only `5001` was
+// BACK-timed (#397). The static send file `0xf3fa8` stays a
+// SCRIPTED-GATEWAY reply probe, never the exe buy path. Filters,
+// set-item, bag, and gift semantics stay display-only OPEN (next
+// step: SendInput sweep on the live shop per the
+// `~/scratch/planet-verify/` recipe).
 
 /// Full-bleed BACK rect (`State_ItemShop.bnd` rect 0, code ordinal 1):
 /// the tapped BACK press at `(757,580)` leaves the shop and emits the
@@ -610,8 +611,8 @@ pub const MSHOP_TOP100_CODE: u32 = 0x1A20_007D;
 /// `0x1A200084`). Codes `0x7D..0x84` pair with eight `State_MShop.bnd`
 /// rects (button, 3KEY/7KEY, four sort headers, SELECTALL).
 pub const MSHOP_TOP100_LAST_CODE: u32 = 0x1A20_0084;
-/// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): commits the cart through
-/// the pinned empty `SyncItemPurchase` 5000 send.
+/// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): opens the local web-purchase
+/// surface; no game-socket buy opcode follows (W-a NULL, #397).
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
 /// Cart pager (`IDC_BUTTON_SSHOP_MYCART_LEFT/RIGHT`).
 pub const SHOP_CART_LEFT_CODE: u32 = 0x1420_0072;

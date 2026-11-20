@@ -9,9 +9,11 @@ Clicks drive the public `click_shop`/`click_music_shop` seams (the
 same seams the windowed binary feeds through
 `GameLoop::mouse_click`); paint runs the side overlays
 (`paint_shop_board` / `paint_music_shop_board` + cart over
-`side_placements`). Queued buys drain through the take-seam
-(`take_shop_buy` → 5000, `take_music_buy` → 5010 — ASSUMED
-wire-side, never exe proof).
+`side_placements`). The item cart BUYITEM opens the local web surface
+with no `C2S 5000` (W-a NULL, #397); scripted `5001` reply probes use
+`queue_shop_buy_for_reply_probe` only. Song buys still drain through
+the take-seam (`take_music_buy` → 5010 — ASSUMED wire-side, never
+exe proof).
 
 ## What was clicked, what happened
 
@@ -20,8 +22,8 @@ Item shop open from Waiting; scroll NEXT click (staged
 scroll origin) turns to page 1 (8/2 over the eight staged
 `ITEMBUY` hit areas) and back; first-row `ITEMBUY` click checks
 Good01 into the cart; cart `BUYITEM` click (staged
-`IDC_BUTTON_SSHOP_BUYITEM`, `0x14200070`) queues the pinned empty
-5000 send and the seam drains it once. Song shop open from
+`IDC_BUTTON_SSHOP_BUYITEM`, `0x14200070`) opens the local web
+purchase surface and sends no game opcode. Song shop open from
 Waiting; TITLE sort click (staged `IDC_BUTTON_MSHOP_MS_TITLE`,
 `0x1A200080`) resorts and resets the pager; MSALL NEXT click
 (staged `IDC_BUTTON_MSHOP_MSALL_RIGHT`, `0x1A20000B`) turns to
@@ -35,13 +37,13 @@ Evidence: screen path `waiting → shop → waiting` /
 `waiting → musicshop → waiting`, state hashes
 `07a26fe11d0d9c4a` (shop open) → `085b1af61b85cfab`
 (page 1) → `abf7819035bb3eab` (Good01 checked) →
-`b88d86a046d514ae` (5000 queued); music
+`b88d86a046d514ae` (web surface opened); music
 `ecba3f591475a287` (song shop open) → `16b70ed241ae880f`
 (TITLE sorted) → `54ff53a04fe97fce` (page 1) →
 `b65513055311b344` (song 757 staged) → `f668ca3d6ba933eb`
 (5010 queued). Guards: `shops_hand_session_browses_and_buys`,
 `music_shop_hand_session_sorts_pages_and_buys` (plus
-`shop_browse_toggles_cart_and_commits_5000`,
+`shop_row_toggle_checks_the_cart_and_buy_opens_the_web_surface`,
 `shop_buyitem_without_cart_queues_nothing`,
 `shop_pager_turns_eight_row_pages`,
 `shop_wallet_gem_caption_waits_for_wire_data`,

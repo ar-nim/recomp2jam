@@ -771,6 +771,98 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
+    /// W-a re-scope (#397): the exe's final cart recipe (row pick at
+    /// `(238,263)`, BUYITEM `(41,574)`, web OK `(345,385)`) has no
+    /// `C2S 5000`. Our live boot must paint the local SHOPPING BAG
+    /// confirmation face and the staged web client, and leave the buy
+    /// outbox empty. The wire-quiet half is guarded by the scripted
+    /// gateway test `cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family`.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> assemble_online_session
+    ///   -> stage_live_scenes (stages the charge web frame) ->
+    ///   OnlineSession::ingest_snapshot -> ScreenGame::ingest_snapshot ->
+    ///   click_side_screen -> click_shop(ToggleRow/CartBuy) ->
+    ///   ShopPanel::ShoppingBag -> shop_purchase_web_open ->
+    ///   paint_side -> paint_cash_charge_frame.
+    #[test]
+    fn live_boot_cart_row_buy_paints_the_web_surface_without_a_buy_queue() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(
+                session.game_mut().enter_screen(lobby),
+                "gate reaches the shop lobby through {lobby:?}"
+            );
+        }
+        assert!(
+            session.game_mut().cash_charge_art_staged(),
+            "live boot stages the web frame the purchase surface reuses"
+        );
+        assert!(session.game_mut().visit_side(SideScreen::Shop));
+        session
+            .game_mut()
+            .set_shop_catalog(&o2jam_file::AvatarItemTable {
+                rows: vec![o2jam_file::AvatarItemRow {
+                    item_id: 1,
+                    item_type: 0,
+                    price: 4500,
+                    params: [0; 4],
+                    flags: (0, 0),
+                    name: "W6Good".to_owned(),
+                    description: String::new(),
+                    sprites: Vec::new(),
+                }],
+            });
+
+        session.ingest_snapshot(&InputSnapshot::click_at(238, 263));
+        assert_eq!(
+            session.game_mut().shop_cart(),
+            vec![1],
+            "row pick staged a cart row"
+        );
+        assert_eq!(
+            session.game_mut().shop_panel(),
+            o2jam_shell::screens::side::ShopPanel::ShoppingBag
+        );
+
+        session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        session.ingest_snapshot(&InputSnapshot::click_at(345, 385));
+        assert!(
+            session.game_mut().shop_purchase_web_open(),
+            "BUYITEM opened the web purchase surface"
+        );
+        assert_eq!(
+            session.game_mut().take_shop_buy(),
+            None,
+            "no invented 5000 on the buy leg"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        session.paint(&mut RenderFrame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        let client = buf[300 * 800 + 400];
+        let channels = [(client >> 16) as u8, (client >> 8) as u8, client as u8];
+        for (painted, captured) in channels.into_iter().zip([25, 24, 25]) {
+            assert!(
+                painted.abs_diff(captured) <= 1,
+                "exe-pinned web client colour after the cart buy: {channels:?}"
+            );
+        }
+        server.join().unwrap();
+    }
+
     /// Reopened #362: the b8 click is delivered as a pointer snapshot, not
     /// as a direct `click_shop` call. This guard drives that whole live
     /// chain and reads pixels before and after, so a Shop -> Payment

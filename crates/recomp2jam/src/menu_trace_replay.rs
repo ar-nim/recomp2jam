@@ -893,10 +893,12 @@ mod tests {
     }
 
     /// Live chain: window::WindowHandler → session::Session::ingest_snapshot →
-    /// ScreenGame::ingest_snapshot → ShopState::toggle_row / cart commit outbox.
-    /// The #194 close leg (cart + BUYITEM round trip) at the seam.
+    /// ScreenGame::ingest_snapshot → ShopState::toggle_row / cart row pick →
+    /// local web-purchase surface. The #194 close leg re-scoped by W-a:
+    /// the replay shows a staged cart and an opened web surface, not a
+    /// game-socket 5000.
     #[test]
-    fn shop_row_cart_buyitem_replay_commits_the_cart() {
+    fn shop_row_cart_buyitem_replay_opens_the_purchase_surface() {
         let trace = load_menu_trace("shop-row-cart-buyitem.json").expect("committed trace loads");
         let (first, _) = replay_twice(stage_shop_browser, &trace).expect("buy replay succeeds");
         assert_eq!(
@@ -909,8 +911,13 @@ mod tests {
         let (mut game, _) = replay_for_state(stage_shop_browser, &trace);
         assert_eq!(game.shop_cart(), vec![1, 2], "row toggles check the cart");
         assert!(
-            game.take_shop_buy().is_some(),
-            "BUYITEM queues the 5000 commit"
+            game.shop_purchase_web_open(),
+            "BUYITEM opens the local web purchase surface"
+        );
+        assert_eq!(
+            game.take_shop_buy(),
+            None,
+            "the exe buy leg sends no game opcode"
         );
     }
 

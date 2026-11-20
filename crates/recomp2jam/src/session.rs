@@ -4115,6 +4115,22 @@ pub(super) mod session_tests {
         decode_frame(&bytes).unwrap()
     }
 
+    /// One frame off a recording socket, or `None` on a clean client
+    /// close. Unlike [`read_frame`], a short read ends the tap instead
+    /// of panicking in the server thread.
+    fn read_frame_until_eof(stream: &mut TcpStream) -> Option<Frame> {
+        let mut header = [0u8; HEADER_LEN];
+        if stream.read_exact(&mut header).is_err() {
+            return None;
+        }
+        let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+        let mut bytes = header.to_vec();
+        let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+        stream.read_exact(&mut body).ok()?;
+        bytes.extend_from_slice(&body);
+        Some(decode_frame(&bytes).unwrap())
+    }
+
     /// Fake gateway on loopback: returns its port plus the server thread
     /// running `with_server` (5 s reads, like the login-flow tests).
     fn fake_gateway(
@@ -4664,6 +4680,10 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only: W-a found no exe C2S
+        // 5000 on the buy leg, so the probe stages the legacy empty
+        // send to keep this 5001 decoder guarded.
+        session.game.queue_shop_buy_for_reply_probe();
         assert!(session.shop_buy_attempt.is_none());
 
         paint_frame(&mut session);
@@ -4739,6 +4759,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
         paint_frame(&mut session);
         paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 17");
         server.join().unwrap();
@@ -4820,6 +4843,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
 
         paint_frame(&mut session);
 
@@ -4904,6 +4930,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
         paint_frame(&mut session);
         paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
         server.join().unwrap();
@@ -5027,6 +5056,96 @@ pub(super) mod session_tests {
         paint_frame(&mut session);
         server.join().unwrap();
         assert_eq!(session.game.side(), None);
+    }
+
+    /// W-a NULL pin (#397, traces `W6FA-BUY-01/02`): a cart-row pick,
+    /// BUYITEM and the web page's `(345,385)` OK put no shop-buy opcode
+    /// on the game socket. Only the BACK leg's pinned `5007`/`5028`
+    /// pair follows. The 5001 seen in the exe tap was BACK-timed.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+    ///   click_side_screen -> click_shop(ToggleRow/CartBuy) ->
+    ///   open local web surface -> click_shop_purchase_web(BACK) ->
+    ///   flush_exit_shop -> GatewayConnection::send_frame(5007, 5028).
+    #[test]
+    fn cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family() {
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{
+            SideScreen, SHOP_BACK_CODE, SHOP_BUYITEM_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 4500,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "W6Good".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let area = |code, sprite: Option<&str>, x, y, w, h| ScenePlacement {
+            id: format!("W6A_{code:X}"),
+            code,
+            sprite: sprite.map(str::to_owned),
+            rect: o2jam_render::Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(
+                    SHOP_ITEMBUY_FIRST_CODE,
+                    Some("Shop_Btn_ItemBuy.ojs"),
+                    220,
+                    187,
+                    81,
+                    17,
+                ),
+                area(SHOP_BUYITEM_CODE, None, 17, 563, 49, 23),
+                area(SHOP_BACK_CODE, None, 744, 570, 40, 25),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(238, 263));
+        assert_eq!(session.game.shop_cart(), vec![1]);
+        session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        session.ingest_snapshot(&InputSnapshot::click_at(345, 385));
+
+        assert!(session.game.shop_purchase_web_open());
+        assert_eq!(session.game.take_shop_buy(), None, "no 5000 was queued");
+        session.ingest_snapshot(&InputSnapshot::click_at(757, 580));
+        paint_frame(&mut session);
+        assert_eq!(session.game.side(), None, "BACK leaves the shop side");
+        drop(session);
+        server.join().unwrap();
+        let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            opcodes,
+            vec![5007, 5028],
+            "the buy leg is quiet; only BACK's 5007/5028 family is sent"
+        );
     }
 
     #[test]

@@ -12,8 +12,9 @@ use super::super::side::{
 /// or wire queue — so the board reads without touching the
 /// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
 /// the same names, so the click seam and the snapshot surface never
-/// change. The cart commit still queues on the outbox (cluster 1):
-/// `apply_action` only reports it, the caller queues the send.
+/// change. The cart commit reports itself to the caller (cluster 1):
+/// `apply_action` opens no wire queue; the caller mounts the local web
+/// purchase surface instead (#397).
 #[derive(Default)]
 pub(crate) struct ShopState {
     /// Lower-left panel face (`MY BAG` on entry, `SHOPPING BAG`
@@ -239,9 +240,9 @@ impl ShopState {
     /// check the cart, all three pagers step and hold at the ends,
     /// `ITEMPRE` picks preview the row and `ITEMBACK` clears it.
     /// Reports whether the action commits the cart (`BUYITEM` on a
-    /// non-empty cart): the caller queues the pinned 5000 send on
-    /// the outbox, so this board state never touches the wire.
-    /// Preview and bag-pager arms report no send (browse tools only).
+    /// non-empty cart): the caller opens the local web purchase
+    /// surface, so this board state never touches the wire.
+    /// Preview and bag-pager arms report no commit.
     /// `owned_len` is the staged owned-good count the bag pager
     /// holds against (same empty-panel rule as the cart pager).
     pub(crate) fn apply_action(&mut self, action: ShopAction, owned_len: usize) -> bool {

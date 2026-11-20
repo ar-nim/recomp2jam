@@ -78,10 +78,11 @@ staged scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x14022047` at
 (221,374)): its LEFT/RIGHT children (`0x48`/`0x49`) stage
 scroll-relative, so hit-testing offsets by the staged scroll
 origin — geometry from parsed rects, never literals. The cart
-commits through `BUYITEM` (`0x70`) as the pinned empty
-`SyncItemPurchase` 5000 send (file `0xf3fa8`); the 5001 answer
-is undecodable standalone, so the wire ride stays ASSUMED behind
-the take-seam (`docs/shop-buy.md`). Sort/filter/set-item/bag/
+`BUYITEM` (`0x70`) opens the local `구입 하기` web purchase surface;
+W-a found no `C2S 5000` on the exe socket and the only `5001` was
+BACK-timed (#397). The static send file `0xf3fa8` is corroboration
+for a synthetic probe, not the exe buy path (`docs/shop-buy.md`).
+Sort/filter/set-item/bag/
 gift semantics stay display-only OPEN (next step: SendInput sweep
 on the live shop per the `~/scratch/planet-verify/` recipe) —
 see ticket #195 for what that sweep's evidence split resolved.
@@ -145,9 +146,10 @@ room slot).
 - Cart add (#685): the live boot parks the seven parent-relative
   `Dialog_Shopping_Add.bnd` rects in a hidden slot; no painter mounts
   them. The exe pin is the D4 row-pick face switch (MY BAG → SHOPPING
-  BAG), so `ITEMBUY` checks the row and switches the face locally while
-  `BUYITEM` alone queues the pinned empty 5000. A sheet mount or a
-  per-item add opcode would be invented (`SHOPPINGBAG_ADD_NEXT_STEP`).
+  BAG), so `ITEMBUY` checks the row and switches the face locally; the
+  W-a NULL pin shows `BUYITEM` opens the web purchase surface and
+  sends no game opcode. A sheet mount or a per-item add opcode would
+  be invented (`SHOPPINGBAG_ADD_NEXT_STEP`).
   Guards: `cart_add_opens_the_cart_face_without_mounting_the_parked_sheet`,
   `shopping_bag_add_sheet_stages_seven_parent_relative_rects`.
 - Gem price (#395, partial): `ShopGood::gem_price` is an explicit
@@ -273,7 +275,8 @@ OPEN for D1-D11; no live paired frame hash is claimed here.
    unpinned. `MGASH`→`o2_cash` join OPEN — rig capture at known
    balances still names the cell).
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
-   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side),
+   checks the cart, `BUYITEM` opens the web surface with no game-socket
+   opcode (W-a NULL, #397),
    `ITEMPRE`/`ITEMBACK` preview and clear (comment pairing
    ASSUMED); `ITEMGIFT`/`GIFTITEM` record a no-op (ticket #196);
    set-item unevidenced; bag-vs-giftbox landing UNCONFIRMED
