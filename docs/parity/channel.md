@@ -168,3 +168,43 @@ Harness note: the default `online` boot applies the gate. The
 click still measures input delivery on the bare planet board; guard
 `x11_game_args_skip_the_relay_notice_gate` pins that argument. This
 is a trace affordance, not an exe behavior claim.
+
+## Ticket #717 — refused channel-enter notice (evidence pin, 2026-11-20)
+
+Oracle: `OTwo.exe` 7.55, SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`
+(5,029,888 B), Ghidra 12.2 / REA `target-83a045418b62.exe`. Static
+pack and live boot pack are cited in `~/scratch/channel-full-findings.md`
+(`~/scratch/channel-full/win3`). The 1005 handler at VA `0x55a110`
+(file `0x15a110`) selects text through the 8-entry jump table at VA
+`0x55a324` (file `0x15a324`) and posts queue type 1, the one-OK
+`Dialog_Information` sheet (same sheet as #244/#367, geometry from
+`Dialog_Information.bnd` by code-ordinal pairing). Live result-7 frame:
+blue one-OK sheet with `채널 정보가 없습니다.`, OK near (400,365)
+back to the unchanged Channel dialog; the highlighted row keeps its
+enter face. No sound transient, highlight write, or row repaint is
+observed (static chain has no sound dispatch; the statically visible
+"mark row full" arm is superseded by the live observation because
+the notice becomes the top dialog first).
+
+Pin the CP949 strings at their exact VAs (bytes through the NUL;
+VA = file offset + `0x400000`):
+
+| Result | VA / file offset | CP949 text | REA evidence this pin |
+|---|---|---|---|
+| 1 with `Restricted = 0`, 2..=5, codes past 7 (default arm) | `0x64d740` / `0x24d740` | `채널 허용 인원이 초과된 상태라서 더 이상 들어갈 수 없습니다.\n\n다른 채널을 이용해 주세요.` | `ev_4c4e43875c0d39d4029adb3b49c2f4713c64828965311535bc9658595b390554` |
+| 1 with `Restricted = 1` | `0x64d6c8` / `0x24d6c8` | `유료곡 대전을 활성화하기 위한 서버입니다. 유료곡이 없으신 분은 입장하실 수 없습니다.\n\n다른 서버를 이용해 주세요.` | `ev_a2583cf8b9bfa43458b195d7862f47fdeacae009ad9cbd34d483dc06f7121e37` |
+| 6 | `0x64d6a4` / `0x24d6a4` | `사용자 정보를 읽어오지 못했습니다.` | `ev_3c7f9db2b1b6ef599ab9785bb312c54bf03032d019aa7e26392776e4d6de60c9` |
+| 7 | `0x64d68c` / `0x24d68c` | `채널 정보가 없습니다.` | `ev_1bfd3059a4523c59d86d10333711fefad7304e7643cdff23f7e7b24e9f6d09b4` |
+
+Result 0 is success: no sheet, the identity fetch follows. Other
+values of the optional `Restricted` word post no sheet in the exe;
+our wire decoder admits only 0/1, so that arm stays unrepresentable.
+
+Shell stand-in at this pin: `OnlineSession::drain_channel_login`
+logs `channel login rejected; staying in Channel` and leaves the
+dialog unchanged (no sheet). Status: OPEN — implementation and
+guards ride the fix commit. The keyboard-confirm fan-out to the
+channel vftable slot stays untouched and OPEN by the channel-full
+lane's pin (next step: stopped-state breakpoint on `0x475260` with a
+focused canvas); this ticket covers the 1005 answer path only.
