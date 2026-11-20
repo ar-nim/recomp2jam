@@ -9694,6 +9694,49 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// Empty title refusal is a wire behavior (ticket #514): the exe
+    /// tap `~/scratch/evidence-room/create-fields-2/exe/wire/
+    /// room-stage.log` 02:26:34 logs `no C2S 2004 count=0` beside
+    /// `title-02-refusal-click.png` sha256
+    /// `1058be51698dc3c2c0ba61ba0d3e56b42311a68ba4fcb135900a5555ff27a658`.
+    /// Caller chain: boot → Room → staged CREATE sheet → clear title →
+    /// Commit → paint → the creator socket stays silent.
+    #[test]
+    fn refused_empty_title_sends_no_create_frame_on_the_gateway() {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE;
+        use std::collections::HashMap;
+
+        let (mut session, server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().load_create_room_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "CREATE_OK".to_owned(),
+                code: CREATE_ROOM_CREATE_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 30,
+                    h: 30,
+                },
+            }],
+            HashMap::new(),
+        );
+        session.game_mut().open_create_room_dialog();
+        session.game_mut().delete_room_dialog_char();
+        assert_eq!(session.game_mut().create_room_form().title, "");
+        session.game_mut().click_room_dialog(20, 20);
+        assert!(session.game_mut().room_dialog().is_some());
+        assert!(session.game_mut().take_create_room().is_none());
+        paint_frame(&mut session);
+        assert_eq!(session.screen(), Screen::Room);
+        server.join().unwrap();
+    }
+
     /// Live-path guard for the exe CREATE wire pin in
     /// `~/scratch/evidence-room/create-fields-2/exe/wire/room-stage.log`
     /// 02:27:01 (`C2S 2004 len=17
