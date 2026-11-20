@@ -154,6 +154,26 @@ populated-row filter: blank cell painted blue 255; green after), plus
 the live gate assertion in
 `live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
 
+## Equipment wells (ticket #424, 2026-11-20)
+
+The 16 slot images `0X15600013..22` are bound rects in `State_Myroom.bnd`;
+the first eleven Korean comments (악기/헤어/소품/장갑/목걸이/상의/하의/안경/
+귀걸이/의상소품/신발) name the same parts, in the same order, as the eleven
+slot-selector buttons (`docs/myroom.md` block walk). The 2001 character body
+carries seventeen equipment words in `ItemType` order (Instrument 0 …
+Costume 16, `docs/net-protocol.md`), so well ordinal `0..11` pairs with the
+equipment array at the same index. `Itemdata_Korea.dat` sprite slots 0–1 are
+shop icons and are never worn (`docs/equip.md`); the exe's hash-pinned MyRoom
+frame shows the jacket, pants and shoes icons in their wells.
+
+Landed: `paint_myroom_slot_icons` inks each styled well from the 2001
+equipment word's staged shop portrait at the paired `.bnd` rect. Missing
+word, row, portrait, or rect paints nothing — no fallback geometry. The
+same `shop_item_portraits` map the Item Shop stages from `set_avatar_source`
+serves the wells, so equip/vacate restages update both figure and well.
+Guard: `myroom_worn_item_inks_its_staged_equipment_well` with a synthetic
+portrait and jacket slot 5; no ink before the painter was wired.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to

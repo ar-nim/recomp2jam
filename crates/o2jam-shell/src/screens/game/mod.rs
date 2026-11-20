@@ -40,9 +40,9 @@ use super::paint::{
     paint_channel_scene, paint_dialog_scene, paint_lanking_board, paint_lanking_scene,
     paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
     paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet, paint_myroom_data,
-    paint_myroom_figure, paint_payment_notice, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
@@ -6277,6 +6277,12 @@ impl ScreenGame {
         let views = myroom_gift_views(table, &self.catalog_songs, character);
         let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
         let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
+        paint_myroom_slot_icons(
+            frame,
+            placements,
+            &character.equipment,
+            &self.shop_item_portraits,
+        );
         // Identity fields belong to the status face; the exe's default
         // Inventory face hides them with the rest of that plate (#369).
         let mut captions = if self.myroom.panel() == MyRoomPanel::Status {
@@ -12960,6 +12966,67 @@ mod game_tests {
         assert!(
             portrait_inked,
             "entered MyRoom paints the equipped figure center-stage"
+        );
+    }
+
+    /// Ticket #424 wire-to-frame leg: the 2001 equipment word for a
+    /// worn jacket must ink the paired equipment well from the item
+    /// table's shop icon, at the staged `.bnd` rect. No well art or
+    /// portrait without the wire word and the item table (no
+    /// fallback geometry, ADR-0003).
+    #[test]
+    fn myroom_worn_item_inks_its_staged_equipment_well() {
+        // Live caller chain:
+        //   connect::stage_online_identity (S2C 2001 equipment) ->
+        //   ScreenGame::set_myroom_character -> set_avatar_source
+        //   (portraits from Itemdata_Korea.dat) -> GameLoop paint ->
+        //   ScreenGame::paint_at -> paint_side -> paint_myroom_overlay
+        //   -> MyRoom well placements. Synthetic figure/table only.
+        use super::super::side::{MYROOM_SLOT_IMAGE_FIRST_CODE, MYROOM_SLOT_WELLS};
+        const JACKET_SLOT: usize = 5;
+        const JACKET_ITEM_ID: i32 = 376;
+        const {
+            assert!(JACKET_SLOT < MYROOM_SLOT_WELLS);
+        }
+
+        let mut character = myroom_test_character(Vec::new());
+        character.equipment[JACKET_SLOT] = JACKET_ITEM_ID;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(character);
+        game.shop_item_portraits.insert(
+            u32::try_from(JACKET_ITEM_ID).unwrap_or(0),
+            solid_test_figure([0x00, 0x7C]),
+        );
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_IMAGE_SMYROOM_TOP".to_owned(),
+                code: MYROOM_SLOT_IMAGE_FIRST_CODE + u32::try_from(JACKET_SLOT).unwrap_or(0),
+                sprite: None,
+                rect: Rect {
+                    x: 120,
+                    y: 60,
+                    w: 48,
+                    h: 48,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (60..108).any(|y| (120..168).any(|x| buf[y * 800 + x] != 0)),
+            "the jacket's staged shop icon inks its 2001 equipment well"
         );
     }
 
