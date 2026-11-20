@@ -42,6 +42,17 @@ touch. Lessons are pruned for staleness, never for merely duplicating a doc.
   override `git user.name/email` or pass `-c user.name` — including when a
   subagent commits.
 
+## Machine budget (15 GB)
+
+A full-suite test binary holds ~3 GB and every worktree builds its own
+`target/`, so memory is the binding constraint, not cores. Rule: ONE
+full-suite run at a time machine-wide, owned by the senior at merge time.
+Lanes gate per ticket with `gate-check.sh --no-push --quick -- <crates>`
+(the tiering lives in `docs/agents/triage-labels.md`); a lane runs the full
+suite only when its acceptance names both arms, and says so. SIGKILL
+(signal 9) in a test log under fleet load = this rule was violated - wait
+for a quieter machine, never re-run into the OOM.
+
 ## GitHub / tracker
 
 - Issue images: upload them (gist git-push accepts binaries; `gh gist
