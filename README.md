@@ -1,72 +1,135 @@
 # recomp2jam
 
-A clean-room **recompilation of the O2Jam 7.55 client in Rust**.
+A clean-room **recompilation of the O2Jam 7.55 client in Rust** — and the
+reference implementation of 7.55 behavior: every shipped behavior traces to
+pinned evidence against the original executable (the behavior oracle) or is
+explicitly labeled OPEN with its next evidence step.
 
-The original client was C++ (MSVC 2005) built on the **CDX game library**,
-**Boost ~1.35/1.37**, and **libvorbis**. This project re-implements that
-client's behavior in safe, portable Rust — no original code or binaries are
-included here.
+The original client was C++ (MSVC 2005) on the **CDX** library, **Boost
+~1.35/1.37**, and **libvorbis**. This project re-implements that client in
+safe, portable Rust — no original code or binaries are included.
 
-> ⚠️ Legal / clean-room note: you must supply your own legally obtained
-> O2Jam 7.55 install. Never commit the original `.exe`, `.ojm`, `.ojn`, or
-> other copyrighted assets to this repo (they are git-ignored by default).
+> ⚠️ Clean-room note: you must supply your own legally obtained O2Jam 7.55
+> install. Never commit the original `.exe`, `.ojm`, `.ojn`, or other
+> copyrighted assets (git-ignored by default; see
+> [`AGENTS.md`](AGENTS.md)).
 
-## Original stack (what we're replacing)
+## Status
 
-| Original | Role in 7.55 client | Rust replacement (planned) |
+The client **runs today**: windowed boot → planet board → channel → rooms →
+waiting → loading → playing → result, plus the shop, MyRoom, payment, options,
+and dialog families, driven by the original archive formats through pure-Rust
+parsers. Behavior is pinned by ~2,900 scenario-named guards (live-path
+regression tests), with the 7.55 executable as oracle.
+
+## Screenshots
+
+Rendered by this client (reference captures; the `-native` variants pair with
+original-client captures in `docs/screenshots/`):
+
+| | | |
 |---|---|---|
-| C++ + MSVC 2005 CRT | game code, ABI, RTTI/exceptions | Rust, `anyhow`/`thiserror` |
-| CDX (DirectDraw/Direct3D-era wrapper) | 2D sprites, scene, input, timing loop | `winit` + `wgpu` (later milestone) |
-| Boost 1.35/1.37 | smart ptrs, threads, asio, filesystem, signals | `std`, `tokio` (later), `serde` |
-| libvorbis (+ ogg) | BGM / key sounds in `.ojm` | `lewton` (pure-Rust Vorbis decode) |
-| Win32 + DirectX 8/9 era | window, audio, input | `cpal`/`rodio`, `winit`, `gilrs` (later) |
-| InstallShield 11.5 installer | `O2Jam_Classic.exe` is the *installer*, not the game | extract on Windows, point tools at the installed files |
+| ![planet](docs/screenshots/planet.png) | ![channel](docs/screenshots/channel.png) | ![playing](docs/screenshots/playing.png) |
+| ![myroom](docs/screenshots/myroom.png) | ![musicshop](docs/screenshots/musicshop.png) | ![loading](docs/screenshots/loading.png) |
 
-See [`docs/original-stack.md`](docs/original-stack.md) for RE implications
-(MSVC 2005 mangling, Boost internals, CDX surface model) and
-[`docs/architecture.md`](docs/architecture.md) for the crate map.
+Regenerate with `cargo run -p recomp2jam -- --out-dir docs/screenshots`
+(after `scripts/worktree-setup.sh`).
+
+## Feature progress
+
+Live from the [issue tracker](https://github.com/ar-nim/recomp2jam/issues) —
+badges are GitHub search queries against feature labels, so this section
+**cannot diverge** from the tracker. Open = work remaining, done = closed.
+
+**Boot & board:**
+![avi](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Avi&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aavi)
+![planet](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Planet&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aplanet)
+![channel](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Channel&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Achannel)
+
+**Lobbies:**
+![room](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Room&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aroom)
+![waiting](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Waiting&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Awaiting)
+
+**Gameplay:**
+![loading](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Loading&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aloading)
+![playing](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Playing&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aplaying)
+![result](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Result&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aresult)
+
+**Economy & sides:**
+![shops](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Shops&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Ashop)
+![myroom](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=MyRoom&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Amyroom)
+![payment](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Payment&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Apayment)
+
+**System:**
+![tutorial](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Tutorial&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Atutorial)
+![options](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Options&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Aoptions)
+![messenger](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Messenger&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Amessenger)
+![dialogs](https://img.shields.io/github/issues-search/ar-nim/recomp2jam?label=Dialogs&query=repo%3Aar-nim%2Frecomp2jam%20is%3Aissue%20is%3Aopen%20label%3Acomponent%3Adialogs)
+
+Specs (story matrices, one per feature):
+[#287 Avi](https://github.com/ar-nim/recomp2jam/issues/287) ·
+[#288 Planet](https://github.com/ar-nim/recomp2jam/issues/288) ·
+[#289 Channel](https://github.com/ar-nim/recomp2jam/issues/289) ·
+[#290 Room](https://github.com/ar-nim/recomp2jam/issues/290) ·
+[#291 Waiting](https://github.com/ar-nim/recomp2jam/issues/291) ·
+[#292 Loading](https://github.com/ar-nim/recomp2jam/issues/292) ·
+[#293 Playing](https://github.com/ar-nim/recomp2jam/issues/293) ·
+[#294 Result](https://github.com/ar-nim/recomp2jam/issues/294) ·
+[#178 Item Shop](https://github.com/ar-nim/recomp2jam/issues/178) ·
+[#179 Music Shop](https://github.com/ar-nim/recomp2jam/issues/179) ·
+[#180 MyRoom](https://github.com/ar-nim/recomp2jam/issues/180) ·
+[#296/#297 Payment](https://github.com/ar-nim/recomp2jam/issues/296) ·
+[#313 Tutorial](https://github.com/ar-nim/recomp2jam/issues/313) ·
+[#314 Options](https://github.com/ar-nim/recomp2jam/issues/314) ·
+[#315 Messenger](https://github.com/ar-nim/recomp2jam/issues/315) ·
+[#316 Dialogs](https://github.com/ar-nim/recomp2jam/issues/316)
 
 ## Layout
 
 ```text
 crates/
-  o2jam-file    # .ojm / .ojn parsers (pure Rust, no OS deps)
-  o2jam-audio   # Vorbis decode (lewton) + backend trait (null/cpal later)
-  o2jam-game    # timing, judgement, score, chart model (pure logic)
-  recomp2jam    # the game client binary (CLI today, windowed client later)
-  o2jam-dump    # CLI inspector for .ojm/.ojn files
-docs/
-  original-stack.md
-  architecture.md
-  reversing.md
-  file-formats/ojm.md
-  file-formats/ojn.md
-  progress.md
-fixtures/       # small synthetic test files only — no copyrighted data
+  o2jam-file      # .ojm / .ojn parsers (pure Rust)
+  o2jam-audio     # Vorbis decode (lewton) + backend trait
+  o2jam-net       # the 7.55 wire protocol (framing, opcodes, bodies)
+  o2jam-render    # pixel formats, blits, figure decode
+  o2jam-text      # text rasterization (OFL fonts; exe pins geometry)
+  o2jam-game      # timing, judgement, score, chart model
+  o2jam-shell     # ScreenGame: scenes, staging, painters, input
+  input-drive     # scripted input/replay driver
+  di-interposer   # DirectInput stand-in feeding scripted keys to the exe
+  recomp2jam      # the game client binary
+  o2jam-dump      # CLI inspector for .ojm/.ojn files
+docs/             # evidence, parity verdicts, file formats, agent playbooks
+fixtures/         # small synthetic test files only — no copyrighted data
+scripts/          # gates, rig, tracker, provenance tooling
 ```
+
+See [`docs/architecture.md`](docs/architecture.md) for the crate map and
+[`docs/original-stack.md`](docs/original-stack.md) for the RE notes
+(MSVC 2005 mangling, Boost internals, CDX surface model).
 
 ## Quick start
 
 ```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo run -p o2jam-dump -- --help
-cargo run -p recomp2jam -- --help
+bash scripts/worktree-setup.sh     # claim a data slot + symlink install-root/
+bash scripts/gate-check.sh         # fmt + clippy + tests (both data arms) + push
+cargo run -p recomp2jam -- --help  # client CLI (headless walks, shots, windowed)
+scripts/play-local.sh              # windowed client against local Memoryer
 ```
 
 ## Roadmap
 
-- [x] Day-0 scaffold: workspace builds, `cargo test` green
-- [ ] RE inventory: module/function list from installed 7.55 binaries
-- [ ] `o2jam-file`: verified OJM + OJN parsers against real files
-- [ ] `o2jam-audio`: sample-accurate playback, latency measurement
-- [ ] `o2jam-game`: judgement/score parity tests vs. original
-- [ ] `recomp2jam`: windowed 7-key gameplay (winit + wgpu + cpal)
-- [ ] Compatibility matrix in `docs/progress.md`
+- [x] Workspace with verified `.ojm`/`.ojn` parsers and dump tooling
+- [x] The 7.55 wire protocol against a local server (Memoryer interop)
+- [x] Windowed client: boot → board → lobby → playing → result
+- [x] Shop, MyRoom, payment, options, and dialog families
+- [ ] Behavior parity to 100% of pinned spec stories — the tracker above
+- [ ] Judged-input replay parity (exe injection via the DI interposer)
+- [ ] Modern renderer (wgpu) behind the current painter seam
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). RE findings go in `docs/` as small,
-reviewable PRs. Be precise about addresses/versions: everything is relative
-to **7.55** unless stated otherwise.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md). RE
+findings go in `docs/` as small, reviewable PRs — behavior described in our
+own words with addresses and evidence IDs, never pasted disassembly.
+Everything is relative to **7.55** unless stated otherwise.
