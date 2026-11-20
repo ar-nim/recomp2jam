@@ -4,7 +4,10 @@ use crate::avatar::{
     PLAYING_BACKDROP_CODE,
 };
 use crate::screens::side::{
-    cash_charge_close_hit, CASH_CHARGE_WEB_CODE, TUTORIAL_RECEPTOR_SPRITES,
+    cash_charge_close_hit, shop_action_at, ShopAction, CASH_CHARGE_WEB_CODE,
+    SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEMWON_FIRST_CODE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 #[test]
@@ -214,6 +217,196 @@ fn bnd_blob(rects: &[(u32, u32, u32, u32)]) -> Vec<u8> {
         blob.extend_from_slice(&y2.to_le_bytes());
     }
     blob
+}
+
+/// One synthetic `State_ItemShop` archive: the pinned audit cells at
+/// their raw `.bnd` coordinates plus empty rects for the rest of the
+/// 186-record bind. No copyrighted archive bytes are used.
+fn shop_archive() -> Vec<u8> {
+    let list = [
+        "NUMBER_OF_STATE 0x01",
+        "STATE_SHOP 0XA4 0X03",
+        "{",
+        "BOUND \"State_ItemShop.bnd\"",
+        "IDC_STATE_SHOP 0X14000000",
+        "IDC_IMAGE_SSHOP_ITEMSHOW1 0X14600035",
+        "IDC_TEXT_SSHOP_ITEMNAME1 0X1440002C",
+        "IDC_BUTTON_SSHOP_ITEMBUY1 0X14200018 \"Shop_Btn_ItemCheck.ojs\"",
+        "IDC_BUTTON_SSHOP_ITEMGIFT1 0X14200020",
+        "IDC_TEXT_SSHOP_ITEMWON1 0X14400054",
+        "IDC_TEXT_SSHOP_ITEMGEM1 0X1440005C",
+        "IDC_BUTTON_SSHOP_ITEMPRE1 0X14200064 \"Shop_ItemPre.ojs\"",
+        "}",
+        "",
+    ]
+    .join("\n");
+    let mut rects = vec![(0, 0, 0, 0); 0xBA];
+    rects[0] = (0, 0, 800, 600);
+    // Ordinal = (code & 0xFFF) - 1, the exe pairing rule.
+    rects[0x34] = (227, 86, 336, 167);
+    rects[0x2B] = (231, 69, 331, 81);
+    rects[0x17] = (220, 187, 301, 204);
+    rects[0x1F] = (261, 187, 301, 204);
+    rects[0x53] = (247, 169, 285, 182);
+    rects[0x5B] = (300, 169, 338, 182);
+    rects[0x63] = (308, 184, 348, 201);
+    o2jam_file::test_archive::build_archive(&[
+        ("ControlList_Interface.txt", list.as_bytes()),
+        ("State_ItemShop.bnd", &bnd_blob(&rects)),
+        ("Shop_Btn_ItemCheck.ojs", &sprite55_blob(1, 1, &[1])),
+        ("Shop_ItemPre.ojs", &sprite55_blob(1, 1, &[2])),
+    ])
+}
+
+/// D1/D3 red proof: the exe puts the priced row children 70 px below
+/// their raw `.bnd` rects (entry `05b24e64…cb00`, audit per-cell table),
+/// while ITEMSHOW and ITEMNAME keep their raw origins.
+#[test]
+fn shop_stages_priced_children_at_the_exe_origin_but_shelf_art_raw() {
+    // Live caller chain (tier 3, archives present):
+    //   main.rs::run_play -> live_art::stage_live_scenes
+    //   -> live_art::stage_interface_scenes -> stage_state(State::Shop)
+    //   -> stage_shop_child_origin -> placed child rects.
+    // Archives absent -> skip cleanly (CI has no game data).
+    let archive = shop_archive();
+    let art = stage_state(&archive, State::Shop, StageContext::default())
+        .art
+        .expect("shop stages with synthetic bytes");
+    let rect_y = |code: u32| {
+        art.placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .expect("staged code")
+            .rect
+            .y
+    };
+    assert_eq!(
+        [
+            rect_y(SHOP_ITEMSHOW_FIRST_CODE),
+            rect_y(SHOP_ITEMNAME_FIRST_CODE),
+            rect_y(SHOP_ITEMWON_FIRST_CODE),
+            rect_y(SHOP_ITEMGEM_FIRST_CODE),
+        ],
+        [86, 69, 239, 239],
+        "shelf art stays raw; price cells inherit the exe child origin"
+    );
+}
+
+/// D2 red proof: the visible 담기 art is at `(220,257)-(301,274)`,
+/// so `(238,263)` picks the row; the raw BND center `(260,195)`
+/// lands on the figure and must answer nothing (row-pick frame
+/// `c84b952f…9922e`, audit D2).
+#[test]
+fn shop_row_pick_at_the_visible_button_hits_the_first_row() {
+    // Live caller chain (tier 3, archives present):
+    //   main.rs::run_play -> live_art::stage_live_scenes
+    //   -> live_art::stage_interface_scenes -> stage_state(State::Shop)
+    //   -> ScreenGame::load_side_scene -> ScreenGame::click_shop
+    //   -> shop_action_at -> ShopAction::ToggleRow.
+    // Archives absent -> skip cleanly (CI has no game data).
+    let archive = shop_archive();
+    let art = stage_state(&archive, State::Shop, StageContext::default())
+        .art
+        .expect("shop stages with synthetic bytes");
+    assert_eq!(
+        shop_action_at(&art.placements, 238, 263),
+        Some(ShopAction::ToggleRow(0)),
+        "the exe-pinned visible button picks the row"
+    );
+    assert_eq!(
+        shop_action_at(&art.placements, 260, 195),
+        None,
+        "the raw BND center is a figure, not a button"
+    );
+}
+
+/// D1/D2/D3 mutant guard: art-less priced cells and the art-less
+/// gift half move at staging; anchored buy/preview keep the raw
+/// paint rect and shift their hit rect through the same constant.
+#[test]
+fn shop_priced_children_share_one_origin_without_double_moving_art() {
+    // Live caller chain: main.rs::run_play -> live_art::stage_live_scenes
+    // -> live_art::stage_interface_scenes -> stage_state(State::Shop)
+    // -> stage_shop_child_origin. Archives absent -> skip cleanly.
+    let archive = shop_archive();
+    let art = stage_state(&archive, State::Shop, StageContext::default())
+        .art
+        .expect("shop stages with synthetic bytes");
+    let staged = |code: u32| {
+        art.placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .expect("staged code")
+            .rect
+            .y
+    };
+    assert_eq!(
+        [
+            staged(SHOP_ITEMWON_FIRST_CODE),
+            staged(SHOP_ITEMGEM_FIRST_CODE),
+            staged(SHOP_ITEMGIFT_FIRST_CODE),
+            staged(SHOP_ITEMBUY_FIRST_CODE),
+            staged(SHOP_ITEMPRE_FIRST_CODE),
+        ],
+        [239, 239, 257, 187, 184],
+        "ink and art-less gift move; anchored art keeps its raw rect"
+    );
+    let buy = art
+        .placements
+        .iter()
+        .find(|placed| placed.code == SHOP_ITEMBUY_FIRST_CODE)
+        .expect("staged buy");
+    assert!(
+        buy.sprite.is_some(),
+        "the real buy family carries the sprite anchor"
+    );
+    assert_eq!(
+        shop_action_at(&art.placements, 238, 263),
+        Some(ShopAction::ToggleRow(0)),
+        "the anchored buy answers at the exe's child origin"
+    );
+}
+
+/// D1/D2/D3 archive-backed guard: the installed 7.55 bind staged
+/// through the live boot seam puts the first visible buy hit at
+/// `(238,263)` (exe row-pick frame `c84b952f…9922e`) and the
+/// first won price at y 239 (entry frame `05b24e64…cb00`).
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_shop_bnd_stages_the_audit_visible_row_and_price_origin() {
+    // Live caller chain (tier 3):
+    //   main.rs::run_play -> live_art::stage_live_scenes
+    //   -> live_art::stage_interface_scenes -> stage_state(State::Shop)
+    //   -> stage_shop_child_origin -> shop_action_at.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Image/Interface1.opi");
+    let Ok(bytes) = std::fs::read(&path) else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let art = stage_state(&bytes, State::Shop, StageContext::default())
+        .art
+        .expect("installed shop stages");
+    assert_eq!(
+        shop_action_at(&art.placements, 238, 263),
+        Some(ShopAction::ToggleRow(0)),
+        "the exe row-pick pixel reaches the first staged buy control"
+    );
+    assert_eq!(
+        shop_action_at(&art.placements, 260, 195),
+        None,
+        "the raw BND center stays on the figure"
+    );
+    let won = art
+        .placements
+        .iter()
+        .find(|placed| placed.code == SHOP_ITEMWON_FIRST_CODE)
+        .expect("installed won cell");
+    assert_eq!(
+        (won.rect.x, won.rect.y),
+        (247, 239),
+        "the installed BND rect inherits the one child origin"
+    );
 }
 
 fn room_archive() -> Vec<u8> {
