@@ -2471,16 +2471,23 @@ fn hovered_placement_figure(art: &SceneArt, action: PlanetAction) -> Option<&Ava
 pub fn dialog_origin(placements: &[ScenePlacement]) -> (i32, i32) {
     placements
         .iter()
-        .find(|placement| {
-            placement
-                .sprite
-                .as_deref()
-                .is_some_and(|sprite| sprite.starts_with("Dialog_"))
-        })
+        .find(|placement| is_dialog_backdrop(placement))
         .map_or((0, 0), |placement| (placement.rect.x, placement.rect.y))
 }
 
-/// Paint one dialog placement at its dialog-relative origin: the
+/// True for a dialog's sheet-frame placement. The frame is scenery:
+/// its body already paints at its parsed anchor, so control hit tests
+/// and frame-state repaints must skip it. Treating it as a control
+/// adds the dialog origin to a record that is already absolute and
+/// paints a second copy of the whole sheet (#729).
+#[must_use]
+pub(crate) fn is_dialog_backdrop(placement: &ScenePlacement) -> bool {
+    placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+}
+
 /// Paint one dialog placement at its dialog-relative origin: the
 /// backdrop (`Dialog_*.ojs`) at its absolute anchor (its anchor
 /// *is* the dialog origin, painted at view `(0,0)`); every child
@@ -2500,11 +2507,7 @@ fn paint_dialog_figure(
     figure: &AvatarFigure,
     origin: (i32, i32),
 ) {
-    let is_backdrop = placement
-        .sprite
-        .as_deref()
-        .is_some_and(|sprite| sprite.starts_with("Dialog_"));
-    if is_backdrop {
+    if is_dialog_backdrop(placement) {
         figure.paint_scaled_anchors(frame, 0, 0, frame.w, frame.h);
         return;
     }
@@ -2589,7 +2592,7 @@ pub(crate) fn dialog_rect_hit(placements: &[ScenePlacement], code: u32, x: i32, 
     let (origin_x, origin_y) = dialog_origin(placements);
     placements
         .iter()
-        .find(|placement| placement.code == code)
+        .find(|placement| placement.code == code && !is_dialog_backdrop(placement))
         .is_some_and(|placement| {
             rect_hit(
                 &Rect {
@@ -2613,7 +2616,7 @@ pub(crate) fn dialog_control_code(placements: &[ScenePlacement], x: i32, y: i32)
     let (origin_x, origin_y) = dialog_origin(placements);
     placements
         .iter()
-        .filter(|placed| placed.code != 0)
+        .filter(|placed| placed.code != 0 && !is_dialog_backdrop(placed))
         .filter(|placed| {
             rect_hit(
                 &Rect {
@@ -2631,8 +2634,11 @@ pub(crate) fn dialog_control_code(placements: &[ScenePlacement], x: i32, y: i32)
 }
 
 /// Repaint one staged dialog control's chosen frame over its rest
-/// face. The caller owns the state choice; a missing placement,
-/// figure, or record paints nothing (ADR-0003).
+/// face. The sheet frame is scenery and never repaints here: its
+/// record is already absolute, so adding the dialog origin would
+/// paint a second copy of the whole sheet (#729). The caller owns
+/// the state choice; a missing placement, figure, or record paints
+/// nothing (ADR-0003).
 pub(crate) fn paint_dialog_frame_record(
     frame: &mut Frame<'_>,
     art: &SceneArt,
@@ -2642,6 +2648,9 @@ pub(crate) fn paint_dialog_frame_record(
     let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
         return;
     };
+    if is_dialog_backdrop(placed) {
+        return;
+    }
     let Some(sprite) = placed.sprite.as_deref() else {
         return;
     };
@@ -2672,6 +2681,9 @@ pub fn paint_messenger_frame_record(
     let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
         return;
     };
+    if is_dialog_backdrop(placed) {
+        return;
+    }
     let Some(sprite) = placed.sprite.as_deref() else {
         return;
     };
