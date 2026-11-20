@@ -3173,14 +3173,14 @@ pub use self::waiting::{
 #[cfg(test)]
 pub(crate) use self::waiting::{
     paint_waiting_bpm, paint_waiting_covers, paint_waiting_mapname, paint_waiting_music,
-    paint_waiting_skillcounts, paint_waiting_skills, paint_waiting_speed, paint_waiting_staged,
-    paint_waiting_team_highlight, paint_waiting_title, paint_waiting_wins, ready_dot_color,
-    seat_origin, staged_role, staged_seat_text, staged_seats, waiting_control_armed_for_role,
-    waiting_level_layer, waiting_music_caption, waiting_row_text, waiting_seats, SeatKind,
-    StagedSeat, WAITING_AVATAR_SLOT_ID, WAITING_BPM_ID, WAITING_LEVEL_ID, WAITING_MAPNAME_ID,
-    WAITING_MUSICNAME_ID, WAITING_ROOMNAME_ID, WAITING_SEATS, WAITING_SEAT_PARENT_IDS,
-    WAITING_SKILLCOUNT_IDS, WAITING_SKILL_IDS, WAITING_SPEED_NUM_ID, WAITING_TEAM_IDS,
-    WAITING_WINNERSCORE_ID,
+    paint_waiting_seat_marks, paint_waiting_skillcounts, paint_waiting_skills, paint_waiting_speed,
+    paint_waiting_staged, paint_waiting_team_highlight, paint_waiting_title, paint_waiting_wins,
+    ready_dot_color, seat_origin, staged_role, staged_seat_text, staged_seats,
+    waiting_control_armed_for_role, waiting_level_layer, waiting_music_caption, waiting_row_text,
+    waiting_seats, SeatKind, StagedSeat, WAITING_AVATAR_SLOT_ID, WAITING_BPM_ID, WAITING_LEVEL_ID,
+    WAITING_MAPNAME_ID, WAITING_MUSICNAME_ID, WAITING_ROOMNAME_ID, WAITING_SEATS,
+    WAITING_SEAT_PARENT_IDS, WAITING_SKILLCOUNT_IDS, WAITING_SKILL_IDS, WAITING_SPEED_NUM_ID,
+    WAITING_TEAM_IDS, WAITING_WINNERSCORE_ID,
 };
 
 /// Score digits anchor top-left (`LivePlay` draws points at
@@ -10122,6 +10122,7 @@ mod paint_tests {
             master: true,
             playing: false,
             has_song: true,
+            downloading: false,
         };
         assert_eq!(
             staged_seat_text(&champion, Some("CHAMPION")),
@@ -10139,6 +10140,7 @@ mod paint_tests {
             master: false,
             playing: false,
             has_song: false,
+            downloading: false,
         };
         assert_eq!(
             staged_seat_text(&challenger, Some("CHALLENGER")),
@@ -13029,6 +13031,103 @@ mod paint_tests {
             hash, 0x2EF3_90AE_C80F_1B86,
             "waiting paint generation changed; re-check the exe pins before updating"
         );
+    }
+
+    /// Ticket #559: the exe's `music-state=4` frame (`matched-ab-339`,
+    /// `4026`/`4037 (0004)`) shows a DOWNLOADING badge on that seat.
+    /// Live chain: `OnlineSession::apply_member_music_state` ->
+    /// `ScreenGame::set_member_music_state` -> `paint_at` ->
+    /// `paint_waiting_scene` -> `staged_seats` -> `paint_waiting_seat_marks`.
+    /// Rect origins are the parsed Waiting seat-template `.bnd` records
+    /// (EXTEND1 `(48,127)` / EXTEND2 `(190,127)`, bar y163), not painter
+    /// literals; the figures are synthetic so CI runs without art.
+    #[test]
+    fn downloading_member_paints_only_its_own_bnd_badge_and_bar() {
+        let mut room = waiting_room();
+        let mut peer = RoomMember {
+            nickname: "peer".to_owned(),
+            ..room.slots[0].member.clone().unwrap()
+        };
+        peer.master = false;
+        peer.music_state = 4;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let seats = staged_seats(&room, None);
+        assert!(seats[1].downloading, "the wire state stages the seat badge");
+
+        let placements = [
+            (
+                "IDC_BUTTON_SWAIT_EXTEND1",
+                48,
+                127,
+                100,
+                45,
+                "Wait_Downloding.ojs",
+            ),
+            (
+                "IDC_BUTTON_SWAIT_EXTEND2",
+                190,
+                127,
+                100,
+                45,
+                "Wait_Downloding.ojs",
+            ),
+            (
+                "IDC_BUTTON_SWAIT_EXTEND1",
+                66,
+                163,
+                65,
+                7,
+                "Wait_Downloding_Bar.ojs",
+            ),
+            (
+                "IDC_BUTTON_SWAIT_EXTEND2",
+                208,
+                163,
+                65,
+                7,
+                "Wait_Downloding_Bar.ojs",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, x, y, w, h, sprite)| ScenePlacement {
+            role: PlacementRole::Clone,
+            id: id.to_owned(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect { x, y, w, h },
+        })
+        .collect();
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([
+                (
+                    "Wait_Downloding.ojs".to_owned(),
+                    solid_figure(20, 10, [0x00, 0x7C]),
+                ),
+                (
+                    "Wait_Downloding_Bar.ojs".to_owned(),
+                    solid_figure(20, 7, [0xE0, 0x03]),
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_marks(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &seats,
+            &art,
+        );
+        assert_eq!(buf[129 * 800 + 192], pack_xrgb(0xFF, 0, 0), "peer badge");
+        assert_eq!(buf[165 * 800 + 210], pack_xrgb(0, 0xFF, 0), "peer bar");
+        assert_eq!(buf[129 * 800 + 50], 0, "ready seat has no badge");
+        assert_eq!(buf[165 * 800 + 68], 0, "ready seat has no bar");
     }
 }
 

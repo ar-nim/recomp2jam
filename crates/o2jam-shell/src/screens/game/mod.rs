@@ -569,6 +569,10 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    /// `4039` download percentage per waiting seat (`None` until the
+    /// server reports one). The bar's frame/rect mapping stays OPEN;
+    /// staging the pinned byte keeps the wire half observable.
+    member_download_progress: [Option<u8>; 8],
     /// One-based channel number for the waiting `CHNUM` digit wells
     /// (`1003 channel_id + 1`), staged on resident channel login.
     waiting_channel_number: Option<u16>,
@@ -1027,6 +1031,7 @@ impl ScreenGame {
             relay_down_art: None,
             relay_down_pending_channels: Vec::new(),
             relay_down_notice_pending: false,
+            member_download_progress: [None; 8],
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
             catalog_chart_files: HashMap::new(),
@@ -1776,10 +1781,35 @@ impl ScreenGame {
             if let Some(slot) = room.slots.iter_mut().find(|slot| slot.index == member_id) {
                 if let Some(member) = slot.member.as_mut() {
                     member.music_state = state;
+                    if state != o2jam_net::MusicState::Downloading.code() {
+                        self.member_download_progress[usize::from(member_id)] = None;
+                    }
                 }
             }
         }
         self
+    }
+
+    /// Stage one `4039` percentage for a waiting seat. Unknown seat
+    /// indexes are a silent no-op, like every other member mirror.
+    pub fn set_member_download_progress(&mut self, member_id: u8, percentage: u8) -> &mut Self {
+        if let Some(slot) = self
+            .member_download_progress
+            .get_mut(usize::from(member_id))
+        {
+            *slot = Some(percentage);
+        }
+        self
+    }
+
+    /// Staged `4039` percentage of one waiting seat, if the server sent
+    /// one since that seat last left the downloading state.
+    #[must_use]
+    pub fn member_download_progress(&self, member_id: u8) -> Option<u8> {
+        self.member_download_progress
+            .get(usize::from(member_id))
+            .copied()
+            .flatten()
     }
 
     /// Staged music state of one occupied waiting seat (`None` without

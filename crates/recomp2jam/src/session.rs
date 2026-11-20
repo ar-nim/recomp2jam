@@ -3325,20 +3325,21 @@ impl OnlineSession {
         self.game.set_member_music_state(member_id, state);
     }
 
-    /// Decode one 4039 download percentage (§2, handler VA `0x559a10`:
-    /// percentage then member).
-    ///
-    /// No staging: the percentage has no seat field our client models
-    /// yet — the exe forwards it to the waiting download bar
-    /// (`Wait_Downloding.ojs`, §4) and the post-START flow that owns
-    /// that art is slice 3/4 (#276). Traced, never silently eaten.
+    /// Fold one 4039 download percentage into its waiting seat
+    /// (§2, handler VA `0x559a10`: percentage then member). The bar's
+    /// rect/frame mapping stays OPEN, so the byte is staged for
+    /// observers instead of driving an invented fill.
     fn apply_download_progress(&mut self, frame: &Frame) {
         match DownloadProgressChanged::decode_frame(frame) {
-            Ok(progress) => tracing::debug!(
-                member = progress.member_id,
-                percent = progress.percentage,
-                "download progress (no staged bar yet)"
-            ),
+            Ok(progress) => {
+                self.game
+                    .set_member_download_progress(progress.member_id, progress.percentage);
+                tracing::debug!(
+                    member = progress.member_id,
+                    percent = progress.percentage,
+                    "download progress staged on the seat"
+                );
+            }
             Err(_) => tracing::debug!(id = frame.id, "dropping undecodable download progress"),
         }
     }
@@ -3944,11 +3945,11 @@ pub(super) mod session_tests {
     use o2jam_game::PEER_SLOT_COUNT;
     use o2jam_net::frame::{decode_frame, encode_frame};
     use o2jam_net::{
-        AcquireMusic, Frame, GameStatsUpdate, GatewayConnection, MemberMusicState, MusicState,
-        Request, Response, StatKind, SyncMemberMusicStateEvent, UpdateGameStats,
-        WaitingMusicChanged, WireMessage, HEADER_LEN,
+        AcquireMusic, DownloadProgressChanged, Frame, GameStatsUpdate, GatewayConnection,
+        MemberMusicState, MusicState, Request, Response, StatKind, SyncMemberMusicStateEvent,
+        UpdateGameStats, WaitingMusicChanged, WireMessage, HEADER_LEN,
     };
-    use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord};
+    use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord, StartGateVerdict};
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
     use super::{
@@ -8919,6 +8920,83 @@ pub(super) mod session_tests {
         session.menu_key(MenuKey::Back, true);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    /// Ticket #559: the matched-ab-339 member-downloading leg. Live
+    /// chain: `OnlineSession::paint` -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_member_music_state` (4037) /
+    /// `apply_download_progress` (4039) -> `ScreenGame` seat mirror ->
+    /// `start_gate_verdict` (-4, no START frame). The percentage's bar
+    /// fill stays OPEN; the pinned wire byte must not be dropped.
+    #[test]
+    fn downloading_state_and_progress_from_the_gateway_stage_the_seat() {
+        use o2jam_net::SyncMemberMusicStateEvent;
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let state = SyncMemberMusicStateEvent {
+            member_id: 1,
+            state: MusicState::Downloading,
+        };
+        let progress = DownloadProgressChanged {
+            percentage: 42,
+            member_id: 1,
+        };
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&state.encode()).unwrap();
+            stream.write_all(&progress.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.member_download_progress(1) == Some(42)
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.member_music_state(1),
+            Some(MusicState::Downloading.code()),
+            "4037 arms the seat's download badge"
+        );
+        assert_eq!(
+            session.game.member_download_progress(1),
+            Some(42),
+            "4039 stages the percentage instead of dropping it"
+        );
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::MusicDownloading,
+            "the exe's -4 verdict keeps START closed"
+        );
+    }
+
+    /// Ticket #559 gate arm: with a downloading peer the master's START
+    /// press arms the face but sends nothing; once the 4037 state clears
+    /// the same press sends the pinned 4010. Live chain: `menu_key` ->
+    /// `ScreenGame::press_start` -> `StartGateVerdict::MusicDownloading`
+    /// -> `OnlineSession` send/no-send.
+    #[test]
+    fn start_stays_closed_while_a_peer_reports_downloading() {
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            assert!(start.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        session
+            .game
+            .set_member_music_state(1, MusicState::Downloading.code());
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::MusicDownloading
+        );
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting, "still in Waiting");
+
+        session
+            .game
+            .set_member_music_state(1, MusicState::Ready.code());
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
     }
 
     #[test]
