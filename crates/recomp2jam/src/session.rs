@@ -3899,6 +3899,12 @@ impl GameLoop for OnlineSession {
     }
 
     fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
+        // The qualified guest gate ignores click, Return and Escape
+        // (#614: `docs/wine-boot.md` focus pin, pack P15 `8773f5cc…`).
+        // Filter only the live snapshot path; `menu_key` stays the
+        // seam the shell and gate drivers use to arm the clock.
+        let ignore_player_input = self.joined_waiting && self.game.screen() == Screen::Loading;
+
         // Snapshot-native sweep with the networked gates the driver
         // path used to own in the legacy whole-gesture edge: one snapshot carries the
         // tap, so the gate and the local advance read the same frame.
@@ -3922,6 +3928,9 @@ impl GameLoop for OnlineSession {
         let mut surviving = InputSnapshot::new();
         surviving.set_pointer(snapshot.pointer());
         for edge in snapshot.edges() {
+            if ignore_player_input && is_loading_gate_input(edge) {
+                continue;
+            }
             if let InputEdge::Menu { key, down } = *edge {
                 self.menu_key(key, down);
                 continue;
@@ -3970,6 +3979,20 @@ impl GameLoop for OnlineSession {
         if self.game.screen() != Screen::Loading {
             self.loaded_sent = false;
         }
+    }
+}
+
+/// Player edges the 7.55 guest gate ignores while its cover is up
+/// (#614): canvas presses, Return and Escape. The lane keys stay
+/// outside this pin; the gate's own clock still sends 4012.
+fn is_loading_gate_input(edge: &InputEdge) -> bool {
+    match *edge {
+        InputEdge::PointerDown { .. } | InputEdge::PointerUp { .. } => true,
+        InputEdge::Menu {
+            key: MenuKey::Confirm | MenuKey::Back,
+            ..
+        } => true,
+        InputEdge::Menu { .. } | InputEdge::Lane { .. } => false,
     }
 }
 
@@ -8415,6 +8438,38 @@ pub(super) mod session_tests {
             "a refused 4012 must not enter Playing"
         );
         assert!(!session.loaded_sent, "no send is latched on a failure");
+        server.join().unwrap();
+    }
+
+    /// #614: the qualified guest gate ignores Return, Escape and
+    /// canvas clicks (`docs/wine-boot.md` focus pin, pack P15
+    /// `8773f5cc…`). Live chain: `run_windowed_session` -> `Shell`
+    /// -> `GameLoop::ingest_snapshot` ->
+    /// `OnlineSession::ingest_snapshot`. The wall-paced gate, not
+    /// player input, posts 4012.
+    #[test]
+    fn joined_loading_ignores_return_escape_and_clicks_on_the_live_input_path() {
+        use o2jam_shell::InputEdge;
+
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+
+        let mut ignored = InputSnapshot::new();
+        for key in [MenuKey::Confirm, MenuKey::Back] {
+            ignored.push_edge(InputEdge::Menu { key, down: true });
+            ignored.push_edge(InputEdge::Menu { key, down: false });
+        }
+        ignored.push_edge(InputEdge::PointerDown { x: 400, y: 300 });
+        ignored.push_edge(InputEdge::PointerUp { x: 400, y: 300 });
+        session.ingest_snapshot(&ignored);
+
+        assert_eq!(session.game.screen(), Screen::Loading);
+        assert!(!session.loaded_sent, "no input may post 4012");
         server.join().unwrap();
     }
 
