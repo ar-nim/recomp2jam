@@ -160,6 +160,19 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.
 
+Close handoff rules (retro #175):
+
+1. **Ancestor check before close.** A fix is not done until
+   `git merge-base --is-ancestor <fix-sha> <branch-under-test>` passes; quote
+   the command and its rc=0 output in the close record. The #175 fix
+   (d1cac8f) landed on main only and never reached the branch under test, so
+   the owner live-tested a binary without the fix and got a false
+   "fix failed".
+2. **End-of-work switch-back.** The mandatory final step of every delegation
+   flow returns the main checkout to `main`; confirm with
+   `git -C /home/arnim/Projects/recomp2jam branch --show-current`. Owner rule
+   2026-11-13 (#175): the next session starts from a known branch.
+
 ## Senior completeness pre-flight
 
 Run this list immediately before posting any close, retro, or merge note.
