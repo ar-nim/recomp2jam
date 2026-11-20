@@ -55,12 +55,13 @@ pub(super) fn paint_option_key_tab(
     frame: &mut Frame<'_>,
     art: Option<&SceneArt>,
     captions: KeyCaptions,
+    settings: &crate::options::OptionsSettings,
 ) {
     let Some(art) = art.filter(|art| art.has_figures()) else {
-        paint_planet_options(frame, art, PlanetOptionTab::Key);
+        paint_planet_options(frame, art, PlanetOptionTab::Key, settings);
         return;
     };
-    paint_dialog_without_captions(frame, art);
+    paint_dialog_without_captions(frame, art, settings);
     paint_bound_captions(frame, art, captions);
     if let Some(lane) = captions.armed_lane {
         paint_armed_stand_in(frame, art, captions.three_key, lane);
@@ -71,7 +72,11 @@ pub(super) fn paint_option_key_tab(
 /// generic dialog painter would stack all frames at one rect, while
 /// the exe image control paints exactly the selected frame (VAs
 /// `0x439000` / `0x439780`).
-fn paint_dialog_without_captions(frame: &mut Frame<'_>, art: &SceneArt) {
+fn paint_dialog_without_captions(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    settings: &crate::options::OptionsSettings,
+) {
     let without_captions = SceneArt {
         placements: art
             .placements
@@ -81,7 +86,12 @@ fn paint_dialog_without_captions(frame: &mut Frame<'_>, art: &SceneArt) {
             .collect(),
         figures: art.figures.clone(),
     };
-    paint_planet_options(frame, Some(&without_captions), PlanetOptionTab::Key);
+    paint_planet_options(
+        frame,
+        Some(&without_captions),
+        PlanetOptionTab::Key,
+        settings,
+    );
 }
 
 /// Paint the active family's captions at their exe offset class.
@@ -258,6 +268,7 @@ mod tests {
             },
             Some(art),
             captions,
+            &crate::options::OptionsSettings::default(),
         );
         buf
     }

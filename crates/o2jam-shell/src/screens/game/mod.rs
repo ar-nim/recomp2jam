@@ -6462,7 +6462,12 @@ impl ScreenGame {
                         if let Some(art) = sound_art {
                             paint_sound_tab_with_knobs(frame, art, dialog.settings());
                         } else {
-                            paint_planet_options(frame, dialog.staged_art(), dialog.tab());
+                            paint_planet_options(
+                                frame,
+                                dialog.staged_art(),
+                                dialog.tab(),
+                                dialog.settings(),
+                            );
                         }
                     }
                     PlanetOptionTab::Key => {
@@ -6474,10 +6479,16 @@ impl ScreenGame {
                                 three_key: dialog.settings().three_key(),
                                 armed_lane: dialog.rebind_armed(),
                             },
+                            dialog.settings(),
                         );
                     }
                     _ => {
-                        paint_planet_options(frame, dialog.staged_art(), dialog.tab());
+                        paint_planet_options(
+                            frame,
+                            dialog.staged_art(),
+                            dialog.tab(),
+                            dialog.settings(),
+                        );
                     }
                 }
             }
@@ -16276,11 +16287,12 @@ mod game_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
-        // Re-based when Game DEFAULT began restoring the exe raw
-        // `LongnoteMode` 3 instead of the old stand-in 0, then again
-        // when the Sound slider step moved from 8 to the exe's 4.
+        // Re-based across both options lanes: #716 (Game DEFAULT
+        // restores the exe's effective values after the pinned load
+        // rewrites) and the Sound slider step moving 8 -> the exe's 4
+        // (hash recomputed on the union of the two lanes).
         assert_eq!(
-            hash, 0x858B_5A27_2E51_EA3D,
+            hash, 0x4E3D_A8FB_D75E_1206,
             "options outputs drifted: {observed}"
         );
     }
@@ -16723,7 +16735,7 @@ mod game_tests {
         assert_eq!(game.options().note_type(), 1);
         assert_eq!(game.options().note_tail(), 3);
         assert_eq!(game.options().blend_half(), 0);
-        assert_eq!(game.options().mode(), 2);
+        assert_eq!(game.options().mode(), 1, "ModeWin is 1, ModeFull is 2");
         assert!(game.options().longnote_used());
         assert_eq!(game.options().effect_level(), 2);
     }
@@ -16916,10 +16928,9 @@ mod game_tests {
         // window::InputHandler::route_mouse_edge -> GameLoop::ingest_snapshot
         // -> ScreenGame::click_dispatch -> click_planet -> click_planet_modal
         // -> click_options_dialog -> OptionsDialog::click ->
-        // OptionsSettings::reset_game. The exe's `LONGNOTEMODE` read
-        // default is 3 (file `0x16fb06`); DEFAULT must put that raw
-        // value back, not a different stand-in that happens to behave
-        // the same through the `== 1` consumer.
+        // OptionsSettings::reset_game. The exe reads raw
+        // `LONGNOTEMODE` 3 (file `0x16fb06`) and its load path rewrites
+        // it to 1 (`0x43a630`); DEFAULT must restore the effective 1.
         use super::super::side::OPTION_GAME_LONGNOTE_USED;
         use crate::options::DEFAULT_LONGNOTE_MODE;
         let mut game = ScreenGame::new();
@@ -16939,7 +16950,7 @@ mod game_tests {
         assert_eq!(
             game.options().longnote_mode(),
             DEFAULT_LONGNOTE_MODE,
-            "Game DEFAULT restores the exe raw default, not 0"
+            "Game DEFAULT restores the exe effective default, not 0"
         );
     }
 
@@ -24387,6 +24398,7 @@ mod game_tests {
                 },
                 Some(&scene_art),
                 PlanetOptionTab::Key,
+                &crate::options::OptionsSettings::default(),
             );
             let rect_ink = (0..kh)
                 .flat_map(|dy| (0..kw).map(move |dx| (dy, dx)))
