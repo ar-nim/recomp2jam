@@ -6815,6 +6815,115 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// Ticket #512: the relay-down OK sends no game frame; the rows it
+    /// was holding are revealed only after the modal closes, and the
+    /// next face press starts the pinned entry cadence.
+    ///
+    /// Live caller chain: boot relay probe ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `hold_channel_rows_for_relay_notice` -> `enter_screen(Channel)`
+    /// -> `open_relay_down_dialog` -> `InputSnapshot` OK click ->
+    /// `click_planet_modal` -> `dismiss_relay_down_dialog` ->
+    /// `set_channels`; then face click -> `dispatch_channel_press` ->
+    /// `begin_channel_login` -> `poll_channel_login` (1004, then 2000).
+    ///
+    /// Wire pin: relay-down boot-2 tap `a33fc8d1697a2843b874feb7034099740c0a4ec1ce1b8a354e10a40387e08913`
+    /// and observe `9f942859b94d414dac78b838ce70174f5bd411ece862c5540aafa3e355f2499e`:
+    /// OK at 15:37:34/37 sends no game frame; the face click at
+    /// 15:37:45 sends 1004 -> 1005, then 4030/4031, 2000/2001,
+    /// 2026, 2002/2003, 5028/5029, 2010/2011, 2024. The full boot
+    /// reply order is guarded by `connect::tests::room_stage_gateway_sends_exe_wire_sequence`;
+    /// this guard covers the interactive OK boundary and the first two
+    /// sends the session owns. Pixels: t240 pack `ea5cc6d6…c563`.
+    #[test]
+    fn relay_down_ok_reveals_rows_first_then_starts_the_pinned_entry_wire() {
+        use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
+        use std::sync::mpsc;
+
+        let (ok_pressed, wait_for_ok) = mpsc::channel::<()>();
+        let (socket_quiet, wait_for_quiet) = mpsc::channel::<()>();
+        let held = vec![
+            entry_channel(),
+            o2jam_net::ChannelState {
+                gateway_id: 0,
+                channel_id: 9,
+                capacity: 100,
+                population: 2,
+                active: true,
+            },
+        ];
+        let (mut session, server) = channel_session(move |mut stream| {
+            wait_for_ok.recv().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(150)))
+                .unwrap();
+            let mut byte = [0u8; 1];
+            assert!(
+                stream.read_exact(&mut byte).is_err(),
+                "OK itself must send no game frame"
+            );
+            stream.set_read_timeout(None).unwrap();
+            socket_quiet.send(()).unwrap();
+
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004, "the face click sends the entry");
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, 2000, "1004 then 2000");
+            stream
+                .write_all(
+                    &CharacterInfo {
+                        nickname: "gate".to_owned(),
+                        gender: Gender::Male,
+                        level: 3,
+                        ..Default::default()
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        crate::stage_channel_list_after_relay_gate(&mut session.game, held.clone(), true);
+        assert!(session.game.relay_down_notice_pending());
+        session.game.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Planet);
+        assert!(session.game.enter_screen(Screen::Channel));
+        assert!(session.game.relay_down_dialog_open());
+        assert!(
+            session.game.channel_rows().is_empty(),
+            "rows held behind OK"
+        );
+        let before_ok = painted_game_frame(&mut session);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        assert!(
+            !session.game.relay_down_dialog_open(),
+            "OK closes the sheet"
+        );
+        assert_eq!(session.game.channel_rows(), held, "OK reveals the rows");
+        // A real frame loop polls between OK and the next press: the
+        // sheet's dismissal must leave the socket untouched there.
+        paint_frame(&mut session);
+        let after_ok = painted_game_frame(&mut session);
+        assert_ne!(before_ok, after_ok, "the revealed rows reach the canvas");
+        ok_pressed.send(()).unwrap();
+        wait_for_quiet.recv().unwrap();
+
+        session.ingest_snapshot(&InputSnapshot::click_at(502, 236));
+        paint_until(&mut session, |session| {
+            session.game.myroom_character().is_some()
+        });
+        assert_eq!(session.game.screen(), Screen::Room);
+        server.join().unwrap();
+    }
+
     #[test]
     fn disband_broadcast_read_by_the_07da_fuse_still_removes_the_row() {
         // Live-path guard for the drain gap seen in the 13:14 live leg:
