@@ -1747,13 +1747,42 @@ const BOOT_BGM_BANK_FILES: [&str; 7] = [
 /// Bank index holding the scene-BGM archive in the exe's boot table.
 const SCENE_BGM_BANK_INDEX: usize = 2;
 
-/// Installed path of one exe boot bank. Only the scene bank is decoded
-/// here; the other six archives stay installed but uncued (their
-/// runtime bank slots are not part of this client slice).
-fn boot_bgm_bank_path(index: usize) -> std::path::PathBuf {
+/// Installed path of one exe boot bank. The scene bank and the UI
+/// effect bank are decoded here; the other archives stay installed but
+/// uncued (their runtime slots are not part of this client slice).
+fn boot_bank_path(index: usize) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Music")
         .join(BOOT_BGM_BANK_FILES[index])
+}
+
+/// Bank index holding the UI one-shot archive in the exe's boot table
+/// (`0x67f728`, stride `0x48`): row 0 is `bgEffect.ojm`, row 1 is
+/// `O2PlanetNPC.ojm` (voice lines, out of this cluster).
+const UI_EFFECT_BANK_INDEX: usize = 0;
+
+/// Cache-slot base of the UI effect bank (row `+0` of the executable's
+/// boot table). The fetcher (`0x54eca0`) writes each mode-2 entry's
+/// fetch ordinal, and the bank loader adds this base to it; ids 1/2/5/9/
+/// `0x23` therefore name `bgEffect` entries 2/3/6/10/36, not decimal
+/// sample names.
+const UI_EFFECT_BANK_BASE: usize = 0;
+
+/// Emitter bound from `0x551870`: ids `>= 0x34` are rejected.
+const UI_EFFECT_EMITTER_BOUND: usize = o2jam_shell::screens::game::UI_EFFECT_SLOT_COUNT;
+
+/// Descriptor version for `bgEffect.ojm`: 2.8 selects the exe's 17-way
+/// de-interleave plus zeroed-NOT pass (`docs/file-formats/ojm.md`).
+const UI_EFFECT_BANK_VERSION: f32 = 2.8;
+
+#[allow(dead_code)]
+/// Named UI one-shot cue, beside the scene cue. Returns `None` for a
+/// slot the first cluster does not pin (the silent list in the #718 map)
+/// or one past the emitter bound. Shell handler branches call
+/// `ScreenGame::cue_ui_effect` with the same `UiEffectId`; the client
+/// hook keeps the id→cue table visible at the launch entry.
+fn ui_effect_cue(effect_id: u8) -> Option<o2jam_shell::screens::game::UiEffectId> {
+    o2jam_shell::screens::game::UiEffectId::from_slot(effect_id)
 }
 
 /// The cue one screen enters with: delegates to the shell's
@@ -1802,7 +1831,7 @@ fn decode_bgm_record(
 /// ever sound), so CI stays green without game data. Shared with
 /// the online session's audio attach (`session.rs`).
 pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
-    let path = boot_bgm_bank_path(SCENE_BGM_BANK_INDEX);
+    let path = boot_bank_path(SCENE_BGM_BANK_INDEX);
     let Ok(bytes) = std::fs::read(&path) else {
         tracing::debug!("scene BGM bank missing; BGM stays silent");
         return Vec::new();
@@ -1817,6 +1846,35 @@ pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
         .chain(tables.mode3.iter())
         .map(|entry| decode_bgm_record(&bytes, entry))
         .collect()
+}
+
+/// Decode the first boot bank (`Music/bgEffect.ojm`) into the exe's UI
+/// effect slots. The fetcher writes each mode-2 entry's ordinal into the
+/// field the UI bank loader reads as an id (#718 correction to
+/// `docs/file-formats/ojm.md`), so ordinal N lands in slot
+/// `bank base + N`. Slots the install does not decode stay empty: no
+/// synthetic sample is ever substituted for a missing bank entry.
+/// Missing or unparsable data yields an all-empty bank so CI stays
+/// green without game data.
+pub(crate) fn load_ui_effect_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
+    let mut slots = vec![None; UI_EFFECT_EMITTER_BOUND];
+    let Ok(bytes) = std::fs::read(boot_bank_path(UI_EFFECT_BANK_INDEX)) else {
+        tracing::debug!("UI effect bank missing; effect cues stay silent");
+        return slots;
+    };
+    let decoded = loading::load_sound_bank(&bytes, UI_EFFECT_BANK_VERSION);
+    for (ordinal, pcm) in decoded {
+        let Some(slot) = usize::try_from(ordinal)
+            .ok()
+            .and_then(|ordinal| UI_EFFECT_BANK_BASE.checked_add(ordinal))
+        else {
+            continue;
+        };
+        if let Some(entry) = slots.get_mut(slot) {
+            *entry = Some(pcm);
+        }
+    }
+    slots
 }
 
 /// Load a chart plus its key sounds into a windowed game, if requested.
@@ -1858,6 +1916,7 @@ fn setup_chart_audio(
     let bgm_bank = load_scene_bgm_bank();
     game.with_audio(backend, bank);
     game.stage_scene_bgm(bgm_bank);
+    game.stage_ui_effect_bank(load_ui_effect_bank());
     let (cue_id, cue_repeat) = scene_bgm_cue(o2jam_shell::Screen::Avi);
     tracing::info!(?cue_id, ?cue_repeat, "launch BGM cued");
     Ok(())
@@ -2515,7 +2574,7 @@ mod scene_bgm_tests {
     use o2jam_shell::Screen;
 
     use super::{
-        boot_bgm_bank_path, load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue,
+        boot_bank_path, load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue,
         BOOT_BGM_BANK_FILES, SCENE_BGM_BANK_INDEX,
     };
 
@@ -2655,7 +2714,7 @@ mod scene_bgm_tests {
     fn scene_bank_path_comes_from_the_third_boot_bank() {
         assert_eq!(SCENE_BGM_BANK_INDEX, 2);
         assert_eq!(
-            boot_bgm_bank_path(SCENE_BGM_BANK_INDEX).file_name(),
+            boot_bank_path(SCENE_BGM_BANK_INDEX).file_name(),
             Some(std::ffi::OsStr::new("BGM.ojm"))
         );
     }
@@ -2664,7 +2723,7 @@ mod scene_bgm_tests {
     fn shipped_bank_records_select_the_shipped_tracks() {
         // Record 3 names the room track on the installed bank;
         // skipping cleanly without game data (CI rule).
-        let path = boot_bgm_bank_path(SCENE_BGM_BANK_INDEX);
+        let path = boot_bank_path(SCENE_BGM_BANK_INDEX);
         if !path.exists() {
             println!("skip: missing {}", path.display());
             return;
@@ -2679,6 +2738,64 @@ mod scene_bgm_tests {
             assert!(!pcm.unwrap().samples.is_empty());
         }
         assert_eq!(bgm.play_scene_music(19, false, &bank), None);
+    }
+}
+
+/// UI-effect hook tests: the pinned id set and the installed `bgEffect`
+/// bank. Containment: no audio device is opened here.
+#[cfg(test)]
+mod ui_effect_tests {
+    use super::{
+        boot_bank_path, load_ui_effect_bank, ui_effect_cue, UI_EFFECT_BANK_BASE,
+        UI_EFFECT_BANK_INDEX, UI_EFFECT_EMITTER_BOUND,
+    };
+    use o2jam_shell::screens::game::UiEffectId;
+
+    #[test]
+    fn pinned_ui_effect_ids_name_the_exe_handler_cues() {
+        // seam: the id→cue table is the whole behavior of this launch
+        // hook; the handler branches that call it are guarded in the
+        // shell crate (see `ui_effect_cue_walk`).
+        let cases = [
+            (0x01, UiEffectId::DialogAccept),
+            (0x02, UiEffectId::DialogDecline),
+            (0x05, UiEffectId::PlanetExit),
+            (0x09, UiEffectId::ChannelRowJoin),
+            (0x23, UiEffectId::ChannelExit),
+        ];
+        for (slot, expected) in cases {
+            assert_eq!(ui_effect_cue(slot), Some(expected), "slot {slot:#04x}");
+        }
+        assert_eq!(ui_effect_cue(0x00), None, "slot 0 is a blank bank entry");
+        assert_eq!(UiEffectId::SliderApply.slot(), 2, "apply shares slot 2");
+        assert_eq!(
+            ui_effect_cue(u8::try_from(UI_EFFECT_EMITTER_BOUND).unwrap_or(u8::MAX)),
+            None,
+            "emitter rejects ids at its bound"
+        );
+        assert_eq!(UI_EFFECT_BANK_INDEX, 0);
+        assert_eq!(UI_EFFECT_BANK_BASE, 0);
+    }
+
+    #[test]
+    fn installed_effect_bank_decodes_the_first_cluster_slots() {
+        // Install-guarded: no game data leaves this unclaimed (CI has
+        // no install-root). The ids are cache slots, so these are
+        // `bgEffect` entries 2/3/6/10/36 by fetch ordinal.
+        let path = boot_bank_path(UI_EFFECT_BANK_INDEX);
+        if !path.exists() {
+            println!("skip: missing {}", path.display());
+            return;
+        }
+        let bank = load_ui_effect_bank();
+        assert_eq!(bank.len(), UI_EFFECT_EMITTER_BOUND);
+        for slot in [0x01_u8, 0x02, 0x05, 0x09, 0x23] {
+            assert!(ui_effect_cue(slot).is_some(), "slot {slot:#04x} is pinned");
+            assert!(
+                bank[usize::from(slot)].is_some(),
+                "slot {slot:#04x} has no decoded PCM"
+            );
+        }
     }
 }
 

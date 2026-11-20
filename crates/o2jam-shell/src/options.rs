@@ -681,6 +681,15 @@ impl OptionsSettings {
         f32::from(self.bgm_music) / 255.0
     }
 
+    /// Linear UI-effect gain from the `Sound`/`BGVolume` word. The exe's
+    /// emitter indexes a volume table at file `0x27ed60` with this word;
+    /// the table's numeric levels stay OPEN, so this is a plain 0–255
+    /// scaling and never claims the exe's decoded values.
+    #[must_use]
+    pub fn effect_gain(&self) -> f32 {
+        f32::from(self.bg_effect) / 255.0
+    }
+
     /// `MODE`/`Mode` raw value.
     #[must_use]
     pub const fn mode(&self) -> i32 {

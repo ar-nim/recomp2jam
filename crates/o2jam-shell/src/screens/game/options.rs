@@ -23,9 +23,21 @@ use super::super::side::{
     OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, OPTION_SOUND_KEYSET,
     PLANET_OPTION_FIRST_TAB,
 };
+use super::ui_effect::UiEffectId;
 use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
 use crate::options::OptionsSettings;
 use o2jam_render::{Frame, Rgb555Image};
+
+/// What one options click asks the game to do: close the modal and/or
+/// play one pinned effect. Keeping both in one result stops the handler
+/// from guessing which branch produced the sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct OptionsClick {
+    /// The EXIT (or 0x26200012 Sound apply) button was pressed.
+    pub(super) close: bool,
+    /// Effect cued by this branch, if the #718 map names one.
+    pub(super) effect: Option<UiEffectId>,
+}
 
 /// The options modal as one state cluster: the tab sheets are keyed by
 /// declaration order (Key, Sound, Game), and every click reads the open
@@ -176,20 +188,24 @@ impl OptionsDialog {
     /// tab switches, then the tab's value buttons. SAVE persists
     /// beside the install root and stays open; EXIT closes without
     /// saving; a failed write warns and stays open (never fails
-    /// the scene). Returns `true` only for EXIT, which asks the
-    /// game to close the modal it owns.
-    pub(super) fn click(&mut self, x: i32, y: i32) -> bool {
+    /// the scene). The #718 map cues only the Sound tab's `0x26200012`
+    /// apply arm (id 2) and tab switches (id 9): DEFAULT (`0x26200010`),
+    /// SAVE (`0x26200011`) and the other tabs' exits stay silent.
+    pub(super) fn click(&mut self, x: i32, y: i32) -> OptionsClick {
         let tab = self.tab;
         if self.hit(tab.exit_code(), x, y) {
             self.clear_rebind();
-            return true;
+            return OptionsClick {
+                close: true,
+                effect: (tab == PlanetOptionTab::Sound).then_some(UiEffectId::SliderApply),
+            };
         }
         if self.hit(tab.save_code(), x, y) {
             if let Err(source) = self.save() {
                 tracing::warn!(%source, "options SAVE failed; settings stay in memory");
             }
             self.clear_rebind();
-            return false;
+            return OptionsClick::default();
         }
         if self.hit(tab.default_code(), x, y) {
             match tab {
@@ -198,7 +214,7 @@ impl OptionsDialog {
                 PlanetOptionTab::Game => self.settings.reset_game(),
             }
             self.clear_rebind();
-            return false;
+            return OptionsClick::default();
         }
         for code in [
             OPTION_KEY_SOUNDSET,
@@ -211,8 +227,12 @@ impl OptionsDialog {
             if self.hit(code, x, y) {
                 if let Some(next) = tab.switch_tab(code) {
                     self.switch_tab(next);
+                    return OptionsClick {
+                        effect: Some(UiEffectId::OptionTabSwitch),
+                        ..OptionsClick::default()
+                    };
                 }
-                return false;
+                return OptionsClick::default();
             }
         }
         match tab {
@@ -220,7 +240,7 @@ impl OptionsDialog {
             PlanetOptionTab::Sound => self.click_sound_tab(x, y),
             PlanetOptionTab::Game => self.click_game_tab(x, y),
         }
-        false
+        OptionsClick::default()
     }
 
     /// Key-tab value buttons: `KEY1..KEY7` arm their lane for

@@ -119,8 +119,10 @@ Event 0+1.
 
 How a chart strike `sample_id` (`decode_note_value`: `value − 1`)
 selects an OJM entry. Short version: by cache slot, and only M30
-entries carry an id — OMC/new-variant entries have no id field, so
-the game cannot address them individually.
+entries carry an id stored in the archive — OMC/new-variant entries
+have no id field in the file, so a chart strike cannot address them
+by a stored id. The fetch buffer still holds a written ordinal that
+the UI bank loader reads as an id (correction below).
 
 - Play time (gameplay `0x5703f0`, file `0x1703f0`):
   `slot = (payload & 0xFFF) − 1`, plus `0x3E8` (1000) when the
@@ -138,15 +140,31 @@ the game cannot address them individually.
   own slot (drums `0–12`, music `980–991`; Tutorial-style +1000
   slots stay empty on M30 banks because no shipped M30-paired
   chart sets bit 26).
-- New-variant entries carry no id: the fetcher copies only the
-  32 name bytes into the entry buffer (`strncpy` `0x5f2ad0`), so
-  buffer+`0x28`/`0x2c` read as the init-zeroed bytes for every
-  mode-2/3 entry. Every new-variant entry therefore registers at
-  slot 0 (last entry wins); only `sample_id` 0 can sound, and the
-  12 bit26 Tutorial intro notes (slots 1000–1011) address empty
-  slots. No order-based or name-based lookup exists anywhere on
-  the load/play paths (names are only copied, never compared;
-  the fetch-index field at obj+`0x150` is written but never read).
+- New-variant entries carry no id in the archive: the fetcher copies
+  only the 32 name bytes into the entry buffer (`strncpy`
+  `0x5f2ad0`), so buffer+`0x28` reads as zeroed for every mode-2/3
+  entry. **Correction (#718, wired in #721):** the older note here
+  said buffer+`0x2c`/obj+`0x150` is "written but never read" and
+  that every new-variant entry registers at slot 0. That is wrong
+  for the UI bank path. The entry fetcher (`0x54eca0`, pseudo
+  `ev_1730117d…`) writes the **fetch ordinal** into that field for
+  mode-2 entries, and the UI bank loader (`0x550db0`, pseudo
+  `ev_75ba7fe1…`) reads it as the entry id: the cache slot is bank
+  base + ordinal, with slots `>= 0x34` rejected. The boot bank table
+  at file `0x27f728` has stride `0x48` and row `+0` bases
+  `[0, 0x28, 0x2f, 0x2f, 0x2f, 3, 3]` (evidence
+  `ev_a9fb8aef…`), so `bgEffect.ojm` (bank 0, base 0) registers its
+  mode-2 fetch ordinals directly: entry 2 → UI slot 1 (`01`),
+  entry 3 → slot 2 (`02`), entry 10 → slot 9 (`10`), entry 36 →
+  slot `0x23` (`36`). The emitter at `0x551870` indexes that slot
+  (`mgr + 0x34150 + 4*id`, dossier `ev_de048ee2…`); names are
+  copied but never compared at play time. Banks 2..6 are
+  bit31-flagged mode-3/BGM entries and ride the song-cache path
+  (bound `0x17`) instead. The old slot-0 conclusion applies at most
+  to the chart-strike selection path; whether it also holds for the
+  song-cache loader after this correction is OPEN —
+  next step: re-read the `0x173625`/`0x17364a` loader with the
+  fetcher's ordinal write in hand.
 - C28/C29 verdict (re-confirmed by byte-pattern survey on the pinned
   build, SHA-256 `83a04541…72c823b`, 5,029,888 B; python3 3.14 byte
   scan, hand-decoded, no dossier): selection is id-keyed end to end.

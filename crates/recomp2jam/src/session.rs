@@ -1328,6 +1328,7 @@ impl OnlineSession {
         self.game
             .with_audio(backend, std::collections::HashMap::new());
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
+        self.game.stage_ui_effect_bank(crate::load_ui_effect_bank());
     }
 
     /// Stage the clock-armed loading caption for one chart song id
