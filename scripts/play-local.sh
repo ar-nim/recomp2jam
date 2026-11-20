@@ -32,12 +32,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEMORYER_DIR="${MEMORYER_DIR:-$HOME/memoryer-local}"
 USER_ID=2
 CHECK_ONLY=0
+RIG_RUN=0
 EXTRA=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --user-id) USER_ID="$2"; shift 2 ;;
     --check-only) CHECK_ONLY=1; shift ;;
+    --rig) RIG_RUN=1; shift ;;
     *) EXTRA+=("$1"); shift ;;
   esac
 done
@@ -50,9 +52,17 @@ export RIG_INSTALL_ROOT
 # reaches the 1000 frame as a distinct O2JAM_CLIENT_ID.
 rig_export_client_identity "$USER_ID"
 
-# 0. Display pin (#719): refuse the owner's :0 / Wayland seat before build,
-# token lookup, or spawn. A rig boot must name its :NNN Xvfb display.
-rig_pin_rust_client_display || exit "$?"
+# 0. Display pin (#719): a RIG boot must name its :NNN Xvfb display -
+# pass --rig, preset RIG_DISPLAY, or run with DISPLAY already :NNN.
+# Owner-session interactive runs (Wayland + :0) skip the pin; the pin
+# refusing :0 was a regression (owner report 2026-11-20). The hostile
+# case the pin exists for - a rig script accidentally on the owner
+# display - always passes --rig, so the refusal still fires there.
+if [ "$RIG_RUN" -eq 1 ] || [ -n "${RIG_DISPLAY:-}" ] || [[ "${DISPLAY:-}" =~ ^:[1-9][0-9][0-9]$ ]]; then
+  rig_pin_rust_client_display || exit "$?"
+else
+  echo "play-local: owner-session run (DISPLAY=${DISPLAY:-unset}); display pin skipped - rig boots pass --rig or preset RIG_DISPLAY" >&2
+fi
 
 # 1. Game data: the client stages art from install-root (git-ignored).
 if ! rig_check_install_root; then

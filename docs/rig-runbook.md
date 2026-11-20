@@ -34,11 +34,14 @@ log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 ### Rust-client display pin (#719)
 
 `scripts/play-local.sh` boots only our Rust client. Before build, token lookup,
-or spawn, it calls `scripts/lib/rig-client-display.sh` with the caller chain
+or spawn, it applies `scripts/lib/rig-client-display.sh` when the run IS a rig
+run: `--rig` passed, `RIG_DISPLAY` preset, or `DISPLAY` already `:NNN` (owner
+fix 2026-11-20: interactive owner-session runs on Wayland + `:0` skip the pin -
+the unconditional refusal was a regression). The caller chain is
 `play-local.sh -> rig_pin_rust_client_display -> rig_validated_client_display`.
-A boot must name a rig Xvfb display as `:NNN` in `RIG_DISPLAY` (preferred) or
-`DISPLAY`; the owner's `:0`, short display names, and dead displays are refused
-with exit 10. The pin exports `DISPLAY` and `RIG_DISPLAY`, clears
+A rig boot must name a rig Xvfb display as `:NNN` in `RIG_DISPLAY` (preferred)
+or `DISPLAY`; the owner's `:0`, short display names, and dead displays are
+refused with exit 10. The pin exports `DISPLAY` and `RIG_DISPLAY`, clears
 `WAYLAND_DISPLAY`/`WAYLAND_SOCKET` and Wine prefix variables, and forces
 `WINIT_UNIX_BACKEND=x11`. The peer-only recipe is:
 
