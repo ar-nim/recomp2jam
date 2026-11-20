@@ -34,6 +34,14 @@ is up **before** the confirm: 4012 does not create the Loading frame.
 The older P14 `master loading pixels did not appear after 4010` line is
 refuted as a state claim; its palette detector missed this cover.
 
+The solo-host pixel claim (#595) is the full-bleed frame
+`7ea40df288745d71b3b70fa2ca79fb41a0917291a686730b884ec6929d3bf64b`:
+the selected chart's OJN JPEG with its baked Artist/Remix/Pattern ink,
+no lane HUD. Our host's own 4010/4011 path is guarded by
+`solo_host_start_paints_the_staged_song_cover_full_bleed`, which skips
+cleanly when `install-root` is hidden. The qualified pack is exe proof;
+the guard pins the same caller chain without committing capture bytes.
+
 ## OPEN
 
 The four internal legs (validation `0x5718b0`, staging `0x4f8b80`, OJN

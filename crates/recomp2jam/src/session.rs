@@ -7272,6 +7272,66 @@ pub(super) mod session_tests {
         );
     }
 
+    /// #595: the solo host's own `4010/4011` must land on the walked
+    /// chart's full-bleed cover, not the planet fallback. Qualified
+    /// pack `solo-gate-02` pins the same cover bytes
+    /// (`7ea40df2…bf64b`) on the host's own START. This install-guarded
+    /// guard walks the live chain host select fetch -> `stage_chart_bytes`
+    /// -> 4011 -> `poll_start` -> `paint_loading_cover`; it skips when
+    /// CI hides the archives.
+    #[test]
+    fn solo_host_start_paints_the_staged_song_cover_full_bleed() {
+        use o2jam_net::SetRoomMusic;
+
+        let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&chart_path) else {
+            println!("skip: missing installed chart");
+            return;
+        };
+        let catalog = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&catalog).unwrap();
+        let mut room = joined_snapshot();
+        room.music_id = 757;
+        room.difficulty = 2;
+        room.speed = 1;
+        let (mut session, server) = joined_waiting_session(room.clone(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game.set_song_catalog(&entries);
+        session.game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 2,
+            speed: 1,
+        });
+        session.stage_chart_bytes(&bytes, 2).unwrap();
+        assert!(session.game.has_loading_cover());
+
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        assert_eq!(session.game.screen(), Screen::Loading);
+        assert!(
+            session.game.has_loading_cover(),
+            "the host's own START keeps the staged cover"
+        );
+
+        let expected = {
+            let cover = o2jam_shell::avatar::ojn_cover_figure(&bytes).unwrap();
+            let (r, g, b) = o2jam_render::expand_rgb555(cover.layer(0).unwrap().image.words[0]);
+            o2jam_render::pack_xrgb(r, g, b)
+        };
+        let frame = painted_game_frame(&mut session);
+        assert_eq!(
+            frame[0], expected,
+            "the first Loading frame shows the cover at the top-left"
+        );
+        server.join().unwrap();
+    }
+
     #[test]
     fn loading_confirm_sends_4012_then_enters_playing() {
         use o2jam_net::{ConfirmMusicLoaded, Request};
