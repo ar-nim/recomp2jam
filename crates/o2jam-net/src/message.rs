@@ -1689,6 +1689,25 @@ mod tests {
         }
     }
 
+    /// Exe CREATE wire, ticket #603: `~/scratch/evidence-room/
+    /// create-fields-2/exe/wire/room-stage.log` 02:27:01 captured `C2S
+    /// opcode=2004 len=17 hex=454d505459505300020000310000000000`
+    /// beside `pass-02-empty-password-frame.png` (sha256
+    /// `70318790067b14ba91b45cec4ecd47df14ba7aad5bc54fbefef6147db3db671d`),
+    /// the qualified CREATE sheet with the password field untouched.
+    /// The zero password byte follows the key/game/lock bytes; the other
+    /// string field is also variable-length, not a padded slot.
+    #[test]
+    fn create_room_empty_password_body_matches_the_exe_capture() {
+        let exe_body = b"EMPTYPS\x00\x02\x00\x00\x31\x00\x00\x00\x00\x00";
+        let request = CreateRoom::decode_body(exe_body).unwrap();
+        assert_eq!(request.title, "EMPTYPS");
+        assert_eq!(request.key_mode, KeyMode::SevenKeys);
+        assert_eq!(request.game_mode, GameMode::Normal);
+        assert!(!request.has_password);
+        assert_eq!(request.encode_body(), exe_body);
+    }
+
     #[test]
     fn create_room_round_trips() {
         let request = room_request();

@@ -792,7 +792,7 @@ impl OnlineSession {
     /// A rejected create, a missing room row, or whatever the
     /// gateway transport reports.
     pub fn create_and_join_room(&mut self, title: &str) -> anyhow::Result<JoinedRoom> {
-        let create = CreateRoom {
+        let request = CreateRoom {
             title: title.to_owned(),
             key_mode: KeyMode::FiveKeys,
             game_mode: GameMode::Normal,
@@ -802,9 +802,16 @@ impl OnlineSession {
             max_level: 99,
             premium: false,
         };
+        self.create_room_with_request(&request)
+    }
+
+    /// Host path for the CREATE dialog commit (#603): send the body the
+    /// staged form actually produced, so the mode and password the
+    /// player chose reach the gateway instead of CLI defaults.
+    pub fn create_room_with_request(&mut self, request: &CreateRoom) -> anyhow::Result<JoinedRoom> {
         let created = self.exchange_room_frame(
             Request::CreateRoom.id(),
-            &create.encode_body(),
+            &request.encode_body(),
             CreateRoomResponse::COMMAND,
         )?;
         let created = CreateRoomResponse::decode_frame(&created).map_err(net_context)?;
@@ -1940,7 +1947,7 @@ impl OnlineSession {
         let Some(body) = self.game.take_create_room() else {
             return;
         };
-        match self.create_and_join_room(&body.title) {
+        match self.create_room_with_request(&body) {
             Ok(_) => {
                 let _ = self.game.enter_screen(Screen::Waiting);
             }
@@ -9683,6 +9690,107 @@ pub(super) mod session_tests {
             session.joined_room.as_ref().map(|r| r.title.as_str()),
             Some("x")
         );
+
+        server.join().unwrap();
+    }
+
+    /// Live-path guard for the exe CREATE wire pin in
+    /// `~/scratch/evidence-room/create-fields-2/exe/wire/room-stage.log`
+    /// 02:27:01 (`C2S 2004 len=17
+    /// hex=454d505459505300020000310000000000`, key byte `02`, empty
+    /// password field, frame `pass-02-empty-password-frame.png` sha256
+    /// `70318790067b14ba91b45cec4ecd47df14ba7aad5bc54fbefef6147db3db671d`).
+    /// Caller chain: boot → Room → staged CREATE sheet → Commit →
+    /// `flush_create_room` → `create_and_join_room` → gateway 2004.
+    #[test]
+    fn create_commit_keeps_the_staged_form_fields_on_the_live_gateway() {
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::message::{CreateResult, CreateRoom, CreateRoomResponse, CreatedRoom};
+        use o2jam_net::{KeyMode, RoomList, RoomListEntry};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_CREATE_CODE};
+        use std::collections::HashMap;
+
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Request::CreateRoom.id());
+            let create = CreateRoom::decode_body(&frame.payload).unwrap();
+            assert_eq!(create.title, "EMPTYPS");
+            assert_eq!(create.key_mode, KeyMode::SevenKeys);
+            assert!(!create.has_password);
+            assert!(create.password.is_empty());
+            let created = CreateRoomResponse {
+                result: CreateResult::Success,
+                info: Some(CreatedRoom {
+                    number: 42,
+                    premium: false,
+                    password: String::new(),
+                    has_password: false,
+                    min_level: 0,
+                    max_level: 99,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(
+                    CreateRoomResponse::COMMAND,
+                    &created.encode_body(),
+                ))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Request::GetChannelInfo.id());
+            let list = RoomList {
+                rooms: vec![RoomListEntry {
+                    number: 42,
+                    state_code: 1,
+                    title: "EMPTYPS".to_owned(),
+                    has_password: false,
+                    music_id: 0,
+                    difficulty: 0,
+                    key_mode: 2,
+                    game_mode: 0,
+                    speed: 1,
+                    capacity: 8,
+                    user_count: 1,
+                    min_level: 0,
+                    max_level: 99,
+                    skills: Vec::new(),
+                    premium: false,
+                    room_type: 0,
+                }],
+            };
+            stream
+                .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+
+        let staged = [CREATE_ROOM_CREATE_CODE, CREATE_ROOM_7KEY_MODE_CODE]
+            .into_iter()
+            .enumerate()
+            .map(|(index, code)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: format!("CREATE_{index}"),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 10 + index as i32 * 40,
+                    y: 10,
+                    w: 30,
+                    h: 30,
+                },
+            })
+            .collect();
+        session
+            .game_mut()
+            .load_create_room_scene(staged, HashMap::new());
+        session.game_mut().open_create_room_dialog();
+        session.game_mut().click_room_dialog(50, 20);
+        for letter in "EMPTYPS".chars() {
+            session.game_mut().push_room_dialog_char(letter);
+        }
+        session.game_mut().click_room_dialog(20, 20);
+        paint_frame(&mut session);
 
         server.join().unwrap();
     }
