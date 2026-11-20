@@ -1057,6 +1057,15 @@ impl OnlineSession {
                     self.resolve_song_select(answer, attempt.choice);
                     return None;
                 }
+                Ok(frame) if frame.id == WaitingMusicChanged::COMMAND => {
+                    // The room echoes the pick before its 4003 arena
+                    // answer (`full01/tap.log`). A select drain that
+                    // merely skipped this frame left the master's own
+                    // captions on the pre-pick song until another poll
+                    // (#564), so fold it through the same arm the
+                    // ordinary waiting drain uses.
+                    self.apply_waiting_music_changed(&frame);
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-select frame in select drain");
@@ -9569,30 +9578,13 @@ pub(super) mod session_tests {
         assert_eq!(level_for_difficulty(9), 2);
     }
 
-    #[test]
-    fn waiting_select_music_ok_with_staged_pick_reaches_4000_over_scripted_gateway() {
-        // Ticket #232 wire guard: a real session walk, row click through
-        // ingest_snapshot, OK click at the staged rect, then a paint
-        // must put the 4000 SetRoomMusic frame on the wire with the
-        // staged music id. Server-side assertion pins the accept clause.
+    /// Open the staged select dialog with a catalog row, click it, then
+    /// click OK — the shared master pick gesture for the 4000 wire guards.
+    fn click_master_song_row_and_ok(session: &mut OnlineSession) {
         use o2jam_render::Rect;
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
         use std::collections::HashMap;
 
-        let room = joined_snapshot();
-        let (mut session, server) = joined_waiting_session(room, |mut stream| {
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, o2jam_net::Request::SetRoomMusic.id());
-            let body = o2jam_net::play::SetRoomMusic::decode_body(&frame.payload).unwrap();
-            assert_eq!(body.music_id, 757);
-            // begin_song_select also sends SetRoomArena 4002 right after.
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, o2jam_net::Request::SetRoomArena.id());
-            assert_quiet(&mut stream);
-        });
-
-        // Stage the dialog overlay with a pinned OK rect plus a catalog
-        // so the row click commits song 757 (Normal slot).
         let ok_placement = ScenePlacement {
             id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
             code: 0x27200002,
@@ -9617,18 +9609,78 @@ pub(super) mod session_tests {
         rec[240..251].copy_from_slice(b"o2ma757.ojm");
         let entries = o2jam_file::parse_ojn_list(&rec).unwrap();
         session.set_song_catalog(&entries);
-
-        // 1. Row click stages the pick.
         session
             .game_mut()
             .ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
         assert!(session.game_mut().has_pending_music_send());
-
-        // 2. OK click closes the dialog.
         session
             .game_mut()
             .ingest_snapshot(&InputSnapshot::click_at(389, 519));
         assert!(!session.game_mut().select_music_dialog_open());
+    }
+
+    #[test]
+    fn master_row_pick_echoes_4000_and_4001_over_the_scripted_gateway() {
+        // Ticket #564 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint ->
+        //   ScreenGame::ingest_snapshot (MUSELECT row + OK) ->
+        //   flush_music_send -> SetRoomMusic 4000 / SetRoomArena 4002 ->
+        //   drain_waiting_chat -> apply_waiting_music_changed 4001 ->
+        //   ScreenGame::set_room_music.
+        // Wire pin: `full01/tap.log` 15:43:48 `C2S 4000 len=8
+        // hex=64000101` -> `S2C 4001 len=8 hex=64000101`.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let pick = read_frame(&mut stream);
+            assert_eq!(pick.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&pick.payload).unwrap();
+            assert_eq!(body.music_id, 757);
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::SetRoomArena.id()
+            );
+            let echo = WaitingMusicChanged {
+                music_id: 757,
+                difficulty: 0,
+                speed: 2,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::UpdateMusicState.id()
+            );
+            assert_quiet(&mut stream);
+        });
+        click_master_song_row_and_ok(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(757)
+        });
+        server.join().unwrap();
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert_eq!(room.music_id, 757, "the 4001 echo stages the room song");
+        assert_eq!(room.speed, 2, "the 4001 echo stages the room speed");
+    }
+
+    #[test]
+    fn waiting_select_music_ok_with_staged_pick_reaches_4000_over_scripted_gateway() {
+        // Ticket #232 wire guard: a real session walk, row click through
+        // ingest_snapshot, OK click at the staged rect, then a paint
+        // must put the 4000 SetRoomMusic frame on the wire with the
+        // staged music id. Server-side assertion pins the accept clause.
+        let room = joined_snapshot();
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&frame.payload).unwrap();
+            assert_eq!(body.music_id, 757);
+            // begin_song_select also sends SetRoomArena 4002 right after.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomArena.id());
+            assert_quiet(&mut stream);
+        });
+
+        // Stage the dialog overlay, click the 757 row, then OK; polling
+        // drives the queued pick onto the wire as 4000.
+        click_master_song_row_and_ok(&mut session);
 
         // 3. Polling drives the queued pick onto the wire as 4000.
         paint_frame(&mut session);
