@@ -11,6 +11,7 @@ mod planet;
 mod result_records;
 mod room_fuse;
 mod shop;
+mod ui_effect;
 mod waiting;
 
 use std::collections::HashMap;
@@ -26,6 +27,7 @@ use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
 use self::room_fuse::RoomNoResponseFuse;
 use self::shop::ShopState;
+pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
     avatar_item_by_id, load_shop_portraits, load_worn_figure, ojn_cover_figure, AvatarFigure,
@@ -593,6 +595,11 @@ pub struct ScreenGame {
     /// stops at its end would otherwise freeze the splash.
     avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
+    /// Decoded UI-effect samples keyed by exe cache slot (`0..0x34`).
+    /// Staged from bank 0 `bgEffect.ojm` by the launch client; kept on
+    /// the game (not the audio rig) because a key-bank attach replaces
+    /// the rig's backend without invalidating these one-shots.
+    ui_effect_bank: Vec<Option<PcmSamples>>,
     avatar: Option<AvatarFigure>,
     /// Channel rows, highlight, scrolled list top, and drag capture
     /// (#259 scene cluster): every row word lives behind the scene
@@ -1067,6 +1074,7 @@ impl ScreenGame {
             splash_hold_ms: SPLASH_AUTO_ADVANCE_MS,
             avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
+            ui_effect_bank: Vec::new(),
             avatar: None,
             channel_scene: ChannelScene::default(),
             pointer: None,
@@ -1192,6 +1200,39 @@ impl ScreenGame {
         }
         self.apply_scene_bgm();
         self
+    }
+
+    /// Stage decoded `bgEffect.ojm` samples by exe cache slot. An
+    /// over-long bank is truncated to the emitter bound and a short one
+    /// is padded with empty slots: no sample is invented for a slot the
+    /// install bank does not carry. Staging never plays a cue.
+    pub fn stage_ui_effect_bank(&mut self, bank: Vec<Option<PcmSamples>>) -> &mut Self {
+        let mut slots = vec![None; UI_EFFECT_SLOT_COUNT];
+        for (slot, sample) in bank.into_iter().take(UI_EFFECT_SLOT_COUNT).enumerate() {
+            slots[slot] = sample;
+        }
+        self.ui_effect_bank = slots;
+        self
+    }
+
+    /// Play one pinned UI effect from a handler branch (never from a
+    /// queue poster). The one-shot rides `AudioBackend::play_key`;
+    /// `set_scene_bgm` only ever carries scene music. A missing bank
+    /// entry or audio rig stays silent — the cue is named OPEN there,
+    /// never filled with a substitute sample.
+    fn cue_ui_effect(&mut self, effect: UiEffectId) {
+        let gain = self.options_dialog.settings().effect_gain();
+        let slot = usize::from(effect.slot());
+        let Some(pcm) = self.ui_effect_bank.get(slot).and_then(Option::as_ref) else {
+            tracing::debug!(slot, "UI effect slot has no staged PCM; cue stays silent");
+            return;
+        };
+        let Some(rig) = self.audio.as_mut() else {
+            return;
+        };
+        if let Err(source) = rig.backend.play_key(pcm, gain) {
+            tracing::warn!(%source, slot, "UI effect cue failed");
+        }
     }
 
     /// Cue one scene-BGM pair through the rig (silence without one):
@@ -3160,8 +3201,17 @@ impl ScreenGame {
     fn click_channel_row(&mut self, x: i32, y: i32) {
         let draft_busy = self.channel_slash_command() != SlashCommand::Empty;
         match self.channel_scene.press(x, y, draft_busy) {
-            ChannelPress::Close => self.enter(Screen::Planet),
-            ChannelPress::Enter => self.enter(Screen::Room),
+            // X/BACK and the row enter face are producer branches: the
+            // exe cues id 0x23 before the close and id 9 before the
+            // join post (VA `0x48ff45` / `0x47530d`).
+            ChannelPress::Close => {
+                self.cue_ui_effect(UiEffectId::ChannelExit);
+                self.enter(Screen::Planet);
+            }
+            ChannelPress::Enter => {
+                self.cue_ui_effect(UiEffectId::ChannelRowJoin);
+                self.enter(Screen::Room);
+            }
             ChannelPress::ConsumeDraft => {
                 let _ = self.take_channel_slash();
             }
@@ -4746,10 +4796,16 @@ impl ScreenGame {
     /// not down, #111 arm 3). The board state owns the arms; the
     /// flow step rides the reported family pick.
     fn dispatch_planet_action(&mut self, action: PlanetAction) {
+        // The disc and emblem handlers cue before they open the modal
+        // or step the scene (VA `0x48e087` exit, `0x48e316` emblem).
+        if matches!(action, PlanetAction::QuitConfirm) {
+            self.cue_ui_effect(UiEffectId::PlanetExit);
+        }
         if self
             .planet_board
             .apply_action(action, self.promo_frame_count())
         {
+            self.cue_ui_effect(UiEffectId::EmblemPick);
             self.enter(Screen::Channel);
         }
     }
@@ -4889,9 +4945,11 @@ impl ScreenGame {
             Some(PlanetModal::QuitConfirm) => {
                 let (ok_hit, cancel_hit) = self.quit_button_hits(x, y);
                 if ok_hit {
+                    self.cue_ui_effect(UiEffectId::DialogAccept);
                     self.quit_requested = true;
                     self.planet_board.close_modal();
                 } else if cancel_hit {
+                    self.cue_ui_effect(UiEffectId::DialogDecline);
                     self.planet_board.close_modal();
                 }
             }
@@ -4915,8 +4973,12 @@ impl ScreenGame {
     /// keeps ownership of the modal.
     fn click_options_dialog(&mut self, x: i32, y: i32) {
         let volume_before = self.options_dialog.settings().bgm_music();
-        if self.options_dialog.click(x, y) {
+        let outcome = self.options_dialog.click(x, y);
+        if outcome.close {
             self.planet_board.close_modal();
+        }
+        if let Some(effect) = outcome.effect {
+            self.cue_ui_effect(effect);
         }
         // The dialog sits over the lobby: a BGMusic slider move must
         // re-cue the running scene track at its new gain without a
@@ -7135,9 +7197,13 @@ impl ScreenGame {
             // mouse-only, so the keys never touch the highlight or the
             // top. Confirm/Back below are out of scope (still OPEN).
             MenuKey::Up | MenuKey::Down => {}
-            MenuKey::Back => self.enter(Screen::Planet),
+            MenuKey::Back => {
+                self.cue_ui_effect(UiEffectId::ChannelExit);
+                self.enter(Screen::Planet);
+            }
             MenuKey::Confirm => {
                 if self.take_channel_slash() == SlashCommand::Empty {
+                    self.cue_ui_effect(UiEffectId::ChannelRowJoin);
                     self.enter(Screen::Room);
                 }
             }
@@ -18219,11 +18285,25 @@ mod game_tests {
     struct CueLog {
         inner: o2jam_audio::NullBackend,
         pushes: Rc<RefCell<Vec<i16>>>,
+        /// Second log: one-shot effect ids, read off the marker sample
+        /// of the staged effect bank (slot id in sample 0).
+        effects: Rc<RefCell<Vec<u8>>>,
     }
 
     impl AudioBackend for CueLog {
         fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
             self.inner.play_pcm(pcm)
+        }
+
+        fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), o2jam_audio::AudioError> {
+            if let Some(marker) = pcm
+                .samples
+                .first()
+                .and_then(|sample| u8::try_from(*sample).ok())
+            {
+                self.effects.borrow_mut().push(marker);
+            }
+            self.inner.play_key(pcm, gain)
         }
 
         fn set_scene_bgm(
@@ -18247,20 +18327,332 @@ mod game_tests {
         }
     }
 
+    /// Synthetic effect bank whose slot marker is its cache id, so
+    /// CueLog's second vector reads ids without game data. Only test
+    /// audio is fabricated; the launch client stages decoded archives.
+    fn effect_marker_bank() -> Vec<Option<PcmSamples>> {
+        (0..UI_EFFECT_SLOT_COUNT)
+            .map(|slot| {
+                let marker = i16::try_from(slot).expect("cache slot fits i16");
+                Some(PcmSamples {
+                    samples: vec![marker; 64],
+                    sample_rate: 44_100,
+                    channels: 1,
+                })
+            })
+            .collect()
+    }
+
+    /// Game with both CueLog vectors and a fully staged effect bank:
+    /// the scripted-walk entry for the #721 scenario guards.
+    fn effect_cue_game(
+        pushes: &Rc<RefCell<Vec<i16>>>,
+        effects: &Rc<RefCell<Vec<u8>>>,
+    ) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.with_audio(cue_log_backend(pushes, effects), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
+        game.stage_ui_effect_bank(effect_marker_bank());
+        game
+    }
+
+    /// Stage one options tab with synthetic rects for the named codes.
+    /// `has_figures` needs one dummy figure; geometry stays in the
+    /// staged placements, never in the handler.
+    fn stage_effect_option_sheet(
+        game: &mut ScreenGame,
+        tab: crate::screens::side::PlanetOptionTab,
+        codes: &[u32],
+    ) -> Vec<ScenePlacement> {
+        use crate::avatar::{AvatarFigure, PlacementRole};
+        use o2jam_render::Rect;
+
+        let placements: Vec<ScenePlacement> = codes
+            .iter()
+            .enumerate()
+            .map(|(index, code)| ScenePlacement {
+                id: format!("cue-{index}"),
+                code: *code,
+                sprite: None,
+                rect: Rect {
+                    x: 100 + i32::try_from(index).unwrap_or(0) * 40,
+                    y: 100,
+                    w: 20,
+                    h: 20,
+                },
+                role: PlacementRole::Single,
+            })
+            .collect();
+        game.load_planet_option_tab(
+            tab,
+            placements.clone(),
+            HashMap::from([("cue-figure".to_owned(), AvatarFigure::default())]),
+        );
+        placements
+    }
+
+    /// One silent test backend: scene pushes in `pushes`, one-shot
+    /// effect markers in `effects` (the CueLog second vector).
+    fn cue_log_backend(
+        pushes: &Rc<RefCell<Vec<i16>>>,
+        effects: &Rc<RefCell<Vec<u8>>>,
+    ) -> Box<dyn AudioBackend> {
+        Box::new(CueLog {
+            inner: o2jam_audio::NullBackend::new(),
+            pushes: Rc::clone(pushes),
+            effects: Rc::clone(effects),
+        })
+    }
+
     /// Boot a rig-bound game onto the planet board through the splash.
     fn game_on_the_board(pushes: &Rc<RefCell<Vec<i16>>>) -> ScreenGame {
         let mut game = ScreenGame::new();
         game.with_audio(
-            Box::new(CueLog {
-                inner: o2jam_audio::NullBackend::new(),
-                pushes: Rc::clone(pushes),
-            }),
+            cue_log_backend(pushes, &Rc::new(RefCell::new(Vec::new()))),
             HashMap::new(),
         );
         game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
         game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game
+    }
+
+    #[test]
+    fn planet_emblem_pick_cues_effect_one() {
+        // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
+        // ScreenGame::ingest_snapshot -> click_dispatch ->
+        // planet_pointer_down/up -> dispatch_planet_action ->
+        // ScreenGame::cue_ui_effect -> AudioBackend::play_key.
+        // No install-root read (synthetic marker bank, null sink).
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        game.menu_key(MenuKey::Back, true);
+        let bgm_before = pushes.borrow().clone();
+
+        game.click_planet(136, 88);
+
+        assert_eq!(game.screen(), Screen::Channel, "emblem enters the dialog");
+        assert_eq!(*effects.borrow(), vec![1], "emblem pick cues slot 1");
+        assert_eq!(*pushes.borrow(), bgm_before, "effect never touches BGM");
+    }
+
+    #[test]
+    fn hovering_an_emblem_cues_no_effect() {
+        // Live chain: window.rs::route_mouse_input -> InputSnapshot with
+        // pointer only -> ScreenGame::ingest_snapshot -> hovered_planet_action
+        // (paint-side state). No handler branch runs, so no emitter call.
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        game.menu_key(MenuKey::Back, true);
+
+        let mut hover = InputSnapshot::new();
+        hover.set_pointer(Some((136, 88)));
+        game.ingest_snapshot(&hover);
+        assert!(
+            game.hovered_planet_action().is_some(),
+            "the pointer really is over an emblem"
+        );
+        let mut hover = InputSnapshot::new();
+        hover.set_pointer(Some((524, 246)));
+        game.ingest_snapshot(&hover);
+
+        assert!(effects.borrow().is_empty(), "hover emits nothing");
+        assert_eq!(*pushes.borrow(), vec![8, 9], "hover leaves BGM alone");
+    }
+
+    #[test]
+    fn refused_channel_enter_cues_no_effect_after_the_row_pick() {
+        // Live chain: main.rs::run_play -> OnlineSession::ingest_snapshot
+        // -> 1005 refusal -> ScreenGame::open_channel_refusal_dialog ->
+        // click_dispatch -> click_planet_modal (information OK) -> no
+        // cue. The row-pick cue comes from the earlier producer branch
+        // window.rs::route_mouse_edge -> ScreenGame::click_channel_row.
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        game.set_channels(two_channels());
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
+        assert_eq!(game.screen(), Screen::Room, "row join advanced");
+        let after_row_pick = effects.borrow().clone();
+        assert_eq!(after_row_pick, vec![1, 9], "pick then join");
+
+        game.menu_key(MenuKey::Back, true);
+        game.open_channel_refusal_dialog(b"channel full");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        assert!(!game.channel_refusal_dialog_open(), "OK dismisses it");
+        assert_eq!(
+            *effects.borrow(),
+            after_row_pick,
+            "the 1005 answer adds no effect"
+        );
+    }
+
+    #[test]
+    fn a_cue_without_a_staged_bank_entry_fabricates_no_sample() {
+        // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
+        // ScreenGame::ingest_snapshot -> dispatch_planet_action ->
+        // ScreenGame::cue_ui_effect. With no bank staged (CI without
+        // game data), the named cue must stay silent rather than
+        // substitute a made-up one-shot.
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = ScreenGame::new();
+        game.with_audio(cue_log_backend(&pushes, &effects), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
+        game.menu_key(MenuKey::Back, true);
+
+        game.click_planet(136, 88);
+
+        assert_eq!(game.screen(), Screen::Channel, "flow still advances");
+        assert!(effects.borrow().is_empty(), "no sample, no effect");
+        assert_eq!(*pushes.borrow(), vec![8, 9], "scene BGM is untouched");
+    }
+
+    #[test]
+    fn slider_apply_cues_two_but_reset_and_cancel_do_not() {
+        // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
+        // ScreenGame::ingest_snapshot -> click_dispatch ->
+        // click_planet_modal -> click_options_dialog ->
+        // OptionsDialog::click -> ScreenGame::cue_ui_effect. The Sound
+        // tab's `0x26200012` arm applies the slider, while `0x26200010`
+        // (DEFAULT/reset) and `0x26200011` (SAVE/cancel) stay silent.
+        use crate::screens::side::PlanetOptionTab;
+
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        let sound_sheet = stage_effect_option_sheet(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[0x2620_0010, 0x2620_0011, 0x2620_0012],
+        );
+        open_options(&mut game);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+        let bgm_before = pushes.borrow().clone();
+
+        click_staged_dialog_button(&mut game, &sound_sheet, 0x2620_0010);
+        click_staged_dialog_button(&mut game, &sound_sheet, 0x2620_0011);
+        assert!(effects.borrow().is_empty(), "reset and cancel are silent");
+
+        click_staged_dialog_button(&mut game, &sound_sheet, 0x2620_0012);
+        assert_eq!(*effects.borrow(), vec![2], "slider apply cues slot 2");
+        assert_eq!(game.planet_modal(), None, "apply closes the sheet");
+        assert_eq!(*pushes.borrow(), bgm_before, "no BGM cue from the dialog");
+    }
+
+    #[test]
+    fn option_tab_switch_and_channel_exit_cue_their_pinned_ids() {
+        // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
+        // ScreenGame::ingest_snapshot -> click_dispatch ->
+        // click_planet_modal -> click_options_dialog ->
+        // OptionsDialog::click (tab switch) -> cue_ui_effect; and
+        // click_channel_row (X) -> cue_ui_effect. No install-root read.
+        use crate::screens::side::{PlanetOptionTab, OPTION_SOUND_GAMESET};
+
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        let sound_sheet = stage_effect_option_sheet(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[OPTION_SOUND_GAMESET, 0x2620_0003],
+        );
+        stage_effect_option_sheet(&mut game, PlanetOptionTab::Game, &[]);
+        game.set_channels(two_channels());
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
+        assert_eq!(game.screen(), Screen::Planet, "X closes the dialog");
+        assert_eq!(*effects.borrow(), vec![1, 0x23], "emblem then BACK");
+
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &sound_sheet, 0x2620_0003);
+        assert_eq!(*effects.borrow(), vec![1, 0x23], "slider step is silent");
+        click_staged_dialog_button(&mut game, &sound_sheet, OPTION_SOUND_GAMESET);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Game);
+        assert_eq!(*effects.borrow(), vec![1, 0x23, 9], "tab switch cues 9");
+    }
+
+    #[test]
+    fn planet_exit_and_dialog_ok_cancel_cue_five_one_and_two() {
+        // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
+        // ScreenGame::ingest_snapshot -> dispatch_planet_action (exit
+        // disc) and click_planet_modal -> cue_ui_effect. The dialog OK
+        // is the generic `0x22200002` handler (exe `0x4345b0`), CANCEL
+        // the `0x22200003` one (`0x4345fc`).
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        game.menu_key(MenuKey::Back, true);
+
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        assert_eq!(*effects.borrow(), vec![5], "exit disc cues slot 5");
+        game.ingest_snapshot(&InputSnapshot::click_at(450, 253));
+        assert_eq!(*effects.borrow(), vec![5, 2], "CANCEL cues slot 2");
+        assert!(game.planet_modal().is_none());
+
+        game.click_planet(769, 580);
+        game.ingest_snapshot(&InputSnapshot::click_at(350, 253));
+        assert!(game.quit_confirmed());
+        assert_eq!(*effects.borrow(), vec![5, 2, 5, 1], "OK cues slot 1");
+    }
+
+    #[test]
+    fn effect_cue_walk_records_the_pinned_sequence_in_cuelog() {
+        // Live chain: window.rs::route_mouse_edge/route_key ->
+        // InputSnapshot -> ScreenGame::ingest_snapshot -> click_dispatch,
+        // menu_key -> the handler branches above -> cue_ui_effect ->
+        // AudioBackend::play_key. The CueLog second vector is the whole
+        // one-shot sequence; its first vector must stay at the scene
+        // pushes boot/Planet/Channel/Room/Planet would make anyway.
+        use crate::screens::side::{PlanetOptionTab, OPTION_SOUND_GAMESET};
+
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = effect_cue_game(&pushes, &effects);
+        let sound_sheet = stage_effect_option_sheet(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[OPTION_SOUND_GAMESET, 0x2620_0012],
+        );
+        stage_effect_option_sheet(&mut game, PlanetOptionTab::Game, &[]);
+        game.set_channels(two_channels());
+
+        game.menu_key(MenuKey::Back, true);
+        let mut hover = InputSnapshot::new();
+        hover.set_pointer(Some((136, 88)));
+        game.ingest_snapshot(&hover);
+        game.click_planet(136, 88); // 1
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246)); // 9
+        game.menu_key(MenuKey::Back, true);
+        game.open_channel_refusal_dialog(b"full");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368)); // silent
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171)); // 0x23
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &sound_sheet, 0x2620_0012); // 2
+        assert_eq!(game.planet_modal(), None, "slider apply closes options");
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &sound_sheet, OPTION_SOUND_GAMESET); // 9
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(769, 580); // 5
+        game.ingest_snapshot(&InputSnapshot::click_at(350, 253)); // 1
+
+        assert_eq!(
+            *effects.borrow(),
+            vec![1, 9, 0x23, 2, 9, 5, 1],
+            "one-shot cue sequence"
+        );
+        assert_eq!(
+            *pushes.borrow(),
+            vec![8, 9, 3, 9],
+            "effects never re-cue scene BGM"
+        );
     }
 
     #[test]
@@ -18402,14 +18794,9 @@ mod game_tests {
         // `apply_bgm_cue` seam on side entry and side leave.
         use super::super::side::{MYROOM_BACK_CODE, MYROOM_MESSENGER_CODE};
         let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
         let mut game = ScreenGame::new();
-        game.with_audio(
-            Box::new(CueLog {
-                inner: o2jam_audio::NullBackend::new(),
-                pushes: Rc::clone(&pushes),
-            }),
-            HashMap::new(),
-        );
+        game.with_audio(cue_log_backend(&pushes, &effects), HashMap::new());
         game.stage_scene_bgm(marker_bank(&[5, 6, 8, 9]));
         walk_to_lobby(&mut game, Screen::Waiting);
         game.load_side_scene(
@@ -18472,14 +18859,9 @@ mod game_tests {
         use std::time::{Duration, Instant};
 
         let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
         let mut game = ScreenGame::new();
-        game.with_audio(
-            Box::new(CueLog {
-                inner: o2jam_audio::NullBackend::new(),
-                pushes: Rc::clone(&pushes),
-            }),
-            HashMap::new(),
-        );
+        game.with_audio(cue_log_backend(&pushes, &effects), HashMap::new());
         game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
         walk_to_lobby(&mut game, Screen::Room);
         let host_pushes = pushes.borrow().clone();
