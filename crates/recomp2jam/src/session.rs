@@ -9411,6 +9411,68 @@ pub(super) mod session_tests {
         assert!(!row.admin);
     }
 
+    /// #578 wire arm (CP34): the joined peer's chat reaches the master.
+    /// Pin: `~/scratch/close-wr/wire-only/peer.log` 15:51:37
+    /// `S2C 3012 len=16 hex=74657374657232005749524532393101` -
+    /// sender `tester2`, text `WIRE291`, seat 1. Live caller chain:
+    /// `OnlineSession::paint` -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_waiting_user_message` ->
+    /// `ScreenGame::push_waiting_user_message` -> `paint_waiting_chat`.
+    /// The guest's send half is pinned by #600; this is the other seat's
+    /// receive half. No install-root read (synthetic gateway).
+    #[test]
+    fn peer_chat_from_cp34_lands_as_a_master_waiting_row() {
+        let cp34_echo = b"tester2\x00WIRE291\x01";
+        let (mut session, server) =
+            joined_waiting_session(room_with_peer("tester2"), move |mut stream| {
+                stream.write_all(&encode_frame(3012, cp34_echo)).unwrap();
+                assert_quiet(&mut stream);
+            });
+        paint_until(&mut session, |session| {
+            session.game.waiting_chat().len() == 1
+        });
+        server.join().unwrap();
+        let rows = session.game.waiting_chat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sender, "tester2");
+        assert_eq!(rows[0].text, "WIRE291");
+        assert!(!rows[0].admin, "3012 is a player row");
+    }
+
+    /// #578 wire arm (CP33): the peer's READY echo reaches the master's
+    /// START gate. Pin: `~/scratch/close-wr/wire-only/peer.log` 15:51:32
+    /// `ASYNC id=4009 len=2 hex=0101`. Live caller chain:
+    /// `OnlineSession::paint` -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_ready_echo` ->
+    /// `ScreenGame::set_member_ready` -> `start_gate_verdict`. The two
+    /// client frame pair stays OPEN; this gate pins the wire leg.
+    #[test]
+    fn peer_ready_echo_from_cp33_opens_the_master_start_gate() {
+        let mut room = room_with_peer("tester2");
+        let peer = room.slots[1].member.as_mut().expect("seated peer");
+        peer.ready = false;
+        peer.team = 1;
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            stream.write_all(&encode_frame(4009, &[1, 1])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::PeerNotReady
+        );
+        paint_until(&mut session, |session| {
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.ready)
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::Startable
+        );
+    }
+
     #[test]
     fn master_chat_send_lands_as_a_waiting_row_from_the_3012_echo() {
         // Ticket #567 live chain (docs/live-path-reachability.md):

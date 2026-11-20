@@ -175,3 +175,28 @@ makes the seat pixel stay unpainted; restoring it passes.
 
 No qualified exe frame pair covers the peer-figure pixels in this state;
 the exe display rule stays OPEN per #312.
+
+## #578 peer READY and chat on the master (2026-11-20)
+
+Wire pins from the bootless scripted leg:
+`~/scratch/close-wr/wire-only/peer.log` CP33 `S2C 4009 len=2 hex=0101`
+(15:51:32) and CP34 `S2C 3012 len=16
+hex=74657374657232005749524532393101` (15:51:37) — sender `tester2`,
+text `WIRE291`, seat 1. The two-client frame pair is still OPEN (boot 5
+died after CP06 on an observer timeout); these guards pin the wire
+receive half only.
+
+Guards in `session.rs`:
+`peer_ready_echo_from_cp33_opens_the_master_start_gate` — live chain
+`OnlineSession::paint` → `poll_waiting_chat` → `drain_waiting_chat` →
+`apply_ready_echo` → `ScreenGame::set_member_ready` →
+`start_gate_verdict` (`PeerNotReady` → `Startable`).
+
+`peer_chat_from_cp34_lands_as_a_master_waiting_row` — live chain
+`OnlineSession::paint` → `poll_waiting_chat` → `drain_waiting_chat` →
+`apply_waiting_user_message` → `ScreenGame::push_waiting_user_message`
+→ `paint_waiting_chat`.
+
+RED proofs: removing the `4009` arm in `apply_waiting_frame` makes the
+ready guard time out; removing the `3012` arm makes the chat guard time
+out; restoring both passes. No install-root read (synthetic gateway).
