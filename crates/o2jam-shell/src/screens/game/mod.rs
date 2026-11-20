@@ -25258,6 +25258,36 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_tutorial_exit_press_returns_the_open_room_board_without_modal() {
+        // Spec #313 WAVE5 row: the bottom-right `(777,567)` press leaves
+        // Tutorial and returns the Room board with no modal. Boot1 input
+        // `cee8b7d5…1913` and frame `ed1bf56e…7b46` pin the click and
+        // the resulting board; boot2 repeats. Live chain: boot ->
+        // Channel -> Room -> staged FIRSTSTEP click -> Tutorial ->
+        // exit hit test -> `leave_side` -> Room entry BGM cue.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[3]));
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None, "the side visit is gone");
+        assert_eq!(game.screen(), Screen::Room, "the lobby is back");
+        assert_eq!(game.planet_modal(), None, "no channel modal on return");
+        assert_eq!(game.room_dialog(), None, "no lobby dialog on return");
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(3),
+            "the host Room cue is re-cued"
+        );
+    }
+
+    #[test]
     fn planet_tutorial_plate_click_stays_click_silent_under_static_dead_verdict() {
         // Ticket #471: live chain boot → Waiting → Planet side → the
         // dimmed TUTORIAL plate `0x19201006` at its `docs/planet.md:84`
