@@ -52,7 +52,7 @@ use super::paint::{
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
     staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt, ChannelChatMessage,
     LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
+    ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
     RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
@@ -64,17 +64,18 @@ use super::side::{
     myroom_record_slot, myroom_wallet_captions, paint_side_scene, paint_side_scene_live,
     paint_tutorial_scene, password_action_at, payment_side_notice, planet_action_at,
     select_chrome_action_at, select_filter_button_id, select_filter_choice_at, select_music_rows,
-    select_music_songs_with_labels, select_row_hit, shop_action_at, side_scene_slot,
-    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
-    LankingSong, LankingSort, MusicShopAction, MusicShopRow, MyRoomAction, MyRoomLowerTab,
-    MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet,
-    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
-    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen, TutorialChartGlobals,
-    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    select_music_songs_with_labels, select_row_hit, shop_action_at, shop_panel_kept,
+    shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
+    MyRoomAction, MyRoomLowerTab, MyRoomPanel, MyRoomState, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -3152,6 +3153,31 @@ impl ScreenGame {
         planet_action_at(placements, x, y)
     }
 
+    /// Shelf cell under the pointer on the open Item Shop side.
+    /// Motion alone arms the white tooltip; the row-pick and button
+    /// hover frames in the A/B sweep show no tooltip there
+    /// (`05b24e64…` entry, `hover-shelf-figure1` / `hover-shelf-row1-buy`).
+    /// The geometry rides the staged ITEMSHOW rects, never a literal.
+    #[must_use]
+    pub fn hovered_item_show_slot(&self) -> Option<usize> {
+        if self.side != Some(SideScreen::Shop) {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        self.side_placements
+            .iter()
+            .enumerate()
+            .find(|(_, placed)| {
+                placed
+                    .code
+                    .checked_sub(SHOP_ITEMSHOW_FIRST_CODE)
+                    .is_some_and(|slot| {
+                        slot < SHOP_ITEM_ROWS as u32 && rect_hit(&placed.rect, x, y)
+                    })
+            })
+            .map(|(index, _)| index)
+    }
+
     /// Channel dialog click: the scene resolves the X close, the
     /// scroll arrows, the row highlight, and the enter-face target
     /// (#259). This seam still owns the flow steps and the shared
@@ -5645,6 +5671,13 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Lower-left panel face: MY BAG at entry, SHOPPING BAG after
+    /// a row pick (audit D4).
+    #[must_use]
+    pub fn shop_panel(&self) -> ShopPanel {
+        self.shop.panel
+    }
+
     /// Checked cart item ids in toggle order.
     #[must_use]
     pub fn shop_cart(&self) -> Vec<u32> {
@@ -6214,6 +6247,14 @@ impl ScreenGame {
                 &self.tutorial_key_lights,
                 now_ms,
             );
+        } else if self.side == Some(SideScreen::Shop) {
+            // The entry face is MY BAG and the tooltip stays hidden
+            // until a staged shelf cell is hovered (audit D4/D5).
+            let panel = self.shop_panel();
+            let shelf_hovered = self.hovered_item_show_slot().is_some();
+            paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
+                shop_panel_kept(placed, panel) && shop_tooltip_kept(placed, shelf_hovered)
+            });
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -6253,22 +6294,28 @@ impl ScreenGame {
                 &self.shop_visible_goods(),
                 &self.shop_item_portraits,
             );
+            let panel = self.shop_panel();
             paint_shop_board(
                 frame,
                 &self.side_placements,
-                &self.shop_visible_goods(),
-                &self.wallet,
-                &self.shop_visible_cart(),
-                self.shop_cart_page(),
-                self.shop_cart_pages(),
+                ShopBoard {
+                    panel,
+                    goods: &self.shop_visible_goods(),
+                    wallet: &self.wallet,
+                    cart: &self.shop_visible_cart(),
+                    cart_page: self.shop_cart_page(),
+                    cart_pages: self.shop_cart_pages(),
+                },
             );
             paint_shop_preview(frame, &self.side_placements, self.shop_preview().as_ref());
-            paint_shop_bag_pager(
-                frame,
-                &self.side_placements,
-                self.shop_bag_page(),
-                self.shop_bag_pages(),
-            );
+            if panel == ShopPanel::MyBag {
+                paint_shop_bag_pager(
+                    frame,
+                    &self.side_placements,
+                    self.shop_bag_page(),
+                    self.shop_bag_pages(),
+                );
+            }
             paint_shop_avatar(
                 frame,
                 &self.side_placements,
@@ -7662,7 +7709,9 @@ mod game_tests {
     use crate::avatar::PlacementRole;
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
-    use crate::screens::side::TUTORIAL_INSTRUCTION_SPRITE;
+    use crate::screens::side::{
+        SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
+    };
     use crate::{GameLoop, MenuKey};
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
@@ -18862,6 +18911,156 @@ mod game_tests {
         game.click_shop(18, 564);
         assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
         assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn shop_entry_hides_the_cart_face_until_a_row_pick_opens_it() {
+        // D4 red proof. Live caller chain:
+        //   main.rs::run_play -> live_art::stage_live_scenes
+        //   -> stage_interface_scenes -> ScreenGame::load_side_scene
+        //   -> ScreenGame::visit_side -> paint_side -> paint_side_scene_live
+        //   -> shop_panel_kept; click_shop -> ShopState::apply_action.
+        // Frame pair: entry `05b24e64…cb00` (MY BAG) -> row pick
+        // `c84b952f…9922e` (SHOPPING BAG).
+        let mut game = open_shop_board(2);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SSHOP_MYCART_BACK".to_owned(),
+            code: SHOP_MYCART_BACK_CODE,
+            sprite: Some("shop-cart.ojs".to_owned()),
+            rect: Rect {
+                x: 5,
+                y: 381,
+                w: 583,
+                h: 214,
+            },
+        });
+        game.side_figures
+            .insert("shop-cart.ojs".to_owned(), solid_test_figure([0, 0x7C]));
+        let red_cart_ink = |buf: &[u32]| {
+            (381..595).any(|y| (5..588).any(|x| near_xrgb(buf[y * 800 + x], pack_xrgb(0xFF, 0, 0))))
+        };
+        let mut entry = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut entry,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(game.shop_panel(), ShopPanel::MyBag);
+        assert!(
+            !red_cart_ink(&entry),
+            "the entry frame shows MY BAG, not the cart backdrop"
+        );
+
+        game.click_shop(221, 188);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        let mut picked = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut picked,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            red_cart_ink(&picked),
+            "the row pick mounts the SHOPPING BAG cart art"
+        );
+    }
+
+    #[test]
+    fn shop_white_tooltip_waits_for_a_hovered_shelf_cell() {
+        // D5 red proof. Live caller chain:
+        //   window::WindowHandler -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::ingest_snapshot (pointer)
+        //   -> ScreenGame::paint_side -> hovered_item_show_slot
+        //   -> shop_tooltip_kept -> paint_side_scene_live.
+        // Entry `05b24e64…cb00` shows the notice board with no
+        // tooltip; `hover-shelf-figure1` shows it on figure hover;
+        // `hover-shelf-row1-buy` shows none on the row button.
+        let mut game = open_shop_board(2);
+        let tooltip_name = "shop-tooltip.ojs";
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SSHOP_ITEMTOOLTIP2".to_owned(),
+            code: SHOP_TOOLTIP_CODES[1],
+            sprite: Some(tooltip_name.to_owned()),
+            rect: Rect {
+                x: 455,
+                y: 404,
+                w: 242,
+                h: 119,
+            },
+        });
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SSHOP_ITEMSHOW1".to_owned(),
+            code: SHOP_ITEMSHOW_FIRST_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 227,
+                y: 86,
+                w: 109,
+                h: 81,
+            },
+        });
+        game.side_figures
+            .insert(tooltip_name.to_owned(), solid_test_figure([0, 0x7C]));
+        let tooltip_ink = |buf: &[u32]| {
+            (404..523)
+                .any(|y| (455..697).any(|x| near_xrgb(buf[y * 800 + x], pack_xrgb(0xFF, 0, 0))))
+        };
+        let mut entry = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut entry,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            !tooltip_ink(&entry),
+            "the entry frame leaves the notice board uncovered"
+        );
+
+        let mut snapshot = crate::InputSnapshot::new();
+        snapshot.set_pointer(Some((280, 126)));
+        game.ingest_snapshot(&snapshot);
+        let mut hovered = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            tooltip_ink(&hovered),
+            "hovering the staged shelf figure mounts the tooltip"
+        );
+
+        let mut snapshot = crate::InputSnapshot::new();
+        snapshot.set_pointer(Some((238, 263)));
+        game.ingest_snapshot(&snapshot);
+        let mut on_button = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut on_button,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            !tooltip_ink(&on_button),
+            "hovering the visible row button keeps the tooltip hidden"
+        );
     }
 
     #[test]

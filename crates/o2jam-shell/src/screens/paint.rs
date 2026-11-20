@@ -47,7 +47,7 @@ use super::side::{
     planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
     shop_cart_slots, wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow,
     MyRoomAction, MyRoomLowerTab, MyRoomState, PlanetAction, PlanetBand, PlanetOptionTab,
-    PlanetPromo, ShopGood, WalletRow, WalletState, CASH_CHARGE_WEB_CODE, GEM_LABEL,
+    PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, CASH_CHARGE_WEB_CODE, GEM_LABEL,
     INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
     LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
     MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
@@ -56,8 +56,9 @@ use super::side::{
     NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
     RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
     SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1522,26 +1523,49 @@ fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], t
     }
 }
 
+/// Staged board data behind one Item Shop overlay pass. Bundled so
+/// the painter takes one parameter object instead of six arguments.
+pub struct ShopBoard<'a> {
+    /// Lower-left panel face (entry MY BAG, row-pick SHOPPING BAG).
+    pub panel: ShopPanel,
+    /// Visible catalog goods for the item rows.
+    pub goods: &'a [ShopGood],
+    /// Shared wallet behind the two currency cells.
+    pub wallet: &'a WalletState,
+    /// Checked cart goods behind the cart rows.
+    pub cart: &'a [ShopGood],
+    /// Current cart page (zero-based).
+    pub cart_page: usize,
+    /// Cart page count (at least one).
+    pub cart_pages: usize,
+}
+
 /// Item-shop board overlay over the staged side art: the visible
 /// goods' names and cash prices into the staged `ITEMNAME`/`ITEMWON`
-/// TEXT rects (per-row gem cells stay blank — no pinned source), the
-/// wallet gem and cash cells (`GEMMONEY`, `MGASH`), the checked cart
-/// rows with the checkout totals (`CHECKMONEY` sums the row prices,
-/// `CHECKGEM` stays `--` — same OPEN), and both pager readouts —
-/// each inked into staged rects, never literals. Text renders through
-/// the system face (owner decision `e8d01`).
+/// TEXT rects (the exe's observed gem zero inks the staged child
+/// cell until a per-item word is pinned), the wallet gem and cash
+/// cells (`GEMMONEY`, `MGASH`), and — on the SHOPPING BAG face the
+/// row pick opens — the checked cart rows with checkout totals and
+/// pager readout. Every cell uses a staged rect, never a literal.
+/// Text renders through the system face (owner decision `e8d01`).
 pub fn paint_shop_board(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
-    goods: &[ShopGood],
-    wallet: &WalletState,
-    cart: &[ShopGood],
-    cart_page: usize,
-    cart_pages: usize,
+    board: ShopBoard<'_>,
 ) {
-    paint_shop_rows(frame, placements, goods);
-    paint_shop_wallet(frame, placements, wallet);
-    paint_shop_cart(frame, placements, cart, cart_page, cart_pages);
+    paint_shop_rows(frame, placements, board.goods);
+    paint_shop_wallet(frame, placements, board.wallet);
+    // The entry face is MY BAG (audit D4); cart ink only rides the
+    // face the row pick opens. Both faces share the stage geometry.
+    if board.panel == ShopPanel::ShoppingBag {
+        paint_shop_cart(
+            frame,
+            placements,
+            board.cart,
+            board.cart_page,
+            board.cart_pages,
+        );
+    }
 }
 
 /// Visible goods into the staged `ITEMNAME`/`ITEMWON` templates
@@ -1555,11 +1579,12 @@ fn paint_shop_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement], goods: 
         if let Some(rect) = shop_template_rect(placements, SHOP_ITEMWON_FIRST_CODE + slot_u32) {
             paint_text_into_rect(frame, rect, &good.price.to_string(), CP949_INK);
         }
-        if let (Some(gem_price), Some(rect)) = (
-            good.gem_price,
-            shop_template_rect(placements, SHOP_ITEMGEM_FIRST_CODE + slot_u32),
-        ) {
-            paint_text_into_rect(frame, rect, &gem_price.to_string(), CP949_INK);
+        if let Some(rect) = shop_template_rect(placements, SHOP_ITEMGEM_FIRST_CODE + slot_u32) {
+            let word = good.gem_price.map_or_else(
+                || SHOP_GEM_UNPRICED_WORD.to_owned(),
+                |price| price.to_string(),
+            );
+            paint_text_into_rect(frame, rect, &word, CP949_INK);
         }
     }
 }
@@ -3712,6 +3737,71 @@ mod paint_tests {
     }
 
     #[test]
+    fn shop_gem_cell_reads_the_exe_zero_when_no_price_word_is_pinned() {
+        // D3 red proof: the exe entry frame `05b24e64…cb00` inks
+        // `0` in every visible ITEMGEM cell (won `4500` beside it).
+        // The table→`+0x18` map is still OPEN, so the staged catalog
+        // row carries `gem_price: None`; the cell must still read
+        // the exe's observed zero at the +70 child origin.
+        let placements = vec![shop_placement(SHOP_ITEMGEM_FIRST_CODE, 300, 239, 38, 13)];
+        let goods = vec![ShopGood {
+            item_id: 1,
+            name: "Hair".to_owned(),
+            price: 4500,
+            gem_price: None,
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &goods,
+                wallet: &WalletState::default(),
+                cart: &[],
+                cart_page: 0,
+                cart_pages: 1,
+            },
+        );
+        let mut with_word = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut with_word,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &[ShopGood {
+                    gem_price: Some(0),
+                    ..goods[0].clone()
+                }],
+                wallet: &WalletState::default(),
+                cart: &[],
+                cart_page: 0,
+                cart_pages: 1,
+            },
+        );
+        assert_eq!(
+            buf, with_word,
+            "the fallback word has the exe's observed `0` glyph shape"
+        );
+        assert!(
+            has_ink_in(&buf, 800, 300, 239, 38, 13),
+            "the observed gem zero inks the staged child rect"
+        );
+        assert!(
+            !has_ink_in(&buf, 800, 300, 169, 38, 13),
+            "the raw BND row stays dark (the figure paints there)"
+        );
+    }
+
+    #[test]
     fn shop_gem_price_cell_inks_an_explicit_pinned_word() {
         // #395 partial: the exe's second price cell has a painter, but
         // the live catalog still stages `gem_price: None` — the gifted
@@ -3733,11 +3823,14 @@ mod paint_tests {
                 h: 600,
             },
             &placements,
-            &goods,
-            &WalletState::default(),
-            &[],
-            0,
-            1,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &goods,
+                wallet: &WalletState::default(),
+                cart: &[],
+                cart_page: 0,
+                cart_pages: 1,
+            },
         );
         assert!(has_ink_in(&buf, 800, 300, 169, 38, 13), "ITEMGEM inks");
     }
@@ -3790,11 +3883,14 @@ mod paint_tests {
                 h: 600,
             },
             &placements,
-            &goods,
-            &wallet,
-            &goods[..1],
-            0,
-            1,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &goods,
+                wallet: &wallet,
+                cart: &goods[..1],
+                cart_page: 0,
+                cart_pages: 1,
+            },
         );
         let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
         assert!(lit(231, 69, 100, 12), "row name paints");
@@ -3811,15 +3907,16 @@ mod paint_tests {
         // Synthetic `STATE_SHOP` browse chrome: the preview pick
         // inks its name into the staged ITEMCOMMENT rect, the bag
         // pager inks the current page into the left digit union and
-        // the total into the right one, and the staged ITEMGEM rects
-        // stay dark (the gem-price join is OPEN).
+        // the total into the right one. The ITEMGEM cell at the raw
+        // BND row stays dark: staging moves that cell +70 px before
+        // it reaches this painter (#722 D3).
         let placements = vec![
             shop_placement(SHOP_ITEMCOMMENT_CODE, 468, 421, 163, 89),
             shop_placement(SHOP_BAG_PAGE_CUR_TENS_CODE, 317, 568, 14, 17),
             shop_placement(SHOP_BAG_PAGE_CUR_ONES_CODE, 331, 568, 14, 17),
             shop_placement(SHOP_BAG_PAGE_TOT_TENS_CODE, 357, 568, 14, 17),
             shop_placement(SHOP_BAG_PAGE_TOT_ONES_CODE, 371, 568, 14, 17),
-            shop_placement(SHOP_ITEMGEM_FIRST_CODE, 300, 169, 38, 13),
+            shop_placement(SHOP_ITEMGEM_FIRST_CODE, 300, 239, 38, 13),
             shop_placement(SHOP_ITEMNAME_FIRST_CODE, 231, 69, 100, 12),
             shop_placement(SHOP_ITEMWON_FIRST_CODE, 247, 169, 38, 13),
         ];
@@ -3843,11 +3940,14 @@ mod paint_tests {
                 h: 600,
             },
             &placements,
-            &goods,
-            &WalletState::default(),
-            &[],
-            0,
-            1,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &goods,
+                wallet: &WalletState::default(),
+                cart: &[],
+                cart_page: 0,
+                cart_pages: 1,
+            },
         );
         paint_shop_preview(
             &mut Frame {
@@ -3872,7 +3972,10 @@ mod paint_tests {
         assert!(lit(468, 421, 163, 89), "preview name paints");
         assert!(lit(317, 568, 28, 17), "bag cur page paints");
         assert!(lit(357, 568, 28, 17), "bag tot page paints");
-        assert!(!lit(300, 169, 38, 13), "ITEMGEM stays dark");
+        assert!(
+            !lit(300, 169, 38, 13),
+            "raw ITEMGEM row stays dark; staging owns the +70 origin"
+        );
     }
 
     #[test]
@@ -3905,11 +4008,14 @@ mod paint_tests {
                 h: 600,
             },
             &placements,
-            &[],
-            &wallet,
-            &cart,
-            0,
-            1,
+            ShopBoard {
+                panel: ShopPanel::ShoppingBag,
+                goods: &[],
+                wallet: &wallet,
+                cart: &cart,
+                cart_page: 0,
+                cart_pages: 1,
+            },
         );
         let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
         assert!(lit(200, 288, 95, 13), "won balance paints");

@@ -429,8 +429,66 @@ pub const SHOP_ITEMNAME_FIRST_CODE: u32 = 0x1440_002C;
 /// eight run contiguously through `+7`.
 pub const SHOP_ITEMWON_FIRST_CODE: u32 = 0x1440_0054;
 /// First row gem-price TEXT template (`IDC_TEXT_SSHOP_ITEMGEM1`);
-/// eight run contiguously through `+7` (blank: no pinned source).
+/// eight run contiguously through `+7`. No per-item source is
+/// pinned, so ticket #722 inks the exe's observed zero word.
 pub const SHOP_ITEMGEM_FIRST_CODE: u32 = 0x1440_005C;
+/// Word the exe inks in a visible ITEMGEM cell when no per-item gem
+/// price is pinned. The 7.55 entry frame `05b24e64…cb00` reads
+/// won `4500` / gem `0` on all four cards (shop A/B audit D3). The
+/// table→entry `+0x18` join stays OPEN; this is the observed word,
+/// never a derived price.
+pub const SHOP_GEM_UNPRICED_WORD: &str = "0";
+/// Exe child origin of the item-shop priced/button controls. The
+/// 7.55 entry frame (`05b24e64…cb00`, shop A/B audit D1-D3) inks
+/// ITEMWON/ITEMGEM 70 px below their raw `.bnd` rects and answers
+/// presses on ITEMBUY/ITEMGIFT/ITEMPRE 70 px below theirs. The
+/// anchored sprite art already paints at the exe position from the
+/// raw rect; only the TEXT ink and the hit rects need the offset.
+/// ITEMSHOW and ITEMNAME keep their raw origins (per-cell table).
+/// This is the single +70 px declaration: staging and hit tests
+/// both read it, so no geometry is copied at the call sites.
+pub const SHOP_CHILD_ORIGIN_Y: i32 = 70;
+
+/// Which geometry treatment one shop child needs for the exe's
+/// [`SHOP_CHILD_ORIGIN_Y`]. Text ink and art-less buttons have no
+/// decoded anchor, so their staged rect itself moves. Anchored
+/// buttons keep the raw rect (their sprite anchor already paints
+/// at the exe position) and shift only their hit rect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopChildGeometry {
+    /// Art-less ITEMWON/ITEMGEM TEXT cell: shift the staged rect.
+    TextInk,
+    /// ITEMBUY/ITEMPRE with a sprite anchor: shift the hit rect.
+    AnchoredButton,
+    /// Art-less ITEMGIFT: shift the staged rect (no anchor to move).
+    ArtlessButton,
+}
+
+/// The child-geometry rule for one shop control code, if it belongs
+/// to a priced or clickable child family.
+#[must_use]
+pub fn shop_child_geometry(code: u32) -> Option<ShopChildGeometry> {
+    let in_run = |first: u32| {
+        code.checked_sub(first)
+            .is_some_and(|slot| slot < SHOP_ITEM_ROWS as u32)
+    };
+    if [SHOP_ITEMWON_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE]
+        .iter()
+        .copied()
+        .any(in_run)
+    {
+        return Some(ShopChildGeometry::TextInk);
+    }
+    if [SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE]
+        .iter()
+        .copied()
+        .any(in_run)
+    {
+        return Some(ShopChildGeometry::AnchoredButton);
+    }
+    in_run(SHOP_ITEMGIFT_FIRST_CODE).then_some(ShopChildGeometry::ArtlessButton)
+}
+
 /// Item-list scroll (`IDC_SCROLL_SSHOP_ITEM`): pager children ride
 /// scroll-relative.
 pub const SHOP_SCROLL_CODE: u32 = 0x1402_2047;
@@ -533,6 +591,15 @@ pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
 /// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
+/// Owned-panel tab anchors and selection frame (rects only, no art;
+/// `MYBAGSELECT` uses the archive frame body like MyRoom's frame).
+pub const SHOP_MYBACK_POS_CODE: u32 = 0x1460_006D;
+pub const SHOP_MYCART_POS_CODE: u32 = 0x1460_006E;
+pub const SHOP_MYBAGSELECT_CODE: u32 = 0x1450_0052;
+/// Cart panel backdrop (`Shop_CartBack.ojs`) and the two tooltip
+/// rects (`Shop_Tooltip.ojs` at `0xB1`; `0x84` is its art-less twin).
+pub const SHOP_MYCART_BACK_CODE: u32 = 0x1450_006F;
+pub const SHOP_TOOLTIP_CODES: [u32; 2] = [0x1450_0084, 0x1450_00B1];
 /// Music-shop TOP100 board button (`0x1A20007D`, `docs/musicshop.md`):
 /// music-shop chrome only per the #181 verdict — the item shop owns no
 /// TOP100 arm, so this code never dispatches on the item side. The
@@ -557,6 +624,9 @@ pub const SHOP_CART_ROWS: usize = 5;
 /// Cart-row TEXT templates (row-local, tiled over the staged
 /// `CART_EX` slots like the lanking templates).
 pub const SHOP_CART_NUM_CODE: u32 = 0x1440_007B;
+/// Cart delete icon (`IMAGE_CART_DELETE`): its class byte differs
+/// from the three neighbouring cart-row TEXT templates.
+pub const SHOP_CART_DELETE_CODE: u32 = 0x1450_007F;
 pub const SHOP_CART_ITEMNAME_CODE: u32 = 0x1440_007D;
 pub const SHOP_CART_PRICE_CODE: u32 = 0x1440_007E;
 /// Cart page-number IMAGEs (staged absolute, `Shop_CartPageNum.ojs`):
@@ -626,6 +696,65 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
         .collect()
 }
 
+/// Lower-left panel face on the Item Shop. The A/B entry frame
+/// (`05b24e64…cb00`, audit D4) opens on MY BAG; the row-pick frame
+/// (`c84b952f…9922e`) shows SHOPPING BAG with the checked row. The
+/// row pick is the only pinned switch; no tab press is claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShopPanel {
+    /// Entry face: owned-item grid and its page readout.
+    #[default]
+    MyBag,
+    /// Face after a row pick: checked rows and checkout totals.
+    ShoppingBag,
+}
+
+/// Whether one staged shop placement paints on the current lower
+/// panel face. The MY BAG face hides the cart backdrop, cart rows,
+/// totals, and pager; the SHOPPING BAG face hides the owned cells,
+/// bag pager, and bag frame. Geometry still comes from `.bnd`
+/// placements — this only selects which staged art mounts.
+#[must_use]
+pub fn shop_panel_kept(placed: &ScenePlacement, panel: ShopPanel) -> bool {
+    let in_run = |first: u32, count: u32| {
+        placed
+            .code
+            .checked_sub(first)
+            .is_some_and(|slot| slot < count)
+    };
+    // Control-class bytes separate some neighbours: MYCART_POS
+    // (`0x146`) sits before MYCART_BACK (`0x145`), and the cart
+    // row-local templates cross from `0x144` to `0x145`. Each run
+    // below stays inside one class byte.
+    let cart = placed.code == SHOP_MYCART_POS_CODE
+        || placed.code == SHOP_MYCART_BACK_CODE
+        || in_run(SHOP_BUYITEM_CODE, 4)
+        || in_run(SHOP_CART_CHECKGEM_CODE, 2)
+        || in_run(SHOP_CART_TOGGLE_FIRST_CODE, SHOP_CART_ROWS as u32)
+        || in_run(SHOP_CART_NUM_CODE, 4)
+        || placed.code == SHOP_CART_DELETE_CODE
+        || in_run(SHOP_CART_PAGE_CUR_ONES_CODE, 4);
+    let bag = in_run(SHOP_MYBAGITEM_FIRST_CODE, SHOP_BAG_CELLS as u32)
+        || in_run(SHOP_BAG_LEFT_CODE, 2)
+        || in_run(SHOP_BAG_PAGE_CUR_TENS_CODE, 4)
+        || placed.code == SHOP_MYBAGSELECT_CODE
+        || placed.code == SHOP_MYBACK_POS_CODE;
+    match panel {
+        ShopPanel::MyBag => !cart,
+        ShopPanel::ShoppingBag => !bag,
+    }
+}
+
+/// Whether the hover tooltip paints. The entry frame (`05b24e64…`)
+/// shows the blue notice board with no white tooltip; the shelf
+/// hover frame (`hover-shelf-figure1`, same sweep) shows it while
+/// the pointer sits on a staged ITEMSHOW cell. Hover over the row
+/// button instead shows no tooltip (`hover-shelf-row1-buy`).
+#[must_use]
+pub fn shop_tooltip_kept(placed: &ScenePlacement, shelf_hovered: bool) -> bool {
+    !SHOP_TOOLTIP_CODES.contains(&placed.code) || shelf_hovered
+}
+
 /// One item-shop click the exe codes name: row toggles, the cart
 /// buy, the list/cart pagers, the bag pager, and the row preview.
 /// Category tabs stage a local selection (exe FASHION press frame);
@@ -689,8 +818,11 @@ pub fn shop_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<S
 }
 
 /// Click rect for one staged placement: scroll pager children shift
-/// by the staged scroll origin; every other control answers at its
-/// own staged rect.
+/// by the staged scroll origin, and the priced row buttons answer at
+/// the exe's child origin; every other control answers at its own
+/// staged rect. An anchored button's sprite still paints from the
+/// raw rect — its decoded anchor already carries the visible +70 px
+/// art position — so only its hit rect follows the child origin.
 fn shop_click_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Rect {
     if placed.code == SHOP_SCROLL_LEFT_CODE || placed.code == SHOP_SCROLL_RIGHT_CODE {
         if let Some(origin) = shop_scroll_origin(placements) {
@@ -701,6 +833,15 @@ fn shop_click_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Re
                 h: placed.rect.h,
             };
         }
+    }
+    let anchored_button = shop_child_geometry(placed.code)
+        == Some(ShopChildGeometry::AnchoredButton)
+        && placed.sprite.is_some();
+    if anchored_button {
+        return Rect {
+            y: placed.rect.y.saturating_add(SHOP_CHILD_ORIGIN_Y),
+            ..placed.rect
+        };
     }
     placed.rect
 }

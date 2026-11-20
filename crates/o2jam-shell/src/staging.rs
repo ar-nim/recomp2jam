@@ -24,10 +24,11 @@ use crate::screens::messenger::{
 };
 use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
-    PlanetOptionTab, SideScreen, CASH_CHARGE_DIALOG_BLOCK, CHANNEL_INFO_DIALOG_BLOCK,
-    CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK,
-    SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
-    TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
+    shop_child_geometry, PlanetOptionTab, ShopChildGeometry, SideScreen, CASH_CHARGE_DIALOG_BLOCK,
+    CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK,
+    PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK, SHOP_CHILD_ORIGIN_Y,
+    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
+    TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -771,6 +772,24 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
     )
 }
 
+/// Put the exe's child origin on the shop controls that have no
+/// sprite anchor to carry it: art-less TEXT ink and the art-less
+/// gift half. Anchored ITEMBUY/ITEMPRE placements keep the raw rect
+/// (their decoded anchor paints at the exe position) and take the
+/// same [`SHOP_CHILD_ORIGIN_Y`] at the hit-test seam. One origin,
+/// two consumers, no literal coordinates in either (owner `f38f3`).
+fn stage_shop_child_origin(art: &mut StagedArt) {
+    for placed in &mut art.placements {
+        let moves_rect = matches!(
+            shop_child_geometry(placed.code),
+            Some(ShopChildGeometry::TextInk | ShopChildGeometry::ArtlessButton)
+        );
+        if moves_rect {
+            placed.rect.y = placed.rect.y.saturating_add(SHOP_CHILD_ORIGIN_Y);
+        }
+    }
+}
+
 /// Native ordinals of the three `Dialog_ChargeCash.bnd` rects, paired
 /// by `(code & 0xFFF) - 1` (exe pairing, docs/file-formats/opi.md).
 const CASH_CHARGE_FRAME_ORDINAL: u32 = 1;
@@ -1025,6 +1044,9 @@ fn stage_bound_row_hiding(
         placements: bind_scene_rects(&resolved.block, &resolved.bind),
         figures: HashMap::new(),
     };
+    if row.state == State::Shop {
+        stage_shop_child_origin(&mut art);
+    }
     let visible_names: Vec<String> = staged_names(&resolved.names, row.extra_sprites)
         .into_iter()
         .filter(|name| !hidden.contains(&name.as_str()))

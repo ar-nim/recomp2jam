@@ -201,12 +201,69 @@ staged 7.55 board path (`paint_shop_scene`) never carries it. Guard:
 `shop_no_archive_fallback_carries_the_offline_stand_in_marker`
 (marker ink present on the fallback card, absent on staged art).
 
+## Ticket #722 (A/B audit child origin, 2026-11-20)
+
+Authority: `docs/captures/shop-ab-audit.md` delta table D1-D11 and its
+per-cell table. Entry frame `05b24e64…cb00`; row-pick frame
+`c84b952f…9922e`; shelf-hover frame `hover-shelf-figure1` (same
+qualified pack). Version pin for every exe row stays the 7.55 exe
+SHA-256 `83a04541…72c823b`; no new exe bytes were analyzed here.
+
+The +70 px child origin has one declaration,
+`SHOP_CHILD_ORIGIN_Y` in `crates/o2jam-shell/src/screens/side.rs`.
+Two consumers read it, because the exe's rects mean two different
+things after staging:
+
+- art-less `ITEMWON`/`ITEMGEM` TEXT cells and the art-less `ITEMGIFT`
+  half move their staged rect at the staging seam
+  (`stage_shop_child_origin`); the painter and hit tests then read
+  the moved rect like every other control (owner rule `f38f3`).
+- anchored `ITEMBUY`/`ITEMPRE` keep the raw `.bnd` paint rect: their
+  decoded sprite anchor already puts the visible 담기 / 입기 art at
+  BND y + 70. `shop_click_rect` shifts only their hit rect by the
+  same constant. `ITEMSHOW`/`ITEMNAME` stay raw (audit per-cell
+  table). Shifting their paint rects as well would double-move the
+  art below the cards (checked against the archive-backed shot).
+
+D1/D2/D3 guards: `shop_stages_priced_children_at_the_exe_origin_but_shelf_art_raw`,
+`shop_row_pick_at_the_visible_button_hits_the_first_row`,
+`shop_priced_children_share_one_origin_without_double_moving_art`,
+`shop_gem_cell_reads_the_exe_zero_when_no_price_word_is_pinned`, and
+the archive-backed `live_shop_bnd_stages_the_audit_visible_row_and_price_origin`
+(install-root skip). Red proof: setting `SHOP_CHILD_ORIGIN_Y` to `0`
+fails the staging, hit, and installed-bind guards; replacing the gem
+word with `--` fails the glyph-shape guard. The row-pick pixel
+`(238,263)` reaches `ToggleRow(0)` on the installed BND; raw
+`(260,195)` answers nothing. The gem word is the observed exe `0`
+(`SHOP_GEM_UNPRICED_WORD`); the table→entry `+0x18` map stays OPEN.
+
+D4 (frame state): `ShopPanel` defaults to `MyBag` at catalog staging
+and switches to `ShoppingBag` on `ToggleRow`. `shop_panel_kept`
+selects the staged art face; the cart overlay and bag pager ink only
+on their own face. Guard `shop_entry_hides_the_cart_face_until_a_row_pick_opens_it`;
+red proof: removing the panel assignment fails it.
+
+D5 (frame state, resolved): the white `ITEMTOOLTIP`/`ITEMTOOLTIP2`
+placements hide at entry and mount while the pointer lies on a
+staged `ITEMSHOW` cell (`hovered_item_show_slot` from the shared
+pointer snapshot). Guard `shop_white_tooltip_waits_for_a_hovered_shelf_cell`;
+red proof: making `shop_tooltip_kept` always true fails it. The
+sweep's row-button hover frame shows no tooltip, so button hover
+does not arm it. Tooltip *ink* still rides the preview pick; the
+exe tooltip's description text source stays OPEN.
+
+Live status: the archive-backed staging/press guard is tier 3
+(headless install-root read of the qualified bind); paint and panel
+guards are SEAM. The paired Rust live re-run (wave 2) is still
+OPEN for D1-D11; no live paired frame hash is claimed here.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.
-2. TEXT caption and icon staging sources (GEM cell staged from
-   5028/5001 words since ticket #21; `MGASH`→`o2_cash` join OPEN —
-   rig capture at known balances still names the cell).
+2. TEXT caption and icon staging sources (row GEM cells now ink the
+   exe's observed `0` per #722; the table→entry `+0x18` map is still
+   unpinned. `MGASH`→`o2_cash` join OPEN — rig capture at known
+   balances still names the cell).
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
    checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side),
    `ITEMPRE`/`ITEMBACK` preview and clear (comment pairing

@@ -2,8 +2,8 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_goods, shop_page_count, ShopAction, ShopGood, SHOP_BAG_CELLS,
-    SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    lanking_page_window, shop_goods, shop_page_count, ShopAction, ShopGood, ShopPanel,
+    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 
 /// Item-shop goods, pages, and the checked cart behind the shop
@@ -16,6 +16,9 @@ use super::super::side::{
 /// `apply_action` only reports it, the caller queues the send.
 #[derive(Default)]
 pub(crate) struct ShopState {
+    /// Lower-left panel face (`MY BAG` on entry, `SHOPPING BAG`
+    /// after a row pick; audit D4).
+    pub(crate) panel: ShopPanel,
     /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
     /// see [`Self::set_shop_catalog`]).
     pub(crate) shop_goods: Vec<ShopGood>,
@@ -50,6 +53,7 @@ impl ShopState {
     /// the item page, the preview pick, and the owned-panel page;
     /// the cart keeps its checks.
     pub(crate) fn set_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
+        self.panel = ShopPanel::MyBag;
         self.shop_goods = shop_goods(table);
         self.shop_page = 0;
         self.preview = None;
@@ -244,6 +248,7 @@ impl ShopState {
         match action {
             ShopAction::ToggleRow(slot) => {
                 self.toggle_row(slot);
+                self.panel = ShopPanel::ShoppingBag;
                 false
             }
             ShopAction::TryOn(slot) => {
