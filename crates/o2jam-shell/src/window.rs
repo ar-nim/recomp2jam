@@ -985,30 +985,25 @@ mod tests {
     }
 
     #[test]
-    fn mouse_input_arm_advances_avi_and_arms_the_planet_press_split() {
+    fn mouse_input_arm_arms_the_planet_press_split_after_the_pinned_key() {
         // A real ScreenGame behind the seam, two scenes deep:
         //
-        // 1. Avi press: the non-planet down-dispatch advances the
-        //    flow to the planet board — the edge reached ScreenGame
-        //    through the MouseInput arm.
+        // 1. The pinned ESC key leaves Avi (#385); a canvas click no
+        //    longer advances the flow through the MouseInput arm.
         // 2. Planet press at the pinned option-gear rect (#115 split):
         //    the down edge only ARMS the press (no modal yet), the up
         //    edge fires it (the Options dialog opens).
         let (mut handler, game, routed) = seamed_handler();
         handler.surface_size = Some((800, 600));
-        handler.track_motion(400.0, 300.0);
-        handler.route_mouse_input(true);
+        handler.route_key(KeyCode::Escape, true);
+        handler.route_key(KeyCode::Escape, false);
         handler.deliver_snapshot();
         assert_eq!(
             handler.shell.game.screen_name(),
             "planet",
-            "the avi press advanced the flow through the seam"
+            "the pinned key advanced the flow through the seam"
         );
-        assert_eq!(
-            routed.borrow()[..],
-            [("down", 400, 300)],
-            "exactly one down edge crossed the seam"
-        );
+        assert!(routed.borrow().is_empty(), "no click crossed the seam");
         handler.track_motion(729.0, 580.0);
         handler.route_mouse_input(true);
         handler.deliver_snapshot();
@@ -1026,7 +1021,7 @@ mod tests {
         );
         assert_eq!(
             routed.borrow()[..],
-            [("down", 400, 300), ("down", 729, 580), ("up", 729, 580)],
+            [("down", 729, 580), ("up", 729, 580)],
             "both planet edges crossed the seam"
         );
     }
@@ -1041,8 +1036,8 @@ mod tests {
         // once and never replays.
         let (mut handler, game, routed) = seamed_handler();
         handler.surface_size = Some((800, 600));
-        handler.track_motion(400.0, 300.0);
-        handler.route_mouse_input(true);
+        handler.route_key(KeyCode::Escape, true);
+        handler.route_key(KeyCode::Escape, false);
         handler.deliver_snapshot();
         assert_eq!(handler.shell.game.screen_name(), "planet");
         // The whole tap lands inside one frame: no freeze between
@@ -1057,10 +1052,7 @@ mod tests {
             Some(super::super::screens::game::PlanetModal::Options),
             "the intra-frame tap fires exactly once"
         );
-        assert_eq!(
-            routed.borrow()[..],
-            [("down", 400, 300), ("down", 729, 580), ("up", 729, 580),]
-        );
+        assert_eq!(routed.borrow()[..], [("down", 729, 580), ("up", 729, 580)]);
         let replay = handler.deliver_snapshot();
         assert!(replay.edges().is_empty(), "the queue drained");
         assert_eq!(
@@ -1077,8 +1069,8 @@ mod tests {
         // clicks ride the drained queue, never the polled state.
         let (mut handler, game, _) = seamed_handler();
         handler.surface_size = Some((800, 600));
-        handler.track_motion(400.0, 300.0);
-        handler.route_mouse_input(true);
+        handler.route_key(KeyCode::Escape, true);
+        handler.route_key(KeyCode::Escape, false);
         handler.deliver_snapshot();
         assert_eq!(handler.shell.game.screen_name(), "planet");
         handler.track_motion(729.0, 580.0);
