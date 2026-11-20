@@ -635,6 +635,15 @@ pub const SHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1450_0081;
 pub const SHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1450_0080;
 pub const SHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1450_0083;
 pub const SHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1450_0082;
+/// Cart-add sheet block (`DIALOG_SHOPPINGBAG_ADD`, 7 `Dialog_Shopping_Add.bnd`
+/// rects, spec #316 story 11). The block stages geometry only: no
+/// qualified cart-add frame pins a live mount or a wire opcode.
+pub const SHOPPINGBAG_ADD_DIALOG_BLOCK: &str = "DIALOG_SHOPPINGBAG_ADD";
+/// Why the cart-add sheet stays parked: the exe's row pick is pinned
+/// only to the SHOPPING BAG panel face (audit D4), not to this sheet;
+/// 5001 has no verdict field and 5000 carries no item id, so a sheet
+/// mount or a per-item add frame would be invented.
+pub const SHOPPINGBAG_ADD_NEXT_STEP: &str = "Capture a qualified exe ITEMBUY press with Dialog_Shopping_Add.bnd mounted, or a 5000/5001 body naming the added item, before mounting the sheet or sending an add opcode; the pinned row-pick panel switch stays local";
 /// Next evidence step for a staged shop gift control press: the gift
 /// send has no TCP shape (web-only `gift_input.aspx`, `docs/gifts.md`),
 /// `Dialog_GiftView.bnd` stages nowhere (census bucket E,
@@ -4459,20 +4468,6 @@ pub fn payment_view_caption(label: &PaymentLabel) -> String {
     format!("{} {}", label.block, label.url_path())
 }
 
-/// Plain stall label painted over the Payment side screen: the exe
-/// opens web billing views here (lifecycle §12) and this client
-/// queues no web call, so the screen names the stall instead of
-/// staying a silent dead view.
-pub const PAYMENT_UNWIRED_NOTICE: &str = "BILLING UNWIRED";
-
-/// Notice text shown on the Payment side screen: the stall label
-/// plus both lifecycle-verified billing pages, so neither view
-/// reads as a working shop.
-#[must_use]
-pub fn payment_side_notice() -> String {
-    format!("{PAYMENT_UNWIRED_NOTICE} {PAYMENT_PAGE} {GIFT_PAGE}")
-}
-
 /// Next evidence step for the dimmed Planet TUTORIAL plate, the only
 /// tutorial entry arm still OPEN. Static pin `S-PLAY-B3`
 /// (`docs/captures/static-play/pins.md`) shows the plate is disabled at
@@ -7506,17 +7501,6 @@ mod side_tests {
             Some(ShopAction::OpenCashCharge)
         );
         assert_eq!(shop_action_at(std::slice::from_ref(&plate), 92, 339), None);
-    }
-
-    #[test]
-    fn payment_side_states_the_unwired_billing_notice() {
-        // The billing views complete no web call, so the side
-        // screen must name the stall instead of painting art
-        // alone: the notice cites both lifecycle-verified pages.
-        let notice = payment_side_notice();
-        assert!(notice.contains(PAYMENT_UNWIRED_NOTICE), "{notice}");
-        assert!(notice.contains(PAYMENT_PAGE), "{notice}");
-        assert!(notice.contains(GIFT_PAGE), "{notice}");
     }
 
     #[test]

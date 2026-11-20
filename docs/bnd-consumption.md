@@ -83,7 +83,7 @@ a live path, so each lands in A. Nothing is tests-only.
 | Dialog_Question2.bnd | E | none — §Gaps | exe instantiates a Yes/No dialog app-wide (`docs/cxo2-reference.md:38`); our Rust never stages this sheet |
 | Dialog_SelectAlbum.bnd | C | `docs/bnd-semantics.md:60-75` | no Rust reference; no `BOUND` mounts it |
 | Dialog_SelectMusic.bnd | A | `staging.rs:356` (`Dialog::SelectMusic` row) + `live_art.rs:168` (`stage_select_dialog_art`) | staged over Waiting seats live |
-| Dialog_Shopping_Add.bnd | E | none — §Gaps | — |
+| Dialog_Shopping_Add.bnd | E (parked geometry) | `staging.rs` (`stage_shopping_bag_add_sheet`) + `live_art.rs` (`stage_shopping_bag_add_parked`) | Spec #316 story 11: 7 parent-relative rects staged at boot into a hidden slot; audit D4 pins the row pick to the SHOPPING BAG panel face but no exe mount or add opcode, so no painter or wire consumes the sheet (`SHOPPINGBAG_ADD_NEXT_STEP`) |
 | Dialog_SkillInfo.bnd | E | none — §Gaps | — |
 | Dialog_Top100_Buy.bnd | C | `docs/bnd-semantics.md:60-75` | no Rust reference; no `BOUND` mounts it |
 | Dialog_UserInfo.bnd | C | `docs/bnd-semantics.md:60-75` | no Rust reference; no `BOUND` mounts it |

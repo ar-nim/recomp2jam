@@ -1330,6 +1330,84 @@ fn cash_charge_close_press_hits_the_b8_sprite_anchor() {
     assert!(!cash_charge_close_hit(&art.dialog, 590, 4));
 }
 
+/// Spec #316 story 10: the billing and gift web views stage their own
+/// bound rects (9 and 12), and the Cash Charge chrome stages its three
+/// parent-relative rects. The embedded pages stay blank by owner pin,
+/// so no figure is claimed for the web client. Install data is
+/// local-only: CI skips cleanly.
+#[test]
+fn billing_and_gift_web_sheets_stage_only_their_bound_chrome() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_payment_sheets / stage_cash_charge_sheet ->
+    // staging::stage_state / stage_cash_charge -> resolve_bound_row ->
+    // o2jam_file::parse_bnd (this guard stages the same rows).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let ctx = StageContext::default();
+    for (state, expected) in [(State::Payment, 9), (State::Payment2, 12)] {
+        let report = stage_state(&interface, state, ctx);
+        assert!(report.misses.is_empty(), "{state:?} row must resolve");
+        let art = report.art.expect("billing sheet stages");
+        assert_eq!(art.placements.len(), expected, "{state:?} rect count");
+    }
+    let charge = stage_cash_charge(&interface, ctx);
+    assert_eq!(charge.dialog.placements.len(), 3, "ChargeCash rect count");
+    let web = charge
+        .dialog
+        .placements
+        .iter()
+        .find(|placed| placed.code == CASH_CHARGE_WEB_CODE)
+        .expect("ChargeCash web client staged");
+    assert!(
+        web.sprite.is_none()
+            || !charge
+                .dialog
+                .figures
+                .contains_key(web.sprite.as_deref().unwrap_or("")),
+        "the web client holds no page figure"
+    );
+}
+
+/// Spec #316 story 11: the cart-add sheet stages its seven bound rects
+/// at the parsed parent origin. The row pick stays on the SHOPPING BAG
+/// panel face (audit D4); this is geometry only, never a mount.
+/// Install data is local-only: CI skips cleanly.
+#[test]
+fn shopping_bag_add_sheet_stages_seven_parent_relative_rects() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_shopping_bag_add_parked -> staging::stage_shopping_bag_add_sheet
+    // -> stage_parked_sheet -> o2jam_file::parse_bnd (same block here).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let report = stage_shopping_bag_add_sheet(&interface, StageContext::default());
+    assert!(report.misses.is_empty(), "cart-add block must resolve");
+    let art = report.art.expect("cart-add sheet stages");
+    assert_eq!(
+        art.placements.len(),
+        7,
+        "Dialog_Shopping_Add.bnd rect count"
+    );
+    let frame = art
+        .placements
+        .iter()
+        .find(|placed| placed.sprite.as_deref() == Some("Dialog_Shopping_Add.ojs"))
+        .expect("cart-add frame staged");
+    assert!(
+        art.placements
+            .iter()
+            .any(|placed| placed.rect.x > frame.rect.x && placed.rect.y > frame.rect.y),
+        "children stage at the parsed frame origin"
+    );
+}
+
 /// Spec #315 story 12: the six `DIALOG_MESSENGER_*` blocks stage at
 /// their parsed `.bnd` rects (77/6/7/13/6/5). The B8 pack never mounts
 /// these sheets, so this guard pins geometry only — never a live mount.

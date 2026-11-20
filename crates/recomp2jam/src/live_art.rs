@@ -26,8 +26,8 @@ use o2jam_shell::screens::paint::{
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
     read_install_archives, stage_byname_sheet, stage_cash_charge, stage_dialog,
-    stage_messenger_sheet, stage_room_hover_overlay, stage_state, Dialog, StageContext,
-    StagingArchive, State, BYNAME_TABLE, MESSENGER_SHEETS,
+    stage_messenger_sheet, stage_room_hover_overlay, stage_shopping_bag_add_sheet, stage_state,
+    Dialog, StageContext, StagingArchive, State, BYNAME_TABLE, MESSENGER_SHEETS,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -88,6 +88,20 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_payment_sheets(game, archive);
     stage_cash_charge_sheet(game, archive);
     stage_messenger_sheets(game, archive);
+    stage_shopping_bag_add_parked(game, archive);
+}
+
+/// Park the cart-add sheet's parsed rects beside the live shop. The
+/// row pick is pinned to the SHOPPING BAG panel face, not to this
+/// sheet, so nothing paints it and no add opcode is sent (#685).
+fn stage_shopping_bag_add_parked(game: &mut ScreenGame, archive: &[u8]) {
+    let Some(art) = stage_shopping_bag_add_sheet(archive, StageContext::default()).art else {
+        return;
+    };
+    game.load_shopping_bag_add_sheet(SceneArt {
+        placements: art.placements,
+        figures: art.figures,
+    });
 }
 
 /// Park all six Messenger sheets beside the live scenes: each block

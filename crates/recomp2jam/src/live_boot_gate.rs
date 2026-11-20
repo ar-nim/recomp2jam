@@ -299,6 +299,14 @@ mod live_boot_gate_tests {
             game.payment_art_staged(),
             "live boot stages the payment sheets"
         );
+        // Spec #316 story 11: stage_live_scenes also calls
+        // stage_shopping_bag_add_parked -> staging::stage_shopping_bag_add_sheet
+        // -> ScreenGame::load_shopping_bag_add_sheet. The sheet parks its
+        // seven bound rects; the row-pick panel switch stays local.
+        assert!(
+            game.shopping_bag_add_art_staged(),
+            "live boot parks the cart-add sheet rects"
+        );
         // Live caller chain: main.rs::run_play -> setup_online ->
         // connect::connect_and_login_with_transport ->
         // assemble_online_session -> session::OnlineSession::stage_live_art
