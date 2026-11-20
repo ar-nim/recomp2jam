@@ -2657,6 +2657,38 @@ pub(crate) fn paint_dialog_frame_record(
     );
 }
 
+/// Repaint one record on a parent-relative staged sheet.
+///
+/// `stage_at_parent_origin` has already moved the `.bnd` child to a canvas
+/// rect, so a zero-anchor bound body paints at that rect. A nonzero record
+/// anchor stays local to the sheet frame and still needs the parsed frame
+/// origin. The two cases keep a staged child from being offset twice.
+pub fn paint_messenger_frame_record(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    code: u32,
+    record: usize,
+) {
+    let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let Some(sprite) = placed.sprite.as_deref() else {
+        return;
+    };
+    let Some(figure) = art.figures.get(sprite) else {
+        return;
+    };
+    let Some(layer) = figure.layer(record) else {
+        return;
+    };
+    let origin = if layer.dx == 0 && layer.dy == 0 {
+        (0, 0)
+    } else {
+        dialog_origin(&art.placements)
+    };
+    paint_dialog_layer(frame, placed, figure, origin, record);
+}
+
 /// Archive-less fallback for the one-OK information sheet: the
 /// `Dialog_Information.bnd` back origin (241,206) plus its OK rect
 /// (102,150,117,26), the geometry the exe paints and the qualified

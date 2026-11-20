@@ -1537,6 +1537,53 @@ fn messenger_sheet_children_stage_at_the_parsed_parent_origin() {
     }
 }
 
+/// Spec #315 M20: all six parked sheets carry control frame records,
+/// but no exe hover/press pair pins their states. The marker stays OPEN
+/// until a qualified mount capture names it (never invented from art).
+#[test]
+fn messenger_frame_states_stay_open_until_a_qualified_mount_pack() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_interface_scenes -> stage_messenger_sheets ->
+    // staging::stage_messenger_sheet -> resolve_bound_row -> parse_bnd.
+    // No sheet mounts (`N-MOUNT`), so the state seam is the whole claim;
+    // the staged art still comes from that live chain. Archives absent ->
+    // skip cleanly (CI has no game data).
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    for sheet in MESSENGER_SHEETS {
+        let art = stage_messenger_sheet(&interface, sheet, StageContext::default())
+            .art
+            .unwrap_or_else(|| panic!("{} did not stage", sheet.block_name()));
+        let record_bearing_controls = art
+            .placements
+            .iter()
+            .filter(|placed| {
+                placed.code != 0
+                    && placed.sprite.as_deref().is_some_and(|sprite| {
+                        art.figures
+                            .get(sprite)
+                            .is_some_and(|figure| figure.len() >= 2)
+                    })
+            })
+            .count();
+        assert!(
+            record_bearing_controls > 0,
+            "{} carries control frame records",
+            sheet.block_name()
+        );
+        assert_eq!(
+            crate::screens::game::messenger_frame::messenger_frame_exe_pin(sheet),
+            None,
+            "{} frame states stay OPEN until a mount pack",
+            sheet.block_name()
+        );
+    }
+}
+
 #[test]
 fn install_loader_reads_archives_from_given_root() {
     let root = test_scratch_root("reads");

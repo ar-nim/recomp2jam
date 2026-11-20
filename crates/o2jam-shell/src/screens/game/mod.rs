@@ -5,6 +5,7 @@ mod channel;
 mod chat;
 mod dialog_frame;
 mod lanking;
+pub mod messenger_frame;
 mod musicshop;
 mod options;
 mod options_key_labels;
@@ -16439,6 +16440,112 @@ mod game_tests {
             "release returns to hover"
         );
         assert!(!near_xrgb(pixel(&mut game), cover));
+    }
+
+    #[test]
+    fn messenger_hover_repaints_the_parent_relative_staged_record() {
+        // Spec #315 M20. seam: no exe mount pin exists for a Messenger
+        // sheet (`N-MOUNT`), so no boot chain can reach this painter yet.
+        // The guard composes the new state selector with the Messenger
+        // record painter; it pins that a parent-relative staged child is
+        // repainted once at its parsed canvas rect, never twice.
+        use super::messenger_frame::{MessengerFrame, MessengerFrameState};
+        use crate::staging::MessengerSheet;
+        let code = crate::screens::messenger::POPUP_MENU_CODES[0];
+        let cover_code = 0xDEAD_BEEF;
+        let child_rect = Rect {
+            x: 101,
+            y: 55,
+            w: 10,
+            h: 10,
+        };
+        let placement = |id: &str, code, sprite: Option<&str>, rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: sprite.map(str::to_owned),
+            rect,
+        };
+        let figure = |words: &[u16], dx: i32, dy: i32| {
+            let mut figure = AvatarFigure::default();
+            for &word in words {
+                figure.push_layer(FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(
+                        &word.to_le_bytes().repeat(10 * 10),
+                        10,
+                        10,
+                    )
+                    .expect("messenger test frame"),
+                    dx,
+                    dy,
+                    colorkey: 0xFFFF,
+                });
+            }
+            figure
+        };
+        let art = SceneArt {
+            placements: vec![
+                placement(
+                    "sheet",
+                    0,
+                    Some("Dialog_Messenger_PopUpMenu.ojs"),
+                    Rect {
+                        x: 100,
+                        y: 50,
+                        w: 40,
+                        h: 40,
+                    },
+                ),
+                placement("button", code, Some("popup.ojs"), child_rect),
+                placement("cover", cover_code, Some("cover.ojs"), child_rect),
+            ],
+            figures: HashMap::from([
+                ("popup.ojs".to_owned(), figure(&[0x001F, 0x7C00], 1, 5)),
+                ("cover.ojs".to_owned(), figure(&[0x03E0], 0, 0)),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        let mut canvas = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        crate::screens::paint::paint_messenger_frame_record(&mut canvas, &art, cover_code, 0);
+        let pixel = |canvas: &Frame<'_>| canvas.buf[55 * 800 + 101];
+        let cover = pack_xrgb(0, 255, 0);
+        assert!(near_xrgb(pixel(&canvas), cover), "cover paints over rest");
+
+        let state = MessengerFrameState::default();
+        let hovered = state.frame_for(MessengerSheet::PopUpMenu, Some(code), code);
+        assert_eq!(hovered, MessengerFrame::Hover);
+        let record = hovered
+            .record(&art.figures["popup.ojs"])
+            .expect("hover record exists");
+        assert_eq!(record, 0);
+        crate::screens::paint::paint_messenger_frame_record(&mut canvas, &art, code, record);
+        assert!(
+            near_xrgb(pixel(&canvas), pack_xrgb(0, 0, 255)),
+            "hover repaints record 0 at the staged child rect"
+        );
+
+        let mut pressed = MessengerFrameState::default();
+        pressed.arm_press(MessengerSheet::PopUpMenu, code);
+        let active = pressed.frame_for(MessengerSheet::PopUpMenu, Some(code), code);
+        assert_eq!(active, MessengerFrame::Active);
+        let record = active
+            .record(&art.figures["popup.ojs"])
+            .expect("active record exists");
+        assert_eq!(record, 1);
+        crate::screens::paint::paint_messenger_frame_record(&mut canvas, &art, code, record);
+        assert!(
+            near_xrgb(pixel(&canvas), pack_xrgb(255, 0, 0)),
+            "active repaints record 1 at the staged child rect"
+        );
+        assert_eq!(
+            canvas.buf[110 * 800 + 201],
+            0,
+            "no second repaint lands at an origin-offset rect"
+        );
     }
 
     #[test]
