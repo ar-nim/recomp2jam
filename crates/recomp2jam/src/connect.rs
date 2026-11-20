@@ -6,7 +6,7 @@
 //! the launcher (`OTwo.exe … |test|??|addr|port` argv); without one,
 //! they default to zero and the server decides.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_score};
 use anyhow::{bail, Context, Result};
@@ -616,9 +616,33 @@ fn local_ipv4(gateway: &GatewayConnection) -> Result<std::net::SocketAddrV4> {
     }
 }
 
-fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Result<u32> {
-    let local = local_ipv4(gateway)?;
-    let request = AuthorizeRequest::new(
+/// Rig-only override for the client id in the 1000 frame (#726).
+///
+/// The 7.55 exe sends a fixed client id; Memoryer does not use it to
+/// deduplicate sessions (it matches the token). Rig boots may still
+/// want one distinct logged identity per uid, so `play-local.sh`
+/// exports this variable only in its multi-client mode.
+const RIG_CLIENT_ID_ENV: &str = "O2JAM_CLIENT_ID";
+
+/// Choose the wire client id: explicit rig override, else the exe's
+/// 7.55 literal. An empty override is the same as no override.
+fn resolve_client_id(client_id_override: Option<&str>) -> String {
+    client_id_override
+        .filter(|client_id| !client_id.is_empty())
+        .unwrap_or(o2jam_net::MEMORYER_CLIENT_ID)
+        .to_owned()
+}
+
+/// Build the 1000 request with the chosen client id. The caller chain
+/// is `online` -> `setup_online` -> `connect_and_login` -> `authorize`;
+/// keeping the choice here lets the wire encoder be tested without a
+/// gateway or a process-global environment change.
+fn authorize_request_with_client_id(
+    options: &ConnectOptions,
+    local: SocketAddrV4,
+    client_id_override: Option<&str>,
+) -> AuthorizeRequest {
+    let mut request = AuthorizeRequest::new(
         options.relay_key1,
         options.relay_key2,
         local,
@@ -627,6 +651,14 @@ fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Resul
         options.token.clone(),
         options.gender,
     );
+    request.client_id = resolve_client_id(client_id_override);
+    request
+}
+
+fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Result<u32> {
+    let local = local_ipv4(gateway)?;
+    let client_id_override = std::env::var(RIG_CLIENT_ID_ENV).ok();
+    let request = authorize_request_with_client_id(options, local, client_id_override.as_deref());
     let frame = gateway.exchange(
         Request::Authorize.id(),
         &request.encode_body(),
@@ -840,7 +872,7 @@ fn login_channel(
 #[cfg(test)]
 mod connect_flow_tests {
     use std::io::{Read, Write};
-    use std::net::TcpStream;
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 
     use o2jam_net::{
         frame::decode_frame, AuthResponse, ChannelList, ChannelLoginResponse, Frame, HEADER_LEN,
@@ -1269,6 +1301,57 @@ mod connect_flow_tests {
         let message = format!("{:?}", outcome.unwrap_err());
         assert!(message.contains("authorize rejected"), "{message}");
         assert!(message.contains("InvalidLogin"), "{message}");
+    }
+
+    /// Caller chain: scripts/play-local.sh exports `O2JAM_CLIENT_ID`,
+    /// `recomp2jam online` -> `setup_online` -> `connect_and_login` ->
+    /// `authorize` -> `authorize_request_with_client_id` ->
+    /// `AuthorizeRequest::encode_body` sends the 1000 frame. These guards
+    /// pin the pure resolver and wire encoder seam: `std::env::set_var` is
+    /// process-global (unsafe in edition 2024) and would race other tests,
+    /// while the two-socket live probe pins the environment read itself.
+    fn loopback() -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 15010)
+    }
+
+    #[test]
+    fn owner_authorize_frame_keeps_the_exe_client_id() {
+        let options = test_options(15010, None, false, None);
+        let request = authorize_request_with_client_id(&options, loopback(), None);
+        let decoded = AuthorizeRequest::decode_body(&request.encode_body()).unwrap();
+        assert_eq!(decoded.client_id, o2jam_net::MEMORYER_CLIENT_ID);
+    }
+
+    #[test]
+    fn two_rig_uids_send_distinct_client_ids_in_authorize_frames() {
+        let first = authorize_request_with_client_id(
+            &test_options(15010, None, false, None),
+            loopback(),
+            Some("726PNA-B1YW-28ZG9M-I5SC-Q0OPM6-UID1"),
+        );
+        let second = authorize_request_with_client_id(
+            &test_options(15010, None, false, None),
+            loopback(),
+            Some("726PNA-B1YW-28ZG9M-I5SC-Q0OPM6-UID2"),
+        );
+        let first_id = AuthorizeRequest::decode_body(&first.encode_body())
+            .unwrap()
+            .client_id;
+        let second_id = AuthorizeRequest::decode_body(&second.encode_body())
+            .unwrap()
+            .client_id;
+        assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn empty_client_id_override_keeps_the_exe_literal() {
+        let request = authorize_request_with_client_id(
+            &test_options(15010, None, false, None),
+            loopback(),
+            Some(""),
+        );
+        let decoded = AuthorizeRequest::decode_body(&request.encode_body()).unwrap();
+        assert_eq!(decoded.client_id, o2jam_net::MEMORYER_CLIENT_ID);
     }
 }
 /// Avatar IO split: [`read_avatar_archive`] owns the filesystem,

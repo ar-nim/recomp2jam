@@ -25,6 +25,8 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # shellcheck source=lib/rig-client-display.sh
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-display.sh"
+# shellcheck source=lib/rig-client-identity.sh
+. "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-identity.sh"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEMORYER_DIR="${MEMORYER_DIR:-$HOME/memoryer-local}"
@@ -42,6 +44,11 @@ done
 
 RIG_INSTALL_ROOT="${RIG_INSTALL_ROOT:-$REPO_ROOT/install-root/O2Jam}"
 export RIG_INSTALL_ROOT
+
+# Client identity (#726): owner boots keep the exe's fixed client id.
+# Multi-client rig boots set RIG_DISTINCT_CLIENT_IDS=1 so --user-id N
+# reaches the 1000 frame as a distinct O2JAM_CLIENT_ID.
+rig_export_client_identity "$USER_ID"
 
 # 0. Display pin (#719): refuse the owner's :0 / Wayland seat before build,
 # token lookup, or spawn. A rig boot must name its :NNN Xvfb display.
