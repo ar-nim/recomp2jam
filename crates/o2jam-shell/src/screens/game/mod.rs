@@ -664,6 +664,11 @@ pub struct ScreenGame {
     /// role packet feeds this word on the live boot yet, so the default
     /// keeps the plain eight-card backdrop and hides the select overlay.
     waiting_member_role: MemberRole,
+    /// Announced room master from a 3007 leave event (`docs/relay.md`
+    /// section 10: the sibling handler compares the local member id to
+    /// the announced master id for its `+0x30` flag). `None` keeps the
+    /// creator-seat rule until the server names another master.
+    announced_room_master_id: Option<u8>,
     /// Cached copy of the last staged song-select dialog art so the
     /// MUSELECT open trigger can reopen it after an OK close (#266).
     select_music_art_cache: Option<SceneArt>,
@@ -1030,6 +1035,7 @@ impl ScreenGame {
             result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
+            announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
             select_mode: SelectMusicMode::SongSelect,
@@ -1666,6 +1672,7 @@ impl ScreenGame {
             self.arena_stage = stage;
         }
         self.waiting = Some(room);
+        self.announced_room_master_id = None;
         self.chat.clear_waiting();
         // A new room means new seats: drop the old per-seat figures,
         // then peers wear their wire equipment as soon as the snapshot
@@ -1735,6 +1742,24 @@ impl ScreenGame {
         room.clear_member(member_id);
         if known_seat {
             self.restage_waiting_figures();
+        }
+        self
+    }
+
+    /// Promote the seat named by a 3007 leave event. The exe marks the
+    /// announced master's slot with `+0x30` and clears the others (files
+    /// `0x15d888`-`0x15d8d3`); that flag selects START/READY and paints
+    /// the seat's master emblem. The local seat id never changes — the
+    /// announced id is the second source of the role test.
+    pub fn promote_waiting_master(&mut self, member_id: u8) -> &mut Self {
+        self.announced_room_master_id = Some(member_id);
+        let Some(room) = self.waiting.as_mut() else {
+            return self;
+        };
+        for slot in &mut room.slots {
+            if let Some(member) = slot.member.as_mut() {
+                member.master = slot.index == member_id;
+            }
         }
         self
     }
@@ -2566,7 +2591,7 @@ impl ScreenGame {
     pub fn is_room_master(&self) -> bool {
         self.waiting
             .as_ref()
-            .is_some_and(|room| room.member_id == 0)
+            .is_some_and(|room| room.member_id == self.announced_room_master_id.unwrap_or(0))
     }
 
     /// Every occupied peer seat ready: the `START 0x16202012` click

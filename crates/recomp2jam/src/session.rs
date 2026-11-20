@@ -3325,6 +3325,7 @@ impl OnlineSession {
             "room member left"
         );
         self.game.clear_waiting_member_seat(left.member_id);
+        self.game.promote_waiting_master(left.new_master_id);
         if let Some(room) = self.joined_room.as_mut() {
             room.clear_member(left.member_id);
         }
@@ -8509,6 +8510,42 @@ pub(super) mod session_tests {
         assert_eq!(
             session.game.staged_waiting_member(1).unwrap().nickname,
             "guest"
+        );
+    }
+
+    #[test]
+    fn master_leave_promotes_the_resident_peer_to_room_master() {
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat -> apply_user_left ->
+        //   ScreenGame::promote_waiting_master -> is_room_master / seat star.
+        // Wire-only CP37 pin in the 291 story matrix: the master leaves
+        // with a peer seated; the peer gets `3007 body=0001000000000000`
+        // (departing 0, promoted 1) and no 2007. The exe compares the
+        // local member id against the announced master id (docs/relay.md
+        // section 10, files `0x15d888`-`0x15d8d3`) for its `+0x30` flag,
+        // which selects START versus READY and the seat's master emblem.
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[0, 1, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert!(!session.game.is_room_master(), "guest starts as a peer");
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(0).is_none()
+        });
+        server.join().unwrap();
+        assert!(
+            session.game.is_room_master(),
+            "promotion must arm the peer's master controls"
+        );
+        assert!(
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.master),
+            "the promoted seat must carry the master emblem"
         );
     }
 
