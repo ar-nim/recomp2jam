@@ -153,3 +153,50 @@ One native-client run with a pass-through gateway tap (`15020 -> 15010`,
 
 This is a native-drive pin only. No qualified exe frame covers the
 sequence; the exe comparison stays OPEN per #312.
+
+## #570 joined peer figure on the master seat (2026-11-20)
+
+The roster wire half is already pinned by the 3004 guards in `session.rs`
+(`master_seats_the_joining_peer_from_the_3004_broadcast`,
+`join_broadcast_raises_the_headcount_from_the_pinned_3004_member_id`),
+and the live two-client Rust capture `~/scratch/p379-live/` shows the
+peer's name on cover 1. The remaining spec-row gap was paint parity:
+the master must draw the figure in that seat, not just the status mark.
+
+Guard: `joined_peer_figure_paints_in_the_master_seat_slot` (`session.rs`).
+Live chain: `OnlineSession::paint` → `poll_waiting_chat` →
+`drain_waiting_chat` → `apply_user_joined` →
+`ScreenGame::seat_waiting_member` → `GameLoop::paint` →
+`ScreenGame::paint_at` → `paint_waiting` → `paint_waiting_seat_avatars`.
+The test stages a synthetic one-pixel figure and synthetic seat art, so
+the hidden-install-root arm is N/A; the wire-to-seat staging is guarded
+separately. RED proof: removing the `paint_waiting_seat_avatars` call
+makes the seat pixel stay unpainted; restoring it passes.
+
+No qualified exe frame pair covers the peer-figure pixels in this state;
+the exe display rule stays OPEN per #312.
+
+## #578 peer READY and chat on the master (2026-11-20)
+
+Wire pins from the bootless scripted leg:
+`~/scratch/close-wr/wire-only/peer.log` CP33 `S2C 4009 len=2 hex=0101`
+(15:51:32) and CP34 `S2C 3012 len=16
+hex=74657374657232005749524532393101` (15:51:37) — sender `tester2`,
+text `WIRE291`, seat 1. The two-client frame pair is still OPEN (boot 5
+died after CP06 on an observer timeout); these guards pin the wire
+receive half only.
+
+Guards in `session.rs`:
+`peer_ready_echo_from_cp33_opens_the_master_start_gate` — live chain
+`OnlineSession::paint` → `poll_waiting_chat` → `drain_waiting_chat` →
+`apply_ready_echo` → `ScreenGame::set_member_ready` →
+`start_gate_verdict` (`PeerNotReady` → `Startable`).
+
+`peer_chat_from_cp34_lands_as_a_master_waiting_row` — live chain
+`OnlineSession::paint` → `poll_waiting_chat` → `drain_waiting_chat` →
+`apply_waiting_user_message` → `ScreenGame::push_waiting_user_message`
+→ `paint_waiting_chat`.
+
+RED proofs: removing the `4009` arm in `apply_waiting_frame` makes the
+ready guard time out; removing the `3012` arm makes the chat guard time
+out; restoring both passes. No install-root read (synthetic gateway).
