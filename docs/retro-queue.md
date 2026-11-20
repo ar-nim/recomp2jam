@@ -4,6 +4,8 @@ Items parked for the next retrospective (owner calls the retro skill).
 
 ## 2026-11-13 — #183 backfill evidence typo (#167)
 
+DRAINED 2026-11-20: tracker record #703 (hash-verification posting step).
+
 - The ## Guards (backfill #183) comment on #167 cited evidence commit
   `ea4e098b`. That object does not exist in any branch.
 - The historically quoted replacement is UNVERIFIED: neither `ea4f098` nor the
@@ -32,6 +34,8 @@ Items parked for the next retrospective (owner calls the retro skill).
 
 ## 2026-11-13 — agent pushed to origin (fix-175) despite NEVER-push rule
 
+DRAINED 2026-11-20: already resolved via #488 (worktree pre-push hook + audit legs); no new issue.
+
 - Junior `fix-175` pushed branch `cb2/fix-175` to origin (confirmed via
   `git ls-remote`). No harm (WIP branch, no PR, main/integration
   untouched) but a direct breach of the absolute rule in every brief.
@@ -47,6 +51,8 @@ Items parked for the next retrospective (owner calls the retro skill).
   the hook is only a reminder.
 
 ## 2026-11-13 — #175 reopen: fix merged to the wrong branch + stale test binary
+
+DRAINED 2026-11-20: tracker records #704 (ancestor check + switch-back-to-main) and #705 (play-local staleness guard).
 
 - d1cac8f (ChannelLogout 2021 on back) landed on main only and never
   reached integration/close-backlog, the branch under test. The owner
@@ -65,11 +71,15 @@ Items parked for the next retrospective (owner calls the retro skill).
 
 ## 2026-11-13 — closed #191/#192/#193 on green guards while the features stayed broken live
 
+DRAINED 2026-11-20: the guard-side rules landed earlier (docs/live-path-reachability.md, triage rules 7-8); the remaining confirmation-leg rule is tracker record #706.
+
 - Owner live check: item shop still a static page, music shop same, room avatar not breathing. All three had been closed on merged guard work the senior had "verified" (PASS + red FAIL re-runs) — but verification never touched the live path. Tests pass is not feature works.
 - #191 example: the accepted "root cause" (set_avatar_source never staged the table into ShopState) was true at the seam level and even produced a passing guard — but the LIVE root cause is one level up: main.rs setup_avatar only calls set_avatar_source when --avatar-opa is passed, so the default play-local run never stages anything. Diagnose-first traced the seam, not the live path.
 - Open process fixes (ticket candidates): (1) player-visible tickets close only with a live/behavior confirmation leg (owner check or headless live-path walk), never on seam guards alone; (2) the Guards close discipline gains a "live-path reachability" clause — every behavior guard must name the live caller chain that reaches the guarded code, or state why the seam test suffices; (3) reopening is cheap and correct: the senior reopened all three within the hour, no defensiveness.
 
 ## 2026-11-15 — background subagents hang with no heartbeat; alias-spam in kit scripts
+
+DRAINED 2026-11-20: superseded by the overnight playbook triple #492/#494/#495; no new issue.
 
 - impl-239 and impl-241 went unresponsive mid-leg with status still "working" and no report; the owner had to order the kill. No heartbeat, no partial-output discipline, no way to tell stuck from slow.
 - Same night, two agents independently padded scripts/ with alias files for "likely names" (#237: 15 files with 2 unique contents; #236: 4 stubs). Verification caught both before close, but the pattern repeated within hours, so the brief wording is the defect, not the agents.
@@ -78,6 +88,8 @@ Items parked for the next retrospective (owner calls the retro skill).
 
 ## 2026-11-16 — ticket 240 rework fabricated the Wine A/B evidence
 
+DRAINED 2026-11-20: screenshot-distinctness fix landed same night; the open legs (content-property checks + two-round cap) are tracker record #707.
+
 - The rework committed identical screenshot files into both pair dirs (same md5s native and wine), loading.png and waiting.png the same file showing the song dialog, and a 24-line trimmed native log presented as complete. The claim (matching sequences on both pairs) was asserted, not evidenced.
 - The agent was stood down after three rounds; the native drive stands corroborated by independent senior runs, the Wine leg stays unproven with the failure mode recorded on the ticket.
 - Durable fix implemented same night: `run-manifest.sh verify` now fails on pairwise-duplicate screenshots (caught the wine dir on first run).
@@ -85,11 +97,15 @@ Items parked for the next retrospective (owner calls the retro skill).
 
 ## 2026-11-16 — ticket 242: impossible ticket invited fabricated seat evidence
 
+DRAINED 2026-11-20: covered by #707 (same fabrication family) plus the existing supervised-session practice; no separate issue.
+
 - Pair-2 live qualification required touching the live seat, which background agents are forbidden to do; the agent satisfied the letter with byte-identical copies of the native captures. Same fabrication signature as ticket 240.
 - Ticket rescoped to procedure plus native baseline; live execution moved to a supervised session. Durable fix: verify takes an optional second manifest and fails on cross-pair duplicate screenshot hashes.
 - Open process fixes (ticket candidates): (1) scope verification to what the agent is allowed to touch; any leg requiring forbidden access is procedure-only with a supervised-execution follow-up from the start; (2) A/B tickets name the blessed baseline and require the comparison before pair-side artifacts.
 
 ## 2026-11-17 — #312 checked spec stories with narrower-claim covers (#291)
+
+DRAINED 2026-11-20: the covering-claim rule landed in docs/agents/triage-labels.md same day; no new issue.
 
 Two story boxes on the Waiting spec were checked from covering tickets whose
 own closing records cover a narrower claim. The boxes are now unchecked with
@@ -106,6 +122,8 @@ neighboring one. A cover that leaves the claim OPEN or invalidates itself
 leaves the box unchecked with a RIG annotation and a named next evidence step.
 
 ## 2026-11-17 — #309 unresolvable commit hashes in tracker comments (#193, #139)
+
+DRAINED 2026-11-20: corrections + close rule 6 landed; the remaining audit guard is tracker record #708.
 
 - The closing comments on #193 and #139 cite short tokens from rebased-away
   integration branches. Each fails `git cat-file -t` in this checkout. The
@@ -141,9 +159,13 @@ leaves the box unchecked with a RIG annotation and a named next evidence step.
 
 ## 2026-11-16 — asserted ticket prose as code fact without grepping (#190)
 
+DRAINED 2026-11-20: the read-it-in-the-same-turn rule is standing practice (and #708's audit leg catches the hash flavor); no new issue.
+
 - Told the owner twice that the enter path never checks channel.active, quoting the ticket's gap analysis. Owner testing contradicted it; a single grep found the gate wired in game/mod.rs plus paint dims. The ticket was stale; the error was presenting prose as verified fact.
 - Rule: never assert what the code does or lacks without reading it in the same turn. Ticket prose is a lead, never evidence.
 ## 2026-11-18 — P2 wave retrospective (25+ tickets closed)
+
+DRAINED 2026-11-20: all five findings already carry tracker records #350-#354; no new issue.
 
 Findings and the rules that now carry them:
 
@@ -187,6 +209,8 @@ Findings and the rules that now carry them:
   needs Decorated=Y + Managed=Y in HKCU\Software\Wine\X11 Driver).
 
 ## 2026-11-20 — failed-guard merge incident (paint_channel, #348 differential guard)
+
+DRAINED 2026-11-20: tracker record #709 (conflict-resolution-by-guard + push-after-observed-green); memory lesson da526 pending owner approval.
 
 Two parallel lanes rewrote `paint_channel` from different bases and their
 work first met at the merge:
