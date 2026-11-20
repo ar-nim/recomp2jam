@@ -2051,6 +2051,38 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
     }
 }
 
+/// Carousel inputs the planet painter needs: the mounted banner frame
+/// and the rotation flag that selects the PLAYSTOP face (7.55 capture,
+/// `docs/hover.md` #711 pin). Grouped so the painter
+/// consumes staged view state, never the carousel object itself.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanetPromoPaint {
+    /// One-based banner frame; `0` paints no banner.
+    pub banner_index: u32,
+    /// True while the carousel rotates (stop-square face).
+    pub spinning: bool,
+}
+
+impl PlanetPromoPaint {
+    /// Board state while the carousel rotates.
+    #[must_use]
+    pub const fn spinning(banner_index: u32) -> Self {
+        Self {
+            banner_index,
+            spinning: true,
+        }
+    }
+
+    /// Board state after PLAYSTOP holds the carousel.
+    #[must_use]
+    pub const fn stopped(banner_index: u32) -> Self {
+        Self {
+            banner_index,
+            spinning: false,
+        }
+    }
+}
+
 /// Planet: staged solo-mission art with the exe-pinned emblem
 /// captions, flat card fallback. The captions ride the `TEXT`
 /// placements' `.bnd` rects (ordinals 6..10) with their
@@ -2066,16 +2098,16 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// held board control (`press`, armed on left-down over the bare
 /// board) repaints its pressed frame over that (see
 /// [`paint_planet_press`]); `None` keeps the hover/rest paint. The
-/// carousel banner (`promo_index`, 1-based — `0` paints no banner
-/// frame) repaints its selected frame over the backdrop (see
-/// [`paint_planet_promo_frame`]).
+/// carousel `promo` picks the banner frame (1-based — `0` paints no
+/// banner, [`paint_planet_promo_frame`]) and the PLAYSTOP face
+/// ([`paint_planet_playstop_face`]).
 pub fn paint_planet_scene(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     selection: Option<PlanetBand>,
     hover: Option<PlanetAction>,
     press: Option<PlanetAction>,
-    promo_index: u32,
+    promo: PlanetPromoPaint,
 ) {
     // The banner body's three frames stack in the shared rest paint
     // ([`SceneArt::paint_backdrop`] keeps the verified all-layers
@@ -2084,7 +2116,7 @@ pub fn paint_planet_scene(
     // banner placement, then lay only the selected frame over it —
     // its colorkey holes show the backdrop, never a sibling frame
     // (#170 ghosting; the exe refresh arm VA `0x48e4b0`).
-    paint_planet_board(frame, art, promo_index);
+    paint_planet_board(frame, art, promo);
     paint_planet_hover(frame, art, hover);
     paint_planet_press(frame, art, press);
     paint_planet_captions(frame, &art.placements);
@@ -2101,8 +2133,8 @@ pub fn paint_planet_scene(
 pub struct StagedPlanetBoard<'a> {
     /// Bound `State_Planet` scene art.
     pub art: &'a SceneArt,
-    /// One-based carousel frame; `0` paints no banner.
-    pub promo_index: u32,
+    /// Banner frame and PLAYSTOP face mounted by the exe's controls.
+    pub promo: PlanetPromoPaint,
 }
 
 /// Planet board beneath a scene: the exe's image control mounts ONE
@@ -2115,15 +2147,74 @@ pub struct StagedPlanetBoard<'a> {
 /// A/B measures sheet versus exe within ~1 level per channel; the old
 /// all-layers stack painted the bright button body over the sheet.
 /// Other bodies keep their verified all-layers stack.
-fn paint_planet_board(frame: &mut Frame<'_>, art: &SceneArt, promo_index: u32) {
+fn paint_planet_board(frame: &mut Frame<'_>, art: &SceneArt, promo: PlanetPromoPaint) {
     art.paint_backdrop_live(frame, Screen::Planet, |placed| {
         placed.code != PLANET_PROMO_IMAGE_CODE
+            && planet_action_for_code(placed.code)
+                != Some(PlanetAction::Promo {
+                    cell: PlanetPromo::Stop,
+                })
             && !matches!(
                 planet_action_for_code(placed.code),
                 Some(PlanetAction::Emblem { .. })
             )
     });
-    paint_planet_promo_frame(frame, art, promo_index);
+    paint_planet_promo_frame(frame, art, promo.banner_index);
+    paint_planet_playstop_face(frame, art, promo.spinning);
+}
+
+/// Raw record of `Planet_Btn_Promotion_PlayStop.ojs` painted while the
+/// carousel rotates: the stop square. Direct record-vs-capture match,
+/// 624/624 opaque px in five captures (boot rest, second click, +7 s),
+/// `docs/hover.md` 2026-11-11 method; record sha256
+/// `5c035ae665967786b177716c28e3d467147d132990f24b541fa4225f86915ed8`.
+const PLAYSTOP_SPINNING_RECORD: usize = 0;
+
+/// Raw record painted once PLAYSTOP holds the carousel: the play
+/// triangle, 624/624 opaque px after the first click and again after
+/// two 3000 ms ticks. Record sha256
+/// `812e25c0d23da5154a2f3dd2e6c10f35a57d5af69e1ca5c5c0421c713991d448`.
+const PLAYSTOP_STOPPED_RECORD: usize = 3;
+
+/// Raw record of the pressed stop square (dark variant): best match
+/// 521/624 px in the `clean-playstop-press` capture, the rest being
+/// cursor ink. The exact pressed index stays OPEN in `docs/hover.md`;
+/// this keeps the #111 press art distinct from the explicit rest face.
+const PLAYSTOP_PRESSED_RECORD: usize = 2;
+
+/// PLAYSTOP state face: the exe paints raw record 0 while the carousel
+/// rotates (stop square) and record 3 once it holds (play triangle),
+/// even though all six records share one anchor (#711 capture pair).
+/// The button is omitted from the rest stack so the selected record is
+/// the only face underneath hover and press. A stage without record 3
+/// keeps record 0 — never invented art.
+fn paint_planet_playstop_face(frame: &mut Frame<'_>, art: &SceneArt, spinning: bool) {
+    let Some(placement) = art.placements.iter().find(|placed| {
+        planet_action_for_code(placed.code)
+            == Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop,
+            })
+    }) else {
+        return;
+    };
+    let Some(figure) = placement
+        .sprite
+        .as_ref()
+        .and_then(|sprite| art.figures.get(sprite))
+    else {
+        return;
+    };
+    let record = if !spinning && figure.layer(PLAYSTOP_STOPPED_RECORD).is_some() {
+        PLAYSTOP_STOPPED_RECORD
+    } else {
+        PLAYSTOP_SPINNING_RECORD
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(frame, placement, &art.figures, record, shares_body, None);
 }
 
 /// Promotion-banner frame: the exe's image control paints one frame
@@ -2228,16 +2319,17 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
 /// hover/rest paint. The swap is per-control, pinned against the
 /// `clean-playstop`/`clean-promo-left` captures (344 px / 255 px,
 /// repaint confined to the control rect): a staged body carrying a
-/// second record repaints its alternate record (layer 0 over the
-/// stacked rest top — the same repaint arm the hover's full-colour
-/// restore uses); a single-record control (the option gear, no
+/// second record repaints its alternate record (over the rest/state
+/// face — the same repaint arm the hover's full-colour restore uses;
+/// PLAYSTOP uses record 2 once #711 makes record 0 its explicit rest
+/// face); a single-record control (the option gear, no
 /// visible pressed art in the `geartest` crops) paints nothing, never
 /// a stand-in. Emblems paint nothing either (emblem press == hover
 /// pixel-identical, #111 arm 1 caveat; the orange ring is the
 /// channel-dialog ACTIVE marker, not a pressed frame). Which raw
-/// record the exe's pressed art is, per control, stays OPEN — next
-/// step: the record-vs-capture match of the press crops against the
-/// staged records (the `docs/hover.md` 2026-11-11 playstop method).
+/// record the exe's pressed art is, per control, stays OPEN; the
+/// `clean-playstop-press` crop best-matches record 2 (521/624 px,
+/// the rest cursor ink), which is why PLAYSTOP uses that record.
 fn paint_planet_press(frame: &mut Frame<'_>, art: &SceneArt, press: Option<PlanetAction>) {
     let Some(action) = press else {
         return;
@@ -2253,6 +2345,23 @@ fn paint_planet_press(frame: &mut Frame<'_>, art: &SceneArt, press: Option<Plane
     if figure.layer(1).is_none() {
         return;
     }
+    // PLAYSTOP's rest face is now the explicitly selected record 0,
+    // so its pressed art must stay a distinct record (#111). The raw
+    // press index is an OPEN stand-in pinned only by the dark-square
+    // crop; hover still paints its own record on top.
+    let pressed_record = if matches!(
+        action,
+        PlanetAction::Promo {
+            cell: PlanetPromo::Stop
+        }
+    ) {
+        PLAYSTOP_PRESSED_RECORD
+    } else {
+        0
+    };
+    if figure.layer(pressed_record).is_none() {
+        return;
+    }
     let Some(placement) = art
         .placements
         .iter()
@@ -2265,10 +2374,17 @@ fn paint_planet_press(frame: &mut Frame<'_>, art: &SceneArt, press: Option<Plane
         .sprite
         .as_deref()
         .is_some_and(|sprite| shared.contains(sprite));
-    // The pressed frame repaint: layer 0 (the staged alternate
-    // record) full-colour over the rest top, confined to the
+    // The pressed frame repaint: the control's alternate record
+    // full-colour over the rest/state face, confined to the
     // placement's own rect by the blit — the pinned repaint region.
-    paint_placement_layer(frame, placement, &art.figures, 0, shares_body, None);
+    paint_placement_layer(
+        frame,
+        placement,
+        &art.figures,
+        pressed_record,
+        shares_body,
+        None,
+    );
 }
 
 /// Frame index the PLAYSTOP hover arms: 1 while the staged body
@@ -2870,7 +2986,7 @@ pub fn paint_channel_scene(
         frame.buf.fill(0);
     }
     if let Some(board) = board.filter(|board| board.art.has_figures()) {
-        paint_planet_board(frame, board.art, board.promo_index);
+        paint_planet_board(frame, board.art, board.promo);
     }
     paint_channel_dialog_body(frame, art);
     art.paint_backdrop(frame, Screen::Channel);
@@ -4994,7 +5110,7 @@ mod paint_tests {
             },
             Some(StagedPlanetBoard {
                 art: &board,
-                promo_index: 1,
+                promo: PlanetPromoPaint::spinning(1),
             }),
             None,
         );
@@ -7595,7 +7711,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -7617,7 +7733,7 @@ mod paint_tests {
             Some(PlanetBand::Hard),
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
         // paint_cursor draws at (x - 6, y): (313 + 10 - 6, 32 + 56).
@@ -7722,7 +7838,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(
             rest[50 * 800 + 136],
@@ -7748,7 +7864,7 @@ mod paint_tests {
                 band: Some(PlanetBand::Easy),
             }),
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
         assert_eq!(
@@ -7800,7 +7916,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         let mut hovered = vec![0u32; 800 * 600];
         paint_planet_scene(
@@ -7813,7 +7929,7 @@ mod paint_tests {
             None,
             Some(PlanetAction::Emblem { band: None }),
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(hovered, rest, "static emblems paint no highlight");
     }
@@ -7905,7 +8021,7 @@ mod paint_tests {
                 selection,
                 hover,
                 press,
-                1,
+                PlanetPromoPaint::spinning(1),
             );
             buf
         };
@@ -7962,7 +8078,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         for (code, x) in [
             (PLANET_BUTTON_FREE_CODE, 614),
@@ -7980,29 +8096,24 @@ mod paint_tests {
         }
     }
 
-    #[test]
-    fn promo_playstop_hover_paints_the_second_frame() {
-        // The one true frame swap (`docs/hover.md`): PLAYSTOP rest
-        // is frame 0, hover is body frame 1 (224 changed pixels at
-        // (392,515)-(407,529)). Unhovered the rest stack stands.
-        use super::super::side::{PlanetAction, PlanetPromo, PLANET_PROMO_STOP_CODE};
+    /// Six distinct record colours at the PLAYSTOP anchor, standing
+    /// in for the six 26x24 raw records of the shipped OPI body
+    /// (#711 pin). Record 0 is the spinning stop square, record 3 the
+    /// stopped play triangle, record 1 the hover face.
+    fn playstop_record_art() -> SceneArt {
+        use super::super::side::PLANET_PROMO_STOP_CODE;
         let sprite = "Planet_Btn_Promotion_PlayStop.ojs";
-        // Three layers on purpose: the hover must take layer 1
-        // (the pinned hover frame), never the stack top.
         let mut playstop = AvatarFigure::default();
-        for (word, anchor) in [
-            ([0xE0, 0x03], (387, 511)),
-            ([0x00, 0x7C], (387, 511)),
-            ([0x1F, 0x00], (387, 511)),
-        ] {
+        for word in [0x001Fu16, 0x7C00, 0x7C1F, 0x03E0, 0x03FF, 0x7FFF] {
             playstop.push_layer(FigureLayer {
-                image: Rgb555Image::decode(&word.repeat(26 * 24), 26, 24).unwrap(),
-                dx: anchor.0,
-                dy: anchor.1,
+                image: Rgb555Image::decode(&word.to_le_bytes().repeat(26 * 24), 26, 24)
+                    .expect("playstop record"),
+                dx: 387,
+                dy: 511,
                 colorkey: 0xFFFF,
             });
         }
-        let art = SceneArt {
+        SceneArt {
             placements: vec![ScenePlacement {
                 role: PlacementRole::Single,
                 id: String::new(),
@@ -8016,42 +8127,65 @@ mod paint_tests {
                 },
             }],
             figures: HashMap::from([(sprite.to_owned(), playstop)]),
-        };
-        let blue = pack_xrgb(0x00, 0x00, 0xFF);
-        let red = pack_xrgb(0xFF, 0x00, 0x00);
-        let mut rest = vec![0u32; 800 * 600];
+        }
+    }
+
+    fn paint_playstop_pixel(promo: PlanetPromoPaint, hover: bool) -> u32 {
+        let art = playstop_record_art();
+        let hover_action = hover.then_some(super::super::side::PlanetAction::Promo {
+            cell: super::super::side::PlanetPromo::Stop,
+        });
+        let mut buf = vec![0u32; 800 * 600];
         paint_planet_scene(
             &mut Frame {
-                buf: &mut rest,
+                buf: &mut buf,
                 w: 800,
                 h: 600,
             },
             &art,
             None,
+            hover_action,
             None,
-            None,
-            1,
+            promo,
         );
-        assert_eq!(rest[520 * 800 + 400], blue, "rest keeps the top layer");
-        let mut hovered = vec![0u32; 800 * 600];
-        paint_planet_scene(
-            &mut Frame {
-                buf: &mut hovered,
-                w: 800,
-                h: 600,
-            },
-            &art,
-            None,
-            Some(PlanetAction::Promo {
-                cell: PlanetPromo::Stop,
-            }),
-            None,
-            1,
-        );
+        buf[520 * 800 + 400]
+    }
+
+    #[test]
+    fn promo_spinning_paints_the_stop_face_record() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::paint_planet ->
+        // paint_planet_scene -> paint_planet_board ->
+        // paint_planet_playstop_face. Exe capture: boot rest and the
+        // second click both match raw record 0, 624/624 px (#711).
         assert_eq!(
-            hovered[520 * 800 + 400],
-            red,
-            "hover swaps to frame 1, not the stack top"
+            paint_playstop_pixel(PlanetPromoPaint::spinning(1), false),
+            pack_xrgb(0x00, 0x00, 0xFF),
+            "spinning must paint the stop square, not the stacked top"
+        );
+    }
+
+    #[test]
+    fn promo_stopped_paints_the_play_face_record() {
+        // Same live chain after PLAYSTOP toggles the rotation flag:
+        // the #711 capture matches raw record 3, 624/624 px both
+        // immediately and after two 3000 ms ticks.
+        assert_eq!(
+            paint_playstop_pixel(PlanetPromoPaint::stopped(1), false),
+            pack_xrgb(0x00, 0xFF, 0x00),
+            "stopped must paint the play triangle, not the stop square"
+        );
+    }
+
+    #[test]
+    fn promo_playstop_hover_paints_the_second_frame() {
+        // Hover composes on top of the state face: its pinned record 1
+        // still wins while the carousel spins (224 changed px at
+        // (392,515)-(407,529), `docs/hover.md`).
+        assert_eq!(
+            paint_playstop_pixel(PlanetPromoPaint::spinning(1), true),
+            pack_xrgb(0xFF, 0x00, 0x00),
+            "hover swaps to record 1, not the state face"
         );
     }
 
@@ -8102,7 +8236,7 @@ mod paint_tests {
                 None,
                 None,
                 None,
-                index,
+                PlanetPromoPaint::spinning(index),
             );
             buf[164 * 800 + 50]
         };
@@ -8180,7 +8314,7 @@ mod paint_tests {
                 None,
                 None,
                 None,
-                index,
+                PlanetPromoPaint::spinning(index),
             );
             buf
         };
@@ -8226,7 +8360,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         let black = pack_xrgb(0, 0, 0);
         assert_eq!(
@@ -8325,7 +8459,7 @@ mod paint_tests {
             &dialog,
             Some(StagedPlanetBoard {
                 art: &board,
-                promo_index: 1,
+                promo: PlanetPromoPaint::spinning(1),
             }),
             None,
         );
@@ -8376,7 +8510,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(rest[575 * 800 + 725], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -8390,7 +8524,7 @@ mod paint_tests {
             None,
             Some(PlanetAction::OptionsDialog),
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
     }
@@ -8436,7 +8570,7 @@ mod paint_tests {
             None,
             None,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(rest[575 * 800 + 765], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -8450,7 +8584,7 @@ mod paint_tests {
             None,
             Some(PlanetAction::QuitConfirm),
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert_eq!(hovered[575 * 800 + 765], blue, "hover restores frame 0");
     }
@@ -8529,7 +8663,7 @@ mod paint_tests {
             None,
             hover,
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         buf
     }
@@ -8606,7 +8740,7 @@ mod paint_tests {
                 band: Some(PlanetBand::Easy),
             }),
             None,
-            1,
+            PlanetPromoPaint::spinning(1),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -12146,7 +12280,7 @@ mod paint_tests {
             &art,
             Some(StagedPlanetBoard {
                 art: &board,
-                promo_index: 0,
+                promo: PlanetPromoPaint::spinning(0),
             }),
             None,
         );
@@ -12190,7 +12324,7 @@ mod paint_tests {
             &art,
             Some(StagedPlanetBoard {
                 art: &empty_board,
-                promo_index: 0,
+                promo: PlanetPromoPaint::spinning(0),
             }),
             None,
         );

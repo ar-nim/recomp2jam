@@ -888,7 +888,7 @@ mod live_art_tests {
             None,
             None,
             None,
-            1,
+            o2jam_shell::screens::paint::PlanetPromoPaint::spinning(1),
         );
         assert!(
             buf.iter().any(|pixel| *pixel != 0),
