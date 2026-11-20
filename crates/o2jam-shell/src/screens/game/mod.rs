@@ -36,12 +36,13 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
-    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
-    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet,
-    paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat,
+    paint_channel_scene, paint_dialog_scene, paint_lanking_board, paint_lanking_scene,
+    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
+    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet, paint_myroom_data,
+    paint_myroom_figure, paint_payment_notice, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
@@ -6284,19 +6285,21 @@ impl ScreenGame {
     /// 2013/2014/2019 rows paint below the list in both cases; empty
     /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
+        let board = self.staged_channel_board();
         match (
             self.scene_art(Screen::Channel),
             self.channel_scene.rows().is_empty(),
         ) {
-            (Some(art), false) => self.channel_scene.paint(
-                frame,
-                Some(art),
-                self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
-                    art,
-                    promo_index: self.planet_board.planet_promo_carousel.index(),
-                }),
-                self.hovered_channel_row(),
-            ),
+            (Some(art), false) => {
+                self.channel_scene
+                    .paint(frame, Some(art), board, self.hovered_channel_row())
+            }
+            (Some(art), true) if self.relay_down_dialog_open() => {
+                // The held rows leave the dialog empty, but the exe's
+                // one-OK sheet still sits over the board and the
+                // Channel dialog (`baf781b8…`, spec #316 story 26).
+                paint_channel_scene(frame, &[], 0, 0, art, board, None);
+            }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
             (None, false) => self.channel_scene.paint(frame, None, None, None),
             (None, true) => paint_screen(frame, Screen::Channel),
@@ -6309,6 +6312,16 @@ impl ScreenGame {
         // The relay notice opens here, above the channel frame the
         // exe shows behind it (#244 capture, boundary fixed in #348).
         self.paint_planet_modal(frame);
+    }
+
+    /// Bound Planet board mounted under the Channel dialog: the exe
+    /// keeps its emblem strip and MENU band behind the sheet
+    /// (`docs/parity/channel.md`, #244/#348 captures).
+    fn staged_channel_board(&self) -> Option<StagedPlanetBoard<'_>> {
+        self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
+            art,
+            promo_index: self.planet_board.planet_promo_carousel.index(),
+        })
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -23688,6 +23701,67 @@ mod game_tests {
             game.option_rebind_armed(),
             None,
             "switching tabs disarms the pending rebind"
+        );
+    }
+
+    /// Spec #316 story 26: the exe's relay notice is a modal over a
+    /// live Channel scene, not a black canvas. Qualified pack
+    /// `baf781b8…` (`~/scratch/p244-capture/message-box.png`) shows
+    /// the Planet emblem strip and MENU band behind the Channel
+    /// dialog; boot-2 `9bf5463c…` agrees. Live chain: boot relay
+    /// probe -> `hold_channel_rows_for_relay_notice` ->
+    /// `enter_screen(Channel)` -> `open_relay_down_dialog` ->
+    /// `paint_channel` -> `paint_planet_modal`.
+    #[test]
+    fn relay_notice_keeps_the_staged_board_behind_the_channel_dialog() {
+        use crate::avatar::FigureLayer;
+        use o2jam_render::Rgb555Image;
+
+        let pixel = |word: u16, x: i32, y: i32| {
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).expect("pixel"),
+                dx: x,
+                dy: y,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let (planet_placements, mut planet_figures) = corner_scene_art("State_Planet.ojs");
+        planet_figures.insert("State_Planet.ojs".to_owned(), pixel(0x0020, 10, 500));
+        let (channel_placements, mut channel_figures) = corner_scene_art("Dialog_ChannelInfo.ojs");
+        channel_figures.insert("Dialog_ChannelInfo.ojs".to_owned(), pixel(0x7C00, 10, 100));
+
+        let (notice_placements, mut notice_figures) = corner_scene_art("Dialog_Information.ojs");
+        notice_figures.insert("Dialog_Information.ojs".to_owned(), pixel(0x001F, 400, 300));
+
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Planet, planet_placements, planet_figures);
+        game.load_scene(Screen::Channel, channel_placements, channel_figures);
+        game.load_relay_down_scene(notice_placements, notice_figures);
+        game.hold_channel_rows_for_relay_notice(two_channels());
+        assert!(game.enter_screen(Screen::Planet));
+        assert!(game.enter_screen(Screen::Channel));
+        assert!(game.relay_down_dialog_open(), "notice is up");
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(
+            buf[500 * 800 + 10],
+            pack_xrgb(0, 8, 0),
+            "board band is behind the notice"
+        );
+        assert_eq!(
+            buf[100 * 800 + 10],
+            pack_xrgb(255, 0, 0),
+            "channel dialog stays behind the notice"
         );
     }
 
