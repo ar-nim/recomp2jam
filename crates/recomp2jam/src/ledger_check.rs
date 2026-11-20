@@ -806,6 +806,68 @@ mod tests {
         );
     }
 
+    /// Story 18 of #313: a reviewer must be able to read every OPEN
+    /// Tutorial arm and see the next evidence step beside it. The guard
+    /// reads the committed parity row (CARGO_MANIFEST_DIR anchored, so
+    /// CI without `install-root` still runs it) and fails on a bare OPEN.
+    #[test]
+    fn tutorial_open_verdicts_name_their_next_evidence_step() {
+        let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let row = std::fs::read_to_string(docs_root.join("parity/tutorial.md"))
+            .expect("docs/parity/tutorial.md");
+        let bare: Vec<&str> = row
+            .lines()
+            .filter(|line| line.contains("OPEN"))
+            .filter(|line| !line.to_ascii_lowercase().contains("next step"))
+            .collect();
+        assert!(
+            bare.is_empty(),
+            "OPEN arms must name a next evidence step: {bare:#?}"
+        );
+    }
+
+    /// Story 19 of #313: the stale "no tutorial control" note must be
+    /// corrected, not deleted. The exe ships FIRSTSTEP in the Room
+    /// ControlList, and #358 later pinned its dispatch; the guard keeps
+    /// the contradiction visible in the historical note.
+    #[test]
+    fn tutorial_firststep_contradiction_is_recorded_in_the_legacy_note() {
+        let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let fixes = std::fs::read_to_string(docs_root.join("parity/playtest-fixes.md"))
+            .expect("docs/parity/playtest-fixes.md");
+        let lines: Vec<&str> = fixes.lines().collect();
+        let start = lines
+            .iter()
+            .position(|line| line.contains("Room chrome dispatch (tickets #32, #34)"))
+            .expect("the #34 legacy note survives");
+        let end = lines[start + 1..]
+            .iter()
+            .position(|line| line.starts_with("- **"))
+            .map_or(lines.len(), |offset| start + 1 + offset);
+        let note = lines[start..end].join(" ");
+        for required in [
+            "contradiction",
+            "IDC_BUTTON_SROOM_FIRSTSTEP",
+            "0x13200032",
+            "#358",
+        ] {
+            assert!(
+                note.contains(required),
+                "#34 note must record {required}: {note}"
+            );
+        }
+        let tutorial = std::fs::read_to_string(docs_root.join("parity/tutorial.md"))
+            .expect("docs/parity/tutorial.md");
+        let input = tutorial
+            .lines()
+            .find(|line| line.starts_with("| Input |"))
+            .expect("tutorial Input row");
+        assert!(
+            input.contains("#34") && input.contains("#358"),
+            "the Input row must carry the contradiction and its resolution"
+        );
+    }
+
     #[test]
     fn parity_index_links_every_section_file() {
         let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");

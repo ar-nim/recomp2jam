@@ -9937,6 +9937,61 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_hover_repaints_its_staged_body_frame_on_the_room_board() {
+        // Spec #313 WAVE5 row: the Room FIRSTSTEP chrome
+        // `0x13200032` repaints `Room_FirstStep.ojs` body frame 0 under
+        // the pointer. EXE pin `docs/hover.md:111`: rest matches
+        // neither frame (31% / 22%), hover matches frame 0 (100%),
+        // rect `660,1-718,32`, hover capture hash `36575039…4009e`.
+        // Live chain: boot -> Channel -> Room -> pointer snapshot ->
+        // `hovered_room_control` -> `paint_room` ->
+        // `paint_room_scene_with_hover` -> `paint_room_hover` frame 0.
+        // A two-record synthetic body keeps the guard data-independent.
+        let rect = Rect {
+            x: 660,
+            y: 1,
+            w: 58,
+            h: 31,
+        };
+        let mut game =
+            room_lobby_with_placements(vec![(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", rect)]);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: Some("Room_FirstStep.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([(
+                "Room_FirstStep.ojs".to_owned(),
+                chrome_two_layer_figure(58, 31),
+            )]),
+        );
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 689, 16), rest);
+        game.ingest_snapshot(&InputSnapshot::motion_to(689, 16));
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(0x1320_0032),
+            "B7's FIRSTSTEP aim resolves the staged chrome"
+        );
+        assert_eq!(
+            room_pixel(&mut game, 689, 16),
+            hover,
+            "hover paints body frame 0"
+        );
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+        assert_eq!(
+            room_pixel(&mut game, 689, 16),
+            rest,
+            "unhover restores the rest body"
+        );
+    }
+
+    #[test]
     fn hovered_room_button_repaints_on_an_empty_room_list() {
         // The exe arms chrome hover on an empty live room — every
         // `docs/hover.md` sweep row shows the six empty row panels
@@ -25257,6 +25312,36 @@ mod game_tests {
     }
 
     #[test]
+    fn firststep_tutorial_exit_press_returns_the_open_room_board_without_modal() {
+        // Spec #313 WAVE5 row: the bottom-right `(777,567)` press leaves
+        // Tutorial and returns the Room board with no modal. Boot1 input
+        // `cee8b7d5…1913` and frame `ed1bf56e…7b46` pin the click and
+        // the resulting board; boot2 repeats. Live chain: boot ->
+        // Channel -> Room -> staged FIRSTSTEP click -> Tutorial ->
+        // exit hit test -> `leave_side` -> Room entry BGM cue.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[3]));
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None, "the side visit is gone");
+        assert_eq!(game.screen(), Screen::Room, "the lobby is back");
+        assert_eq!(game.planet_modal(), None, "no channel modal on return");
+        assert_eq!(game.room_dialog(), None, "no lobby dialog on return");
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(3),
+            "the host Room cue is re-cued"
+        );
+    }
+
+    #[test]
     fn planet_tutorial_plate_click_stays_click_silent_under_static_dead_verdict() {
         // Ticket #471: live chain boot → Waiting → Planet side → the
         // dimmed TUTORIAL plate `0x19201006` at its `docs/planet.md:84`
@@ -25286,6 +25371,37 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(663, 88));
         assert_eq!(game.side(), Some(SideScreen::Planet));
         assert_eq!(game.tutorial_chart_globals(), None);
+    }
+
+    #[test]
+    fn music_shop_return_to_room_keeps_the_firststep_tutorial_leg_live() {
+        // Spec #313 WAVE5 row: the B7/Boot1 chain
+        // `planet→channel→room→musicshop→tutorial` is one session, so
+        // a MusicShop side visit and its BACK cannot consume the
+        // FIRSTSTEP entry. B7 input log sha256 `78067e13…203f` names
+        // the MusicShop legs; boot1 repeats the chain.
+        // Live chain: boot -> Channel -> Room -> MusicShop side ->
+        // BACK -> Room -> staged FIRSTSTEP -> Tutorial globals ->
+        // exit click -> Room.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        assert_eq!(game.screen(), Screen::Room);
+
+        assert!(game.visit_side(SideScreen::MusicShop));
+        assert_eq!(game.side(), Some(SideScreen::MusicShop));
+        assert!(game.leave_side(), "MusicShop BACK returns to its host");
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.tutorial_chart_globals(), Some(TUTORIAL_CHART_GLOBALS));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
     }
 
     #[test]
@@ -25358,6 +25474,71 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[298 * 800 + 375], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn tutorial_guide_art_has_no_wall_clock_timer_beyond_the_chart() {
+        // Spec #313 story 12: the tutorial adds no invented timer. The
+        // only cadence the exe pins is chart-derived (helper `0x495110`
+        // writes song id 8888 before `ChangeState(0xb)`; `S-PLAY-B3`),
+        // so guide art holds the B7 frame 0 across wall-clock paints.
+        // Live chain: boot -> Channel -> Room -> staged FIRSTSTEP ->
+        // Tutorial globals -> `paint_tutorial_scene` frame selector.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let mut instruction = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16] {
+            use crate::avatar::FigureLayer;
+            let pixels = [word.to_le_bytes(); 16].concat();
+            instruction.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                dx: 374,
+                dy: 297,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_tutorial_scene(
+            vec![ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(TUTORIAL_INSTRUCTION_SPRITE.to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([(TUTORIAL_INSTRUCTION_SPRITE.to_owned(), instruction)]),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(
+            game.tutorial_chart_globals().map(|globals| globals.song_id),
+            Some(8888),
+            "only the pinned chart can drive cadence"
+        );
+
+        let paint = |game: &mut ScreenGame, now_ms| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            buf[298 * 800 + 375]
+        };
+        let frame_zero = pack_xrgb(255, 0, 0);
+        assert_eq!(paint(&mut game, 0), frame_zero);
+        assert_eq!(paint(&mut game, 45_000), frame_zero, "no wall-clock page");
+        game.lane_key(0, true);
+        assert_eq!(paint(&mut game, 45_000), frame_zero, "no key-driven page");
     }
 
     #[test]
@@ -25449,6 +25630,117 @@ mod game_tests {
                 "key up clears the cap"
             );
         }
+    }
+
+    #[test]
+    fn firststep_tutorial_key_press_lights_its_cap_and_left_highway_glow() {
+        // Spec #313 WAVE5 row: one lane key lights its own cap AND
+        // changes the left-highway glow; the other six lanes stay at
+        // rest and all judgement tallies stay zero. Boot2 pack
+        // `989abc137caec5cb429d98d1b0e19c094032fc1c900a350c423f6ae0e82c088f`
+        // pins the down/up frames (`28d1ca44…1a`, `be76f41d…3a`,
+        // `d662b505…3e`) and the zero HUD. Live chain: boot ->
+        // Channel -> Room -> staged FIRSTSTEP -> Tutorial -> lane key
+        // -> `lane_key` -> `paint_tutorial_scene` frame swap.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for lane in 0..7usize {
+            let name = format!("KeyEffect_Tutorial_{}.ojs", lane + 1);
+            let mut figure = AvatarFigure::default();
+            for frame in 0..5 {
+                let word = if frame == 0 {
+                    0x7FFFu16
+                } else {
+                    0x0400u16 + lane as u16
+                };
+                let pixels = word.to_le_bytes().repeat(2);
+                for dy in [487, 520] {
+                    figure.push_layer(crate::avatar::FigureLayer {
+                        image: o2jam_render::Rgb555Image::decode(&pixels, 2, 1).unwrap(),
+                        dx: 100 + (lane as i32) * 20,
+                        dy,
+                        colorkey: 0x0000,
+                    });
+                }
+            }
+            placements.push(ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(name.clone()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            });
+            figures.insert(name, figure);
+        }
+        game.load_tutorial_scene(placements, figures);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let ink = |buf: &[u32], lane: usize, dy: usize| buf[dy * 800 + 101 + lane * 20];
+        let rest = paint(&mut game);
+
+        game.lane_key(2, true);
+        let pressed = paint(&mut game);
+        assert_ne!(ink(&pressed, 2, 487), ink(&rest, 2, 487), "lane 2 cap");
+        assert_ne!(ink(&pressed, 2, 520), ink(&rest, 2, 520), "left glow");
+        for lane in (0..7).filter(|lane| *lane != 2) {
+            assert_eq!(ink(&pressed, lane, 487), ink(&rest, lane, 487));
+            assert_eq!(ink(&pressed, lane, 520), ink(&rest, lane, 520));
+        }
+        assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
+
+        game.lane_key(2, false);
+        let released = paint(&mut game);
+        assert_eq!(ink(&released, 2, 487), ink(&rest, 2, 487));
+        assert_eq!(ink(&released, 2, 520), ink(&rest, 2, 520));
+    }
+
+    #[test]
+    fn only_the_pinned_firststep_dispatch_can_enter_the_tutorial() {
+        // Spec #313 story 13: without an exe dispatch pin no control
+        // may invent a Tutorial transition. `S-PLAY-B3` pins the Room
+        // FIRSTSTEP dispatcher `0x4902bb` -> helper `0x495110` ->
+        // `ChangeState(0xb)`; the dimmed Planet TUTORIAL plate
+        // `0x19201006` is zeroed at construction (`0x48df50`..`0x48df8b`)
+        // and its handler `0x48e280` only picks a channel family.
+        // Seam suffices: this names the whole dispatch table and also
+        // drives a staged Room click, so an unpinned code cannot enter.
+        let entries: Vec<_> = ROOM_CONTROLS
+            .iter()
+            .filter(|control| control.action == TutorialEntry)
+            .collect();
+        assert_eq!(entries.len(), 1, "one pinned Tutorial dispatch");
+        assert_eq!(entries[0].code, 0x1320_0032, "FIRSTSTEP only");
+        assert_eq!(entries[0].id, "IDC_BUTTON_SROOM_FIRSTSTEP");
+
+        let mut game = room_lobby_with_control(0x1920_1006, "IDC_BUTTON_SPLANET_TUTORIAL");
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), None, "dead plate never enters Tutorial");
+        assert_eq!(game.tutorial_chart_globals(), None, "no chart globals");
     }
 
     #[test]
