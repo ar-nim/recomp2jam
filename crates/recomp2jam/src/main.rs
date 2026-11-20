@@ -1725,9 +1725,36 @@ fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
     o2jam_audio::SinkChoice::for_session(sound, false).open()
 }
 
-/// Installed scene-BGM bank the launch cue plays (`Music/BGM.ojm`,
-/// read-only like the other archives below).
-const SCENE_BGM_BANK: &str = "../../install-root/O2Jam/Music/BGM.ojm";
+/// OJM archives the 7.55 sound-device init loads at boot, in exe bank
+/// index order (loader `0x550db0`, loop `0x550ae0`, names at `0x67f730`
+/// with a `0x48` stride). Name spelling follows the installed files:
+/// Windows folds case, so `bgEffect.ojm`/`BGMwinter.ojm` are the exe's
+/// `BGEffect.ojm`/`BGMWinter.ojm`. Observer-target pins: sha256
+/// `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`,
+/// REA `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`
+/// (caller chain) and `ev_a9fb8aefefa70e2a45105090df82976fd44527a81a7029fd83d4f64e1a2bfd3e`
+/// (bank names).
+const BOOT_BGM_BANK_FILES: [&str; 7] = [
+    "bgEffect.ojm",
+    "O2PlanetNPC.ojm",
+    "BGM.ojm",
+    "Event.ojm",
+    "Planet.ojm",
+    "BGMwinter.ojm",
+    "DialogBGM.ojm",
+];
+
+/// Bank index holding the scene-BGM archive in the exe's boot table.
+const SCENE_BGM_BANK_INDEX: usize = 2;
+
+/// Installed path of one exe boot bank. Only the scene bank is decoded
+/// here; the other six archives stay installed but uncued (their
+/// runtime bank slots are not part of this client slice).
+fn boot_bgm_bank_path(index: usize) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Music")
+        .join(BOOT_BGM_BANK_FILES[index])
+}
 
 /// The cue one screen enters with: delegates to the shell's
 /// single-source table ([`o2jam_shell::Screen::bgm_cue`], S0.2
@@ -1768,14 +1795,14 @@ fn decode_bgm_record(
     o2jam_audio::decode_vorbis(body).ok()
 }
 
-/// Decode `Music/BGM.ojm` into one [`None`]-kept slot per record
-/// (fetch order = one-based record order) for
+/// Decode the third boot bank (`Music/BGM.ojm`) into one [`None`]-kept
+/// slot per record (fetch order = one-based record order) for
 /// [`o2jam_audio::SceneBgm`]. A missing or unparsable bank yields
 /// an empty one (no fallback tracks: only the shipped records
 /// ever sound), so CI stays green without game data. Shared with
 /// the online session's audio attach (`session.rs`).
 pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SCENE_BGM_BANK);
+    let path = boot_bgm_bank_path(SCENE_BGM_BANK_INDEX);
     let Ok(bytes) = std::fs::read(&path) else {
         tracing::debug!("scene BGM bank missing; BGM stays silent");
         return Vec::new();
@@ -2487,7 +2514,10 @@ mod scene_bgm_tests {
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::Screen;
 
-    use super::{load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue, SCENE_BGM_BANK};
+    use super::{
+        boot_bgm_bank_path, load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue,
+        BOOT_BGM_BANK_FILES, SCENE_BGM_BANK_INDEX,
+    };
 
     /// Ten-slot bank (records 1..=10) holding one synthetic track in
     /// `record` and blanks elsewhere — the shipped bank's shape
@@ -2606,10 +2636,35 @@ mod scene_bgm_tests {
     }
 
     #[test]
+    fn boot_bank_table_names_all_seven_exe_archives() {
+        assert_eq!(
+            BOOT_BGM_BANK_FILES,
+            [
+                "bgEffect.ojm",
+                "O2PlanetNPC.ojm",
+                "BGM.ojm",
+                "Event.ojm",
+                "Planet.ojm",
+                "BGMwinter.ojm",
+                "DialogBGM.ojm",
+            ]
+        );
+    }
+
+    #[test]
+    fn scene_bank_path_comes_from_the_third_boot_bank() {
+        assert_eq!(SCENE_BGM_BANK_INDEX, 2);
+        assert_eq!(
+            boot_bgm_bank_path(SCENE_BGM_BANK_INDEX).file_name(),
+            Some(std::ffi::OsStr::new("BGM.ojm"))
+        );
+    }
+
+    #[test]
     fn shipped_bank_records_select_the_shipped_tracks() {
         // Record 3 names the room track on the installed bank;
         // skipping cleanly without game data (CI rule).
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SCENE_BGM_BANK);
+        let path = boot_bgm_bank_path(SCENE_BGM_BANK_INDEX);
         if !path.exists() {
             println!("skip: missing {}", path.display());
             return;
