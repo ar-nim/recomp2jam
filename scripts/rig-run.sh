@@ -42,6 +42,10 @@ set -euo pipefail
 RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # shellcheck source=lib/rig-preflight.sh
 . "$RIG_LIB"
+# Native Rust boots clear inherited Wayland/Wine state (#719); a Wine boot
+# keeps its prefix. The display pin itself lives in play-local.sh.
+# shellcheck source=lib/rig-client-display.sh
+. "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-display.sh"
 # The audio lane (monitor tap, probe, verifier) lives in one module and is
 # sourced here so `run`/`stop` drive it and `scripts/rig-audio.sh` can be
 # used standalone (#279).
@@ -217,6 +221,8 @@ cmd_run() {
   refuse_leaked_wayland
   validate_display "$display"
   sanitize_env
+  # #719: a native peer must not inherit the Wine master's prefix claim.
+  rig_clear_inherited_wine_prefix "$1"
   mkdir -p "$out_dir"
   [ -f "$out_dir/claims" ] || : > "$out_dir/claims"
   export RIG_CLAIMS_FILE="$out_dir/claims"
@@ -642,6 +648,24 @@ PYEOF
   stop_quiet "$tmp/o-pfx-a"
   stop_quiet "$tmp/o-pfx-b"
   assert_reject "prefix-claim" 15 "already claimed" "$tmp/err-pfx-b"
+
+  # #719: the Wine master's prefix is claimed first; a native peer inheriting
+  # it must still boot. Caller chain: rig-run.sh run -> cmd_run ->
+  # rig_clear_inherited_wine_prefix -> preflight_run_checks -> rig_check_prefix.
+  attempt "$tmp/err-pfx-native-a" "${senv[@]}" RIG_WINEPREFIX="$tmp/p-native" \
+    bash "$0" run :181 "$tmp/o-pfx-native-a" -- sleep 30
+  [ "$ATTEMPT_EXIT" -eq 0 ] ||
+    { cat "$tmp/err-pfx-native-a" >&2; die "selftest: leg native-prefix-inheritance setup run failed"; }
+  attempt "$tmp/err-pfx-native-b" "${senv[@]}" RIG_WINEPREFIX="$tmp/p-native" \
+    RIG_CLIENT_KIND=native bash "$0" run :182 "$tmp/o-pfx-native-b" -- sleep 30
+  local native_code=$ATTEMPT_EXIT
+  stop_quiet "$tmp/o-pfx-native-a"
+  stop_quiet "$tmp/o-pfx-native-b"
+  [ "$native_code" -eq 0 ] ||
+    { cat "$tmp/err-pfx-native-b" >&2; die "selftest: leg native-prefix-inheritance FAILED: inherited prefix refused the native boot"; }
+  [ -z "$(lane_field "$tmp/o-pfx-native-b" client_prefix)" ] ||
+    die "selftest: leg native-prefix-inheritance FAILED: native client recorded a Wine prefix"
+  echo "selftest: leg native-prefix-inheritance PASS (native boot ignored inherited prefix)"
 
   # Second run claiming the same listen port must reject with 11.
   attempt "$tmp/err-port-a" "${senv[@]}" RIG_LISTEN_PORTS=59401 \
