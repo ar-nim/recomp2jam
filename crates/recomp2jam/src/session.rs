@@ -8242,6 +8242,43 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn master_chat_send_lands_as_a_waiting_row_from_the_3012_echo() {
+        // Ticket #567 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::menu_key (Waiting Confirm)
+        //   -> flush_chat_action -> SendWaitingMessage 3011 ->
+        //   drain_waiting_chat -> apply_waiting_user_message 3012 ->
+        //   ScreenGame::push_waiting_user_message -> paint_waiting_chat.
+        // Wire pin: `full01/tap.log` 15:43:51 `C2S 3011 len=17
+        // hex=68656c6c6f68656c6c6f323931` -> `S2C 3012`, with the
+        // CP05 master chat-row pack `4899ad2a…`.
+        use o2jam_net::rooms::WaitingUserMessage;
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let sent = read_frame(&mut stream);
+            assert_eq!(sent.id, 3011);
+            assert_eq!(sent.payload, b"hellohello291".to_vec());
+            let echo = WaitingUserMessage {
+                sender: "master".to_owned(),
+                content: b"hellohello291".to_vec(),
+                member_id: 0,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert!(session.game.is_room_master(), "master role for this leg");
+        session.game.set_chat_input("hellohello291");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.waiting_chat().len() == 1
+        });
+        server.join().unwrap();
+        let rows = session.game.waiting_chat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sender, "master");
+        assert_eq!(rows[0].text, "hellohello291");
+        assert!(!rows[0].admin, "3012 is a player row");
+    }
+
+    #[test]
     fn waiting_admin_message_drains_into_waiting_history() {
         use o2jam_net::rooms::WaitingAdminMessage;
         let line = WaitingAdminMessage {
