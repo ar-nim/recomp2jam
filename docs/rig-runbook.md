@@ -163,6 +163,56 @@ client PID 691435 (plasma-shutdown)`), not systemd-oomd or slice
 pressure; the session sent SIGTERM to its background jobs. An OOM event
 would have a `systemd-oomd` kill line, which the journal lacks.
 
+### Client identity and duplicate sessions (#726)
+
+Memoryer does **not** deduplicate on the 7.55 client id. It matches the
+**token** of an already-channeled session
+(`Memoryer/Controllers/AuthController.cs:35-39`): a live duplicate gets
+`1001` result `-2` (`AlreadyConnected`), and a dead duplicate is exited
+before the new session authenticates. The `ClientId` is only logged and
+stored on `Actor`. Therefore two same-host clients must use two
+`--user-index-id` accounts (distinct tokens), even though both Wine
+clients send the same client id. Never restart Memoryer to clear a
+duplicate: retire the extra account session instead.
+
+The client id itself is fixed in 7.55: the exe's 1000 builder appends the
+literal at file `0x2472c8`, byte-identical to `726PNA-B1YW-28ZG9M-I5SC-Q0OPM6`
+(`docs/client-server-plan.md`). The launch blob varies `UserIndexId`,
+`Username` (token), and `Gender`; it never varies the client id. A live
+socket probe (2026-11-20 22:24+08:00, `memoryer-server` PID 92326) proved
+the constraint: three sessions with tokens tester/tester2/t207probe and
+the **same** fixed client id all entered channel 0/0 and stayed alive;
+a fourth auth with uid 1's token and a **different** client id returned
+`-2` and left the older session alive. See
+`~/scratch/distinct-clientids/probe-after-adjust.log`.
+
+Our Rust client keeps that exe literal by default. Rig boots that want
+one distinct *logged* identity per uid set `RIG_DISTINCT_CLIENT_IDS=1`:
+`play-local.sh --user-id N` then exports
+`O2JAM_CLIENT_ID=726PNA-B1YW-28ZG9M-I5SC-Q0OPM6-UIDN`, which
+`connect::authorize` puts in the 1000 frame. An explicit
+`O2JAM_CLIENT_ID` wins. Single-client owner boots are unchanged.
+Hermetic guard: `bash scripts/lib/rig-client-identity.sh selftest`.
+The override is a rig observability aid, not a substitute for distinct
+uids; the exe path cannot use it without editing the oracle.
+
+Rig spec story row (the GitHub issue body stays untouched under the
+no-remote rule):
+
+- [x] Concurrent rig clients use distinct uids/tokens; two same-host
+  sessions coexist and the guest joins the host's room (#726; two-exe
+  pack `win2/f5`, trace `S294-RESULT-MULTI-726-02`). The fixed 7.55
+  ClientID is not a session key and is unchanged by default.
+
+Two-exe identity leg: both Wine clients keep the fixed exe client id, so
+`ClientID:` lines in `server.log` repeat; that is expected. Use a distinct
+uid per exe (master 1, guest 2, optional observer 3). The room must also
+fit the guest's mode: tester2 is level 1 and gets the blue
+`NORMAL mode only` box when it double-clicks a 7KEY room row. For an
+identity-only join, host `NORMAL + 3KEY DRUM` — select NORMAL then 7KEY
+(the sequence that makes CREATE OK fire), then click 3KEY DRUM before
+OK. Scratch recipe: `~/scratch/result-harness/scripts/run-two-exe-identity-726.sh`.
+
 ### Committed capture records (#308)
 
 A committed record such as `docs/captures/t240/` is a hash-pinned pointer,
@@ -417,7 +467,7 @@ the counts can be compared across waves.
 | Mode | First observable | Next step |
 | --- | --- | --- |
 | Channel flake / popup miss | emblem or channel click lands with no `03EA`/`03EC`, or the NORMAL-mode box is still up / never appears | probe a fresh frame at the transition, retry with a bounded count, and refuse to claim the scene until the wire cue arrives |
-| Duplicate-session `1001 feffffff` | auth or channel entry answers `-1` while another lane holds the account session | select a free account index, log the wire frame, and stop; never restart Memoryer to force recovery |
+| Duplicate-session `1001 feffffff` | auth or channel entry answers `-1` while another lane holds the account session | select a free account index (Memoryer matches the **token**, not the client id, #726), log the wire frame, and stop; never restart Memoryer to force recovery |
 | Preflight Wayland leak | `rig-run` exits 10 with `WAYLAND_DISPLAY is set` / `XDG_SESSION_TYPE=wayland` and no client boots | unset the ambient variables in the calling driver's clean env, then re-run |
 | Frame-gating miss | stale frame still shows the popup, or the first grab is black before paint | wait for a painted frame and a changed frame hash before any oracle read |
 | Driver / setup fault | wrong script path, missing `__main__` guard, bad arg order, wrong row formula, missing `mkdir` | fix the driver and re-run the same leg; keep the failed pack as the negative record |
