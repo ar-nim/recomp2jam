@@ -12160,6 +12160,23 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_empty_bag_cell_paints_no_selection_frame() {
+        // Live caller chain (#305, BAG-CELL-EMPTY x peer):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> PickBagCell
+        //   -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // Exe2 pack `c693cf07…998affdf` (empty bag) moves only the OS
+        // cursor on a bag-cell press: no blue frame on an empty cell.
+        let (mut game, cell) = myroom_selection_overlay(MyRoomPanel::Inventory);
+        game.set_myroom_character(myroom_test_character(Vec::new()));
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+
+        let buf = paint_myroom_panel(&mut game);
+        let cell_pixel = (cell.y + 10) as usize * 800 + (cell.x + 10) as usize;
+        assert_ne!(buf[cell_pixel], pack_xrgb(0, 0, 255));
+    }
+
+    #[test]
     fn myroom_status_face_paints_the_staged_selection_frame_without_amber() {
         // Live caller chain as above; the live-4 gesture pack pins the
         // toggled STATUS face at click (177,318) in the same scene.

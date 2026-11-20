@@ -133,18 +133,26 @@ match), so no exe frame pins the selection body to a pressed cell. That
 mapping stays ours-by-design; the next evidence step is a qualified
 exe capture with a pressed slot/bag/gift cell.
 
+Owner visual confirm is supplied by the cited `story-myroom-select/exe3`
+pack: bag-cell picks at (171,451) / (224,423)-(297,480) center the blue
+frame on the staged `MYBAGITEM1/2` rects (diff bboxes
+(129,417)-(215,486) / (218,417)-(304,486)). The earlier `exe2` pack
+(`c693cf07…998affdf`, empty tester bag) pins the negative arm: a press
+on a blank cell moves only the OS cursor and paints no frame. The
+`25c5997e…` slot-after-bag frame keeps the bag frame in place.
+
 Landed: `paint_myroom_data` stops painting `paint_cursor` amber on the
 MyRoom path. It reads the staged `MYBAGSELECT` sprite and its decoded
 86x69 frame body, then centers that body over each selected staged cell
-rect (slot, bag, gift). Geometry comes from staged `.bnd` rects and the
-sprite record only. Guards:
+rect (bag or gift) whose staged row carries a name. Geometry comes from
+staged `.bnd` rects and the sprite record only. Guards:
 `myroom_inventory_face_paints_the_staged_selection_frame_without_amber`,
 `myroom_status_face_paints_the_staged_selection_frame_without_amber`,
-`myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber`
-(all red on the amber painter: amber pixel 30, frame pixel absent), plus
+`myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber`,
+and `myroom_empty_bag_cell_paints_no_selection_frame` (red before the
+populated-row filter: blank cell painted blue 255; green after), plus
 the live gate assertion in
 `live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
-Owner visual confirm is still pending after merge.
 
 ## Live boot data path (ticket #199 diagnose leg)
 
