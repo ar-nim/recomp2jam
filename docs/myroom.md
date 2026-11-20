@@ -133,18 +133,26 @@ match), so no exe frame pins the selection body to a pressed cell. That
 mapping stays ours-by-design; the next evidence step is a qualified
 exe capture with a pressed slot/bag/gift cell.
 
+Owner visual confirm is supplied by the cited `story-myroom-select/exe3`
+pack: bag-cell picks at (171,451) / (224,423)-(297,480) center the blue
+frame on the staged `MYBAGITEM1/2` rects (diff bboxes
+(129,417)-(215,486) / (218,417)-(304,486)). The earlier `exe2` pack
+(`c693cf07…998affdf`, empty tester bag) pins the negative arm: a press
+on a blank cell moves only the OS cursor and paints no frame. The
+`25c5997e…` slot-after-bag frame keeps the bag frame in place.
+
 Landed: `paint_myroom_data` stops painting `paint_cursor` amber on the
 MyRoom path. It reads the staged `MYBAGSELECT` sprite and its decoded
 86x69 frame body, then centers that body over each selected staged cell
-rect (slot, bag, gift). Geometry comes from staged `.bnd` rects and the
-sprite record only. Guards:
+rect (bag or gift) whose staged row carries a name. Geometry comes from
+staged `.bnd` rects and the sprite record only. Guards:
 `myroom_inventory_face_paints_the_staged_selection_frame_without_amber`,
 `myroom_status_face_paints_the_staged_selection_frame_without_amber`,
-`myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber`
-(all red on the amber painter: amber pixel 30, frame pixel absent), plus
+`myroom_slot_and_gift_selections_paint_the_staged_frame_without_amber`,
+and `myroom_empty_bag_cell_paints_no_selection_frame` (red before the
+populated-row filter: blank cell painted blue 255; green after), plus
 the live gate assertion in
 `live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
-Owner visual confirm is still pending after merge.
 
 ## Live boot data path (ticket #199 diagnose leg)
 
@@ -218,7 +226,12 @@ its source, never to "the data":
   equipment cell, ours-by-design) and restages the figure through
   the #193 hook; queues nothing (send shape still OPEN). Guards:
   `myroom_vacate_clears_the_selected_slot_and_restages`,
-  `myroom_vacate_queues_no_wire_send`.
+  `myroom_vacate_queues_no_wire_send`, and the live-channel-login
+  assertion in `live_boot_myroom_data_path_paints_on_channel_login`
+  (install-root skip) that clicks the bnd-paired ITEMSELL control at
+  (25,491)-(110,534) and checks the worn slot clears. The guard was
+  red-proved by disabling `apply_myroom_vacate`: the live assertion
+  failed with equipment[0] still set.
 - Equip restage unchanged (guard annotated, still green).
 - Slot-filter counts for the next agent: 11 slot buttons
   (`0X15200005..0F`) vs 16 slot images with Korean slot comments
@@ -231,7 +244,16 @@ its source, never to "the data":
   precedent — the 7.55 room capture shows `Exp.` there), WINRATION
   (`0x1540_003C`, exe spelling) paints integer percent from staged
   wins/battles (`0%` with no battles; percent sign and zero-battles
-  fallback ours-by-design). Control names pinned from the shipped
+  fallback ours-by-design). The G readout (`MGAME 0x1540_003F`, bnd
+  rect (685,421)-(780,434)) now inks the shared wallet's gem word:
+  the hash-pinned exe frames `b095a915…` (G 15527) and `929c4817…`
+  (G 626) match the live 5029 words `a73c0000` and `72020000` in
+  `~/scratch/evidence-shops/uid1-server.jsonl` /
+  `uid2-server.jsonl`. Guard:
+  `myroom_money_captions_read_the_single_wallet` (red before the
+  mapping: `None` vs `Some("15527")`). The W cell (`O2JAM 0x40`)
+  stays unpainted until a distinct cash sample separates the wallet
+  words. Control names pinned from the shipped
   `ControlList_Interface.txt` block dump (O2MONEY `0x10`,
   CHARGEMONEY `0x11`, NEXTUPEXP `0x3B`, WINRATION `0x3C`, RANK
   `0x3D`, GUILD `0x3E`, MGAME `0x3F`, O2JAM `0x40`,
@@ -257,8 +279,9 @@ its source, never to "the data":
   image-only; NOTICE stays unpainted like waiting NOTICE. Vacate
   (ITEMSELL) keeps its #200 local-clear + restage with no wire send.
   Guard: `myroom_p0_controls_answer_nothing_and_queue_no_wire`.
-- Amber stand-in kept: highlight rendering still OPEN (no rig pins
-  the real frames).
+- Highlight uses the archive's `Myroom_MybagSelect.oji` body on a
+  populated staged cell only; the amber stand-in is gone (see the
+  #305 note above).
 
 ## OPEN
 
@@ -272,12 +295,14 @@ its source, never to "the data":
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
    or gateway replay naming the entry fetch.
 4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
-   MGAME/O2JAM money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
+   O2JAM W money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
    NOTICE content). WINRATION value source pinned (wins/battles),
    format ours-by-design; NEXTUPEXP paints experience per the room
-   precedent (single-capture pin). Next step: rig capture of the
+   precedent (single-capture pin); MGAME G money inks the wallet gem
+   word (known-stats pair above). Next step: rig capture of the
    userinfo plate at known stats naming each remaining rect's source
-   and format.
+   and format — for W in particular, a wallet sample with unequal
+   gem and cash words.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
 6. Vacate clears the staged worn slot locally and restages but

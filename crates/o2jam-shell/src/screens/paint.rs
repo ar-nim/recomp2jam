@@ -1137,7 +1137,8 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// into the `MYBAGITEM` rects, gift names into the `GIFTBOX_EX`
 /// rects, identity/gift strings into their TEXT rects, and the
 /// archive's `Myroom_MybagSelect.oji` frame body centered on the
-/// selected cell of the active lower tab (bag or gifts). Slot presses
+/// selected populated cell of the active lower tab (bag or gifts);
+/// a blank cell paints no frame (exe2 empty-bag pack). Slot presses
 /// only record the cursor:
 /// the exe3 pack `25c5997e…` pins a hair-slot press after a bag pick
 /// leaving the bag rows and cell frame unchanged (story #23).
@@ -1167,25 +1168,33 @@ pub fn paint_myroom_data(
     match state.lower_tab() {
         MyRoomLowerTab::Bag => {
             paint_myroom_cells(frame, placements, bag_names, MYROOM_BAG_FIRST_CODE);
-            if let Some(rect) = state
-                .bag_cell()
+            let picked = populated_cell_index(state.bag_cell(), bag_names)
                 .and_then(|cell| myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell))
-                .map(|placed| placed.rect)
-            {
+                .map(|placed| placed.rect);
+            if let Some(rect) = picked {
                 paint_myroom_selection(frame, placements, figures, &rect);
             }
         }
         MyRoomLowerTab::Gifts => {
             paint_myroom_cells(frame, placements, gift_names, MYROOM_GIFT_FIRST_CODE);
-            if let Some(rect) = state
-                .gift_cell()
+            let picked = populated_cell_index(state.gift_cell(), gift_names)
                 .and_then(|cell| myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell))
-                .map(|placed| placed.rect)
-            {
+                .map(|placed| placed.rect);
+            if let Some(rect) = picked {
                 paint_myroom_selection(frame, placements, figures, &rect);
             }
         }
     }
+}
+
+/// Keep only a selection whose staged row actually carries a name.
+/// The exe2 empty-cell pack paints no frame on a blank row.
+fn populated_cell_index(selected: Option<usize>, names: &[String]) -> Option<usize> {
+    let index = selected?;
+    names
+        .get(index)
+        .is_some_and(|name| !name.is_empty())
+        .then_some(index)
 }
 
 /// Paint the archive selection frame over one staged cell rect.

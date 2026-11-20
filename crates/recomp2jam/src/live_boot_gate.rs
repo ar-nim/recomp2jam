@@ -26,7 +26,7 @@ mod live_boot_gate_tests {
     use o2jam_render::{pack_xrgb, Frame as RenderFrame};
     use o2jam_shell::screens::game::PlanetModal;
     use o2jam_shell::screens::side::{
-        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
+        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_VACATE_CODE,
     };
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::staging::{
@@ -1334,6 +1334,28 @@ mod live_boot_gate_tests {
             picked.iter().filter(|pixel| **pixel == amber).count(),
             0,
             "no amber stand-in survives the live staged path"
+        );
+        // #532: the bnd-paired ITEMSELL control clears the worn slot
+        // on the same live path. No wire shape is pinned, so the
+        // press must also leave the session outbox empty (no-op send).
+        let vacate = myroom
+            .placements
+            .iter()
+            .find(|placed| placed.code == MYROOM_VACATE_CODE)
+            .expect("ITEMSELL control is staged");
+        assert!(
+            live.myroom_character()
+                .is_some_and(|hero| hero.equipment[0] != 0),
+            "the live hero wears the first table item before vacating"
+        );
+        live.ingest_snapshot(&InputSnapshot::click_at(
+            vacate.rect.x + i32::try_from(vacate.rect.w / 2).unwrap_or(0),
+            vacate.rect.y + i32::try_from(vacate.rect.h / 2).unwrap_or(0),
+        ));
+        assert_eq!(
+            live.myroom_character().map(|hero| hero.equipment[0]),
+            Some(0),
+            "the ITEMSELL press clears the selected worn slot on the live path"
         );
         server.join().unwrap();
     }
