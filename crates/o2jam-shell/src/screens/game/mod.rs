@@ -17396,6 +17396,62 @@ mod game_tests {
         assert_eq!(body.title, "x");
     }
 
+    /// Exe CREATE sheet pin (ticket #517): `~/scratch/evidence-room/
+    /// create-fields-2/exe/artifacts/screenshots/
+    /// pass-02-empty-password-frame.png` (sha256
+    /// `70318790067b14ba91b45cec4ecd47df14ba7aad5bc54fbefef6147db3db671d`)
+    /// shows the password edit empty beside the typed title, and the
+    /// matching 2004 carries no lock. The staged `.bnd` edit rect must
+    /// own focus, and an untouched edit must commit an empty password.
+    #[test]
+    fn staged_create_password_edit_feeds_the_committed_lock_flag() {
+        use crate::screens::side::CREATE_ROOM_PASSWORD_CODE;
+        use crate::staging::{stage_dialog, Dialog, StageContext};
+        let Ok(bytes) = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        ) else {
+            return;
+        };
+        let art = stage_dialog(&bytes, Dialog::CreateRoom, StageContext::default())
+            .art
+            .expect("create-room stages with real bytes");
+        let placements = art.placements.clone();
+
+        let mut game = ScreenGame::new();
+        game.load_create_room_scene(art.placements, art.figures);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        assert_eq!(game.create_room_form().password, "");
+        click_staged_dialog_button(&mut game, &placements, CREATE_ROOM_PASSWORD_CODE);
+        for letter in "1234".chars() {
+            game.push_room_dialog_char(letter);
+        }
+        assert_eq!(game.create_room_form().password, "1234");
+        click_staged_dialog_button(
+            &mut game,
+            &placements,
+            crate::screens::side::CREATE_ROOM_CREATE_CODE,
+        );
+        let locked = game.take_create_room().expect("committed 2004");
+        assert!(locked.has_password);
+        assert_eq!(locked.password, "1234");
+
+        game.open_create_room_dialog();
+        assert_eq!(game.create_room_form().password, "");
+        click_staged_dialog_button(
+            &mut game,
+            &placements,
+            crate::screens::side::CREATE_ROOM_CREATE_CODE,
+        );
+        let unlocked = game.take_create_room().expect("committed 2004");
+        assert!(!unlocked.has_password);
+        assert_eq!(unlocked.password, "");
+    }
+
     #[test]
     fn create_click_without_staged_sheet_records_noop_and_keeps_lobby() {
         // The chrome rect stages but the dialog sheet never does (no
