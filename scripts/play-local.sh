@@ -13,6 +13,9 @@
 # Conformance (#206): the same scripts/lib/rig-preflight.sh checks rig-run.sh
 # enforces run here — install-root, Memoryer liveness (TCP connect probe,
 # stronger than the old ss grep), relay ports free, and audio containment.
+# Display pin (#719): this script boots OUR Rust client only. Every boot needs
+# a rig :NNN display (RIG_DISPLAY or DISPLAY); the owner's Wayland session and
+# any inherited Wine prefix are cleared before the build or the client spawn.
 # Audio policy is "attended" when sound is on (a human at a TTY acknowledges
 # the speakers) and "null" with --no-sound; scripted runs (no TTY) with
 # sound on are rejected so automated audio never reaches the speakers.
@@ -20,6 +23,8 @@ set -euo pipefail
 
 # shellcheck source=lib/rig-preflight.sh
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
+# shellcheck source=lib/rig-client-display.sh
+. "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-display.sh"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEMORYER_DIR="${MEMORYER_DIR:-$HOME/memoryer-local}"
@@ -37,6 +42,10 @@ done
 
 RIG_INSTALL_ROOT="${RIG_INSTALL_ROOT:-$REPO_ROOT/install-root/O2Jam}"
 export RIG_INSTALL_ROOT
+
+# 0. Display pin (#719): refuse the owner's :0 / Wayland seat before build,
+# token lookup, or spawn. A rig boot must name its :NNN Xvfb display.
+rig_pin_rust_client_display || exit "$?"
 
 # 1. Game data: the client stages art from install-root (git-ignored).
 if ! rig_check_install_root; then
@@ -125,7 +134,7 @@ echo "play-local: user-id $USER_ID, token ${TOKEN:0:8}…, memoryer 127.0.0.1:15
 # process tree and traps inside the wrapper, not in the replaced shell.
 exec bash "$REPO_ROOT/scripts/lib/rig-live-lock.sh" \
   run --owner "play-local:uid=$USER_ID pid=$$" -- \
-  env WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" "$BIN" online \
+  "$BIN" online \
   --host 127.0.0.1 --port 15010 \
   --user-id "$USER_ID" --token "$TOKEN" \
   "${EXTRA[@]}"

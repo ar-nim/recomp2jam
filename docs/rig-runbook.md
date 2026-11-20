@@ -31,6 +31,28 @@ One manifest per run records `pair`, `build`, `params`, `script`, and
 `seed`. One artifact layout per run holds the manifest copy, the input
 log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 
+### Rust-client display pin (#719)
+
+`scripts/play-local.sh` boots only our Rust client. Before build, token lookup,
+or spawn, it calls `scripts/lib/rig-client-display.sh` with the caller chain
+`play-local.sh -> rig_pin_rust_client_display -> rig_validated_client_display`.
+A boot must name a rig Xvfb display as `:NNN` in `RIG_DISPLAY` (preferred) or
+`DISPLAY`; the owner's `:0`, short display names, and dead displays are refused
+with exit 10. The pin exports `DISPLAY` and `RIG_DISPLAY`, clears
+`WAYLAND_DISPLAY`/`WAYLAND_SOCKET` and Wine prefix variables, and forces
+`WINIT_UNIX_BACKEND=x11`. The peer-only recipe is:
+
+```sh
+env -u WAYLAND_DISPLAY -u WINEPREFIX DISPLAY=:NNN RIG_DISPLAY=:NNN \
+  bash scripts/play-local.sh --no-sound --frame-dump DIR --input-log LOG
+```
+
+`rig-run.sh` clears an inherited `WINEPREFIX`/`RIG_WINEPREFIX` for native
+boots (binary basename `recomp2jam`, or `RIG_CLIENT_KIND=native`) before
+`rig_check_prefix`, so a native peer cannot trip exit 15 on a Wine master's
+claim. Wine launcher boots keep their prefix. The owner EXE+Wine path
+`~/scratch/owner-exe-run.sh` is untouched.
+
 ### Screenshot layout contract (#302)
 
 Every manifest declares `artifacts/screenshots` relative to the run
