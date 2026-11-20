@@ -2515,24 +2515,47 @@ fn paint_dialog_figure(
         };
         // A `(0,0)` record carries no position: the `.bnd` rect is
         // its only placement data (verified bound-body rule).
-        let at = if layer.dx == 0 && layer.dy == 0 {
-            (placement.rect.x + layer.dx, placement.rect.y + layer.dy)
-        } else {
-            (layer.dx, layer.dy)
-        };
+        let at = dialog_layer_origin(placement, layer.dx, layer.dy);
         if painted_anchors.contains(&at) {
             continue;
         }
         painted_anchors.push(at);
-        let (view_x, view_y) = anchor_in_frame(origin.0 + at.0, origin.1 + at.1, frame.w, frame.h);
-        blit_rgb555(
-            frame,
-            &layer.image.view(),
-            view_x,
-            view_y,
-            Some(layer.colorkey),
-        );
+        paint_dialog_layer(frame, placement, figure, origin, index);
     }
+}
+
+/// One record's dialog-relative origin: zero-anchor bodies land at
+/// their `.bnd` rect, authored anchors keep their absolute position.
+fn dialog_layer_origin(placement: &ScenePlacement, dx: i32, dy: i32) -> (i32, i32) {
+    if dx == 0 && dy == 0 {
+        (placement.rect.x + dx, placement.rect.y + dy)
+    } else {
+        (dx, dy)
+    }
+}
+
+/// Repaint one record of a staged dialog control at the same origin
+/// the base dialog pass uses. The frame-state pass calls this so a
+/// hover/active record lands exactly over its rest face.
+fn paint_dialog_layer(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figure: &AvatarFigure,
+    origin: (i32, i32),
+    index: usize,
+) {
+    let Some(layer) = figure.layer(index) else {
+        return;
+    };
+    let at = dialog_layer_origin(placement, layer.dx, layer.dy);
+    let (view_x, view_y) = anchor_in_frame(origin.0 + at.0, origin.1 + at.1, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        view_x,
+        view_y,
+        Some(layer.colorkey),
+    );
 }
 
 /// Paint a staged dialog scene dialog-relative (options and
@@ -2579,6 +2602,59 @@ pub(crate) fn dialog_rect_hit(placements: &[ScenePlacement], code: u32, x: i32, 
                 y,
             )
         })
+}
+
+/// Dialog control under a native pointer, using the same staged
+/// rects as the click path. Code-less backdrop/cover placements are
+/// skipped, and the smallest containing rect wins, so a button wins
+/// over the sheet frame beneath it. `None` off every control.
+#[must_use]
+pub(crate) fn dialog_control_code(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u32> {
+    let (origin_x, origin_y) = dialog_origin(placements);
+    placements
+        .iter()
+        .filter(|placed| placed.code != 0)
+        .filter(|placed| {
+            rect_hit(
+                &Rect {
+                    x: placed.rect.x + origin_x,
+                    y: placed.rect.y + origin_y,
+                    w: placed.rect.w,
+                    h: placed.rect.h,
+                },
+                x,
+                y,
+            )
+        })
+        .min_by_key(|placed| placed.rect.w.saturating_mul(placed.rect.h))
+        .map(|placed| placed.code)
+}
+
+/// Repaint one staged dialog control's chosen frame over its rest
+/// face. The caller owns the state choice; a missing placement,
+/// figure, or record paints nothing (ADR-0003).
+pub(crate) fn paint_dialog_frame_record(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    code: u32,
+    record: usize,
+) {
+    let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let Some(sprite) = placed.sprite.as_deref() else {
+        return;
+    };
+    let Some(figure) = art.figures.get(sprite) else {
+        return;
+    };
+    paint_dialog_layer(
+        frame,
+        placed,
+        figure,
+        dialog_origin(&art.placements),
+        record,
+    );
 }
 
 /// Archive-less fallback for the one-OK information sheet: the

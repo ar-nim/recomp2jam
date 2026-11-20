@@ -3,6 +3,7 @@
 
 mod channel;
 mod chat;
+mod dialog_frame;
 mod lanking;
 mod musicshop;
 mod options;
@@ -20,6 +21,7 @@ use std::time::Instant;
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::ChatState;
 pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
+use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
@@ -38,24 +40,24 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
-    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
-    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
-    paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
+    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_cash_charge_frame,
+    paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene, paint_information_message,
+    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
+    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -890,6 +892,10 @@ pub struct ScreenGame {
     /// qualified packs never mount a sheet, so these placements carry
     /// geometry only — no painter and no input ownership (ADR-0012).
     messenger_art: HashMap<MessengerSheet, SceneArt>,
+    /// Pointer/press arm for one open dialog's staged controls. The
+    /// state is seam-tested; the per-dialog pack pins stay OPEN
+    /// (`docs/dialog-frame-states.md`).
+    dialog_frames: DialogFrameState,
     /// Cart-add sheet rects parked by the live boot. The row pick is
     /// pinned only to the SHOPPING BAG panel face (audit D4), so no
     /// painter mounts this sheet and no add opcode is invented (#685).
@@ -1165,6 +1171,7 @@ impl ScreenGame {
             avatar_source: None,
             room_avatar: None,
             messenger_art: HashMap::new(),
+            dialog_frames: DialogFrameState::default(),
             shopping_bag_add_art: None,
             scene_art: std::array::from_fn(|_| None),
         }
@@ -3199,6 +3206,82 @@ impl ScreenGame {
         planet_action_at(placements, x, y)
     }
 
+    /// Open dialog and its staged sheet, when a frame-state arm can
+    /// reach it. The same art the modal painters consume; no sheet
+    /// staged means no state, so the fallback popup is untouched.
+    fn open_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
+        let (host, art) = self
+            .overlay_dialog_art()
+            .or_else(|| self.room_dialog_art())
+            .or_else(|| self.planet_modal_art())?;
+        art.has_figures().then_some((host, art))
+    }
+
+    /// One-OK sheets that layer over a side or the Room board.
+    fn overlay_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
+        if self.messenger_liveness_open {
+            Some((DialogHost::MessengerLiveness, self.relay_down_art.as_ref()?))
+        } else if self.room_no_response_dialog_open() {
+            Some((DialogHost::RoomFuse, self.relay_down_art.as_ref()?))
+        } else {
+            None
+        }
+    }
+
+    /// Room's form sheets, when one owns input.
+    fn room_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
+        match self.room_dialog {
+            Some(RoomDialog::CreateRoom) => {
+                Some((DialogHost::RoomCreate, self.create_room_art.as_ref()?))
+            }
+            Some(RoomDialog::Password { .. }) => {
+                Some((DialogHost::RoomPassword, self.password_art.as_ref()?))
+            }
+            None => None,
+        }
+    }
+
+    /// Planet-board modals, including the options tabs opened in Room.
+    fn planet_modal_art(&self) -> Option<(DialogHost, &SceneArt)> {
+        match self.planet_modal()? {
+            PlanetModal::QuitConfirm => {
+                Some((DialogHost::QuitConfirm, self.planet_quit_art.as_ref()?))
+            }
+            PlanetModal::Options => Some((DialogHost::Options, self.options_dialog.staged_art()?)),
+            PlanetModal::RelayDown => Some((DialogHost::RelayDown, self.relay_down_art.as_ref()?)),
+            PlanetModal::ChannelEnterRefused => {
+                Some((DialogHost::ChannelRefused, self.relay_down_art.as_ref()?))
+            }
+        }
+    }
+
+    /// Dialog control under one native point, through the same staged
+    /// rects the modal click path uses.
+    fn dialog_control_at(&self, x: i32, y: i32) -> Option<(DialogHost, u32)> {
+        let (host, art) = self.open_dialog_art()?;
+        dialog_control_code(&art.placements, x, y).map(|code| (host, code))
+    }
+
+    /// Rest/hover/active repaint over one open dialog's staged face.
+    /// The state choice is pure; the painter only selects the record.
+    fn paint_dialog_frame_states(&self, frame: &mut Frame<'_>) {
+        let Some((host, art)) = self.open_dialog_art() else {
+            return;
+        };
+        let hovered = self
+            .pointer
+            .and_then(|(x, y)| dialog_control_code(&art.placements, x, y));
+        for placed in &art.placements {
+            if placed.code == 0 {
+                continue;
+            }
+            let state = self.dialog_frames.frame_for(host, hovered, placed.code);
+            if let Some(record) = state.record() {
+                paint_dialog_frame_record(frame, art, placed.code, record);
+            }
+        }
+    }
+
     /// Shelf cell under the pointer on the open Item Shop side.
     /// Motion alone arms the white tooltip; the row-pick and button
     /// hover frames in the A/B sweep show no tooltip there
@@ -4771,6 +4854,12 @@ impl ScreenGame {
     /// and press agree even when no motion preceded the press.
     fn apply_pointer_down(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        // Dialog buttons keep the held face while the modal stays open;
+        // sheets that close on the click simply vanish with the press.
+        self.dialog_frames.release();
+        if let Some((host, code)) = self.dialog_control_at(x, y) {
+            self.dialog_frames.arm_press(host, code);
+        }
         if self.bare_planet_board() {
             // Pinned press feedback (#111): the planet board arms the
             // press on down and fires the action on release-inside.
@@ -4794,6 +4883,7 @@ impl ScreenGame {
     /// fires, pinned #111 arm 3).
     fn apply_pointer_up(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        self.dialog_frames.release();
         if self.bare_planet_board() {
             self.planet_pointer_up(x, y);
         }
@@ -6309,6 +6399,7 @@ impl ScreenGame {
             // screen). The side overlay owns the paint (`paint_side`).
             Screen::MusicShop => {}
         }
+        self.paint_dialog_frame_states(frame);
     }
 
     /// The active side screen: staged art plus its board overlay
@@ -6447,6 +6538,7 @@ impl ScreenGame {
             // the relay notice; the B8 pack pins one OK and no wire.
             paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
         }
+        self.paint_dialog_frame_states(frame);
     }
 
     /// Item shop: staged art when present, else the flat card. Buy,
@@ -16167,6 +16259,193 @@ mod game_tests {
             0,
         );
         assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn options_button_hold_repaints_the_active_record_until_release() {
+        // Spec #316 story 17: the active face is a held press. KEYTEST
+        // keeps the options modal open, so the down/up split is visible
+        // through the live input snapshot. Synthetic two-record body;
+        // the per-dialog record indices stay OPEN in docs.
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        let control_rect = Rect {
+            x: 60,
+            y: 181,
+            w: 40,
+            h: 20,
+        };
+        let solid_figure = |word: u16| {
+            use crate::avatar::FigureLayer;
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(
+                    &word.to_le_bytes().repeat(40 * 20),
+                    40,
+                    20,
+                )
+                .expect("options test face"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let placement = |id: &str, code: u32, sprite: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: Some(sprite.to_owned()),
+            rect: control_rect,
+        };
+        game.load_planet_option_tab(
+            PlanetOptionTab::Key,
+            vec![
+                ScenePlacement {
+                    rect: Rect {
+                        x: 217,
+                        y: 42,
+                        w: 366,
+                        h: 510,
+                    },
+                    ..placement("options-back", 0, "Dialog_Option_Key.ojs")
+                },
+                placement(
+                    "options-keytest",
+                    super::super::side::OPTION_KEY_TEST,
+                    "option-keytest.ojs",
+                ),
+                placement("options-cover", 0, "option-cover.ojs"),
+            ],
+            HashMap::from([
+                (
+                    "option-keytest.ojs".to_owned(),
+                    chrome_two_layer_figure(40, 20),
+                ),
+                ("option-cover.ojs".to_owned(), solid_figure(0x7C00)),
+            ]),
+        );
+        let pixel = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf[230 * 800 + 285]
+        };
+        let cover = pack_xrgb(0xFF, 0, 0);
+        let hover = pack_xrgb(0, 0, 0xFF);
+        let active = pack_xrgb(0, 0xFF, 0);
+        game.ingest_snapshot(&InputSnapshot::motion_to(285, 230));
+        assert!(near_xrgb(pixel(&mut game), hover), "hover repaints frame 0");
+        game.ingest_snapshot(&InputSnapshot::press_at(285, 230));
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        assert!(
+            near_xrgb(pixel(&mut game), active),
+            "held press paints frame 1"
+        );
+        game.ingest_snapshot(&InputSnapshot::release_at(285, 230));
+        assert!(
+            near_xrgb(pixel(&mut game), hover),
+            "release returns to hover"
+        );
+        assert!(!near_xrgb(pixel(&mut game), cover));
+    }
+
+    #[test]
+    fn quit_confirm_ok_hover_restores_its_staged_first_frame() {
+        // Spec #316 story 17. Live caller chain: boot stages the quit
+        // sheet -> power disc opens the modal -> pointer snapshot ->
+        // dialog hover resolution -> paint_dialog_frame_record. The
+        // cover placement stands in for a later-painted scrim so the
+        // hover repaint must restore frame 0 on top; no install data.
+        // Per-dialog hover/press packs are OPEN (`docs/dialog-frame-states.md`).
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        // Child rects are dialog-relative: origin (240,189) plus this
+        // rect lands the OK face at native (300,370).
+        let ok_rect = Rect {
+            x: 60,
+            y: 181,
+            w: 40,
+            h: 20,
+        };
+        let solid_figure = |word: u16| {
+            use crate::avatar::FigureLayer;
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(
+                    &word.to_le_bytes().repeat(40 * 20),
+                    40,
+                    20,
+                )
+                .expect("dialog test face"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let placement = |id: &str, code: u32, sprite: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: Some(sprite.to_owned()),
+            rect: ok_rect,
+        };
+        game.load_planet_quit_scene(
+            vec![
+                ScenePlacement {
+                    rect: Rect {
+                        x: 240,
+                        y: 189,
+                        w: 320,
+                        h: 220,
+                    },
+                    ..placement("dialog-back", 0, "Dialog_Question1.ojs")
+                },
+                placement("dialog-ok", QUIT_OK_CODE, "quit-ok.ojs"),
+                placement("dialog-cover", 0, "quit-cover.ojs"),
+            ],
+            HashMap::from([
+                ("quit-ok.ojs".to_owned(), chrome_two_layer_figure(40, 20)),
+                ("quit-cover.ojs".to_owned(), solid_figure(0x7C00)),
+            ]),
+        );
+        let pixel = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf[380 * 800 + 310]
+        };
+        let cover = pack_xrgb(0xFF, 0, 0);
+        let hover = pack_xrgb(0, 0, 0xFF);
+        assert!(
+            near_xrgb(pixel(&mut game), cover),
+            "cover paints over the rest face"
+        );
+        game.ingest_snapshot(&InputSnapshot::motion_to(310, 380));
+        assert!(near_xrgb(pixel(&mut game), hover), "hover repaints frame 0");
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+        assert!(
+            near_xrgb(pixel(&mut game), cover),
+            "unhover restores the rest stack"
+        );
     }
 
     #[test]
