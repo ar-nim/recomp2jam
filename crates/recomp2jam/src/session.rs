@@ -3562,6 +3562,12 @@ impl OnlineSession {
     /// Room lobby has a 2003 snapshot without this row; the exe repaints
     /// from fresh 2005 data (`docs/captures/t320/findings.md`), so a
     /// missing row here is a stale list, not an empty server.
+    ///
+    /// The same fold serves a Channel-scene observer: the row is staged
+    /// for the next Room-board paint but never injected into the 1003
+    /// channel list. The exe's Channel-dialog phase sends no 1004, so no
+    /// live 2005 reaches that socket (#506; tap `620be2ec…81a9f`, frames
+    /// `9ab9ffcc…9d60`). A Channel-dialog paint on 2005 stays OPEN.
     fn apply_room_created(&mut self, frame: &Frame) {
         let Ok(created) = RoomCreated::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable room-create broadcast");
@@ -6663,6 +6669,78 @@ pub(super) mod session_tests {
         );
         assert_eq!(session.game.listed_rooms().len(), 2);
         server.join().unwrap();
+    }
+
+    /// Ticket #506: the channel-observer arm of the 2005 fold. A peer
+    /// that has not sent 1004 gets no 2005 on the real Channel dialog
+    /// (boot-1 tap `620be2ec…81a9f`, frame series `9ab9ffcc…9d60`), so
+    /// this guard drives the broadcast through a scripted gateway and
+    /// pins only what the pinned body proves: the Room-list row is
+    /// staged for the following Room-board paint, while the Channel
+    /// board itself gains no invented row. Live Channel-dialog 2005
+    /// paint stays OPEN with that tap as the named capture.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` (Channel) ->
+    /// `drain_lobby_chat` -> `apply_lobby_frame` -> `apply_room_created`
+    /// -> `ScreenGame::upsert_room` -> Room-board paint.
+    /// Bodies: `~/scratch/evidence-room/row-state-3/exe/wire/room-stage.log`
+    /// (02:52:09, `30cac4c5…` row frame) and
+    /// `~/scratch/evidence-room/exe-master-locked-3/exe/wire/room-stage.log`
+    /// (03:31:26). Both were seen by a 1004-bearing observer at Room.
+    #[test]
+    fn channel_observer_2005_stages_the_room_row_without_repainting_the_channel_board() {
+        use o2jam_net::RoomCreated;
+        let pinned_bodies = [
+            ("00000000524f4f4d455655000100000163000000", "ROOMEVU"),
+            (
+                "000000004c4f434b4544505331323334000200000000000000",
+                "LOCKEDPS1234",
+            ),
+        ];
+        for (body_hex, title) in pinned_bodies {
+            let body = hex_bytes(body_hex);
+            let created = RoomCreated::decode_body(&body).unwrap();
+            assert_eq!(created.title, title, "pinned 2005 body");
+
+            let (mut session, server) = channel_session(move |mut stream| {
+                stream.write_all(&encode_frame(2005, &body)).unwrap();
+                assert_quiet(&mut stream);
+            });
+            session.game_mut().set_channels(vec![entry_channel()]);
+            let before = painted_game_frame(&mut session);
+
+            paint_until(&mut session, |session| {
+                session.game.listed_rooms().len() == 1
+            });
+            let after = painted_game_frame(&mut session);
+            assert_eq!(
+                before, after,
+                "the Channel dialog paints no room row from a 2005"
+            );
+            assert_eq!(session.game.listed_rooms()[0].title, title);
+            assert_eq!(session.game.channel_rows().len(), 1, "1003 rows stay");
+
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Room);
+            let painted = painted_game_frame(&mut session);
+            let mut expected_room = ScreenGame::new();
+            expected_room.menu_key(MenuKey::Back, true);
+            expected_room.click_planet(136, 88);
+            expected_room.menu_key(MenuKey::Confirm, true);
+            expected_room.set_rooms(vec![listed_room_from_created(created)]);
+            let mut expected_buf = vec![0u32; 800 * 600];
+            expected_room.paint(&mut o2jam_render::Frame {
+                buf: &mut expected_buf,
+                w: 800,
+                h: 600,
+            });
+            assert_eq!(
+                painted, expected_buf,
+                "the staged 2005 row paints like a 2003 row"
+            );
+            server.join().unwrap();
+        }
     }
 
     #[test]
