@@ -1434,6 +1434,13 @@ mod live_boot_gate_tests {
     /// (400,365) `Dialog_Information` rect -> `dismiss_relay_down_dialog`.
     /// The exe's close-cp boot-2 pack pins this wire order and the
     /// popup frame before the channel rows become visible.
+    ///
+    /// Ticket #510 pin: relay-down manifest `64caf0c4…8ebd629bbec7208`,
+    /// citation `30d1b061…2e5290c7`, tap `a33fc8d1…a40387e08913`:
+    /// 1000/1001/1002/1003 at 15:37:32, popup blue 0.986 at :33, no
+    /// gateway frame between the 1003 answer and the sheet. The exact
+    /// `order` assertion below is the client half of that witness; the
+    /// elapsed popup timing stays an exe-capture pin.
     #[test]
     fn relay_down_notice_holds_the_pinned_1003_rows_until_ok() {
         let row = ChannelState {
