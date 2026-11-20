@@ -40,7 +40,8 @@ pub struct Shot {
     pub rgb: Vec<u8>,
 }
 
-/// Capture avi, channel, channel-native, room, waiting, waiting-guest,
+/// Capture avi, channel, channel-native, channel-digits-native,
+/// room, waiting, waiting-guest,
 /// shop, shop-native, musicshop, musicshop-native, myroom, myroom-native,
 /// lanking, payment, tutorial, musicselect, loading,
 /// playing, playing-native, result, result-native, result-solo,
@@ -107,6 +108,15 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     // comparison reads the same rows the exe shows. The highlight
     // resets to row 0 (id 0, open), so the Room entry arm is unchanged.
     stage_channel_wire_mirror(&mut game);
+    // Open-row companion for `scripts/rig-channel-digits.sh`: the
+    // closed-row `channel-native` below has no digit ink to probe, so
+    // this one pins the same ten-row mirror before the scroll (#304).
+    shots.push(shoot_checked_native(
+        &mut game,
+        "channel-digits-native",
+        Screen::Channel,
+        0,
+    )?);
     scroll_channel_to_closed_rows(&mut game);
     shots.push(shoot_checked_native(
         &mut game,
@@ -2069,6 +2079,7 @@ mod tests {
             "avi",
             "planet",
             "channel",
+            "channel-digits-native",
             "channel-native",
             "room",
             "waiting",
@@ -4048,10 +4059,10 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Fifteen fixed scenes (channel carries its wire-mirror
-        // native) plus one preview per staged side and one native
-        // per staged #207 side.
-        assert_eq!(shots.len(), 15 + side_count + native_count);
+        // Sixteen fixed scenes (channel carries its open-row and
+        // closed-row wire-mirror natives) plus one preview per staged
+        // side and one native per staged #207 side.
+        assert_eq!(shots.len(), 16 + side_count + native_count);
         let loading_staged = loading_caption_staged();
         for shot in &shots {
             if !loading_staged && shot.name == "loading" {
@@ -4080,13 +4091,14 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Fourteen fixed files (channel plus its wire-mirror native,
-        // minus the never-written avi) plus staged previews and #207
-        // natives.
-        assert_eq!(written.len(), 14 + side_count + native_count);
+        // Fifteen fixed files (channel plus its open-row and closed-row
+        // wire-mirror natives, minus the never-written avi) plus staged
+        // previews and #207 natives.
+        assert_eq!(written.len(), 15 + side_count + native_count);
         assert!(!dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
         assert!(dir.join("channel-native.png").exists());
+        assert!(dir.join("channel-digits-native.png").exists());
         assert!(dir.join("waiting-guest.png").exists());
         assert!(dir.join("musicselect.png").exists());
         assert!(dir.join("playing-native.png").exists());

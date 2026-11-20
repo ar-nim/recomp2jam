@@ -266,6 +266,12 @@ const START_BROADCAST_COMMAND: u16 = 4011;
 const MUSIC_SOURCE_ENV: &str = "O2JAM_MUSIC_SOURCE";
 /// 4011 `StartResult::Success` (Memoryer `StartGameEventData`).
 const START_RESULT_SUCCESS: i32 = 0;
+/// 2009 `RoomUserCountChanged`: Memoryer sends no such frame to a
+/// channel observer (p379 taps `d66d693d…01ca7`/`1c9dbcdb…8e119`;
+/// probe `0c917c9f…7299d` saw pings only). The join count arrives in
+/// 3003 for the joiner and 3004 for the master, never in a board row
+/// update, so a scripted 2009 is a labeled no-op — no local mutation.
+const ROOM_USER_COUNT_EVENT_COMMAND: u16 = 2009;
 
 /// The result word a 4011 broadcast carries (`i32`, Memoryer
 /// `StartGameEventData.Result`): `None` for a body too short to hold
@@ -3478,6 +3484,9 @@ impl OnlineSession {
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
             id if id == RoomList::COMMAND => self.apply_room_list(&frame),
+            id if id == ROOM_USER_COUNT_EVENT_COMMAND => {
+                tracing::debug!(id, "no observer user-count event; row count unchanged");
+            }
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
@@ -3562,6 +3571,12 @@ impl OnlineSession {
     /// Room lobby has a 2003 snapshot without this row; the exe repaints
     /// from fresh 2005 data (`docs/captures/t320/findings.md`), so a
     /// missing row here is a stale list, not an empty server.
+    ///
+    /// The same fold serves a Channel-scene observer: the row is staged
+    /// for the next Room-board paint but never injected into the 1003
+    /// channel list. The exe's Channel-dialog phase sends no 1004, so no
+    /// live 2005 reaches that socket (#506; tap `620be2ec…81a9f`, frames
+    /// `9ab9ffcc…9d60`). A Channel-dialog paint on 2005 stays OPEN.
     fn apply_room_created(&mut self, frame: &Frame) {
         let Ok(created) = RoomCreated::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable room-create broadcast");
@@ -6662,6 +6677,250 @@ pub(super) mod session_tests {
             "the non-disband leave event leaves the painted rows intact"
         );
         assert_eq!(session.game.listed_rooms().len(), 2);
+        server.join().unwrap();
+    }
+
+    /// Ticket #506: the channel-observer arm of the 2005 fold. A peer
+    /// that has not sent 1004 gets no 2005 on the real Channel dialog
+    /// (boot-1 tap `620be2ec…81a9f`, frame series `9ab9ffcc…9d60`), so
+    /// this guard drives the broadcast through a scripted gateway and
+    /// pins only what the pinned body proves: the Room-list row is
+    /// staged for the following Room-board paint, while the Channel
+    /// board itself gains no invented row. Live Channel-dialog 2005
+    /// paint stays OPEN with that tap as the named capture.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` (Channel) ->
+    /// `drain_lobby_chat` -> `apply_lobby_frame` -> `apply_room_created`
+    /// -> `ScreenGame::upsert_room` -> Room-board paint.
+    /// Bodies: `~/scratch/evidence-room/row-state-3/exe/wire/room-stage.log`
+    /// (02:52:09, `30cac4c5…` row frame) and
+    /// `~/scratch/evidence-room/exe-master-locked-3/exe/wire/room-stage.log`
+    /// (03:31:26). Both were seen by a 1004-bearing observer at Room.
+    #[test]
+    fn channel_observer_2005_stages_the_room_row_without_repainting_the_channel_board() {
+        use o2jam_net::RoomCreated;
+        let pinned_bodies = [
+            ("00000000524f4f4d455655000100000163000000", "ROOMEVU"),
+            (
+                "000000004c4f434b4544505331323334000200000000000000",
+                "LOCKEDPS1234",
+            ),
+        ];
+        for (body_hex, title) in pinned_bodies {
+            let body = hex_bytes(body_hex);
+            let created = RoomCreated::decode_body(&body).unwrap();
+            assert_eq!(created.title, title, "pinned 2005 body");
+
+            let (mut session, server) = channel_session(move |mut stream| {
+                stream.write_all(&encode_frame(2005, &body)).unwrap();
+                assert_quiet(&mut stream);
+            });
+            session.game_mut().set_channels(vec![entry_channel()]);
+            let before = painted_game_frame(&mut session);
+
+            paint_until(&mut session, |session| {
+                session.game.listed_rooms().len() == 1
+            });
+            let after = painted_game_frame(&mut session);
+            assert_eq!(
+                before, after,
+                "the Channel dialog paints no room row from a 2005"
+            );
+            assert_eq!(session.game.listed_rooms()[0].title, title);
+            assert_eq!(session.game.channel_rows().len(), 1, "1003 rows stay");
+
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Room);
+            let painted = painted_game_frame(&mut session);
+            let mut expected_room = ScreenGame::new();
+            expected_room.menu_key(MenuKey::Back, true);
+            expected_room.click_planet(136, 88);
+            expected_room.menu_key(MenuKey::Confirm, true);
+            expected_room.set_rooms(vec![listed_room_from_created(created)]);
+            let mut expected_buf = vec![0u32; 800 * 600];
+            expected_room.paint(&mut o2jam_render::Frame {
+                buf: &mut expected_buf,
+                w: 800,
+                h: 600,
+            });
+            assert_eq!(
+                painted, expected_buf,
+                "the staged 2005 row paints like a 2003 row"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    /// Ticket #508: a join sends 3004 to the master and 3003 to the
+    /// joiner, but never 2009 to a channel observer. The evidence-room
+    /// tap (`~/scratch/evidence-room/row-state-3/`) shows the observer
+    /// frame still `(1/8)` after the pinned 3004 body arrived; the
+    /// 1004-bearing probe `0c917c9f…7299d` saw no 2009 either. So this
+    /// guard pins the exe behavior: the observer's local count must not
+    /// move without a 2009 frame.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` (Channel) ->
+    /// `drain_lobby_chat` -> `apply_lobby_frame` -> skip -> no row write.
+    #[test]
+    fn channel_observer_join_broadcast_does_not_mutate_the_local_row_count() {
+        let join = hex_bytes(EVIDENCE_ROOM_JOIN_BROADCAST_HEX);
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&encode_frame(3004, &join)).unwrap();
+            assert_quiet(&mut stream);
+        });
+        let channel = o2jam_net::ChannelState {
+            gateway_id: 0,
+            channel_id: 0,
+            capacity: 8,
+            population: 1,
+            active: true,
+        };
+        session.game_mut().set_channels(vec![channel]);
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P379ROOM")]);
+        let before = painted_game_frame(&mut session);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        let after = painted_game_frame(&mut session);
+
+        assert_eq!(before, after, "no count repaint from a join event");
+        assert_eq!(session.game.channel_rows(), &[channel]);
+        assert_eq!(session.game.listed_rooms()[0].user_count, 1);
+        server.join().unwrap();
+    }
+
+    /// The named no-op for the opcode the exe never sends to an
+    /// observer: even a scripted 2009 frame leaves the row count alone.
+    /// The body here is synthetic (no exe body was captured), so this
+    /// pins only the absence of a local mutation, not a wire layout.
+    #[test]
+    fn hypothetical_2009_frame_is_a_no_op_on_the_channel_observer() {
+        let (mut session, server) = channel_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2009, &[0, 0, 0, 0, 8, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P379ROOM")]);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.listed_rooms()[0].user_count, 1);
+        server.join().unwrap();
+    }
+
+    /// Ticket #512: the relay-down OK sends no game frame; the rows it
+    /// was holding are revealed only after the modal closes, and the
+    /// next face press starts the pinned entry cadence.
+    ///
+    /// Live caller chain: boot relay probe ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `hold_channel_rows_for_relay_notice` -> `enter_screen(Channel)`
+    /// -> `open_relay_down_dialog` -> `InputSnapshot` OK click ->
+    /// `click_planet_modal` -> `dismiss_relay_down_dialog` ->
+    /// `set_channels`; then face click -> `dispatch_channel_press` ->
+    /// `begin_channel_login` -> `poll_channel_login` (1004, then 2000).
+    ///
+    /// Wire pin: relay-down boot-2 tap `a33fc8d1697a2843b874feb7034099740c0a4ec1ce1b8a354e10a40387e08913`
+    /// and observe `9f942859b94d414dac78b838ce70174f5bd411ece862c5540aafa3e355f2499e`:
+    /// OK at 15:37:34/37 sends no game frame; the face click at
+    /// 15:37:45 sends 1004 -> 1005, then 4030/4031, 2000/2001,
+    /// 2026, 2002/2003, 5028/5029, 2010/2011, 2024. The full boot
+    /// reply order is guarded by `connect::tests::room_stage_gateway_sends_exe_wire_sequence`;
+    /// this guard covers the interactive OK boundary and the first two
+    /// sends the session owns. Pixels: t240 pack `ea5cc6d6…c563`.
+    #[test]
+    fn relay_down_ok_reveals_rows_first_then_starts_the_pinned_entry_wire() {
+        use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
+        use std::sync::mpsc;
+
+        let (ok_pressed, wait_for_ok) = mpsc::channel::<()>();
+        let (socket_quiet, wait_for_quiet) = mpsc::channel::<()>();
+        let held = vec![
+            entry_channel(),
+            o2jam_net::ChannelState {
+                gateway_id: 0,
+                channel_id: 9,
+                capacity: 100,
+                population: 2,
+                active: true,
+            },
+        ];
+        let (mut session, server) = channel_session(move |mut stream| {
+            wait_for_ok.recv().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(150)))
+                .unwrap();
+            let mut byte = [0u8; 1];
+            assert!(
+                stream.read_exact(&mut byte).is_err(),
+                "OK itself must send no game frame"
+            );
+            stream.set_read_timeout(None).unwrap();
+            socket_quiet.send(()).unwrap();
+
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004, "the face click sends the entry");
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, 2000, "1004 then 2000");
+            stream
+                .write_all(
+                    &CharacterInfo {
+                        nickname: "gate".to_owned(),
+                        gender: Gender::Male,
+                        level: 3,
+                        ..Default::default()
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        crate::stage_channel_list_after_relay_gate(&mut session.game, held.clone(), true);
+        assert!(session.game.relay_down_notice_pending());
+        session.game.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Planet);
+        assert!(session.game.enter_screen(Screen::Channel));
+        assert!(session.game.relay_down_dialog_open());
+        assert!(
+            session.game.channel_rows().is_empty(),
+            "rows held behind OK"
+        );
+        let before_ok = painted_game_frame(&mut session);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        assert!(
+            !session.game.relay_down_dialog_open(),
+            "OK closes the sheet"
+        );
+        assert_eq!(session.game.channel_rows(), held, "OK reveals the rows");
+        // A real frame loop polls between OK and the next press: the
+        // sheet's dismissal must leave the socket untouched there.
+        paint_frame(&mut session);
+        let after_ok = painted_game_frame(&mut session);
+        assert_ne!(before_ok, after_ok, "the revealed rows reach the canvas");
+        ok_pressed.send(()).unwrap();
+        wait_for_quiet.recv().unwrap();
+
+        session.ingest_snapshot(&InputSnapshot::click_at(502, 236));
+        paint_until(&mut session, |session| {
+            session.game.myroom_character().is_some()
+        });
+        assert_eq!(session.game.screen(), Screen::Room);
         server.join().unwrap();
     }
 

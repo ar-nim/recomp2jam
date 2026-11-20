@@ -1535,7 +1535,9 @@ impl ScreenGame {
     /// OK (or Back) on the relay notice: reveal the held rows in the
     /// already-entered Channel dialog, the exe's post-dialog state
     /// (#244, boundary corrected in #348). Returns `false` when no
-    /// notice was open.
+    /// notice was open. The OK click sends no game frame: the boot-2
+    /// tap `a33fc8d1…8913` shows the next face press owning 1004, so
+    /// this method changes local rows only (#512).
     pub fn dismiss_relay_down_dialog(&mut self) -> bool {
         if self.planet_modal() != Some(PlanetModal::RelayDown) {
             return false;

@@ -922,6 +922,14 @@ Enter payloads of the rows that were clicked: run 1's `Ch.10` row sent
   next evidence step is a gateway sending `active = 0` with a non-zero
   capacity.
 
+**Rig guard (#304).** `scripts/rig-channel-digits.sh` drives the shots
+walk and calls `scripts/rig-channel-digits-probe.py` on its open-row
+`channel-digits-native.png`. The probe decodes the ten `CH_Num` frames
+from `Interface1.opi` and checks both wells of every visible row pixel
+for pixel; it exits non-zero on any mismatch and skips cleanly without
+install-root. The closed-row `channel-native.png` has no digit ink, so
+it is not used for this assertion.
+
 **Shell consequence (code fix still to land).**
 `channel_digit` in `crates/o2jam-shell/src/screens/paint.rs` currently
 paints the raw `channel_id` (`id/10 % 10`, `id % 10`) and its doc
