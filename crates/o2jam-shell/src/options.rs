@@ -50,10 +50,11 @@
 //!
 //! Ours-by-design (never exe proof) and OPEN:
 //!
-//! - Slider↔key mapping on the Sound tab, the slider step (8 here),
-//!   and the live BGM-gain application: the exe pins the four keys
-//!   above, not which slider writes which key. Next step: rig
-//!   SAVE-diff (move one slider, SAVE, diff `option.ini`).
+//! - Slider↔key mapping on the Sound tab and the live BGM-gain
+//!   application: the exe pins the four keys above, not which slider
+//!   writes which key. The step itself is exe-pinned as 4 by
+//!   `0x43bf30` (file `0x3bf30`, evidence `ev_d3068d91…`). Next step:
+//!   rig SAVE-diff (move one slider, SAVE, diff `option.ini`).
 //! - Button→value order on the Game tab (NoteType1→0 vs 1, guide
 //!   Long/Middle/Short/NoUse→3/2/1/0, ModeFull/Win→1/2,
 //!   BlendHalf Yes/No→1/0, Longnote Used/None→1/0): the dialog
@@ -98,9 +99,11 @@ pub const DEFAULT_LANE_KEYS: [KeyCode; OPTION_LANES] = [
 /// Exe default for the four `Sound` volumes (255, full on).
 pub const DEFAULT_SOUND_VOLUME: u8 = 255;
 
-/// Ours-by-design slider step (0–255 domain): the exe pins the
-/// bounds and defaults, not the step. Next step: rig SAVE-diff.
-pub const SOUND_SLIDER_STEP: u8 = 8;
+/// Exe slider step (`0x43bf30`, file `0x3bf30`, evidence
+/// `ev_d3068d91…`): each Down/Up arm moves its volume word by 4
+/// inside the 0–255 domain. The old ours-by-design 8 was retired
+/// when that static pin landed.
+pub const SOUND_SLIDER_STEP: u8 = 4;
 
 /// Exe default `NOTE`/`NoteType` (file `0x1713c7`).
 pub const DEFAULT_NOTE_TYPE: u8 = 0;
