@@ -229,6 +229,9 @@ opens each artifact (pixel rule) and re-reads metrics JSONs rather than
 re-running scorers blind (stale packs can hold pre-fix frames)
 Gates: `bash scripts/gate-check.sh --no-push` (the only accepted evidence;
 both install-root arms); wrap any ad-hoc run in timeout 600
+Merge: run the named guards before composing any conflict resolution in
+guarded code (guard-first rule in "Merge-conflict discipline"); push only
+after gate-check rc=0 is observed in the same output
 Thinking: medium | Skips left: 3 | Exemplars: <verified SHAs or doc entries>
 Never push; never comment on or close issues. Report: the template below.
 ```
@@ -287,6 +290,22 @@ conflicts:
   context; resolve in place, or abort and restart.
 - Run `cargo check --workspace` before committing the merge; full gates
   after.
+
+Guarded conflicts and pushes (retro 2026-11-20, paint_channel):
+
+1. **Guard-first resolution.** When a conflict touches guarded code, run
+   the named guards on each parent before composing the resolution, then
+   re-run them on the resolution before staging. A resolution never adds
+   unpinned behavior: unevidenced cases stay OPEN. Worked example:
+   `e54e41ddc3868959ee77770e50ba6ccaabf35c60` removed a speculative third
+   arm from the channel-waiting-2 merge; that arm flipped the #348
+   differential guard's empty frame to equal the held frame. The unpinned
+   drained-edge case stayed OPEN.
+2. **Push only after observed green.** Push only when `gate-check` rc=0 is
+   observed in the same output; never `;`-chain a push after the gates. If a
+   red merge reaches origin, fix-forward immediately — no force, no history
+   rewrite. The paint_channel merge was pushed after `gate=101`; e54e41d was
+   the fix-forward.
 
 See `docs/agents/issue-tracker.md` (merge protocol) for the full
 sequence.
