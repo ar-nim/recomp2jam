@@ -583,6 +583,15 @@ pub struct ScreenGame {
     /// Playing was entered (`AudioBackend::samples_played` clock).
     /// Re-based on every Playing entry; never the wall clock.
     song_anchor_sample: u64,
+    /// Wall instant of the current Playing entry. The sample clock
+    /// parks between key sounds (Playing cues no scene BGM and the
+    /// device callback stops counting consumed frames when its queue
+    /// empties), so the terminal arm floors chart position with the
+    /// wall time the exe's `timeGetTime` clock would read (B38).
+    /// [`Self::live_song_position_ms`] floors live judgement, paint,
+    /// and the Playing → Result arm with it; the explicit test clock
+    /// and `paint_at` seam stay exact.
+    playing_entered_wall: Option<Instant>,
     /// Device samples per second for the song-clock conversion
     /// ([`song_position_ms`]); 44100 default — the shipped chart
     /// audio rate (VERIFIED `Music/BGM.ojm` decode, 44100 Hz, and
@@ -1094,6 +1103,7 @@ impl ScreenGame {
             flow: ScreenFlow::new(),
             playing: LivePlay::new(&[]),
             song_anchor_sample: 0,
+            playing_entered_wall: None,
             song_rate: 44_100,
             fixed_clock_step_ms: None,
             fixed_now_ms: 0,
@@ -1476,6 +1486,7 @@ impl ScreenGame {
             // the scene being left (the exe rebuilds its controls and
             // their frames per scene).
             self.waiting_start_armed = false;
+            self.playing_entered_wall = (next == Screen::Playing).then(Instant::now);
             if next == Screen::Avi {
                 self.avi_entered_wall = Some(std::time::Instant::now());
             }
@@ -6420,8 +6431,49 @@ impl ScreenGame {
         }
     }
 
+    /// Set the wall-time floor for a deterministic replay of a silent
+    /// or stalled song. `elapsed` is the song position the window
+    /// would have reached since Playing entry; production never calls
+    /// this (the entry hook stamps the real instant). Paired with the
+    /// explicit `paint_at` clock seam, it keeps terminal-state guards
+    /// free of sleeps.
+    pub fn set_playing_wall_elapsed(&mut self, elapsed: std::time::Duration) {
+        if self.flow.current() == Screen::Playing {
+            self.playing_entered_wall = Some(
+                Instant::now()
+                    .checked_sub(elapsed)
+                    .unwrap_or_else(Instant::now),
+            );
+        }
+    }
+
+    /// Live song position: the sample clock with a wall-time floor.
+    /// The device callback stops counting consumed frames once the
+    /// key-sound queue drains and Playing cues no scene BGM, so a
+    /// silent stretch would otherwise freeze judgement, note misses,
+    /// and chart end. The exe's `timeGetTime` clock (B38) keeps
+    /// running; wall time since Playing entry floors our position.
+    /// The fixed-clock replay seam and explicit `paint_at` stay exact.
+    fn live_song_position_ms(&self, sample_position_ms: u64) -> u64 {
+        if self.fixed_clock_step_ms.is_some() || self.flow.current() != Screen::Playing {
+            return sample_position_ms;
+        }
+        self.playing_entered_wall
+            .map_or(sample_position_ms, |entered| {
+                let wall_ms = u64::try_from(entered.elapsed().as_millis()).unwrap_or(u64::MAX);
+                sample_position_ms.max(wall_ms)
+            })
+    }
+
+    /// Either terminal arm of a live song: the chart played out, or
+    /// the life bar emptied before the last note (the exe's early
+    /// game-over arm). Both enter Result through the same entry hook.
+    fn should_leave_playing_for_result(&self, now_ms: u64) -> bool {
+        self.playing.is_finished(now_ms) || self.playing.is_life_empty()
+    }
+
     /// Paint with an explicit song clock (tests use this; live
-    /// paint reads the sample clock, [`Self::now_ms`]).
+    /// paint reads [`Self::live_song_position_ms`]).
     ///
     /// Every frame starts on device black: the exe's backbuffer is
     /// black wherever a scene paints no pixel (7.55 planet capture
@@ -6439,7 +6491,7 @@ impl ScreenGame {
         if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
             self.enter(Screen::Planet);
         }
-        if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
+        if self.flow.current() == Screen::Playing && self.should_leave_playing_for_result(now_ms) {
             // Song end enters Result through the entry hook, so
             // its scene-music cue (`0x13`, once — silent on the
             // 10-record bank, OPEN) fires like every other entry.
@@ -7578,7 +7630,8 @@ impl GameLoop for ScreenGame {
         // the pinned wall hold dismiss it. The former any-lane-key
         // arm was a refuted stand-in.
         if self.flow.current() == Screen::Playing {
-            let now = self.now_ms();
+            let sample_position = self.now_ms();
+            let now = self.live_song_position_ms(sample_position);
             self.strike_at(lane, now);
         }
     }
@@ -7746,7 +7799,8 @@ impl GameLoop for ScreenGame {
     fn paint(&mut self, frame: &mut Frame<'_>) {
         self.pump_dialog_queue();
         self.advance_splash_on_wall_clock();
-        let now = self.now_ms();
+        let sample_position = self.now_ms();
+        let now = self.live_song_position_ms(sample_position);
         self.paint_at(frame, now);
         if let Some(step_ms) = self.fixed_clock_step_ms {
             self.fixed_now_ms = self.fixed_now_ms.saturating_add(step_ms);

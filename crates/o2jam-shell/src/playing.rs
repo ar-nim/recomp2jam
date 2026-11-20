@@ -2259,6 +2259,16 @@ impl LivePlay {
         self.score.life.life()
     }
 
+    /// Empty life bar: the exe's early game-over arm. The scorer's
+    /// dead gate (`0x17051c`, claims B32) freezes every tally after
+    /// this point, so the shell can only reach Result from the bar
+    /// itself — the chart clock keeps running in the exe but need
+    /// not advance in ours (`LIFE-DEATH-EARLY-RESULT`).
+    #[must_use]
+    pub fn is_life_empty(&self) -> bool {
+        self.score.life.is_dead()
+    }
+
     /// Verified hold-bonus accumulator (game `+0x3978`; the lead
     /// `longNoteScore` candidate for 4016): one +10 tick per held span
     /// per advance while armed and the span window is open.
