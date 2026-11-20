@@ -3127,20 +3127,36 @@ impl OnlineSession {
                     self.loading_pacing.retry_confirm_at(now);
                 }
             }
-            LoadingGateCue::EnterPlaying => self.enter_playing_from_loading(),
+            LoadingGateCue::EnterPlaying => {
+                self.enter_playing_from_loading();
+                if self.game.screen() == Screen::Loading {
+                    // The shell still owns its chart gate. Keep the paint
+                    // heartbeat alive so it can finish and retry the handoff
+                    // instead of parking the cover (#727).
+                    self.loading_pacing.retry_playing_at(now);
+                }
+            }
         }
     }
 
-    /// Give a joined guest the chart selection its room already
-    /// carries. The 4011 body is empty on the live lane (#355), so the
-    /// exe's cover comes from the selected chart's OJN. A guest never
-    /// picks locally: its room's song is the selection, and feeding it
-    /// to `set_selected_music` runs the same catalog-token cover
-    /// staging the master's pick uses. No song, no cover: nothing is
-    /// invented.
+    /// Give a joined guest the chart its room already carries. The
+    /// 4011 body is empty on the live lane (#355), so the exe's cover
+    /// comes from the selected chart's OJN. A guest never picks locally:
+    /// its room's song is the selection, and feeding it to
+    /// `set_selected_music` runs the same catalog-token cover staging
+    /// the master's pick uses. The chart walk then stages the full
+    /// loading status the shell's Loading -> Playing gate requires; the
+    /// scripted seam pre-arms that status, but the live paint path must
+    /// do it here (#727). No song, no chart, no invented status.
     fn stage_guest_room_song(&mut self) {
-        if let Some(selection) = self.game.room_music_selection() {
-            self.game.set_selected_music(selection);
+        let Some(selection) = self.game.room_music_selection() else {
+            return;
+        };
+        let music_id = selection.music_id;
+        let level = level_for_difficulty(selection.difficulty);
+        self.game.set_selected_music(selection);
+        if let Err(source) = self.fetch_and_stage_chart(music_id, level) {
+            tracing::warn!(%source, "guest chart staging failed; loading gate holds");
         }
     }
 
@@ -4292,6 +4308,19 @@ pub(super) mod session_tests {
         buf
     }
 
+    /// Paint only when the real window would request a redraw. `None`
+    /// parks the loop until input, matching `WindowHandler::about_to_wait`;
+    /// a parked guest is the #727 stall.
+    fn paint_on_heartbeat(session: &mut OnlineSession, due: &mut Option<Instant>, now: Instant) {
+        match *due {
+            None => return,
+            Some(deadline) if now < deadline => return,
+            Some(_) => {}
+        }
+        paint_frame(session);
+        *due = session.idle_repaint_interval().map(|gap| now + gap);
+    }
+
     /// How long a drained-state assertion may wait for the fake
     /// gateway's pushes to land. Generous on purpose: the deadline
     /// only burns when the session genuinely never reaches the
@@ -4343,7 +4372,13 @@ pub(super) mod session_tests {
     /// servers report through a channel so a stalled client fails the
     /// test instead of panicking inside the server thread.
     pub(super) fn first_opcode(stream: &mut TcpStream) -> Option<u16> {
-        stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+        first_opcode_with_timeout(stream, Duration::from_secs(3))
+    }
+
+    /// Same bounded read with a caller-chosen budget for walks whose
+    /// first paint stages a real chart (debug Vorbis decode is slow).
+    fn first_opcode_with_timeout(stream: &mut TcpStream, timeout: Duration) -> Option<u16> {
+        stream.set_read_timeout(Some(timeout)).ok()?;
         let mut header = [0u8; HEADER_LEN];
         stream.read_exact(&mut header).ok()?;
         let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
@@ -8240,18 +8275,6 @@ pub(super) mod session_tests {
                 let _ = peer_loaded_send.send(first_opcode(&mut stream));
             });
 
-        // Paint only when the real window would request a redraw. `None`
-        // parks the loop until input; a parked peer is the #723 stall.
-        fn paint_when_due(session: &mut OnlineSession, due: &mut Option<Instant>, now: Instant) {
-            match *due {
-                None => return,
-                Some(deadline) if now < deadline => return,
-                Some(_) => {}
-            }
-            paint_frame(session);
-            *due = session.idle_repaint_interval().map(|gap| now + gap);
-        }
-
         master.menu_key(MenuKey::Confirm, true);
         let first_paint = Instant::now();
         let mut master_due = Some(first_paint);
@@ -8262,12 +8285,12 @@ pub(super) mod session_tests {
             && Instant::now() < deadline
         {
             let now = Instant::now();
-            paint_when_due(&mut master, &mut master_due, now);
+            paint_on_heartbeat(&mut master, &mut master_due, now);
             if master.game.screen() == Screen::Loading {
                 master.menu_key(MenuKey::Confirm, true);
                 master_due = Some(now);
             }
-            paint_when_due(&mut peer, &mut peer_due, now);
+            paint_on_heartbeat(&mut peer, &mut peer_due, now);
             thread::sleep(Duration::from_millis(10));
         }
 
@@ -8290,6 +8313,77 @@ pub(super) mod session_tests {
         }
         master_server.join().unwrap();
         peer_server.join().unwrap();
+    }
+
+    /// #727 live caller chain: `main.rs::run_online` ->
+    /// `assemble_online_session` -> `run_windowed_session` ->
+    /// `WindowHandler::about_to_wait` (gap from
+    /// `OnlineSession::idle_repaint_interval`) -> `Shell::paint_backbuffer`
+    /// -> `OnlineSession::paint` -> `poll_wire` -> `poll_waiting_chat` ->
+    /// `poll_start` -> `stage_guest_room_song` ->
+    /// `ScreenGame::set_loading_status`; then `advance_loading_gate_at`
+    /// -> `enter_playing_from_loading`. No scripted `stage_armed_loading`:
+    /// the joined guest must arm the shell gate from its own chart on
+    /// the live paint path. Archives absent -> skip cleanly (CI has no
+    /// game data).
+    #[test]
+    fn live_paced_guest_reaches_playing_without_scripted_loading_gate_arming() {
+        use o2jam_net::Request;
+
+        let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        if !chart_path.is_file() {
+            println!("skip: missing installed chart");
+            return;
+        }
+        let catalog_blob = select_catalog_blob();
+        let catalog = o2jam_file::parse_ojn_list(&catalog_blob).unwrap();
+        let mut room = guest_snapshot();
+        room.music_id = 757;
+        room.difficulty = 2;
+        room.speed = 1;
+
+        let (loaded_send, loaded_recv) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let _ = loaded_send.send(first_opcode_with_timeout(
+                &mut stream,
+                Duration::from_secs(60),
+            ));
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_joined_room(room.clone());
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.set_song_catalog(&catalog);
+        session.joined_room = Some(room);
+        session.joined_waiting = true;
+        session.set_silent_audio(true);
+        session.attach_initial_audio(false);
+        session.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+
+        let mut due = Some(Instant::now());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while session.game.screen() != Screen::Playing && Instant::now() < deadline {
+            let now = Instant::now();
+            paint_on_heartbeat(&mut session, &mut due, now);
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(
+            session.game.screen(),
+            Screen::Playing,
+            "the live-style guest parked on the unarmed Loading gate"
+        );
+        assert_eq!(
+            loaded_recv.recv_timeout(Duration::from_secs(4)).unwrap(),
+            Some(Request::ConfirmMusicLoaded.id())
+        );
+        server.join().unwrap();
     }
 
     /// #602: a blocked 4012 leaves the gate in Loading and latches no
