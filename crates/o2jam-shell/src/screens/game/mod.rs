@@ -25598,6 +25598,33 @@ mod game_tests {
     }
 
     #[test]
+    fn only_the_pinned_firststep_dispatch_can_enter_the_tutorial() {
+        // Spec #313 story 13: without an exe dispatch pin no control
+        // may invent a Tutorial transition. `S-PLAY-B3` pins the Room
+        // FIRSTSTEP dispatcher `0x4902bb` -> helper `0x495110` ->
+        // `ChangeState(0xb)`; the dimmed Planet TUTORIAL plate
+        // `0x19201006` is zeroed at construction (`0x48df50`..`0x48df8b`)
+        // and its handler `0x48e280` only picks a channel family.
+        // Seam suffices: this names the whole dispatch table and also
+        // drives a staged Room click, so an unpinned code cannot enter.
+        let entries: Vec<_> = ROOM_CONTROLS
+            .iter()
+            .filter(|control| control.action == TutorialEntry)
+            .collect();
+        assert_eq!(entries.len(), 1, "one pinned Tutorial dispatch");
+        assert_eq!(entries[0].code, 0x1320_0032, "FIRSTSTEP only");
+        assert_eq!(entries[0].id, "IDC_BUTTON_SROOM_FIRSTSTEP");
+
+        let mut game = room_lobby_with_control(0x1920_1006, "IDC_BUTTON_SPLANET_TUTORIAL");
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), None, "dead plate never enters Tutorial");
+        assert_eq!(game.tutorial_chart_globals(), None, "no chart globals");
+    }
+
+    #[test]
     fn staged_room_control_without_a_target_records_a_labelled_noop() {
         // Ticket #34: `QUICKJOIN` stands in for the staged controls
         // with no evidenced target yet (`FIRSTSTEP` now enters the
