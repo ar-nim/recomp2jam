@@ -171,6 +171,15 @@ impl LoadingGatePacing {
         }
     }
 
+    /// Keep the heartbeat after a refused handoff. The 4012 is already
+    /// latched, so this re-arms only the Playing leg; the shell's gate
+    /// gets another paint clock to finish its own chart work.
+    pub fn retry_playing_at(&mut self, now: Instant) {
+        if matches!(self.phase, LoadingGatePhase::Idle) {
+            self.phase = LoadingGatePhase::ConfirmSent { sent_at: now };
+        }
+    }
+
     /// One clocked advance. Each outward cue fires once; a later advance
     /// in the same phase is a no-op.
     #[must_use]
@@ -670,6 +679,38 @@ mod tests {
         assert_eq!(
             gate.advance_at(confirmed + Duration::from_secs(1)),
             LoadingGateCue::None
+        );
+    }
+
+    /// #727: a shell that refuses the first handoff still gets paint
+    /// clocks. Only the Playing leg re-arms, so the 4012 stays single.
+    #[test]
+    fn refused_handoff_rearms_only_the_playing_leg() {
+        use std::time::{Duration, Instant};
+
+        use super::{
+            LoadingGateCue, LoadingGatePacing, LOADING_CONFIRM_AFTER_START,
+            LOADING_PLAYING_AFTER_CONFIRM,
+        };
+
+        let start = Instant::now();
+        let mut gate = LoadingGatePacing::default();
+        gate.enter_at(start);
+        let confirmed = start + LOADING_CONFIRM_AFTER_START;
+        assert_eq!(gate.advance_at(confirmed), LoadingGateCue::SendConfirm);
+        let handoff = confirmed + LOADING_PLAYING_AFTER_CONFIRM;
+        assert_eq!(gate.advance_at(handoff), LoadingGateCue::EnterPlaying);
+        assert!(!gate.is_active());
+
+        gate.retry_playing_at(handoff);
+        assert!(gate.is_active());
+        assert_eq!(
+            gate.advance_at(handoff + LOADING_PLAYING_AFTER_CONFIRM - Duration::from_millis(1)),
+            LoadingGateCue::None
+        );
+        assert_eq!(
+            gate.advance_at(handoff + LOADING_PLAYING_AFTER_CONFIRM),
+            LoadingGateCue::EnterPlaying
         );
     }
 
