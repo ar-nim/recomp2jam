@@ -33,7 +33,8 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
   stays OPEN). `3KEY`/`7KEY` and `KEYTEST` record selection state
   only (behavior OPEN).
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
-  `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by 8 inside 0–255.
+  `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by 8 inside 0–255 in our shell
+  (ours-by-design; the exe steps by 4 — see the addendum).
   GameEffect drives the live key-strike gain; BGMusic scales the
   lobby scene-BGM cue and re-cues the running track on the slider click
   (no scene change needed). The in-song mix path stays OPEN.
@@ -83,8 +84,10 @@ consumer (file `0x16E372`).
 ## OPEN (each with its rig next step)
 
 1. Slider↔key mapping, slider step, in-song mix application —
-   next step: rig SAVE-diff (move one slider, SAVE, diff
-   `option.ini`).
+   the first two are now pinned statically (see the addendum below:
+   step 4, control IDs `0x26200002..09` / `0x26500013..16`); in-song
+   mix application still needs the rig SAVE-diff (move one slider,
+   SAVE, diff `option.ini`).
 2. Button→value orders (shape arms, guide order, Full/Win order) —
    next step: the ticket's exact rig list (one 0-vs-1 shape capture
    to name oval vs square; five tail captures to name the fifth;
@@ -144,3 +147,32 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
 `ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
 `click_options_dialog` → `apply_scene_bgm` → `AudioBackend::set_scene_bgm`),
 `option_tabs_stage_all_three_sheets_when_archives_present`.
+
+## Static wiring addendum (ticket #712, 7.55 sha256 `83a045…`)
+
+REA static pins, recorded in `~/scratch/options-static-findings.md` with the
+full evidence IDs. VAs map to file offsets by subtracting `0x400000`.
+
+- Sheet classes: RTTI names `CDOption` / `CDOptionGame` / `CDOptionSound` at
+  `0x67d8c4` / `0x67d8e0` / `0x67d900`; ctors `0x437e80` / `0x439960` /
+  `0x43adb0`; primary vftables `0x644fb4` / `0x645148` / `0x6452ac`. One scene
+  dispatcher `0x476330` constructs them at cases 5 (Key), 6 (Sound), `0xf`
+  (Game). (ev `ev_f37bff54…`, `ev_519b6283…`)
+- Key captions are sprite frames, not text. `0x438080` builds the 37-entry DIK
+  order array at object `+0x198`; `0x439230` finds a bound DIK's index there;
+  `0x439000` / `0x439780` paint frame `index + 1` on controls `0x2520900c..12`
+  / `0x25209008..0b` with three offset classes. (ev `ev_303bfa40…`,
+  `ev_16bed920…`, `ev_6973bcac…`, `ev_76f933d4…`)
+- Slider click arms `0x43bf30` step the volume word by **4** (not our 8),
+  clamped to 0 and 255; the NoteBG pair uses `0x33` as its lower bound. The
+  knobs are repainted by `0x43b690` from `trunc(volume / divisor * track_width)`
+  with divisor 255 (204 for NoteKey). Control IDs `0x26200002..09` are the
+  click arms; `0x26500013..16` are the four knobs. The first knob's setter
+  `0x551710(..., 1)` also writes `GameBGVolume`, so exe moves BGVolume and
+  GameBGVolume together. (ev `ev_d3068d91…`, `ev_aefab8e8…`)
+- Game-tab click arm `0x439f40`: `0x2f209007/008` = NoteType 1/0;
+  `0x2f209009..00c` = NoteTail 3/2/1/0; `0x2f209014/015` = Mode 2/1;
+  `0x2f209016/017` = LongnoteMode 1/0; `0x2f209005/006` = BlendHalf 1/0;
+  `0x2f209002..004` = in-memory note shape only. Load/save `0x43a630` /
+  `0x43ab00` match the table above. (ev `ev_1f10e5d7…`,
+  `ev_784693a1…`)
