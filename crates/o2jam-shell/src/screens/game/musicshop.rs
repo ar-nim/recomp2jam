@@ -36,6 +36,10 @@ pub(crate) struct MusicShopState {
     /// behind the scripted-stub seam: the shell proves the rows,
     /// the wire ride stays ASSUMED until a live gateway replay.
     pub(crate) music_shop_board: Option<MusicListAnswer>,
+    /// Last picked `MS_EX` row on the visible page. The exe press
+    /// frame is unpinned (`E-T`); this is client-only chrome over the
+    /// staged row rect, never a wire or ownership claim (#526).
+    pub(crate) music_shop_selected_row: Option<usize>,
     /// Checked song-shop cart ids in pick order (the `MS_EX` row
     /// selection behind the cart `BUYITEM` commit).
     pub(crate) music_shop_cart: Vec<u32>,
@@ -57,6 +61,7 @@ impl MusicShopState {
         self.music_shop_sort = None;
         self.music_shop_page = 0;
         self.music_shop_cart_page = 0;
+        self.music_shop_selected_row = None;
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -121,6 +126,11 @@ impl MusicShopState {
     /// Cart-list page (five rows per page).
     pub(crate) fn cart_page(&self) -> usize {
         self.music_shop_cart_page
+    }
+
+    /// Last picked row on the visible page, if any.
+    pub(crate) fn selected_row(&self) -> Option<usize> {
+        self.music_shop_selected_row
     }
 
     /// Checked song-shop cart ids in pick order.
@@ -193,6 +203,7 @@ impl MusicShopState {
     pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> bool {
         match action {
             MusicShopAction::SelectRow(slot) => {
+                self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
                 if let Some(row) = self.visible_rows().get(slot) {
                     let song_id = row.song.song_id;
                     if !self.music_shop_cart.contains(&song_id) {
@@ -205,10 +216,12 @@ impl MusicShopState {
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
                 self.music_shop_page = 0;
+                self.music_shop_selected_row = None;
                 false
             }
             MusicShopAction::MsPrev => {
                 self.music_shop_page = self.music_shop_page.saturating_sub(1);
+                self.music_shop_selected_row = None;
                 false
             }
             MusicShopAction::MsNext => {
@@ -219,6 +232,7 @@ impl MusicShopState {
                     < self.music_shop_songs.len()
                 {
                     self.music_shop_page = self.music_shop_page.saturating_add(1);
+                    self.music_shop_selected_row = None;
                 }
                 false
             }

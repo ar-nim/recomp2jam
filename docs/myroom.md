@@ -154,6 +154,26 @@ populated-row filter: blank cell painted blue 255; green after), plus
 the live gate assertion in
 `live_boot_myroom_data_path_paints_on_channel_login` (install-root skip).
 
+## Equipment wells (ticket #424, 2026-11-20)
+
+The 16 slot images `0X15600013..22` are bound rects in `State_Myroom.bnd`;
+the first eleven Korean comments (악기/헤어/소품/장갑/목걸이/상의/하의/안경/
+귀걸이/의상소품/신발) name the same parts, in the same order, as the eleven
+slot-selector buttons (`docs/myroom.md` block walk). The 2001 character body
+carries seventeen equipment words in `ItemType` order (Instrument 0 …
+Costume 16, `docs/net-protocol.md`), so well ordinal `0..11` pairs with the
+equipment array at the same index. `Itemdata_Korea.dat` sprite slots 0–1 are
+shop icons and are never worn (`docs/equip.md`); the exe's hash-pinned MyRoom
+frame shows the jacket, pants and shoes icons in their wells.
+
+Landed: `paint_myroom_slot_icons` inks each styled well from the 2001
+equipment word's staged shop portrait at the paired `.bnd` rect. Missing
+word, row, portrait, or rect paints nothing — no fallback geometry. The
+same `shop_item_portraits` map the Item Shop stages from `set_avatar_source`
+serves the wells, so equip/vacate restages update both figure and well.
+Guard: `myroom_worn_item_inks_its_staged_equipment_well` with a synthetic
+portrait and jacket slot 5; no ink before the painter was wired.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to
@@ -252,8 +272,9 @@ its source, never to "the data":
   `uid2-server.jsonl`. Guard:
   `myroom_money_captions_read_the_single_wallet` (red before the
   mapping: `None` vs `Some("15527")`). The W cell (`O2JAM 0x40`)
-  stays unpainted until a distinct cash sample separates the wallet
-  words. Control names pinned from the shipped
+  inks the other settled 5029 word — the wallet cash slot the exe's
+  file `0x163900` writes (`docs/shop-buy.md`); the same guard went red
+  `None` vs `Some("22")` before that mapping. Control names pinned from the shipped
   `ControlList_Interface.txt` block dump (O2MONEY `0x10`,
   CHARGEMONEY `0x11`, NEXTUPEXP `0x3B`, WINRATION `0x3C`, RANK
   `0x3D`, GUILD `0x3E`, MGAME `0x3F`, O2JAM `0x40`,
@@ -295,14 +316,13 @@ its source, never to "the data":
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
    or gateway replay naming the entry fetch.
 4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
-   O2JAM W money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
-   NOTICE content). WINRATION value source pinned (wins/battles),
-   format ours-by-design; NEXTUPEXP paints experience per the room
-   precedent (single-capture pin); MGAME G money inks the wallet gem
-   word (known-stats pair above). Next step: rig capture of the
-   userinfo plate at known stats naming each remaining rect's source
-   and format — for W in particular, a wallet sample with unequal
-   gem and cash words.
+   RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10, NOTICE content).
+   WINRATION value source pinned (wins/battles), format ours-by-design;
+   NEXTUPEXP paints experience per the room precedent (single-capture
+   pin); MGAME G and O2JAM W ink the two settled 5029 wallet words
+   (`docs/shop-buy.md`, file `0x163900`). Next step: rig capture of
+   the userinfo plate at known stats naming each remaining rect's
+   source and format.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
 6. Vacate clears the staged worn slot locally and restages but

@@ -38,8 +38,9 @@ use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
     list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
     paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet,
-    paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
+    paint_music_shop_row_selection, paint_music_shop_wallet, paint_myroom_data,
+    paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
     paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
@@ -5994,6 +5995,14 @@ impl ScreenGame {
         self.music_shop.cart_page()
     }
 
+    /// Last picked catalog row, shown only as staged row chrome.
+    /// No exe press frame pins this feedback (`E-T`); it carries no
+    /// wire or ownership claim (#526).
+    #[must_use]
+    pub fn music_shop_selected_row(&self) -> Option<usize> {
+        self.music_shop.selected_row()
+    }
+
     /// Checked song-shop cart ids in pick order.
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
@@ -6210,6 +6219,11 @@ impl ScreenGame {
         // flags plus the cart and both pager readouts; without
         // staged songs it paints nothing.
         if self.side == Some(SideScreen::MusicShop) {
+            paint_music_shop_row_selection(
+                frame,
+                &self.side_placements,
+                self.music_shop.selected_row(),
+            );
             paint_music_shop_board(
                 frame,
                 &self.side_placements,
@@ -6306,6 +6320,12 @@ impl ScreenGame {
         let views = myroom_gift_views(table, &self.catalog_songs, character);
         let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
         let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
+        paint_myroom_slot_icons(
+            frame,
+            placements,
+            &character.equipment,
+            &self.shop_item_portraits,
+        );
         // Identity fields belong to the status face; the exe's default
         // Inventory face hides them with the rest of that plate (#369).
         let mut captions = if self.myroom.panel() == MyRoomPanel::Status {
@@ -12995,6 +13015,67 @@ mod game_tests {
         );
     }
 
+    /// Ticket #424 wire-to-frame leg: the 2001 equipment word for a
+    /// worn jacket must ink the paired equipment well from the item
+    /// table's shop icon, at the staged `.bnd` rect. No well art or
+    /// portrait without the wire word and the item table (no
+    /// fallback geometry, ADR-0003).
+    #[test]
+    fn myroom_worn_item_inks_its_staged_equipment_well() {
+        // Live caller chain:
+        //   connect::stage_online_identity (S2C 2001 equipment) ->
+        //   ScreenGame::set_myroom_character -> set_avatar_source
+        //   (portraits from Itemdata_Korea.dat) -> GameLoop paint ->
+        //   ScreenGame::paint_at -> paint_side -> paint_myroom_overlay
+        //   -> MyRoom well placements. Synthetic figure/table only.
+        use super::super::side::{MYROOM_SLOT_IMAGE_FIRST_CODE, MYROOM_SLOT_WELLS};
+        const JACKET_SLOT: usize = 5;
+        const JACKET_ITEM_ID: i32 = 376;
+        const {
+            assert!(JACKET_SLOT < MYROOM_SLOT_WELLS);
+        }
+
+        let mut character = myroom_test_character(Vec::new());
+        character.equipment[JACKET_SLOT] = JACKET_ITEM_ID;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(character);
+        game.shop_item_portraits.insert(
+            u32::try_from(JACKET_ITEM_ID).unwrap_or(0),
+            solid_test_figure([0x00, 0x7C]),
+        );
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_IMAGE_SMYROOM_TOP".to_owned(),
+                code: MYROOM_SLOT_IMAGE_FIRST_CODE + u32::try_from(JACKET_SLOT).unwrap_or(0),
+                sprite: None,
+                rect: Rect {
+                    x: 120,
+                    y: 60,
+                    w: 48,
+                    h: 48,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (60..108).any(|y| (120..168).any(|x| buf[y * 800 + x] != 0)),
+            "the jacket's staged shop icon inks its 2001 equipment well"
+        );
+    }
+
     /// Ticket #199 breathe leg: the staged MyRoom figure must idle-
     /// breathe on the paint clock — one frame per 12-frame body per
     /// tick, single-frame bodies every paint (the #193 per-run rule
@@ -13088,7 +13169,7 @@ mod game_tests {
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             MYROOM_ITEMCASH_CODE, MYROOM_MGAME_MONEY_CODE, MYROOM_MUSICCASH_CODE,
-            MYROOM_O2CASH_CODE,
+            MYROOM_O2CASH_CODE, MYROOM_O2JAM_MONEY_CODE,
         };
         let mut game = ScreenGame::new();
         game.set_myroom_character(CharacterInfo {
@@ -13096,12 +13177,14 @@ mod game_tests {
             o2_cash: 500,
             music_cash: 120,
             item_cash: 340,
+            cash_point: 22,
             ..CharacterInfo::default()
         });
         assert_eq!(game.wallet().gem, Some(15_527));
         assert_eq!(game.wallet().o2_cash, Some(500));
         assert_eq!(game.wallet().music_cash, Some(120));
         assert_eq!(game.wallet().item_cash, Some(340));
+        assert_eq!(game.wallet().cash_point, Some(22));
         let captions = game.myroom_money_captions();
         let caption = |code: u32| {
             captions
@@ -13115,6 +13198,9 @@ mod game_tests {
         // G cell bnd rect (685,421)-(780,434): the exe's G 15527 and
         // G 626 frames match the 5029 gem words a73c0000 / 72020000.
         assert_eq!(caption(MYROOM_MGAME_MONEY_CODE), Some("15527"));
+        // W cell reads the other settled 5029 word: file `0x163900`
+        // routes it to the wallet cash slot (`docs/shop-buy.md`).
+        assert_eq!(caption(MYROOM_O2JAM_MONEY_CODE), Some("22"));
     }
 
     #[test]
@@ -13182,10 +13268,10 @@ mod game_tests {
         // Live caller chain: same 2001 staging + paint overlay as the
         // win-rate guard above; this guard pins the OPEN boundary.
         // (`docs/myroom.md` OPEN 4: identity captions leave the
-        // wallet-owned G cell and the still-unpinned W cell alone;
-        // O2MONEY/CHARGEMONEY, rank, guild, free-info, skill counts
-        // and notice have no pinned wire source, so no caption claims
-        // their rects.)
+        // wallet-owned G and W cells alone — those join in
+        // `myroom_wallet_captions` instead. O2MONEY/CHARGEMONEY,
+        // rank, guild, free-info, skill counts and notice have no
+        // pinned wire source, so no caption claims their rects.)
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_identity_captions, MYROOM_CHARGEMONEY_CODE, MYROOM_GUILD_CODE,
@@ -19384,6 +19470,48 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(424, 529));
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    /// Ticket #526 client half: a routed row pick must ink its own
+    /// staged `MS_EX` row rect, so the cart feedback is visible on
+    /// the board and not only in the hidden cart vector. The exe
+    /// press frame is still OPEN (`E-T`); this chrome is ours-by-
+    /// design over archive-pinned geometry.
+    #[test]
+    fn music_shop_row_pick_inks_the_staged_row_chrome() {
+        let mut game = open_music_shop_board(7);
+        let mut before = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut before,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.click_music_shop(19, 105);
+        assert_eq!(
+            game.music_shop_cart(),
+            vec![757],
+            "pick still stages the cart"
+        );
+        let mut after = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut after,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let row_delta = (104..190)
+            .flat_map(|y| (18..371).map(move |x| y * 800 + x))
+            .filter(|index| before[*index] != after[*index])
+            .count();
+        assert!(
+            row_delta > 0,
+            "the picked row's staged chrome changes on the board"
+        );
     }
 
     #[test]

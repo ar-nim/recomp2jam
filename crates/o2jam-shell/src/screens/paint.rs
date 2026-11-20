@@ -50,11 +50,11 @@ use super::side::{
     LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
     MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
     MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE, MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE,
-    MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_SLOT_IMAGE_FIRST_CODE, MYROOM_SLOT_WELLS,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
     SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
@@ -1133,6 +1133,36 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Myroom);
 }
 
+/// Equipment wells over the staged `0X15600013..22` rects: the 2001
+/// equipment word at each `ItemType` ordinal names an item row; that
+/// row's shop icon (sprite slot 0, never worn) inks the paired well.
+/// The first eleven comments of the slot images and slot buttons name
+/// the same parts in the same order (`docs/myroom.md`); the wire
+/// equipment array follows `ItemType` 0..16 (`docs/net-protocol.md`).
+/// No word, row, portrait, or staged well means no ink — no fallback
+/// art or literal geometry (ADR-0003).
+pub fn paint_myroom_slot_icons(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    equipment: &[i32],
+    portraits: &HashMap<u32, AvatarFigure>,
+) {
+    for (slot, item_id) in equipment.iter().enumerate().take(MYROOM_SLOT_WELLS) {
+        let Ok(item_id) = u32::try_from(*item_id) else {
+            continue;
+        };
+        let Some(portrait) = portraits.get(&item_id) else {
+            continue;
+        };
+        let code = MYROOM_SLOT_IMAGE_FIRST_CODE + u32::try_from(slot).unwrap_or(u32::MAX);
+        let Some(placed) = placements.iter().find(|placed| placed.code == code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        portrait.paint_visible_centered(frame, &rect, frame.w, frame.h, 0);
+    }
+}
+
 /// Avatar-room rows and captions over staged placements: bag names
 /// into the `MYBAGITEM` rects, gift names into the `GIFTBOX_EX`
 /// rects, identity/gift strings into their TEXT rects, and the
@@ -1701,6 +1731,50 @@ fn shop_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> 
         .iter()
         .find(|placed| placed.code == code)
         .map(|placed| placed.rect)
+}
+
+/// Client-only chrome for the last picked catalog row: a stripe
+/// inside that row's staged `MS_EX` rect. The exe row-press frame is
+/// still OPEN (`E-T`), so the tone is ours-by-design; the geometry
+/// and the pick→cart state are not. A missing row or unstaged slot
+/// paints nothing (ADR-0003).
+const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
+
+pub fn paint_music_shop_row_selection(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    selected: Option<usize>,
+) {
+    let Some(slot) = selected.and_then(|index| music_shop_slots(placements).into_iter().nth(index))
+    else {
+        return;
+    };
+    let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
+    let stripe_width = 3_u32.min(slot.w);
+    let bar_height = 2_u32.min(slot.h);
+    let bands = [
+        Rect {
+            x: slot.x,
+            y: slot.y,
+            w: stripe_width,
+            h: slot.h,
+        },
+        Rect {
+            x: slot.x,
+            y: slot.y,
+            w: slot.w,
+            h: bar_height,
+        },
+        Rect {
+            x: slot.x,
+            y: slot.y + i32::try_from(slot.h - bar_height).unwrap_or(0),
+            w: slot.w,
+            h: bar_height,
+        },
+    ];
+    for band in bands {
+        fill_rect(frame, &band, MUSIC_SHOP_PICK_TONE);
+    }
 }
 
 /// Song-shop board overlay over the staged side art: the visible

@@ -136,8 +136,9 @@ pub const MYROOM_GUILD_CODE: u32 = 0x1540_003E;
 /// frames pair with the live 5029 gem words `a73c0000` / `72020000`,
 /// so this cell inks [`WalletState::gem`].
 pub const MYROOM_MGAME_MONEY_CODE: u32 = 0x1540_003F;
-/// O2Jam-money caption (`IDC_TEXT_SMYROOM_O2JAM_MONEY`): no wire
-/// source pinned — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+/// O2Jam-money caption (`IDC_TEXT_SMYROOM_O2JAM_MONEY`): the W
+/// readout inks the second settled 5029 word, the wallet cash slot
+/// (`docs/shop-buy.md`, file `0x163900`).
 pub const MYROOM_O2JAM_MONEY_CODE: u32 = 0x1540_0040;
 /// First free-info caption (`IDC_TEXT_SMYROOM_FREEINFO1`).
 pub const MYROOM_FREEINFO_FIRST_CODE: u32 = 0x1540_0041;
@@ -183,6 +184,15 @@ pub const MYROOM_GIFT_NUM_CODE: u32 = 0x1540_004F;
 pub const MYROOM_GIFT_ITEMNAME_CODE: u32 = 0x1540_0051;
 /// Gift sender caption (`IDC_TEXT_GIFT_SENDER`).
 pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
+/// First equipment-well image (`0X15600013..22`, 16 Korean-labelled
+/// slot images in the `STATE_MYROOM` block, `docs/myroom.md`). The
+/// first eleven names match the eleven slot-selector buttons in code
+/// order, so well ordinal `0..11` pairs with the same `ItemType`
+/// ordinal in the 2001 equipment array (`docs/net-protocol.md`).
+pub const MYROOM_SLOT_IMAGE_FIRST_CODE: u32 = 0x1560_0013;
+/// Selector buttons that pair with a labelled equipment well.
+pub const MYROOM_SLOT_WELLS: usize = MYROOM_SLOT_BUTTONS;
+
 /// Large upper-right panel: `IDC_IMAGE_SMYROOM_SLOTCOVER`
 /// (`Myroom_SlotCover.ojs`, 109x81-derived 494x312 body at `.bnd` rect
 /// (240,46)-(734,358)). This is the exe's default Inventory face.
@@ -733,15 +743,22 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
     }
 }
 
-/// Money captions from the single wallet: the G readout and the
-/// three cash TEXT controls read [`WalletState`], never the character
-/// record, so the shop readout and the MyRoom plate stay one source
-/// (`--` until the matching wire words arrive; the 2001 record and
-/// the purchase replies are the only feeds).
+/// Money captions from the single wallet: the G and W readouts and
+/// the three cash TEXT controls read [`WalletState`], never the
+/// character record, so the shop readout and the MyRoom plate stay
+/// one source (`--` until the matching wire words arrive; the 2001
+/// record and the purchase replies are the only feeds). The 5029
+/// body's two words are exe-settled (`docs/shop-buy.md`, file
+/// `0x163900`): word 1 feeds the shared gem slot, word 2 the wallet
+/// cash slot that inks W.
 #[must_use]
 pub fn myroom_wallet_captions(state: &WalletState) -> Vec<(u32, String)> {
     vec![
         (MYROOM_MGAME_MONEY_CODE, wallet_amount_caption(state.gem)),
+        (
+            MYROOM_O2JAM_MONEY_CODE,
+            wallet_amount_caption(state.cash_point),
+        ),
         (MYROOM_O2CASH_CODE, wallet_amount_caption(state.o2_cash)),
         (
             MYROOM_MUSICCASH_CODE,
