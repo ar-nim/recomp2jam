@@ -93,8 +93,9 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
-    ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
-    MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, GameMode, Gender, JoinRoom,
+    JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame,
+    EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -145,7 +146,7 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 /// memory without limit (PERF-07: `usize`, never `as`).
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
 
-use RoomControlAction::{Back, Create, Options, Side, TutorialEntry};
+use RoomControlAction::{Back, Create, Options, RoomFilter, Side, TutorialEntry};
 
 /// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,12 +162,41 @@ enum RoomControlAction {
     /// Enter tutorial through the exe-pinned FIRSTSTEP helper: the
     /// side state plus the chart globals `0x495110` writes first.
     TutorialEntry,
+    /// Select one of the staged mode-filter tabs; the row list changes
+    /// locally while the exe's 2002 parameter stays unpinned (#416).
+    RoomFilter(RoomListFilter),
     /// No evidenced target yet: the router records the press and the
     /// evidence step that would wire it. Never a silent drop.
     Unwired {
         /// Next evidence step named by the click log.
         next_step: &'static str,
     },
+}
+
+/// Room-list family chosen by the three staged mode tabs. The exe's
+/// 2002 filter parameter is unpinned, so the choice filters staged rows
+/// only (#416).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RoomListFilter {
+    /// Every listed room.
+    #[default]
+    All,
+    /// Normal-mode rooms only.
+    Normal,
+    /// Live-mode rooms only.
+    Live,
+}
+
+impl RoomListFilter {
+    /// Whether one wire row belongs to this family.
+    #[must_use]
+    fn keeps(self, room: &RoomListEntry) -> bool {
+        match self {
+            Self::All => true,
+            Self::Normal => room.game_mode == GameMode::Normal.as_u8(),
+            Self::Live => room.game_mode == GameMode::Live.as_u8(),
+        }
+    }
 }
 
 /// One staged room chrome control: the bnd code, the `ControlList` id,
@@ -193,9 +223,11 @@ pub struct RoomControlNoop {
 /// tree has not traced yet: the exe `CStateRoom` click dispatch.
 const HANDLER_STEP: &str =
     "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity/room.md Input row)";
-/// Next evidence step for the three mode filters.
-const MODE_FILTER_STEP: &str =
-    "rig click on each mode filter plus a capture of the filtered room list (the list filter rule is untraced)";
+/// The exe may send a parameter on each tab press, but no pack pins a
+/// 2002 body with one. The press stays a labeled no-op on the wire while
+/// the local row filter is live (#543).
+const ROOM_FILTER_SEND_STEP: &str =
+    "tap 2002 after each mode tab press and pin the filter parameter (#543)";
 /// Next evidence step for the four chat-tab buttons.
 const CHAT_TAB_STEP: &str =
     "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";
@@ -261,9 +293,21 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     unwired(0x1320_C04B, "IDC_BUTTON_SROOM_WATINGVIEW", HANDLER_STEP),
     unwired(0x1320_000C, "IDC_BUTTON_SROOM_LEFT", HANDLER_STEP),
     unwired(0x1320_000D, "IDC_BUTTON_SROOM_RIGHT", HANDLER_STEP),
-    unwired(0x1320_1003, "IDC_BUTTON_SROOM_SHOW_ALLMODE", MODE_FILTER_STEP),
-    unwired(0x1320_1004, "IDC_BUTTON_SROOM_SHOW_NORMALMODE", MODE_FILTER_STEP),
-    unwired(0x1320_1005, "IDC_BUTTON_SROOM_SHOW_BATTLEMODE", MODE_FILTER_STEP),
+    routed(
+        0x1320_1003,
+        "IDC_BUTTON_SROOM_SHOW_ALLMODE",
+        RoomFilter(RoomListFilter::All),
+    ),
+    routed(
+        0x1320_1004,
+        "IDC_BUTTON_SROOM_SHOW_NORMALMODE",
+        RoomFilter(RoomListFilter::Normal),
+    ),
+    routed(
+        0x1320_1005,
+        "IDC_BUTTON_SROOM_SHOW_BATTLEMODE",
+        RoomFilter(RoomListFilter::Live),
+    ),
     unwired(0x1320_100E, "IDC_BUTTON_SROOM_CHAT_ALL", CHAT_TAB_STEP),
     unwired(0x1320_100F, "IDC_BUTTON_SROOM_CHAT_FRIEND", CHAT_TAB_STEP),
     unwired(0x1320_1010, "IDC_BUTTON_SROOM_CHAT_GUILD", CHAT_TAB_STEP),
@@ -300,12 +344,12 @@ fn opening_default_title_index() -> usize {
     usize::try_from(elapsed).unwrap_or(0)
 }
 
-/// Room chrome already showing its active frame: the default-active
-/// mode filter (`SHOW_ALLMODE`) and chat tab (`CHAT_ALL`) paint body
-/// frame 1 and never change on hover (EXE-pinned, `docs/hover.md`).
-/// Hover over them resolves to nothing, so the painter never repaints
-/// frame 1 with frame 0.
-const ROOM_ACTIVE_CHROME_CODES: [u32; 2] = [0x1320_1003, 0x1320_100E];
+/// Room chrome already showing its active frame outside the mode tabs:
+/// the chat tab (`CHAT_ALL`) paints body frame 1 and never changes on
+/// hover (EXE-pinned, `docs/hover.md`). The active mode tab is computed
+/// from [`RoomListFilter`] instead. Hover over an active control resolves
+/// to nothing, so the painter never repaints frame 1 with frame 0.
+const ROOM_ACTIVE_CHROME_CODES: [u32; 1] = [0x1320_100E];
 
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
@@ -567,6 +611,11 @@ pub struct ScreenGame {
     /// evidenced target (see [`RoomControlNoop`]); `None` until such a
     /// press happens.
     last_room_control_noop: Option<RoomControlNoop>,
+    /// Unfiltered wire rows: the active tab narrows `rooms` without
+    /// losing the other family when the player switches back.
+    all_rooms: Vec<RoomListEntry>,
+    /// Family selected by the staged mode tabs.
+    room_filter: RoomListFilter,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
@@ -1009,6 +1058,8 @@ impl ScreenGame {
             pointer: None,
             chat: ChatState::default(),
             last_room_control_noop: None,
+            all_rooms: Vec::new(),
+            room_filter: RoomListFilter::All,
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
@@ -1587,9 +1638,29 @@ impl ScreenGame {
     /// (`AddRoom` first-free-slot ids, `GetRoomList` empty titles);
     /// the 7.55 display rule itself stays OPEN.
     pub fn set_rooms(&mut self, rooms: Vec<RoomListEntry>) -> &mut Self {
-        self.rooms = rooms.into_iter().filter(Self::is_listed_room).collect();
+        self.all_rooms = rooms.into_iter().filter(Self::is_listed_room).collect();
         self.room_highlight = 0;
+        self.refresh_visible_rooms();
         self
+    }
+
+    /// Rebuild the rows the lobby paints and clicks from the wire list
+    /// and the active tab, keeping the highlight on a live row.
+    fn refresh_visible_rooms(&mut self) {
+        let filter = self.room_filter;
+        self.rooms = self
+            .all_rooms
+            .iter()
+            .filter(|room| filter.keeps(room))
+            .cloned()
+            .collect();
+        self.room_highlight = self.room_highlight.min(self.rooms.len().saturating_sub(1));
+    }
+
+    /// Family named by the active mode tab.
+    #[must_use]
+    pub fn room_filter(&self) -> RoomListFilter {
+        self.room_filter
     }
 
     /// Room rows currently staged for the Room painter.
@@ -1606,17 +1677,19 @@ impl ScreenGame {
             return self;
         }
         if let Some(staged) = self
-            .rooms
+            .all_rooms
             .iter_mut()
             .find(|staged| staged.number == room.number)
         {
             *staged = room;
+            self.refresh_visible_rooms();
             return self;
         }
         let insert_at = self
-            .rooms
+            .all_rooms
             .partition_point(|staged| staged.number < room.number);
-        self.rooms.insert(insert_at, room);
+        self.all_rooms.insert(insert_at, room);
+        self.refresh_visible_rooms();
         self
     }
 
@@ -1624,8 +1697,8 @@ impl ScreenGame {
     /// broadcast names the room by number; the highlight stays on a
     /// real row (or at rest when the list becomes empty).
     pub fn remove_room(&mut self, number: i32) -> &mut Self {
-        self.rooms.retain(|room| room.number != number);
-        self.room_highlight = self.room_highlight.min(self.rooms.len().saturating_sub(1));
+        self.all_rooms.retain(|room| room.number != number);
+        self.refresh_visible_rooms();
         self
     }
 
@@ -3101,6 +3174,16 @@ impl ScreenGame {
             // `0x4902bb` → `0x495110` → `ChangeState(0xb)`: set the
             // pinned tutorial globals before entering the side state,
             // never on a rejected visit. Geometry is the staged rect.
+            RoomControlAction::RoomFilter(filter) => {
+                self.room_filter = filter;
+                self.refresh_visible_rooms();
+                // The staged tab changed the local family; the wire half
+                // stays a labeled no-op until a 2002 body pins it.
+                self.last_room_control_noop = Some(RoomControlNoop {
+                    id: control.id,
+                    next_step: ROOM_FILTER_SEND_STEP,
+                });
+            }
             RoomControlAction::TutorialEntry => {
                 if self.visit_side(SideScreen::Tutorial) {
                     self.tutorial_chart_globals = Some(TUTORIAL_CHART_GLOBALS);
@@ -3169,7 +3252,13 @@ impl ScreenGame {
         // one resolves to nothing: the hover must not repaint frame 1
         // with frame 0. Filter/tab switching is unwired, so the
         // default-active pair below never moves in the shell.
-        (!ROOM_ACTIVE_CHROME_CODES.contains(&control.code)).then_some(control)
+        let tab_code = match self.room_filter {
+            RoomListFilter::All => 0x1320_1003,
+            RoomListFilter::Normal => 0x1320_1004,
+            RoomListFilter::Live => 0x1320_1005,
+        };
+        (control.code != tab_code && !ROOM_ACTIVE_CHROME_CODES.contains(&control.code))
+            .then_some(control)
     }
 
     /// Room-row index under a click, staged panels first (see
@@ -17461,6 +17550,62 @@ mod game_tests {
         assert_eq!(body.title, "x");
     }
 
+    /// Exe CREATE sheet pin (ticket #517): `~/scratch/evidence-room/
+    /// create-fields-2/exe/artifacts/screenshots/
+    /// pass-02-empty-password-frame.png` (sha256
+    /// `70318790067b14ba91b45cec4ecd47df14ba7aad5bc54fbefef6147db3db671d`)
+    /// shows the password edit empty beside the typed title, and the
+    /// matching 2004 carries no lock. The staged `.bnd` edit rect must
+    /// own focus, and an untouched edit must commit an empty password.
+    #[test]
+    fn staged_create_password_edit_feeds_the_committed_lock_flag() {
+        use crate::screens::side::CREATE_ROOM_PASSWORD_CODE;
+        use crate::staging::{stage_dialog, Dialog, StageContext};
+        let Ok(bytes) = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        ) else {
+            return;
+        };
+        let art = stage_dialog(&bytes, Dialog::CreateRoom, StageContext::default())
+            .art
+            .expect("create-room stages with real bytes");
+        let placements = art.placements.clone();
+
+        let mut game = ScreenGame::new();
+        game.load_create_room_scene(art.placements, art.figures);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        assert_eq!(game.create_room_form().password, "");
+        click_staged_dialog_button(&mut game, &placements, CREATE_ROOM_PASSWORD_CODE);
+        for letter in "1234".chars() {
+            game.push_room_dialog_char(letter);
+        }
+        assert_eq!(game.create_room_form().password, "1234");
+        click_staged_dialog_button(
+            &mut game,
+            &placements,
+            crate::screens::side::CREATE_ROOM_CREATE_CODE,
+        );
+        let locked = game.take_create_room().expect("committed 2004");
+        assert!(locked.has_password);
+        assert_eq!(locked.password, "1234");
+
+        game.open_create_room_dialog();
+        assert_eq!(game.create_room_form().password, "");
+        click_staged_dialog_button(
+            &mut game,
+            &placements,
+            crate::screens::side::CREATE_ROOM_CREATE_CODE,
+        );
+        let unlocked = game.take_create_room().expect("committed 2004");
+        assert!(!unlocked.has_password);
+        assert_eq!(unlocked.password, "");
+    }
+
     #[test]
     fn create_click_without_staged_sheet_records_noop_and_keeps_lobby() {
         // The chrome rect stages but the dialog sheet never does (no
@@ -23044,6 +23189,71 @@ mod game_tests {
         assert!(game.leave_side());
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    /// Filter tabs select the list family locally (ticket #416). The
+    /// 2002 parameter the exe may send on a tab press stays OPEN — no
+    /// pack pins one — so this guard covers the staged-rect click and
+    /// the rows the lobby paints, not a wire send.
+    #[test]
+    fn room_filter_tabs_keep_only_their_family_of_rows() {
+        use o2jam_net::GameMode;
+        let mut game = ScreenGame::new();
+        let mut rooms = two_rooms();
+        rooms[1].game_mode = GameMode::Live.as_u8();
+        let normal_title = rooms[0].title.clone();
+        let live_title = rooms[1].title.clone();
+        game.set_rooms(rooms);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+
+        let placements = [
+            (0x1320_1003u32, 10),
+            (0x1320_1004u32, 60),
+            (0x1320_1005u32, 110),
+        ]
+        .into_iter()
+        .map(|(code, x)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: format!("FILTER_{code:X}"),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 30,
+                h: 30,
+            },
+        })
+        .collect();
+        game.load_scene(Screen::Room, placements, HashMap::new());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(75, 25));
+        assert_eq!(game.room_filter(), RoomListFilter::Normal);
+        let noop = game.room_control_noop().expect("the send stays OPEN");
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_SHOW_NORMALMODE");
+        assert!(noop.next_step.contains("2002"));
+        let titles: Vec<&str> = game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec![normal_title.as_str()]);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(125, 25));
+        assert_eq!(game.room_filter(), RoomListFilter::Live);
+        let titles: Vec<&str> = game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec![live_title.as_str()]);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(25, 25));
+        assert_eq!(game.room_filter(), RoomListFilter::All);
+        assert_eq!(game.listed_rooms().len(), 2);
     }
 
     #[test]
