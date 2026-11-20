@@ -28,7 +28,7 @@ Shared evidence pins (reused, never re-derived):
 
 | scene | hover guard | click guard | evidence |
 |---|---|---|---|
-| Planet | `hovered_planet_action_tracks_pointer_motion`, `hard_normal_and_drum_sweeps_arm_their_emblems`, `disc_sweep_arms_the_gear_and_exit_discs`, `planet_hover_stays_off_while_a_modal_owns_the_board`, `playstop_hover_arms_the_frame_swap_cell` | `click_dismisses_splash_into_planet_board`, `face_click_*` (channel entry) | rig sweep bboxes; #111 press split |
+| Planet | `hovered_planet_action_tracks_pointer_motion`, `hard_normal_and_drum_sweeps_arm_their_emblems`, `disc_sweep_arms_the_gear_and_exit_discs`, `planet_hover_stays_off_while_a_modal_owns_the_board`, `playstop_hover_arms_the_frame_swap_cell` | `click_keeps_splash_until_a_pinned_key`, `face_click_*` (channel entry) | rig sweep bboxes; #111 press split |
 | Channel | `channel_chrome_sweep_arms_rows_but_not_chrome`, `channel_hover_follows_the_scrolled_viewport`, `channel_hover_survives_a_slash_draft` | `x_button_click_closes_the_dialog_to_the_planet_board`, `channel_scroll_bar_body_click_is_a_labelled_noop`, `empty_channel_list_answers_no_hover_or_click` | bnd-pinned X rect (541,151)-(589,189); NO PAGER readout |
 | Waiting | `waiting_chrome_sweep_arms_no_hover_state` | `waiting_start_press_fires_on_down_and_holds_on_release`, `waiting_team_sweep_queues_4004_then_4008_per_button`, `waiting_unwired_chrome_clicks_land_nowhere`, `waiting_dialog_up_routes_rows_and_holds_chrome` | 4004/4008 relay pins |
 | Result | `result_chrome_sweep_paints_no_hover_state`, `result_rank_rows_are_not_chrome` | `result_retry_press_fires_on_down_and_queues_4010_once`, `result_back_release_outside_holds_rooms` | 4010/4021 relay pins (#87/#88) |

@@ -1681,7 +1681,9 @@ mod live_boot_gate_tests {
             }],
             HashMap::new(),
         );
-        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 300));
+        // #385: the pinned ESC key leaves Avi; a canvas click is not
+        // an exe dismiss edge any more.
+        game.menu_key(o2jam_shell::MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
 
         game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(136, 88));

@@ -435,23 +435,23 @@ const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
-/// Input wiring so far: Escape and a canvas click dismiss the splash
-/// onto the bare planet board; lane keys stay inert (#356) and the
-/// splash auto-advances on its measured 5 s hold (guard:
-/// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
-/// clock for the hold (ticket #54, claims B38); the fixed-clock
-/// path stays the headless seam. The exe set is only partly pinned
-/// (Escape dismisses within ~0.3 s, `~/scratch/avi-hold/run3-escape/`;
-/// Enter and Space show no fast dismiss — `~/scratch/wt24-rig/`
-/// `key-enter/` and `key-space/` both follow the ~5 s timer).
-/// OPEN: the full `VK` sweep; the lane-key stand-in is removed, not
-/// replaced by a claim that Escape is the only exe key (guards:
-/// `lane_press_keeps_the_staged_splash_visible`,
-/// `lane_keys_keep_the_splash_until_escape_or_the_pinned_hold`,
-/// `click_dismisses_splash_into_planet_board`,
-/// `splash_click_edge_lands_the_same_bare_board_as_escape`,
+/// Input wiring so far: ESC (`0x1b`) and CR (`0x0d`) dismiss the
+/// splash onto the bare planet board; lane keys and canvas clicks
+/// stay inert (#385), and the splash auto-advances on its measured
+/// 5 s hold (guard: `splash_auto_advances_at_timeout`). Windowed runs
+/// ride the wall clock for the hold (ticket #54, claims B38); the
+/// fixed-clock path stays the headless seam. The two key codes are
+/// armed by the exe helper at VA `0x4f3e70` / file `0xf3e70`
+/// (`ev_3bd108e9…`), and ESC fast-dismissed on the qualified rig boot
+/// (`~/scratch/avi-completion/win1/exe/`). OPEN: the wider VK sweep,
+/// which the repeating splash cycles leave ambiguous, and any exe
+/// click dismiss (guards: `lane_press_keeps_the_staged_splash_visible`,
+/// `lane_keys_keep_the_splash_until_a_pinned_key_or_the_pinned_hold`,
+/// `click_keeps_splash_until_a_pinned_key`,
+/// `pinned_key_dismiss_edges_land_the_same_bare_board`,
 /// `escape_dismisses_splash_into_planet_board`,
-/// `splash_menu_keys_keep_splash`).
+/// `enter_dismisses_splash_into_planet_board`,
+/// `splash_unarmed_menu_keys_keep_splash`).
 /// Team buttons a waiting room offers (`TEAMA..H`, 0..7 — the
 /// shared toggle helper's index space, VA `0x48c810`).
 const TEAM_SLOT_COUNT: usize = 8;
@@ -4479,9 +4479,10 @@ impl ScreenGame {
             return;
         }
         match self.flow.current() {
-            Screen::Avi => {
-                self.enter(Screen::Planet);
-            }
+            // #385: no exe pin makes a canvas click an Avi dismiss
+            // edge; the click stand-in is removed. Only the armed
+            // byte codes (ESC/CR, `avi_key`) leave the splash.
+            Screen::Avi => {}
             Screen::Channel => self.click_channel_row(x, y),
             Screen::Room => self.click_room_row(x, y),
             Screen::Waiting => self.click_waiting(x, y),
@@ -6990,12 +6991,13 @@ impl ScreenGame {
         }
     }
 
-    /// Splash keys: Escape dismisses (rig-pinned,
-    /// `~/scratch/avi-hold/run3-escape/`), while Confirm (Enter), Up,
-    /// and Down keep the splash (Enter shows no fast dismiss on the
-    /// isolated rig, `~/scratch/wt24-rig/key-enter/`).
+    /// Splash keys: the two byte codes the 7.55 helper arms —
+    /// ESC `0x1b` and CR `0x0d` (VA `0x4f3e70`, file `0xf3e70`,
+    /// `ev_3bd108e9…`) — dismiss onto the bare board. The wider VK
+    /// sweep is OPEN: the repeating splash cycles do not qualify
+    /// any other key, and no click dismiss is pinned (#385).
     fn avi_key(&mut self, key: MenuKey) {
-        if key == MenuKey::Back {
+        if matches!(key, MenuKey::Back | MenuKey::Confirm) {
             self.enter(Screen::Planet);
         }
     }
@@ -8080,10 +8082,13 @@ mod game_tests {
     }
 
     #[test]
-    fn click_dismisses_splash_into_planet_board() {
+    fn click_keeps_splash_until_a_pinned_key() {
+        // No exe click-dismiss pin: a canvas click is not an Avi edge.
         let mut game = ScreenGame::new();
         assert_eq!(game.screen(), Screen::Avi);
         game.ingest_snapshot(&InputSnapshot::click_at(400, 300));
+        assert_eq!(game.screen(), Screen::Avi);
+        game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
     }
 
@@ -13994,10 +13999,10 @@ mod game_tests {
     }
 
     #[test]
-    fn avi_boot_reaches_the_bare_planet_board_on_escape_and_hold_edges() {
-        // Escape edge (#356): boot shows the staged splash and the
-        // pinned Back key dismisses onto the bare board. Lane keys
-        // no longer skip the hold (separate guard above).
+    fn avi_boot_reaches_the_bare_planet_board_on_pinned_keys_and_hold_edges() {
+        // #385: the two exe-armed byte codes (CR 0x0d, ESC 0x1b) are
+        // the only pinned splash dismiss edges. Lane keys and clicks
+        // no longer skip the hold (separate guards below).
         let mut keyed = staged_splash_boot();
         assert_eq!(keyed.screen(), Screen::Avi);
         let boot_hash = keyed.state_hash();
@@ -14021,14 +14026,13 @@ mod game_tests {
     }
 
     #[test]
-    fn splash_menu_keys_keep_splash() {
-        // Dismiss-set boundary: Back (Escape) leaves the splash;
-        // Confirm (Enter), Up, and Down keep it (rig-pinned Enter
-        // non-dismiss, `~/scratch/wt24-rig/key-enter/`). Lane keys
-        // keep it too since #356; the canvas-click dismiss arm stays
-        // a separate stand-in.
+    fn splash_unarmed_menu_keys_keep_splash() {
+        // Dismiss-set boundary: Back (ESC) and Confirm (CR) leave the
+        // splash; Up and Down stay unarmed. The wider VK sweep is
+        // OPEN (the repeating splash cycles make its up/down phase
+        // ambiguous), so no other key is claimed as an exe dismiss.
         let mut game = staged_splash_boot();
-        for key in [MenuKey::Confirm, MenuKey::Up, MenuKey::Down] {
+        for key in [MenuKey::Up, MenuKey::Down] {
             game.menu_key(key, true);
             assert_eq!(game.screen(), Screen::Avi, "{key:?} keeps the splash");
         }
@@ -14038,12 +14042,12 @@ mod game_tests {
     /// `WindowHandler::deliver_snapshot` -> `GameLoop::ingest_snapshot`
     /// -> `InputEdge::Lane` -> `GameLoop::lane_key` -> this game.
     /// Space (lane 3) and the other six bound lanes must keep the
-    /// splash: the exe's Enter/Space rig legs follow the ~5 s hold,
-    /// while Escape (`avi-hold/run3-escape/`) is the pinned fast
-    /// dismiss. The full exe VK set stays OPEN; this guard only
-    /// removes the refuted any-lane-key stand-in.
+    /// splash: #385 pins only the exe-armed ESC/CR byte codes, and
+    /// the qualified boot (`~/scratch/avi-completion/win1/exe/`)
+    /// fast-dismisses on ESC. The wider VK sweep stays OPEN; this
+    /// guard removes the refuted any-lane-key stand-in.
     #[test]
-    fn lane_keys_keep_the_splash_until_escape_or_the_pinned_hold() {
+    fn lane_keys_keep_the_splash_until_a_pinned_key_or_the_pinned_hold() {
         assert_eq!(crate::lane_key(3), Some(winit::keyboard::KeyCode::Space));
         let mut game = staged_splash_boot();
         {
@@ -14067,9 +14071,9 @@ mod game_tests {
 
     #[test]
     fn escape_dismisses_splash_into_planet_board() {
-        // Escape (Back) dismisses within ~0.3 s on the rig
-        // (`~/scratch/avi-hold/run3-escape/`): Back leaves the splash
-        // for the bare planet board, unlike the kept menu keys above.
+        // Escape (VK 0x1b, Back) dismissed within 0.37 s on the
+        // qualified rig boot (`~/scratch/avi-completion/win1/exe/`,
+        // key.log SPLASH_AT 11.38 / KEY_SENT 13.61 / GONE_AT 13.98).
         let mut game = staged_splash_boot();
         assert_eq!(game.screen(), Screen::Avi);
         game.menu_key(MenuKey::Back, true);
@@ -14077,21 +14081,33 @@ mod game_tests {
     }
 
     #[test]
-    fn splash_click_edge_lands_the_same_bare_board_as_escape() {
-        // Third boot edge: a canvas click reaches the same bare board
-        // (and the same state hash) as the pinned Escape edge — every
-        // remaining dismiss arm converges, no input invents a scene.
+    fn enter_dismisses_splash_into_planet_board() {
+        // Enter (VK 0x0d, Confirm) is the second byte code armed by the
+        // exe helper at VA 0x4f3e70 / file 0xf3e70 (ev_3bd108e9…).
+        let mut game = staged_splash_boot();
+        assert_eq!(game.screen(), Screen::Avi);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn pinned_key_dismiss_edges_land_the_same_bare_board() {
+        // Both armed byte codes converge on one bare board state; the
+        // unpinned click arm must not reach that board at all.
         let mut keyed = staged_splash_boot();
         keyed.menu_key(MenuKey::Back, true);
         assert_eq!(keyed.screen(), Screen::Planet);
+        let mut confirmed = staged_splash_boot();
+        confirmed.menu_key(MenuKey::Confirm, true);
+        assert_eq!(confirmed.screen(), Screen::Planet);
+        assert_eq!(
+            confirmed.state_hash(),
+            keyed.state_hash(),
+            "ESC and CR edges land the same board state"
+        );
         let mut clicked = staged_splash_boot();
         clicked.ingest_snapshot(&InputSnapshot::click_at(400, 300));
-        assert_eq!(clicked.screen(), Screen::Planet);
-        assert_eq!(
-            clicked.state_hash(),
-            keyed.state_hash(),
-            "click and key edges land the same board state"
-        );
+        assert_eq!(clicked.screen(), Screen::Avi, "click is not an Avi edge");
     }
 
     fn walk_to_lobby(game: &mut ScreenGame, lobby: Screen) {
@@ -20240,26 +20256,22 @@ mod game_tests {
     }
 
     #[test]
-    fn splash_chrome_absence_sweep_every_click_lands_the_same_board() {
+    fn splash_chrome_absence_sweep_every_click_keeps_the_splash() {
         // Ticket #163 (splash leg): the splash has no chrome — no
-        // hover state arms anywhere and every canvas click dismisses
-        // to the same bare board (no per-control routing).
-        // Deliberate: the whole-screen dismiss is the gesture, not a
-        // control.
-        let mut hashes = Vec::new();
+        // hover state arms anywhere. #385 removes the click stand-in:
+        // no point on the canvas is an exe-pinned dismiss edge.
         for (x, y) in [(0, 0), (799, 0), (0, 599), (799, 599), (400, 300)] {
             let mut game = ScreenGame::new();
             assert_eq!(game.screen(), Screen::Avi);
             assert_no_side_hover(&mut game, x, y);
             assert_eq!(game.screen(), Screen::Avi);
             game.ingest_snapshot(&InputSnapshot::click_at(x, y));
-            assert_eq!(game.screen(), Screen::Planet);
-            hashes.push(game.state_hash());
+            assert_eq!(
+                game.screen(),
+                Screen::Avi,
+                "click at ({x},{y}) must not dismiss the splash"
+            );
         }
-        assert!(
-            hashes.windows(2).all(|pair| pair[0] == pair[1]),
-            "all splash clicks converge on one board"
-        );
     }
 
     #[test]
