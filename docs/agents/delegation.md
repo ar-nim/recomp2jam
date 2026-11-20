@@ -80,6 +80,13 @@ The senior puts the grant in the brief; every write outside it stays senior work
   Once the owner had to point out the agent would never receive the steer.
   The senior assumed delivery and never checked status.
 
+1. **Two-round rework cap.** A leg that fails verification twice is
+   reassigned to senior hands; no third steer. Retro #240: three steer
+   rounds before the agent stood down after byte-identical captures and a
+   trimmed input log; the ticket stayed open for a fresh senior-owned leg.
+   Count rounds with a recorded verification verdict, not delivery checks or
+   status pokes.
+
 ## Show two, then delegate
 
 Before delegating a batch of similar items (guards, backfills, ports):
@@ -160,6 +167,19 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.
 
+Close handoff rules (retro #175):
+
+1. **Ancestor check before close.** A fix is not done until
+   `git merge-base --is-ancestor <fix-sha> <branch-under-test>` passes; quote
+   the command and its rc=0 output in the close record. The #175 fix
+   (d1cac8f) landed on main only and never reached the branch under test, so
+   the owner live-tested a binary without the fix and got a false
+   "fix failed".
+2. **End-of-work switch-back.** The mandatory final step of every delegation
+   flow returns the main checkout to `main`; confirm with
+   `git -C /home/arnim/Projects/recomp2jam branch --show-current`. Owner rule
+   2026-11-13 (#175): the next session starts from a known branch.
+
 ## Senior completeness pre-flight
 
 Run this list immediately before posting any close, retro, or merge note.
@@ -216,6 +236,9 @@ opens each artifact (pixel rule) and re-reads metrics JSONs rather than
 re-running scorers blind (stale packs can hold pre-fix frames)
 Gates: `bash scripts/gate-check.sh --no-push` (the only accepted evidence;
 both install-root arms); wrap any ad-hoc run in timeout 600
+Merge: run the named guards before composing any conflict resolution in
+guarded code (guard-first rule in "Merge-conflict discipline"); push only
+after gate-check rc=0 is observed in the same output
 Thinking: medium | Skips left: 3 | Exemplars: <verified SHAs or doc entries>
 Never push; never comment on or close issues. Report: the template below.
 ```
@@ -274,6 +297,22 @@ conflicts:
   context; resolve in place, or abort and restart.
 - Run `cargo check --workspace` before committing the merge; full gates
   after.
+
+Guarded conflicts and pushes (retro 2026-11-20, paint_channel):
+
+1. **Guard-first resolution.** When a conflict touches guarded code, run
+   the named guards on each parent before composing the resolution, then
+   re-run them on the resolution before staging. A resolution never adds
+   unpinned behavior: unevidenced cases stay OPEN. Worked example:
+   `e54e41ddc3868959ee77770e50ba6ccaabf35c60` removed a speculative third
+   arm from the channel-waiting-2 merge; that arm flipped the #348
+   differential guard's empty frame to equal the held frame. The unpinned
+   drained-edge case stayed OPEN.
+2. **Push only after observed green.** Push only when `gate-check` rc=0 is
+   observed in the same output; never `;`-chain a push after the gates. If a
+   red merge reaches origin, fix-forward immediately — no force, no history
+   rewrite. The paint_channel merge was pushed after `gate=101`; e54e41d was
+   the fix-forward.
 
 See `docs/agents/issue-tracker.md` (merge protocol) for the full
 sequence.

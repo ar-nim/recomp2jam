@@ -32,6 +32,11 @@ himself, against the actual implementation, BEFORE merging or closing:
    respawn the junior (see `docs/agents/delegation.md`), then re-verify.
 4. Post the criterion-by-criterion table in the merge/close comment so the
    owner can audit it. Tick the boxes only for MET criteria.
+5. Run the close-handoff steps from `docs/agents/delegation.md` ("Verify,
+   don't trust"): the fix commit passes
+   `git merge-base --is-ancestor <fix-sha> <branch-under-test>`, and the main
+   checkout is back on `main` at end of work (retro #175: the owner's false
+   "fix failed" came from a binary built without the fix).
 
 Historical tickets with `## Acceptance criteria` were found closed with all
 boxes blank (the 2026-11-17 acceptance audit); this rule is the guard against

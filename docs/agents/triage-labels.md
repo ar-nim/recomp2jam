@@ -123,7 +123,10 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    against the implementation and records `MET` / `NOT MET` / `OPEN` per
    criterion with its command and output (`docs/agents/issue-tracker.md`,
    "Acceptance-criteria review before any close"). Any NOT MET or OPEN blocks
-   the close; green gates alone never tick a box.
+   the close; green gates alone never tick a box. The close-handoff steps in
+   `docs/agents/delegation.md` ("Verify, don't trust") are mandatory too:
+   ancestor check on the branch under test, and the main checkout back on
+   `main` at end of work (retro #175).
 3. File tracker issues sequentially through `scripts/issue-create.sh` (the
    mandated creation path) and read back the title per number; never run
    parallel creates or assume their output order (#487).
