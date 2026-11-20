@@ -60,6 +60,19 @@ points there); this file is the index and the home for the rest.
 
 ## Rig corrections (brief authors read this)
 
+- Every test reading install-root skips cleanly when the archives are
+  absent (CARGO_MANIFEST_DIR-anchored guard + early return), and the suite
+  is verified green both with data present and hidden; CI has no game data.
+- To pin what value the exe renders from a wire field, put a scratch TCP
+  proxy in front of Memoryer and rewrite the one field in the reply: the
+  framing is plaintext `[u16 len][u16 id][body]`, so a value-source question
+  becomes a pixel read. (Recipe lived in ~/scratch/digits-rig/proxy.py -
+  recreate from this section.)
+- Research lanes write findings to disk INCREMENTALLY after every
+  experiment batch, and a killed lane's work is continued from an inventory
+  of its worktree and packs, never redone blind
+  (`docs/agents/delegation.md`, "Resume discipline").
+
 - There is **no** `scripts/playwright.py`. The blessed shot kit is
   `scripts/rig-run.sh` + `scripts/rig-wine.sh` + `scripts/wine-scene.py`.
 - The channel doc is `docs/parity/channel.md` (not `docs/specs/`).
