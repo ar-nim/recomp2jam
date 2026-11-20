@@ -4040,6 +4040,7 @@ pub(super) mod session_tests {
         UpdateGameStats, WaitingMusicChanged, WireMessage, HEADER_LEN,
     };
     use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord, StartGateVerdict};
+    use o2jam_shell::screens::side::RoomDialog;
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
     use super::{
@@ -11619,6 +11620,80 @@ pub(super) mod session_tests {
         );
         paint_frame(&mut session);
         assert!(!session.game.room_no_response_dialog_open());
+        server.join().unwrap();
+    }
+
+    /// #689 live dismissal stack: two OK taps before the paint queue
+    /// two type-100 records. The first pops only the fuse sheet; the
+    /// second pops the create-room form it covered, still locally.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_room_user_list_fuse` ->
+    /// `ScreenGame::pump_room_user_list_fuse_at` -> Information OK ->
+    /// `post_room_no_response_dismissal` -> `ScreenGame::paint` ->
+    /// `pump_dialog_queue`. Named exe click: #367 dossier TEXT
+    /// `0x21400003` / OK `0x21200002`; no qualified tapped pack yet.
+    #[test]
+    fn fuse_ok_pops_one_dialog_level_and_leaves_the_room_sheet_below() {
+        let (port, server) = fake_gateway(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(120)))
+                .unwrap();
+            let mut bytes = [0u8; 64];
+            match stream.read(&mut bytes) {
+                Ok(0) => panic!("gateway closed"),
+                Ok(count) => {
+                    let frame = decode_frame(&bytes[..count]).unwrap();
+                    panic!("OK must not put frame {} on the wire", frame.id);
+                }
+                Err(error) => assert!(matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )),
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        game.open_create_room_dialog();
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        assert!(game.pump_room_user_list_fuse_at(now));
+        assert!(game.room_no_response_dialog_open());
+        assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        assert_eq!(
+            session.game.room_no_response_dismissal_queued(),
+            Some(100),
+            "each OK posts one type-100 record"
+        );
+        paint_frame(&mut session);
+        assert!(!session.game.room_no_response_dialog_open());
+        assert_eq!(
+            session.game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "one OK pops exactly one level"
+        );
+        // Only the two queued dismissals belong to this tap pair.
+        // Stop the room poll before the second paint so a fresh 07DA
+        // cannot be mistaken for a frame the OK handler invented.
+        session.game_mut().set_room_no_response_relay_down(false);
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.room_dialog(),
+            None,
+            "the next type-100 record pops the covered sheet"
+        );
+        assert_eq!(session.screen(), Screen::Room);
         server.join().unwrap();
     }
 

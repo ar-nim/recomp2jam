@@ -25,7 +25,7 @@ use self::musicshop::MusicShopState;
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
-use self::room_fuse::RoomNoResponseFuse;
+use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
@@ -1677,7 +1677,19 @@ impl ScreenGame {
     /// sheet was staged. No timer sleeps, and no sheet outside Room.
     pub fn pump_room_user_list_fuse_at(&mut self, now: Instant) -> bool {
         let in_room = self.flow.current() == Screen::Room;
-        self.room_no_response.pump(in_room, now)
+        let covered = self.open_dialog_layers();
+        self.room_no_response.pump(in_room, now, &covered)
+    }
+
+    /// Sheets already under a new fuse sheet, bottom first. The
+    /// type-100 pump pops them one at a time after the fuse (#689).
+    fn open_dialog_layers(&self) -> Vec<DialogLayer> {
+        let mut layers = Vec::new();
+        if self.room_dialog.is_some() {
+            layers.push(DialogLayer::RoomSheet);
+        }
+        layers.extend(self.planet_modal().map(DialogLayer::PlanetSheet));
+        layers
     }
 
     /// Watchdog pass at the current wall clock.
@@ -1720,9 +1732,36 @@ impl ScreenGame {
 
     /// Pump one queued type-100 dismissal: pop the top dialog. This
     /// is the exe's pump handler 100 (VA `0x47748f`); the OK handler
-    /// itself sends no packet and attributes no FFF0.
+    /// itself sends no packet and attributes no FFF0. One record
+    /// touches one layer, even when the fuse covered another sheet.
     pub fn pump_dialog_queue(&mut self) -> bool {
-        self.room_no_response.take_dismissal()
+        let Some(layer) = self.room_no_response.take_dismissal() else {
+            return false;
+        };
+        self.close_dismissed_dialog_layer(layer);
+        true
+    }
+
+    /// Apply one popped layer to its owner. Notice sheets keep their
+    /// side effects (held rows, refusal text); the fuse layer itself
+    /// was already closed by the dismissal stack.
+    fn close_dismissed_dialog_layer(&mut self, layer: DialogLayer) {
+        match layer {
+            DialogLayer::FuseNotice => {}
+            DialogLayer::RoomSheet => self.room_dialog = None,
+            DialogLayer::PlanetSheet(modal) => match modal {
+                PlanetModal::RelayDown => {
+                    let _ = self.dismiss_relay_down_dialog();
+                }
+                PlanetModal::ChannelEnterRefused => {
+                    let _ = self.dismiss_channel_refusal_dialog();
+                }
+                PlanetModal::QuitConfirm | PlanetModal::Options => {
+                    self.planet_board.close_modal();
+                    self.options_dialog.clear_rebind();
+                }
+            },
+        }
     }
 
     /// Rooms from the last online list (empty offline). Free slots are
