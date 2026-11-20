@@ -101,6 +101,18 @@ BUYITEM (`0x5D`) queue the pinned empty `SyncMusicPurchase`
 shape is untraced, so the wire ride stays ASSUMED behind the
 take-seam.
 
+## Row-pick chrome (#526, 2026-11-20)
+
+The `MS_EX` row slots (`0x1A01802D..31`) and their text templates are
+already staged bound rects; a row pick stages the song in the cart
+(commit `9f4721e`). The exe press frame is still OPEN (`E-T`), so the
+visible feedback is explicitly ours-by-design: `MusicShopState` records
+the last picked row, and `paint_music_shop_row_selection` draws a narrow
+stripe inside that row's staged rect before the catalog text inks. A
+sort or page turn clears the row; no wire send or ownership claim is
+attached. Guard: `music_shop_row_pick_inks_the_staged_row_chrome` (red
+before the painter was wired: no pixel delta in the picked row).
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179).

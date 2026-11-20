@@ -39,19 +39,20 @@ use super::paint::{
     list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat,
     paint_channel_scene, paint_dialog_scene, paint_lanking_board, paint_lanking_scene,
     paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
-    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet, paint_myroom_data,
-    paint_myroom_figure, paint_myroom_slot_icons, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_row_selection,
+    paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
+    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
+    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt, ChannelChatMessage,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
+    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -5965,6 +5966,14 @@ impl ScreenGame {
         self.music_shop.cart_page()
     }
 
+    /// Last picked catalog row, shown only as staged row chrome.
+    /// No exe press frame pins this feedback (`E-T`); it carries no
+    /// wire or ownership claim (#526).
+    #[must_use]
+    pub fn music_shop_selected_row(&self) -> Option<usize> {
+        self.music_shop.selected_row()
+    }
+
     /// Checked song-shop cart ids in pick order.
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
@@ -6181,6 +6190,11 @@ impl ScreenGame {
         // flags plus the cart and both pager readouts; without
         // staged songs it paints nothing.
         if self.side == Some(SideScreen::MusicShop) {
+            paint_music_shop_row_selection(
+                frame,
+                &self.side_placements,
+                self.music_shop.selected_row(),
+            );
             paint_music_shop_board(
                 frame,
                 &self.side_placements,
@@ -19419,6 +19433,48 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(424, 529));
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    /// Ticket #526 client half: a routed row pick must ink its own
+    /// staged `MS_EX` row rect, so the cart feedback is visible on
+    /// the board and not only in the hidden cart vector. The exe
+    /// press frame is still OPEN (`E-T`); this chrome is ours-by-
+    /// design over archive-pinned geometry.
+    #[test]
+    fn music_shop_row_pick_inks_the_staged_row_chrome() {
+        let mut game = open_music_shop_board(7);
+        let mut before = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut before,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.click_music_shop(19, 105);
+        assert_eq!(
+            game.music_shop_cart(),
+            vec![757],
+            "pick still stages the cart"
+        );
+        let mut after = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut after,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let row_delta = (104..190)
+            .flat_map(|y| (18..371).map(move |x| y * 800 + x))
+            .filter(|index| before[*index] != after[*index])
+            .count();
+        assert!(
+            row_delta > 0,
+            "the picked row's staged chrome changes on the board"
+        );
     }
 
     #[test]

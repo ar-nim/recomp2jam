@@ -1733,6 +1733,50 @@ fn shop_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> 
         .map(|placed| placed.rect)
 }
 
+/// Client-only chrome for the last picked catalog row: a stripe
+/// inside that row's staged `MS_EX` rect. The exe row-press frame is
+/// still OPEN (`E-T`), so the tone is ours-by-design; the geometry
+/// and the pick→cart state are not. A missing row or unstaged slot
+/// paints nothing (ADR-0003).
+const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
+
+pub fn paint_music_shop_row_selection(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    selected: Option<usize>,
+) {
+    let Some(slot) = selected.and_then(|index| music_shop_slots(placements).into_iter().nth(index))
+    else {
+        return;
+    };
+    let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
+    let stripe_width = 3_u32.min(slot.w);
+    let bar_height = 2_u32.min(slot.h);
+    let bands = [
+        Rect {
+            x: slot.x,
+            y: slot.y,
+            w: stripe_width,
+            h: slot.h,
+        },
+        Rect {
+            x: slot.x,
+            y: slot.y,
+            w: slot.w,
+            h: bar_height,
+        },
+        Rect {
+            x: slot.x,
+            y: slot.y + i32::try_from(slot.h - bar_height).unwrap_or(0),
+            w: slot.w,
+            h: bar_height,
+        },
+    ];
+    for band in bands {
+        fill_rect(frame, &band, MUSIC_SHOP_PICK_TONE);
+    }
+}
+
 /// Song-shop board overlay over the staged side art: the visible
 /// rows' catalog cells into the staged row-local `MMS` templates
 /// riding the staged `MS_EX` slot origins (title, bought flag,
