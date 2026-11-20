@@ -7,6 +7,8 @@
 | Timing | None documented | n/a (ev: none — no timed dispatch documented) | N/A (R+G, v: 9692d41) (no timed behavior — no dispatch exists to guard; next step: none) |
 | Transitions | `Channel → Room`; hosted by `CStatePlanet` (resolved live 2026-11-09) | `Channel → Room` (row confirm / entry faces); dialog X (bnd-pinned rect (541,151)-(589,189); verified close click (577,171)) closes to `Planet`; hosted by `CStatePlanet` (live memory read 2026-11-09) (ev: `docs/channel-fill.md`; hosted-by live read 2026-11-09) | PASS (R, v: 9692d41) (guards: `flow_allows_every_documented_edge`, `menu_walks_full_session_to_results`, `channel_back_closes_to_the_planet_board`) |
 
+| Refused enter (1005) | One-OK `Dialog_Information` with result-specific CP949 text (#717 section below) | Posts the pinned sheet for every nonzero result; no sound, highlight, or row change; OK dismisses back to the unchanged dialog. Guards: 11 `session::session_tests::refused_enter::*` scripted-gateway tests (per result 1/2/3/4/5/6/7/default, success null, OK composition) | PASS (R+G; no install data needed) |
+
 ## Ticket #92 — row-label value source PINNED (2026-11-11)
 
 Claim D25 is closed without a new rig session: the proxy rewrite its next
@@ -201,10 +203,31 @@ Result 0 is success: no sheet, the identity fetch follows. Other
 values of the optional `Restricted` word post no sheet in the exe;
 our wire decoder admits only 0/1, so that arm stays unrepresentable.
 
-Shell stand-in at this pin: `OnlineSession::drain_channel_login`
-logs `channel login rejected; staying in Channel` and leaves the
-dialog unchanged (no sheet). Status: OPEN — implementation and
-guards ride the fix commit. The keyboard-confirm fan-out to the
-channel vftable slot stays untouched and OPEN by the channel-full
-lane's pin (next step: stopped-state breakpoint on `0x475260` with a
+Shell behavior at this pin: `OnlineSession::drain_channel_login`
+logged `channel login rejected; staying in Channel` and left the
+dialog unchanged (no sheet); the new guards failed against that
+stand-in. Implementation: the 1005 branch maps the result through
+`channel_refusal_message` and calls
+`ScreenGame::open_channel_refusal_dialog`; the shell posts a
+`PlanetModal::ChannelEnterRefused` sheet over the Channel dialog,
+painting the pinned bytes through the shared Information painter.
+OK (or Back) closes only the sheet. Live caller chain:
+`run_online`/`run_play --online` → `OnlineSession::paint` →
+`poll_channel_login` → `drain_channel_login` → 1004/1005 →
+`open_channel_refusal_dialog` → `ScreenGame::paint` →
+`paint_channel` → `paint_planet_modal` →
+`paint_information_message` → OK click → `click_planet_modal` →
+`dismiss_channel_refusal_dialog` → `paint_channel`. Guards:
+`session::session_tests::refused_enter::result_one_without_restriction_posts_the_full_channel_sheet`,
+`result_one_with_restriction_posts_the_premium_sheet`,
+`result_two/three/four/five_posts_the_full_channel_sheet`,
+`result_six_posts_the_user_information_sheet`,
+`result_seven_posts_the_no_channel_information_sheet`,
+`result_past_the_table_posts_the_full_channel_sheet`,
+`successful_login_posts_no_refusal_sheet`,
+`ok_dismisses_the_refusal_without_touching_the_channel_dialog`.
+Each refusal guard also pins no sound emitter, no highlight change,
+and unchanged rows. The keyboard-confirm fan-out to the channel
+vftable slot stays untouched and OPEN by the channel-full lane's
+pin (next step: stopped-state breakpoint on `0x475260` with a
 focused canvas); this ticket covers the 1005 answer path only.
