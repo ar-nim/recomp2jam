@@ -272,8 +272,9 @@ its source, never to "the data":
   `uid2-server.jsonl`. Guard:
   `myroom_money_captions_read_the_single_wallet` (red before the
   mapping: `None` vs `Some("15527")`). The W cell (`O2JAM 0x40`)
-  stays unpainted until a distinct cash sample separates the wallet
-  words. Control names pinned from the shipped
+  inks the other settled 5029 word — the wallet cash slot the exe's
+  file `0x163900` writes (`docs/shop-buy.md`); the same guard went red
+  `None` vs `Some("22")` before that mapping. Control names pinned from the shipped
   `ControlList_Interface.txt` block dump (O2MONEY `0x10`,
   CHARGEMONEY `0x11`, NEXTUPEXP `0x3B`, WINRATION `0x3C`, RANK
   `0x3D`, GUILD `0x3E`, MGAME `0x3F`, O2JAM `0x40`,
@@ -315,14 +316,13 @@ its source, never to "the data":
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
    or gateway replay naming the entry fetch.
 4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
-   O2JAM W money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
-   NOTICE content). WINRATION value source pinned (wins/battles),
-   format ours-by-design; NEXTUPEXP paints experience per the room
-   precedent (single-capture pin); MGAME G money inks the wallet gem
-   word (known-stats pair above). Next step: rig capture of the
-   userinfo plate at known stats naming each remaining rect's source
-   and format — for W in particular, a wallet sample with unequal
-   gem and cash words.
+   RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10, NOTICE content).
+   WINRATION value source pinned (wins/battles), format ours-by-design;
+   NEXTUPEXP paints experience per the room precedent (single-capture
+   pin); MGAME G and O2JAM W ink the two settled 5029 wallet words
+   (`docs/shop-buy.md`, file `0x163900`). Next step: rig capture of
+   the userinfo plate at known stats naming each remaining rect's
+   source and format.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
 6. Vacate clears the staged worn slot locally and restages but

@@ -7495,9 +7495,10 @@ mod side_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
-        // G cell now inks the wallet gem (5029 ↔ exe G frame pin).
+        // G and W cells now ink the two settled 5029 wallet words
+        // (exe frame pins + `docs/shop-buy.md` file `0x163900`).
         assert_eq!(
-            hash, 0x8E0C_970A_B6FB_5CB4,
+            hash, 0x8BDF_4792_4DDE_01F4,
             "MyRoom outputs drifted: {observed}"
         );
     }

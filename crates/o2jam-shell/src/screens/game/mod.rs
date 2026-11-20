@@ -13137,7 +13137,7 @@ mod game_tests {
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             MYROOM_ITEMCASH_CODE, MYROOM_MGAME_MONEY_CODE, MYROOM_MUSICCASH_CODE,
-            MYROOM_O2CASH_CODE,
+            MYROOM_O2CASH_CODE, MYROOM_O2JAM_MONEY_CODE,
         };
         let mut game = ScreenGame::new();
         game.set_myroom_character(CharacterInfo {
@@ -13145,12 +13145,14 @@ mod game_tests {
             o2_cash: 500,
             music_cash: 120,
             item_cash: 340,
+            cash_point: 22,
             ..CharacterInfo::default()
         });
         assert_eq!(game.wallet().gem, Some(15_527));
         assert_eq!(game.wallet().o2_cash, Some(500));
         assert_eq!(game.wallet().music_cash, Some(120));
         assert_eq!(game.wallet().item_cash, Some(340));
+        assert_eq!(game.wallet().cash_point, Some(22));
         let captions = game.myroom_money_captions();
         let caption = |code: u32| {
             captions
@@ -13164,6 +13166,9 @@ mod game_tests {
         // G cell bnd rect (685,421)-(780,434): the exe's G 15527 and
         // G 626 frames match the 5029 gem words a73c0000 / 72020000.
         assert_eq!(caption(MYROOM_MGAME_MONEY_CODE), Some("15527"));
+        // W cell reads the other settled 5029 word: file `0x163900`
+        // routes it to the wallet cash slot (`docs/shop-buy.md`).
+        assert_eq!(caption(MYROOM_O2JAM_MONEY_CODE), Some("22"));
     }
 
     #[test]
@@ -13231,10 +13236,10 @@ mod game_tests {
         // Live caller chain: same 2001 staging + paint overlay as the
         // win-rate guard above; this guard pins the OPEN boundary.
         // (`docs/myroom.md` OPEN 4: identity captions leave the
-        // wallet-owned G cell and the still-unpinned W cell alone;
-        // O2MONEY/CHARGEMONEY, rank, guild, free-info, skill counts
-        // and notice have no pinned wire source, so no caption claims
-        // their rects.)
+        // wallet-owned G and W cells alone — those join in
+        // `myroom_wallet_captions` instead. O2MONEY/CHARGEMONEY,
+        // rank, guild, free-info, skill counts and notice have no
+        // pinned wire source, so no caption claims their rects.)
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_identity_captions, MYROOM_CHARGEMONEY_CODE, MYROOM_GUILD_CODE,
