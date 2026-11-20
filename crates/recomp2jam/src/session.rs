@@ -4115,6 +4115,22 @@ pub(super) mod session_tests {
         decode_frame(&bytes).unwrap()
     }
 
+    /// One frame off a recording socket, or `None` on a clean client
+    /// close. Unlike [`read_frame`], a short read ends the tap instead
+    /// of panicking in the server thread.
+    fn read_frame_until_eof(stream: &mut TcpStream) -> Option<Frame> {
+        let mut header = [0u8; HEADER_LEN];
+        if stream.read_exact(&mut header).is_err() {
+            return None;
+        }
+        let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+        let mut bytes = header.to_vec();
+        let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+        stream.read_exact(&mut body).ok()?;
+        bytes.extend_from_slice(&body);
+        Some(decode_frame(&bytes).unwrap())
+    }
+
     /// Fake gateway on loopback: returns its port plus the server thread
     /// running `with_server` (5 s reads, like the login-flow tests).
     fn fake_gateway(
@@ -4664,6 +4680,10 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only: W-a found no exe C2S
+        // 5000 on the buy leg, so the probe stages the legacy empty
+        // send to keep this 5001 decoder guarded.
+        session.game.queue_shop_buy_for_reply_probe();
         assert!(session.shop_buy_attempt.is_none());
 
         paint_frame(&mut session);
@@ -4739,6 +4759,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
         paint_frame(&mut session);
         paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 17");
         server.join().unwrap();
@@ -4820,6 +4843,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
 
         paint_frame(&mut session);
 
@@ -4904,6 +4930,9 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
         session.game.click_shop(1, 1);
+        // SCRIPTED-GATEWAY reply probe only; the exe buy leg sends no
+        // 5000 (W-a NULL).
+        session.game.queue_shop_buy_for_reply_probe();
         paint_frame(&mut session);
         paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
         server.join().unwrap();
@@ -5027,6 +5056,96 @@ pub(super) mod session_tests {
         paint_frame(&mut session);
         server.join().unwrap();
         assert_eq!(session.game.side(), None);
+    }
+
+    /// W-a NULL pin (#397, traces `W6FA-BUY-01/02`): a cart-row pick,
+    /// BUYITEM and the web page's `(345,385)` OK put no shop-buy opcode
+    /// on the game socket. Only the BACK leg's pinned `5007`/`5028`
+    /// pair follows. The 5001 seen in the exe tap was BACK-timed.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+    ///   click_side_screen -> click_shop(ToggleRow/CartBuy) ->
+    ///   open local web surface -> click_shop_purchase_web(BACK) ->
+    ///   flush_exit_shop -> GatewayConnection::send_frame(5007, 5028).
+    #[test]
+    fn cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family() {
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{
+            SideScreen, SHOP_BACK_CODE, SHOP_BUYITEM_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 4500,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "W6Good".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let area = |code, sprite: Option<&str>, x, y, w, h| ScenePlacement {
+            id: format!("W6A_{code:X}"),
+            code,
+            sprite: sprite.map(str::to_owned),
+            rect: o2jam_render::Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(
+                    SHOP_ITEMBUY_FIRST_CODE,
+                    Some("Shop_Btn_ItemBuy.ojs"),
+                    220,
+                    187,
+                    81,
+                    17,
+                ),
+                area(SHOP_BUYITEM_CODE, None, 17, 563, 49, 23),
+                area(SHOP_BACK_CODE, None, 744, 570, 40, 25),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(238, 263));
+        assert_eq!(session.game.shop_cart(), vec![1]);
+        session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        session.ingest_snapshot(&InputSnapshot::click_at(345, 385));
+
+        assert!(session.game.shop_purchase_web_open());
+        assert_eq!(session.game.take_shop_buy(), None, "no 5000 was queued");
+        session.ingest_snapshot(&InputSnapshot::click_at(757, 580));
+        paint_frame(&mut session);
+        assert_eq!(session.game.side(), None, "BACK leaves the shop side");
+        drop(session);
+        server.join().unwrap();
+        let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            opcodes,
+            vec![5007, 5028],
+            "the buy leg is quiet; only BACK's 5007/5028 family is sent"
+        );
     }
 
     #[test]
@@ -12754,5 +12873,271 @@ pub(super) mod session_tests {
         assert_eq!(game.room_no_response_dismissal_queued(), Some(100));
         game.pump_dialog_queue();
         assert!(!game.room_no_response_dialog_open());
+    }
+
+    /// Hash the resident peer's staged filter strip and rows as one
+    /// value. The exe's W-b frames were byte-identical across every
+    /// master tab click; this is the state-side form of that pin.
+    fn resident_room_view_hash(game: &o2jam_shell::ScreenGame) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", game.room_filter()).hash(&mut hasher);
+        for room in game.listed_rooms() {
+            (
+                room.number,
+                room.title.as_str(),
+                room.game_mode,
+                room.user_count,
+            )
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Room-seat client with a scripted gateway that records every
+    /// opcode it sends. Two of these make the W-b two-client leg.
+    fn recording_room_client(
+        rooms: Vec<o2jam_net::RoomListEntry>,
+    ) -> (OnlineSession, mpsc::Receiver<u16>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(20)))
+                .unwrap();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut bytes = header.to_vec();
+                let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                stream.read_exact(&mut body).unwrap();
+                bytes.extend_from_slice(&body);
+                wire_tx
+                    .send(decode_frame(&bytes).unwrap().id)
+                    .expect("the test reads its wire tap");
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.set_rooms(rooms);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), wire_rx, server)
+    }
+
+    /// Ticket #536 re-scope (W6 W-b, traces `W6FB-PEER-01/02`):
+    /// ALL/NORMAL/LIVE is a local view over the already-staged 2003
+    /// rows. The master's three tab clicks must leave a resident
+    /// peer's strip and rows hash-unchanged and put no per-click
+    /// frame on either socket; keepalives are the only allowed wire.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> assemble_online_session -> paint ->
+    ///   ScreenGame::ingest_snapshot -> click_dispatch ->
+    ///   click_room_control -> RoomControlAction::RoomFilter ->
+    ///   ScreenGame::refresh_visible_rooms (local rows; no wire).
+    /// The peer's second seat is the scripted `recording_room_client`
+    /// above, so the tap covers both clients of one room-list leg.
+    #[test]
+    fn resident_peer_keeps_its_room_filter_and_rows_while_the_master_switches_tabs() {
+        use o2jam_net::{GameMode, RoomListEntry};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        let listed_room = |number, title: &str, game_mode| RoomListEntry {
+            number,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 1,
+            max_level: 99,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        };
+        let normal = listed_room(0, "W6FILTER", GameMode::Normal.as_u8());
+        let live = listed_room(1, "LIVE-ONLY", GameMode::Live.as_u8());
+        let rooms = vec![normal, live];
+        let (mut master, master_rx, master_server) = recording_room_client(rooms.clone());
+        let (mut peer, peer_rx, peer_server) = recording_room_client(rooms);
+        let placements = [(0x1320_1003u32, 25), (0x1320_1004, 75), (0x1320_1005, 125)]
+            .into_iter()
+            .map(|(code, x)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: format!("FILTER_{code:X}"),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 10,
+                    w: 30,
+                    h: 30,
+                },
+            })
+            .collect();
+        master
+            .game_mut()
+            .load_scene(Screen::Room, placements, HashMap::new());
+        let peer_hash = resident_room_view_hash(&peer.game);
+
+        for (x, expected_filter) in [(75, "Normal"), (125, "Live"), (25, "All")] {
+            master.ingest_snapshot(&InputSnapshot::click_at(x, 25));
+            paint_frame(&mut master);
+            paint_frame(&mut peer);
+            assert_eq!(
+                format!("{:?}", master.game.room_filter()),
+                expected_filter,
+                "the master switched to its local {expected_filter} family"
+            );
+            assert_eq!(
+                resident_room_view_hash(&peer.game),
+                peer_hash,
+                "a resident peer keeps its strip and rows on every master tab click"
+            );
+        }
+
+        let noop = master
+            .game
+            .room_control_noop()
+            .expect("the tab press still records its wire step");
+        assert!(
+            noop.next_step.contains("W6FB-PEER-02"),
+            "the no-op names the W-b null wire pin, got {}",
+            noop.next_step
+        );
+        let opcode_filter = |rx: &mpsc::Receiver<u16>| {
+            rx.try_iter()
+                .filter(|id| !matches!(id, 6000 | 6001))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            opcode_filter(&master_rx).is_empty(),
+            "the master's tab clicks put no filter opcode on the wire"
+        );
+        assert!(
+            opcode_filter(&peer_rx).is_empty(),
+            "the resident peer's tap has no filter or join opcode"
+        );
+        drop(master);
+        drop(peer);
+        master_server.join().unwrap();
+        peer_server.join().unwrap();
+    }
+
+    /// Ticket #693 re-scope (W6 W-c, trace `W6FC-DIALOG-02`): a peer
+    /// joins through its own `3002`/`3003` pair while the master's
+    /// CREATE ROOM sheet stays up. The master's frame and wire stay
+    /// unchanged; no master-side `3004`/`3003` join event is claimed,
+    /// staged, or wired by this guard.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> assemble_online_session -> paint ->
+    ///   ScreenGame::ingest_snapshot -> click_room_control(Create) ->
+    ///   open_create_room_dialog (master sheet stays up) ||
+    ///   peer: MenuKey::Confirm -> begin_room_join -> poll_room_join ->
+    ///   JoinRoom 3002 -> JoinRoomResponse 3003 -> resolve_room_join.
+    #[test]
+    fn peer_join_pair_leaves_the_create_room_sheet_and_master_frame_unchanged() {
+        use o2jam_net::rooms::{JoinRoom, JoinRoomResponse};
+        use o2jam_net::Request;
+        use o2jam_shell::screens::side::RoomDialog;
+
+        let answer = hex_bytes(LIVE_JOIN_ANSWER_HEX);
+        let decoded = JoinRoomResponse::decode_body(&answer).unwrap();
+        assert_eq!(decoded.result_code, 0);
+        let room = decoded.room.expect("the 3003 body carries the member rows");
+        let members: Vec<&str> = room
+            .slots
+            .iter()
+            .filter_map(|slot| slot.member.as_ref())
+            .map(|member| member.nickname.as_str())
+            .collect();
+        assert!(
+            members.contains(&"tester"),
+            "the pinned 3003 names the master member, got {members:?}"
+        );
+
+        let (mut master, master_rx, master_server) = recording_room_client(vec![]);
+        // The rig's 방만들기 click routes through click_room_control(Create)
+        // to this same dialog entry; the scripted leg mounts it directly
+        // so the peer's wire pair is the only stimulus under test.
+        master.game_mut().open_create_room_dialog();
+        assert_eq!(
+            master.game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the staged CREATE button opened the master sheet"
+        );
+        let master_before = painted_game_frame(&mut master);
+
+        let (mut peer, peer_server) = room_session(move |mut stream| {
+            let request = read_frame(&mut stream);
+            assert_eq!(request.id, Request::JoinWaiting.id());
+            let join = JoinRoom::decode_body(&request.payload).unwrap();
+            assert_eq!(join.number, 0);
+            assert!(join.password.is_empty());
+            stream
+                .write_all(&encode_frame(3003, &answer))
+                .expect("the scripted peer reply reaches the joiner");
+            assert_quiet(&mut stream);
+        });
+        peer.set_pending_room_join(0, "");
+        peer.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut peer, |session| {
+            session.game.screen() == Screen::Waiting
+                && session
+                    .game
+                    .staged_waiting_member(0)
+                    .is_some_and(|member| member.nickname == "tester")
+        });
+        peer_server.join().unwrap();
+
+        let master_after = painted_game_frame(&mut master);
+        assert_eq!(
+            master_after, master_before,
+            "the peer join repaints nothing under the master's CREATE sheet"
+        );
+        assert_eq!(
+            master.game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the master sheet survives the peer join"
+        );
+        assert!(
+            master.game.staged_waiting_member(1).is_none(),
+            "no master-side join event is staged from the peer's 3003"
+        );
+        let master_join_ops: Vec<u16> = master_rx
+            .try_iter()
+            .filter(|id| matches!(id, 3003 | 3004))
+            .collect();
+        assert!(
+            master_join_ops.is_empty(),
+            "the master socket sees no join event, got {master_join_ops:?}"
+        );
+        drop(master);
+        master_server.join().unwrap();
     }
 }

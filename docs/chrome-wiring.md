@@ -59,8 +59,8 @@ Guards: `shop_chrome_sweep_presses_every_staged_control`, `shop_preview_selects_
 
 | control | outcome | evidence/stand-in |
 |---|---|---|
-| `ITEMBUY` ×8 row toggles | check/uncheck the cart in order | pinned 5000 send arm |
-| `BUYITEM` | empty cart queues nothing; full cart queues one 5000 send, seam drains once | pinned 5000 send |
+| `ITEMBUY` ×8 row toggles | check/uncheck the cart in order | local SHOPPING BAG face |
+| `BUYITEM` | empty cart does nothing; full cart opens the local web surface, no buy opcode | W-a NULL pin (#397) |
 | Scroll pager (relative children) | steps 8-row pages, holds at both ends | staged scroll origin |
 | Cart pager | steps over a full cart, holds at both ends | empty-cart `1/1` rule |
 | `ITEMPRE` ×8 / `ITEMBACK` | pick the visible row into an id-stable preview slot; `ITEMBACK` clears; both queue nothing | staged buttons + staged catalog |

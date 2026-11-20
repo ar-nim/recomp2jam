@@ -231,11 +231,15 @@ pub struct RoomControlNoop {
 /// tree has not traced yet: the exe `CStateRoom` click dispatch.
 const HANDLER_STEP: &str =
     "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity/room.md Input row)";
-/// The exe may send a parameter on each tab press, but no pack pins a
-/// 2002 body with one. The press stays a labeled no-op on the wire while
-/// the local row filter is live (#543).
-const ROOM_FILTER_SEND_STEP: &str =
-    "tap 2002 after each mode tab press and pin the filter parameter (#543)";
+/// W-b (`W6FB-PEER-02`) pins the filter as a local view: the master
+/// changed ALL/NORMAL/LIVE while a resident peer's strip and rows
+/// stayed byte-identical and the tap carried no per-click frame. The
+/// press stays a labeled no-op; a new 2002 body would contradict the
+/// exe, so the next step is only a re-capture if the exe changes (#536).
+const ROOM_FILTER_SEND_STEP: &str = concat!(
+    "W6FB-PEER-02: ALL/NORMAL/LIVE filters only the local 2003 rows; ",
+    "a resident peer keeps its strip and rows and the tap is quiet (no 2002). "
+);
 /// Next evidence step for the four chat-tab buttons.
 const CHAT_TAB_STEP: &str =
     "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";
@@ -827,6 +831,11 @@ pub struct ScreenGame {
     /// Staged Cash Charge view: Item Shop host board plus the
     /// `Dialog_ChargeCash.bnd` frame, client rect, and close control.
     cash_charge_art: Option<CashChargeArt>,
+    /// W-a NULL pin (#397): a staged cart row's BUYITEM opens a local
+    /// web-purchase surface over the shop board. The exe's `5001` is
+    /// a BACK-timed reply and no `C2S 5000` exists, so this surface
+    /// owns the buy leg and the game socket stays quiet.
+    shop_purchase_web_open: bool,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1171,6 +1180,7 @@ impl ScreenGame {
             payment_art: None,
             tutorial_art: None,
             cash_charge_art: None,
+            shop_purchase_web_open: false,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -4838,7 +4848,11 @@ impl ScreenGame {
             return true;
         }
         if self.side == Some(SideScreen::Shop) {
-            self.click_shop(x, y);
+            if self.shop_purchase_web_open {
+                self.click_shop_purchase_web(x, y);
+            } else {
+                self.click_shop(x, y);
+            }
             return true;
         }
         if self.side == Some(SideScreen::Payment) {
@@ -4856,6 +4870,19 @@ impl ScreenGame {
             return true;
         }
         false
+    }
+
+    /// The cart BUYITEM web surface is a local overlay: its page owns
+    /// every click (the `(345,385)` OK is a web action), so only the
+    /// staged shop BACK plate ends the leg. That press keeps the
+    /// pinned `5007` exit on the game socket; no buy opcode is added.
+    fn click_shop_purchase_web(&mut self, x: i32, y: i32) {
+        let back_pressed = shop_action_at(&self.side_placements, x, y)
+            .is_some_and(|action| action == ShopAction::BackToLobby);
+        if back_pressed {
+            self.close_shop_purchase_web();
+            self.click_shop(x, y);
+        }
     }
 
     /// One press on the staged close sprite dismisses the billing
@@ -5827,6 +5854,7 @@ impl ScreenGame {
             // to the equipped avatar (ticket #196).
             self.shop.clear_try_on();
             self.restage_shop_avatar();
+            self.shop_purchase_web_open = false;
         }
         self.side = None;
         self.side_origin = None;
@@ -6130,10 +6158,34 @@ impl ScreenGame {
         self.music_shop.music_shop_cart_page = 0;
     }
 
-    /// Queued cart buy for the session bridge, if any (5000). One
-    /// body per `BUYITEM` commit; the seam drains it.
+    /// Queued cart buy for the session bridge, if any (5000). The
+    /// player-visible cart BUYITEM never queues this body after the
+    /// W-a NULL pin; the seam exists for scripted `5001` reply probes.
     pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
         self.outbox.take_shop_buy()
+    }
+
+    /// Stage the legacy empty `5000` on the outbox for a scripted
+    /// gateway reply probe only. No UI caller uses this: W-a found no
+    /// `C2S 5000` on the exe socket, so the buy leg is the local web
+    /// surface above. Keeping this seam lets the `5001` decoder stay
+    /// guarded without pretending the exe sends the request.
+    pub fn queue_shop_buy_for_reply_probe(&mut self) {
+        self.outbox.pending_shop_buy = Some(SyncItemPurchase);
+    }
+
+    /// Whether the staged cart BUYITEM opened the local web-purchase
+    /// surface over the shop board (#397).
+    #[must_use]
+    pub const fn shop_purchase_web_open(&self) -> bool {
+        self.shop_purchase_web_open
+    }
+
+    /// Close the local web-purchase surface and hand clicks back to
+    /// the shop board. The game socket is untouched by this local
+    /// dismissal; BACK still owns the pinned `5007` exit.
+    pub fn close_shop_purchase_web(&mut self) {
+        self.shop_purchase_web_open = false;
     }
 
     /// Queued shop exit for the session bridge, if any (5007). The
@@ -6144,8 +6196,8 @@ impl ScreenGame {
 
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
-    /// commits a non-empty cart through the pinned 5000 send, both
-    /// pagers step and hold at the ends, `ITEMPRE` previews the row
+    /// opens the local web-purchase surface without a game opcode,
+    /// both pagers step and hold at the ends, `ITEMPRE` previews the row
     /// good in the avatar pane, `ITEMBACK` reverts to the equipped
     /// avatar, and the gift buttons record a no-op (never a send).
     /// Staged placements only — unstaged clicks land nowhere. Only
@@ -6177,23 +6229,25 @@ impl ScreenGame {
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
                 // avatar-pane figure (restage) and the comment preview.
-                if self.shop.apply_action(action, owned_len) {
-                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
-                }
+                self.shop.apply_action(action, owned_len);
                 self.shop.select_preview(slot);
                 self.restage_shop_avatar();
             }
             ShopAction::RevertTryOn => {
-                if self.shop.apply_action(action, owned_len) {
-                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
-                }
+                self.shop.apply_action(action, owned_len);
                 self.shop.clear_preview();
                 self.restage_shop_avatar();
             }
-            _ => {
+            ShopAction::CartBuy => {
+                // W-a: the local SHOPPING BAG confirmation face is
+                // already staged by the row pick; BUYITEM opens the
+                // web purchase surface and sends no game opcode.
                 if self.shop.apply_action(action, owned_len) {
-                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
+                    self.shop_purchase_web_open = true;
                 }
+            }
+            _ => {
+                self.shop.apply_action(action, owned_len);
             }
         }
     }
@@ -6561,6 +6615,14 @@ impl ScreenGame {
             paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
                 shop_panel_kept(placed, panel) && shop_tooltip_kept(placed, shelf_hovered)
             });
+            // The purchase page is a web surface over the shop board;
+            // its content is not captured, so only the staged client
+            // frame and blank web rect paint (owner billing-web pin).
+            if self.shop_purchase_web_open {
+                if let Some(art) = self.cash_charge_art.as_ref() {
+                    paint_cash_charge_frame(frame, &art.dialog);
+                }
+            }
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -7960,6 +8022,7 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
             .map_or(u64::MAX, |modal| modal as u64),
     );
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
+    hash_u64(&mut hash, u64::from(game.shop_purchase_web_open));
     if game.outbox.pending_exit_shop.is_some() {
         hash_u64(&mut hash, 5_007);
     }
@@ -20075,20 +20138,89 @@ mod game_tests {
     }
 
     #[test]
-    fn shop_browse_toggles_cart_and_commits_5000() {
+    fn shop_row_toggle_checks_the_cart_and_buy_opens_the_web_surface() {
         // Ten goods over eight slots: the first ITEMBUY checks row
-        // zero into the cart, the cart BUYITEM queues the pinned
-        // empty 5000 send, and the seam drains it once.
+        // zero into the cart and opens the local SHOPPING BAG face;
+        // BUYITEM opens the web purchase surface and sends no game
+        // opcode (W-a NULL pin, #397).
         let mut game = open_shop_board(10);
         assert!(game.shop_cart().is_empty());
         game.click_shop(221, 188);
         assert_eq!(game.shop_cart(), vec![1]);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
         game.click_shop(221, 188);
         assert!(game.shop_cart().is_empty());
         game.click_shop(221, 188);
         game.click_shop(18, 564);
-        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
-        assert_eq!(game.take_shop_buy(), None);
+        assert!(
+            game.shop_purchase_web_open(),
+            "the cart BUYITEM opens the web purchase surface"
+        );
+        assert_eq!(game.take_shop_buy(), None, "no invented 5000 buy send");
+    }
+
+    /// W-a NULL pin (#397): the cart-row buy leg is local. The row
+    /// pick opens the SHOPPING BAG confirmation face, BUYITEM opens a
+    /// web surface, its web-owned OK sends nothing, and only the
+    /// staged BACK plate keeps the pinned 5007 exit.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> ScreenGame::ingest_snapshot ->
+    ///   click_side_screen -> click_shop -> ShopAction::ToggleRow ->
+    ///   ShopPanel::ShoppingBag; then ShopAction::CartBuy ->
+    ///   shop_purchase_web_open -> click_shop_purchase_web ->
+    ///   ShopAction::BackToLobby -> outbox.pending_exit_shop.
+    #[test]
+    fn cart_row_buy_opens_local_confirmation_and_web_surface_without_a_buy_send() {
+        use super::super::side::SHOP_BACK_CODE;
+        let mut game = open_shop_board(10);
+        let mut placements = shop_side_placements();
+        // The exe's anchored ITEMBUY sprite puts the visible 담기 hit
+        // 70 px below its raw `.bnd` rect (audit D2).
+        if let Some(row) = placements
+            .iter_mut()
+            .find(|placed| placed.code == SHOP_ITEMBUY_FIRST_CODE)
+        {
+            row.sprite = Some("Shop_Btn_ItemBuy.ojs".to_owned());
+        }
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_BACK".to_owned(),
+            code: SHOP_BACK_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 744,
+                y: 570,
+                w: 40,
+                h: 25,
+            },
+        });
+        game.load_side_scene(placements, HashMap::new());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(238, 263));
+        assert_eq!(game.shop_cart(), vec![1]);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        assert!(!game.shop_purchase_web_open());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        assert!(game.shop_purchase_web_open());
+        assert_eq!(game.take_shop_buy(), None, "buy leg sends no 5000");
+
+        // The exe's `(345,385)` OK lands on the web page, not on a
+        // local game-socket confirm sheet; our web surface consumes it.
+        game.ingest_snapshot(&InputSnapshot::click_at(345, 385));
+        assert!(game.shop_purchase_web_open(), "the web page owns the OK");
+        assert_eq!(game.take_shop_buy(), None, "the OK sends no opcode");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(757, 580));
+        assert!(!game.shop_purchase_web_open());
+        assert_eq!(game.side(), None, "BACK leaves the shop side");
+        assert_eq!(game.take_exit_shop(), Some(o2jam_net::shop::ExitShop));
+        assert_eq!(
+            game.take_shop_buy(),
+            None,
+            "the whole leg sent no buy opcode"
+        );
     }
 
     #[test]
@@ -20098,7 +20230,7 @@ mod game_tests {
         // the snapshot click goes click_shop -> shop_action_at at the
         // exe's `SHOP_CHILD_ORIGIN_Y` hit offset -> ShopState::toggle_row
         // -> paint_side_scene_live -> shop_panel_kept. The parked sheet
-        // has no painter, and BUYITEM alone queues the pinned 5000.
+        // has no painter, and BUYITEM opens the web surface (W-a).
         let mut game = open_shop_board(2);
         let cart_add_sprite = "cart-add.ojs";
         game.load_shopping_bag_add_sheet(SceneArt {
@@ -21463,11 +21595,11 @@ mod game_tests {
     fn shops_hand_session_browses_and_buys() {
         // Offline hand-driven shop session (no gateway): the item
         // board opens from Waiting, the pager turns, a row toggle
-        // checks the cart, and the cart BUYITEM queues the pinned
-        // 5000 send through the seam; the song board then sorts,
-        // pages, stages the cart, and queues the pinned 5010 send —
-        // every step through the public seams the windowed binary
-        // feeds, each mutation moving the observable hash.
+        // checks the cart, and the cart BUYITEM opens the local web
+        // surface without a game-socket send; the song board then
+        // sorts, pages, stages the cart, and queues the pinned 5010
+        // send — every step through the public seams the windowed
+        // binary feeds, each mutation moving the observable hash.
         let mut game = open_shop_board(10);
         let entered = game.state_hash();
         game.click_shop(753, 379);
@@ -21481,9 +21613,12 @@ mod game_tests {
         assert_ne!(checked, paged, "row toggle changed nothing");
         game.click_shop(18, 564);
         let bought = game.state_hash();
-        use o2jam_net::shop::SyncItemPurchase;
-        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
-        assert_ne!(bought, checked, "buy commit changed nothing");
+        assert!(game.shop_purchase_web_open());
+        assert_eq!(game.take_shop_buy(), None, "the web buy sends no 5000");
+        assert_ne!(
+            bought, checked,
+            "opening the purchase surface changed nothing"
+        );
         assert!(game.leave_side(), "shop returns to Waiting");
         println!(
             "shop hand session: {entered:016x} -> {paged:016x} -> {checked:016x} -> {bought:016x}"
@@ -21744,14 +21879,14 @@ mod game_tests {
         // Ticket #163 (shop leg, CLICK): press+release through the
         // routed gesture on every staged control — the empty cart
         // commits nothing, all eight ITEMBUY toggles check and uncheck,
-        // the scroll pager turns and holds, BUYITEM queues the pinned
-        // 5000 send, the cart pager turns over a full cart, the #195
+        // the scroll pager turns and holds, BUYITEM opens the local
+        // web surface with no game opcode, the cart pager turns over a
+        // full cart, the #195
         // browse tools answer (ITEMPRE previews, ITEMBACK clears, the
         // bag pager holds with no owned panel staged), and the
         // display-only chrome (GEMMONEY, page digits, scroll bar body,
         // ITEMNAME/ITEMWON templates, preview comment, bag readout)
         // lands nowhere.
-        use o2jam_net::shop::SyncItemPurchase;
         let mut game = open_shop_board(10);
         game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
         assert_eq!(game.take_shop_buy(), None, "empty cart commits nothing");
@@ -21774,8 +21909,12 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(226, 379));
         assert_eq!(game.shop_page(), 0, "scroll PREV holds at the start");
         game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
-        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
-        assert_eq!(game.take_shop_buy(), None, "the seam drains once");
+        assert!(
+            game.shop_purchase_web_open(),
+            "BUYITEM opens the web purchase surface"
+        );
+        assert_eq!(game.take_shop_buy(), None, "the buy leg sends no 5000");
+        game.close_shop_purchase_web();
         assert_eq!(game.shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
         assert_eq!(game.shop_visible_cart().len(), 3);
@@ -22934,7 +23073,8 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         assert!(game.leave_side());
 
-        // Item-shop arm: the row toggle plus cart BUYITEM queues 5000.
+        // Item-shop arm: the row toggle checks the cart and BUYITEM
+        // opens the local web surface (W-a NULL, no 5000).
         let rows: Vec<o2jam_file::AvatarItemRow> = (1..=10)
             .map(|item_id| o2jam_file::AvatarItemRow {
                 item_id,
@@ -22960,6 +23100,7 @@ mod game_tests {
         game.click_shop(340, 575);
         assert_eq!(game.shop_cart(), vec![1]);
         game.click_shop(18, 564);
+        game.queue_shop_buy_for_reply_probe();
         assert!(game.leave_side());
 
         // Song-shop arm (#139 cluster 4): the catalog + TITLE sort +
@@ -23192,8 +23333,11 @@ mod game_tests {
         // #284 re-pins: the Waiting confirm face word folds after the
         // planet press word on every screen (0 while no ready/start
         // request stands), so the stream shifts once.
+        // #397 re-pins: the local web-purchase surface folds after the
+        // legacy 5000 probe word; BUYITEM now opens the surface instead
+        // of queuing that send, so this leg's word pair flips.
         assert_eq!(
-            populated, 0x1BBD_91F6_2C80_6183,
+            populated, 0x6996_8636_6FA1_9803,
             "outbox+lanking+shop+musicshop+planet population must not move the observable hash"
         );
 
