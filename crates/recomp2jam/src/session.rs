@@ -1069,6 +1069,15 @@ impl OnlineSession {
                     self.resolve_song_select(answer, attempt.choice);
                     return None;
                 }
+                Ok(frame) if frame.id == WaitingMusicChanged::COMMAND => {
+                    // The room echoes the pick before its 4003 arena
+                    // answer (`full01/tap.log`). A select drain that
+                    // merely skipped this frame left the master's own
+                    // captions on the pre-pick song until another poll
+                    // (#564), so fold it through the same arm the
+                    // ordinary waiting drain uses.
+                    self.apply_waiting_music_changed(&frame);
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-select frame in select drain");
@@ -3259,6 +3268,15 @@ impl OnlineSession {
         };
         self.game
             .set_room_music(event.music_id, event.difficulty, event.speed);
+        // The session mirror feeds the speed a guest sends on Loading
+        // Confirm and the song a later join stages; leaving it at the
+        // old snapshot would make the peer's wire disagree with its
+        // own captions after the master's echo (#541).
+        if let Some(room) = self.joined_room.as_mut() {
+            room.music_id = event.music_id;
+            room.difficulty = event.difficulty;
+            room.speed = event.speed;
+        }
         self.announce_music_state();
     }
 
@@ -3380,6 +3398,7 @@ impl OnlineSession {
             "room member left"
         );
         self.game.clear_waiting_member_seat(left.member_id);
+        self.game.promote_waiting_master(left.new_master_id);
         if let Some(room) = self.joined_room.as_mut() {
             room.clear_member(left.member_id);
         }
@@ -6485,6 +6504,13 @@ pub(super) mod session_tests {
     /// `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed`
     /// produces. No exe frame pair was captured (`#380` close
     /// comment), so the live before/after capture stays OPEN.
+    ///
+    /// Ticket #544 live chain (docs/live-path-reachability.md):
+    ///   main.rs::run_play -> OnlineSession::paint (Channel/Room) ->
+    ///   poll_lobby_chat -> drain_lobby_chat -> apply_lobby_frame ->
+    ///   apply_room_removed -> ScreenGame::remove_room -> paint_channel.
+    /// Wire pin: `S2C 2007 len=8 hex=00000000` from the WAVE 1 leg2 tap
+    /// `e326e3f7…`, with the observer's 2003 poll `d4fa3dc6…`.
     #[test]
     fn observer_paint_drops_the_row_named_by_the_2007_disband_broadcast() {
         let (mut session, server) = room_session(|mut stream| {
@@ -6982,6 +7008,12 @@ pub(super) mod session_tests {
             bytes[4..8].copy_from_slice(&id.to_le_bytes());
             bytes[20..24].copy_from_slice(&bpm.to_le_bytes());
             bytes[112..117].copy_from_slice(title);
+            // `OjnListEntry::is_song` admits a row only when it names
+            // an `o2maNNN.ojm` chart; without it the catalog BPM map
+            // stays empty and the echo guard compares two `-0-`
+            // captions instead of two tempos (#553).
+            let chart = format!("o2ma{id}.ojm");
+            bytes[240..240 + chart.len()].copy_from_slice(chart.as_bytes());
             bytes
         };
         let mut catalog = record(757, 124.0, b"First");
@@ -7010,6 +7042,11 @@ pub(super) mod session_tests {
 
     #[test]
     fn a_4001_room_echo_keeps_the_staged_pick_on_bpm_and_speed_captions() {
+        // Ticket #553 (master and peer captions follow the room echo):
+        // the master half is this guard; the peer half is
+        // `a_joining_peer_keeps_the_master_seated_across_a_song_and_speed_echo`,
+        // which pins the same 4001 into the session mirror. Both read
+        // `ScreenGame::waiting_song`/`waiting_level` at paint time.
         // Ticket #535 live chain: `main.rs::run_play` -> `OnlineSession::paint`
         // (Waiting) -> `poll_waiting_chat` -> `drain_waiting_chat` ->
         // `apply_waiting_music_changed` -> `ScreenGame::set_room_music` ->
@@ -8421,6 +8458,43 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn master_chat_send_lands_as_a_waiting_row_from_the_3012_echo() {
+        // Ticket #567 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::menu_key (Waiting Confirm)
+        //   -> flush_chat_action -> SendWaitingMessage 3011 ->
+        //   drain_waiting_chat -> apply_waiting_user_message 3012 ->
+        //   ScreenGame::push_waiting_user_message -> paint_waiting_chat.
+        // Wire pin: `full01/tap.log` 15:43:51 `C2S 3011 len=17
+        // hex=68656c6c6f68656c6c6f323931` -> `S2C 3012`, with the
+        // CP05 master chat-row pack `4899ad2a…`.
+        use o2jam_net::rooms::WaitingUserMessage;
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let sent = read_frame(&mut stream);
+            assert_eq!(sent.id, 3011);
+            assert_eq!(sent.payload, b"hellohello291".to_vec());
+            let echo = WaitingUserMessage {
+                sender: "master".to_owned(),
+                content: b"hellohello291".to_vec(),
+                member_id: 0,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert!(session.game.is_room_master(), "master role for this leg");
+        session.game.set_chat_input("hellohello291");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.waiting_chat().len() == 1
+        });
+        server.join().unwrap();
+        let rows = session.game.waiting_chat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sender, "master");
+        assert_eq!(rows[0].text, "hellohello291");
+        assert!(!rows[0].admin, "3012 is a player row");
+    }
+
+    #[test]
     fn waiting_admin_message_drains_into_waiting_history() {
         use o2jam_net::rooms::WaitingAdminMessage;
         let line = WaitingAdminMessage {
@@ -8681,6 +8755,49 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn a_joining_peer_keeps_the_master_seated_across_a_song_and_speed_echo() {
+        // Ticket #541 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint ->
+        //   poll_channel_login / room join -> 3003 snapshot ->
+        //   ScreenGame::set_joined_room -> poll_waiting_chat ->
+        //   drain_waiting_chat -> apply_waiting_music_changed (4001) ->
+        //   ScreenGame::set_room_music -> paint_waiting_seat_avatars.
+        // Wire pin: qualified c3 `waiting.png` guest frame plus the
+        // `full01/tap.log` 4000/4001 pick echo; the peer's own 3003
+        // carries the master seat, which the later echo must not drop.
+        let answer = hex_bytes(LIVE_JOIN_ANSWER_HEX);
+        let (mut session, server) = room_session(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 3002);
+            stream.write_all(&encode_frame(3003, &answer)).unwrap();
+            let echo = WaitingMusicChanged {
+                music_id: 757,
+                difficulty: 0,
+                speed: 6,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateMusicState.id());
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(0, "");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting && session.game.room_music_id() == Some(757)
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session
+                .game
+                .staged_waiting_member(0)
+                .expect("master stays seated")
+                .nickname,
+            "tester"
+        );
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert_eq!(room.music_id, 757, "room song follows the echo");
+        assert_eq!(room.speed, 6, "room speed follows the echo");
+    }
+
+    #[test]
     fn leave_broadcast_removes_the_peer_seat_on_the_master() {
         // 3007 is sent to the remaining room members only. The master's
         // staged seat 1 must disappear without another snapshot.
@@ -8716,6 +8833,42 @@ pub(super) mod session_tests {
         assert_eq!(
             session.game.staged_waiting_member(1).unwrap().nickname,
             "guest"
+        );
+    }
+
+    #[test]
+    fn master_leave_promotes_the_resident_peer_to_room_master() {
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat -> apply_user_left ->
+        //   ScreenGame::promote_waiting_master -> is_room_master / seat star.
+        // Wire-only CP37 pin in the 291 story matrix: the master leaves
+        // with a peer seated; the peer gets `3007 body=0001000000000000`
+        // (departing 0, promoted 1) and no 2007. The exe compares the
+        // local member id against the announced master id (docs/relay.md
+        // section 10, files `0x15d888`-`0x15d8d3`) for its `+0x30` flag,
+        // which selects START versus READY and the seat's master emblem.
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &[0, 1, 0, 0, 0, 0, 0, 0]))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert!(!session.game.is_room_master(), "guest starts as a peer");
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(0).is_none()
+        });
+        server.join().unwrap();
+        assert!(
+            session.game.is_room_master(),
+            "promotion must arm the peer's master controls"
+        );
+        assert!(
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.master),
+            "the promoted seat must carry the master emblem"
         );
     }
 
@@ -9632,30 +9785,13 @@ pub(super) mod session_tests {
         assert_eq!(level_for_difficulty(9), 2);
     }
 
-    #[test]
-    fn waiting_select_music_ok_with_staged_pick_reaches_4000_over_scripted_gateway() {
-        // Ticket #232 wire guard: a real session walk, row click through
-        // ingest_snapshot, OK click at the staged rect, then a paint
-        // must put the 4000 SetRoomMusic frame on the wire with the
-        // staged music id. Server-side assertion pins the accept clause.
+    /// Open the staged select dialog with a catalog row, click it, then
+    /// click OK — the shared master pick gesture for the 4000 wire guards.
+    fn click_master_song_row_and_ok(session: &mut OnlineSession) {
         use o2jam_render::Rect;
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
         use std::collections::HashMap;
 
-        let room = joined_snapshot();
-        let (mut session, server) = joined_waiting_session(room, |mut stream| {
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, o2jam_net::Request::SetRoomMusic.id());
-            let body = o2jam_net::play::SetRoomMusic::decode_body(&frame.payload).unwrap();
-            assert_eq!(body.music_id, 757);
-            // begin_song_select also sends SetRoomArena 4002 right after.
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, o2jam_net::Request::SetRoomArena.id());
-            assert_quiet(&mut stream);
-        });
-
-        // Stage the dialog overlay with a pinned OK rect plus a catalog
-        // so the row click commits song 757 (Normal slot).
         let ok_placement = ScenePlacement {
             id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
             code: 0x27200002,
@@ -9680,18 +9816,78 @@ pub(super) mod session_tests {
         rec[240..251].copy_from_slice(b"o2ma757.ojm");
         let entries = o2jam_file::parse_ojn_list(&rec).unwrap();
         session.set_song_catalog(&entries);
-
-        // 1. Row click stages the pick.
         session
             .game_mut()
             .ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
         assert!(session.game_mut().has_pending_music_send());
-
-        // 2. OK click closes the dialog.
         session
             .game_mut()
             .ingest_snapshot(&InputSnapshot::click_at(389, 519));
         assert!(!session.game_mut().select_music_dialog_open());
+    }
+
+    #[test]
+    fn master_row_pick_echoes_4000_and_4001_over_the_scripted_gateway() {
+        // Ticket #564 live chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> OnlineSession::paint ->
+        //   ScreenGame::ingest_snapshot (MUSELECT row + OK) ->
+        //   flush_music_send -> SetRoomMusic 4000 / SetRoomArena 4002 ->
+        //   drain_waiting_chat -> apply_waiting_music_changed 4001 ->
+        //   ScreenGame::set_room_music.
+        // Wire pin: `full01/tap.log` 15:43:48 `C2S 4000 len=8
+        // hex=64000101` -> `S2C 4001 len=8 hex=64000101`.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let pick = read_frame(&mut stream);
+            assert_eq!(pick.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&pick.payload).unwrap();
+            assert_eq!(body.music_id, 757);
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::SetRoomArena.id()
+            );
+            let echo = WaitingMusicChanged {
+                music_id: 757,
+                difficulty: 0,
+                speed: 2,
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::UpdateMusicState.id()
+            );
+            assert_quiet(&mut stream);
+        });
+        click_master_song_row_and_ok(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(757)
+        });
+        server.join().unwrap();
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert_eq!(room.music_id, 757, "the 4001 echo stages the room song");
+        assert_eq!(room.speed, 2, "the 4001 echo stages the room speed");
+    }
+
+    #[test]
+    fn waiting_select_music_ok_with_staged_pick_reaches_4000_over_scripted_gateway() {
+        // Ticket #232 wire guard: a real session walk, row click through
+        // ingest_snapshot, OK click at the staged rect, then a paint
+        // must put the 4000 SetRoomMusic frame on the wire with the
+        // staged music id. Server-side assertion pins the accept clause.
+        let room = joined_snapshot();
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&frame.payload).unwrap();
+            assert_eq!(body.music_id, 757);
+            // begin_song_select also sends SetRoomArena 4002 right after.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomArena.id());
+            assert_quiet(&mut stream);
+        });
+
+        // Stage the dialog overlay, click the 757 row, then OK; polling
+        // drives the queued pick onto the wire as 4000.
+        click_master_song_row_and_ok(&mut session);
 
         // 3. Polling drives the queued pick onto the wire as 4000.
         paint_frame(&mut session);
