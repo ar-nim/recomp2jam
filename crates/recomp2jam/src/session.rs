@@ -6642,6 +6642,52 @@ pub(super) mod session_tests {
         assert_eq!(session.game.listed_rooms()[0].title, "P380SECOND");
     }
 
+    /// Evidence-room lifecycle bodies (ticket #610):
+    /// `~/scratch/evidence-room/row-state-6/{rust-master,exe}/wire/
+    /// room-stage.log` 03:15:58 / 03:16:13 carry `3007 len=8
+    /// hex=0001000000000000` (peer promotion) and `2007 len=4
+    /// hex=00000000` (last exit). Both must reach the staged Room
+    /// board: 3007 clears the seat but keeps the row, 2007 removes it.
+    #[test]
+    fn evidence_room_3007_keeps_the_row_and_2007_removes_it() {
+        use o2jam_net::frame::encode_frame;
+
+        let mut room = room_with_peer("peer");
+        room.slots[0].member = Some(member_on_team("master", false, 0));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &hex_bytes("0001000000000000")))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        assert!(session.game.staged_waiting_member(0).is_some());
+        paint_until(&mut session, |s| s.game.staged_waiting_member(0).is_none());
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P380SECOND")]);
+        assert!(session.game_mut().enter_screen(Screen::Room));
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.listed_rooms().len(),
+            1,
+            "3007 is not a disband"
+        );
+        server.join().unwrap();
+
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .write_all(&encode_frame(2007, &hex_bytes("00000000")))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(0, "P380SECOND")]);
+        paint_until(&mut session, |s| s.game.listed_rooms().is_empty());
+        assert_eq!(session.screen(), Screen::Room);
+        server.join().unwrap();
+    }
+
     #[test]
     fn pending_join_skips_interleaved_broadcasts() {
         // Live servers interleave broadcasts (our own RoomCreated echo
