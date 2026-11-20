@@ -8220,6 +8220,35 @@ pub(super) mod session_tests {
         assert!(!session.game.waiting_chat()[0].admin);
     }
 
+    /// Seated chat round trip from the CP05 tap (ticket #600):
+    /// `~/scratch/close-wr/full01/tap.log` 15:43:51 carries
+    /// `C2S 3011 len=17 hex=68656c6c6f68656c6c6f323931` and
+    /// `S2C 3012 len=25 hex=7465737465720068656c6c6f68656c6c6f32393100`.
+    /// Caller chain: boot → Room → Waiting → chat draft → Confirm →
+    /// gateway 3011 → inbound 3012 → paint → staged history row.
+    #[test]
+    fn waiting_chat_round_trip_matches_the_cp05_tap() {
+        use o2jam_net::frame::encode_frame;
+        let tapped_answer = b"tester\x00hellohello291\x00";
+        let (mut session, server) = waiting_session(|mut stream| {
+            let sent = read_frame(&mut stream);
+            assert_eq!(sent.id, 3011);
+            assert_eq!(sent.payload, b"hellohello291".to_vec());
+            stream
+                .write_all(&encode_frame(3012, tapped_answer))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game.set_chat_input("hellohello291");
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |s| s.game.waiting_chat().len() == 1);
+        server.join().unwrap();
+        let row = &session.game.waiting_chat()[0];
+        assert_eq!(row.sender, "tester");
+        assert_eq!(row.text, "hellohello291");
+        assert!(!row.admin);
+    }
+
     #[test]
     fn waiting_admin_message_drains_into_waiting_history() {
         use o2jam_net::rooms::WaitingAdminMessage;
