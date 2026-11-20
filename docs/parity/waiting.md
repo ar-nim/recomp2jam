@@ -89,6 +89,13 @@ comparison; restored arms pass. The exe display rule remains **OPEN**
 (#312): no qualified capture pins what the 7.55 exe paints in this state,
 so this note records the owner-decided shell rule only.
 
+Story #550 (MUSELECT opens for the master while peers keep the BPM
+cover) is carried by the same live guard and by the seam guards
+`waiting_mu_select_opens_song_dialog_for_master` and
+`waiting_mu_select_is_noop_for_non_master` in the shell. The static pins
+are the MUSELECT handler at file `0xb2622` and the role-2 popup gate at
+file `0xaaee0`; the qualified exe master dialog frame stays OPEN (#312).
+
 ## #538 master sees the joining peer (2026-11-20)
 
 The parked fix from #379 landed as `75c81be` on `cb2/tt-379`: the master's
