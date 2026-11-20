@@ -51,6 +51,16 @@ guard tests that hold it and what stays OPEN with its next step.
   staged button records its press with its next evidence step instead
   of dropping it. `STATE_ROOM` carries **no** tutorial control, so #34
   closes as "not a room control" with the reporter question posted.
+  **Contradiction (recorded for #317):** the shipped
+  `ControlList_Interface.txt` line 148 names
+  `IDC_BUTTON_SROOM_FIRSTSTEP 0x13200032 "Room_FirstStep.ojs"`
+  (archive data offset 74,444,574, rect `(660,1)-(720,33)`), so the
+  Room state does carry tutorial chrome; the exe wins over this stale
+  sentence. What #34 actually ruled out was a control *named* tutorial.
+  The FIRSTSTEP → `CStateTutorial` dispatch was later pinned by the
+  qualified B7 click `(689,16)` and static `S-PLAY-B3` chain
+  `0x4902bb` → `0x495110` → `0x4f07f0`; #358 closed that leg. This
+  contradiction stays recorded and #34 stays closed.
 - **Room lounge chat (ticket #37).** The room lobby shares the
   main-room feed with the Channel scene (`LobbyChatPanel`, 2012 out,
   2013/2014/2016/2019/2029 in) and paints inside the staged
