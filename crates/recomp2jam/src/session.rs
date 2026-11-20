@@ -180,8 +180,8 @@ mod press;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
-    load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, LoadingGateCue,
-    LoadingGatePacing, PreparedChart, LOADING_GATE_STEPS,
+    load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, LoadingGateArm,
+    LoadingGateCue, LoadingGatePacing, PreparedChart, LOADING_GATE_STEPS,
 };
 use press::{EntryEcho, PressDisposition};
 
@@ -3112,12 +3112,19 @@ impl OnlineSession {
     }
 
     /// One clocked gate advance from `paint`. The cover is already up
-    /// on the transition frame; the confirm holds until the measured
-    /// span, and Playing waits for the posted 4012.
+    /// on the transition frame; the confirm holds until the chart
+    /// arms and the measured span passes, and Playing waits for the
+    /// posted 4012.
     fn advance_loading_gate_at(&mut self, now: Instant) {
         if self.game.screen() != Screen::Loading {
             self.loading_pacing.clear();
             return;
+        }
+        if self.game.loading_gate_ready() {
+            if self.loading_pacing.arm_state() == LoadingGateArm::AwaitingChart {
+                tracing::debug!("loading chart armed; confirm clock still holds");
+            }
+            self.loading_pacing.arm_chart_at(now);
         }
         match self.loading_pacing.advance_at(now) {
             LoadingGateCue::None => {}
@@ -8237,6 +8244,80 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Loading, "hold after 4012");
         session.advance_loading_gate_at(confirmed + LOADING_PLAYING_AFTER_CONFIRM);
         assert_eq!(session.game.screen(), Screen::Playing);
+        server.join().unwrap();
+    }
+
+    /// #608: a latched chart failure leaves the gate unarmed. The
+    /// wall span alone must not post 4012 or hand the guest to
+    /// Playing; the arm latch keeps the load honest until staging
+    /// succeeds. Live chain: `Shell::paint_backbuffer` ->
+    /// `OnlineSession::paint` -> `poll_wire` ->
+    /// `advance_loading_gate_at`.
+    #[test]
+    fn unarmed_loading_gate_holds_4012_at_the_wall_span() {
+        use crate::loading::{LoadingGateArm, LOADING_CONFIRM_AFTER_START};
+
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        session.game_mut().fail_loading_gate();
+        assert!(!session.game.loading_gate_ready());
+
+        let entered = Instant::now();
+        session.arm_loading_gate_at(entered);
+        session.advance_loading_gate_at(
+            entered + LOADING_CONFIRM_AFTER_START + Duration::from_millis(1),
+        );
+
+        assert_eq!(session.game.screen(), Screen::Loading);
+        assert!(!session.loaded_sent, "unarmed gate must not post 4012");
+        assert_eq!(
+            session.loading_pacing.arm_state(),
+            LoadingGateArm::AwaitingChart
+        );
+        server.join().unwrap();
+    }
+
+    /// #608 wire correlate: the observable arm latch opens the 4012
+    /// send, and the gateway's S2C 4013 answer follows that send. The
+    /// exe arm word itself still needs the stopped-state read; this
+    /// guard pins our gate against the P3/P13 wire order.
+    #[test]
+    fn chart_arm_opens_4012_before_the_4013_answer() {
+        use crate::loading::{LoadingGateArm, LOADING_CONFIRM_AFTER_START};
+
+        let (loaded_send, loaded_recv) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            loaded_send.send(loaded.id).unwrap();
+            stream.write_all(&encode_frame(4013, &[1, 1])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+
+        let entered = Instant::now();
+        session.arm_loading_gate_at(entered);
+        assert_eq!(
+            session.loading_pacing.arm_state(),
+            LoadingGateArm::AwaitingChart
+        );
+        session.advance_loading_gate_at(entered + LOADING_CONFIRM_AFTER_START);
+
+        assert_eq!(
+            loaded_recv.recv_timeout(Duration::from_secs(4)).unwrap(),
+            4012
+        );
+        assert!(matches!(
+            session.loading_pacing.arm_state(),
+            LoadingGateArm::ConfirmPosted { .. }
+        ));
         server.join().unwrap();
     }
 
