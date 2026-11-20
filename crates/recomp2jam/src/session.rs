@@ -4039,7 +4039,9 @@ pub(super) mod session_tests {
         MemberMusicState, MusicState, Request, Response, StatKind, SyncMemberMusicStateEvent,
         UpdateGameStats, WaitingMusicChanged, WireMessage, HEADER_LEN,
     };
-    use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord, StartGateVerdict};
+    use o2jam_shell::screens::game::{
+        LobbyChat, QuitConfirmOutcome, ResultMemberRecord, StartGateVerdict,
+    };
     use o2jam_shell::screens::side::RoomDialog;
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -11694,6 +11696,62 @@ pub(super) mod session_tests {
             "the next type-100 record pops the covered sheet"
         );
         assert_eq!(session.screen(), Screen::Room);
+        server.join().unwrap();
+    }
+
+    /// #690 local CANCEL leg. Frame capture name `S316-QUIT-CANCEL-04`
+    /// (qualified exe before/after pack is still GAP). The headless
+    /// pair below is our client's own pixel proof, not an oracle pack.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `run_windowed_session`
+    /// -> `Shell::run` -> `WindowHandler::route_mouse_input` ->
+    /// `GameLoop::ingest_snapshot` -> `OnlineSession::ingest_snapshot`
+    /// -> `ScreenGame::click_planet_modal` ->
+    /// `ScreenGame::cancel_quit_confirm`.
+    #[test]
+    fn quit_cancel_closes_only_the_sheet_and_emits_no_wire_frame() {
+        let (port, server) = fake_gateway(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(120)))
+                .unwrap();
+            let mut bytes = [0u8; 64];
+            match stream.read(&mut bytes) {
+                Ok(0) => panic!("gateway closed"),
+                Ok(count) => {
+                    let frame = decode_frame(&bytes[..count]).unwrap();
+                    panic!("CANCEL must not put frame {} on the wire", frame.id);
+                }
+                Err(error) => assert!(matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )),
+            }
+        });
+        let game = ScreenGame::new();
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.menu_key(MenuKey::Back, true);
+        let bare = painted_game_frame(&mut session);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(769, 580));
+        assert_eq!(
+            session.game.planet_modal(),
+            Some(o2jam_shell::screens::game::PlanetModal::QuitConfirm)
+        );
+        let with_sheet = painted_game_frame(&mut session);
+        assert_ne!(with_sheet, bare, "quit sheet painted nothing");
+
+        session.ingest_snapshot(&InputSnapshot::click_at(450, 253));
+        paint_frame(&mut session);
+        let after = painted_game_frame(&mut session);
+        assert_ne!(after, with_sheet, "CANCEL left the sheet on screen");
+        assert_eq!(session.game.planet_modal(), None);
+        assert_eq!(
+            session.game.last_quit_confirm_outcome(),
+            Some(QuitConfirmOutcome::Cancelled)
+        );
+        assert!(!GameLoop::quit_requested(&session), "CANCEL must not quit");
+        assert_eq!(session.screen(), Screen::Planet);
         server.join().unwrap();
     }
 
