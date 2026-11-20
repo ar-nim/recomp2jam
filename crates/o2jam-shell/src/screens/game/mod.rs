@@ -49,9 +49,10 @@ use super::paint::{
     paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
     paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
     room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -6414,6 +6415,16 @@ impl ScreenGame {
         }
     }
 
+    /// Carousel view the planet painter mounts: the banner frame and
+    /// the rotation flag that selects the PLAYSTOP face (both the bare
+    /// board and the board under the channel dialog use it).
+    fn promo_paint(&self) -> PlanetPromoPaint {
+        PlanetPromoPaint {
+            banner_index: self.planet_board.planet_promo_carousel.index(),
+            spinning: self.planet_board.planet_promo_carousel.spinning(),
+        }
+    }
+
     /// Planet: staged art with emblem captions when present, else
     /// the flat card. A picked band draws the amber cursor stand-in
     /// inside its pinned button rect (highlight rendering is
@@ -6429,7 +6440,7 @@ impl ScreenGame {
                 self.planet_board.planet.band(),
                 self.hovered_planet_action(),
                 self.planet_board.planet_press,
-                self.planet_board.planet_promo_carousel.index(),
+                self.promo_paint(),
             ),
             None => paint_screen(frame, Screen::Planet),
         }
@@ -6517,7 +6528,7 @@ impl ScreenGame {
     fn staged_channel_board(&self) -> Option<StagedPlanetBoard<'_>> {
         self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
             art,
-            promo_index: self.planet_board.planet_promo_carousel.index(),
+            promo: self.promo_paint(),
         })
     }
 
@@ -9257,8 +9268,32 @@ mod game_tests {
         figure
     }
 
+    /// Four-record PLAYSTOP stand-in for the #111 press guards:
+    /// record 0 green rest, record 1 green hover, record 2 red pressed
+    /// square, record 3 blue stopped play face. The raw pressed index
+    /// is an OPEN stand-in (best match in the `clean-playstop-press`
+    /// crop); records 0/3 are the #711 capture pin.
+    fn playstop_press_figure() -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let mut figure = AvatarFigure::default();
+        for word in [0x03E0u16, 0x03E0, 0x7C00, 0x001F] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(
+                    &word.to_le_bytes().repeat(26 * 24),
+                    26,
+                    24,
+                )
+                .expect("playstop press records"),
+                dx: 387,
+                dy: 511,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
     /// Bare planet board with staged promo cells: PLAYSTOP carries a
-    /// pressed frame (two records), the LEFT cell a single record
+    /// pressed frame (four records), the LEFT cell a single record
     /// (no pressed art). Rects are the parsed `.bnd` rects verbatim
     /// (rects 12/14, `ControlList_Interface.txt` STATE_PLANET).
     fn press_planet_game() -> ScreenGame {
@@ -9295,7 +9330,7 @@ mod game_tests {
             ],
             HashMap::from([
                 ("Promo_Left.ojs".to_owned(), press_promo_figure(26, 24, 1)),
-                ("PlayStop.ojs".to_owned(), press_promo_figure(26, 24, 2)),
+                ("PlayStop.ojs".to_owned(), playstop_press_figure()),
             ]),
         );
         game
@@ -14977,7 +15012,10 @@ mod game_tests {
                     },
                 },
             ],
-            HashMap::from([(banner.to_owned(), frames)]),
+            HashMap::from([
+                (banner.to_owned(), frames),
+                ("Promo_Stop.ojs".to_owned(), playstop_press_figure()),
+            ]),
         );
         game
     }
@@ -15029,6 +15067,26 @@ mod game_tests {
         game.click_planet(400, 523);
         assert!(game.planet_promo_spinning());
         assert_eq!(game.planet_promo_index(), 1);
+    }
+
+    #[test]
+    fn promo_stop_click_swaps_the_playstop_face_both_ways() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::paint_planet ->
+        // paint_planet_scene -> paint_planet_board ->
+        // paint_planet_playstop_face. The #711 capture pins rec0 while
+        // spinning and rec3 after one click, then rec0 again on the
+        // second click; the seam uses distinct rest/press/stopped colours.
+        let mut game = promo_carousel_game();
+        let stop_square = pack_xrgb(0x00, 0xFF, 0x00);
+        let play_triangle = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(planet_pixel(&mut game, 400, 523), stop_square);
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        assert_eq!(planet_pixel(&mut game, 400, 523), play_triangle);
+        game.click_planet(400, 523);
+        assert!(game.planet_promo_spinning());
+        assert_eq!(planet_pixel(&mut game, 400, 523), stop_square);
     }
 
     #[test]

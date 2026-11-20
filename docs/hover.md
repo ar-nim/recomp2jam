@@ -25,7 +25,9 @@ All captures are native 800x600 canvas pixels. Artifacts live under
   desaturated rendering of that same frame, so the frame index does not
   change either.
 - **Promo `PLAYSTOP`**: the one true frame swap — rest paints frame 0,
-  hover paints body **frame 1** (both 100%).
+  hover paints body **frame 1** (both 100%). The carousel's rotation
+  flag swaps the *rest* face too (#711 pin below): raw record 0 while
+  spinning (stop square), raw record 3 once held (play triangle).
 - **Room row panels `EXBUTTON1..6`**: static on the live room (six empty
   panels). No frame change and no `Room_MOver.ojs` overlay.
 - **Room mode filters, top-strip buttons, `BACK`, `CREATE`,
@@ -171,6 +173,31 @@ sprite anchors in the bodies agree with those rects byte-exact.
   record-vs-capture match over all six 26x24 records, 2026-11-11: rest
   624/624 on rec0, hover 624/624 on rec1; the old two-record model
   described the frame pairing, not the record count).
+
+### Carousel state face (#711, 2026-11-20)
+
+One boot window (`~/scratch/playstop/win1/exe/`, exe sha256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`;
+manifest sha256 `880748933e61868fed25213a498471f91c5dc982bfa0f975428ea7c7b090788a`,
+citation sha256 `f3e7fc3ae607bfcb7a461483e1b35034835a482f6bd3726427449bf1bb9897e2`,
+`rig-provenance.sh cite --claim exe` + `check` both green; full frames and 26x24 crops
+under `playstop/`, driver log `playstop-drive.log`; route=sink,
+preboot_breach=0, on_default_sink=0):
+pointer parked off-cell, boot rest matches raw **record 0** 624/624
+(stop square); one click matches raw **record 3** 624/624 (play
+triangle), still rec3 after two 3000 ms ticks with a byte-identical
+banner (rotation halted); a second click returns to rec0 and the
+banner advances again. Direct record-vs-capture method from 2026-11-11
+above, tolerance 30/255. Raw record sha256s: rec0
+`5c035ae665967786b177716c28e3d467147d132990f24b541fa4225f86915ed8`,
+rec3 `812e25c0d23da5154a2f3dd2e6c10f35a57d5af69e1ca5c5c0421c713991d448`
+(body sha256 `9e47b7a095b2f94cf264ad8463ad4fe44d2a3460be331fa7e99c60276f248618`).
+The earlier `clean-playstop-*` press corpus best-matches rec2
+(521/624, remainder cursor ink), so the pressed square stays a
+distinct record; hover keeps its pinned rec1 on top of the state face.
+Hovered-stopped and pressed-stopped compositions are not captured —
+OPEN, next step: hover dwell + press on the held face in one boot.
+Full pin table: `~/scratch/playstop-findings.md`.
 
 ## Findings that change the shell's plan
 
