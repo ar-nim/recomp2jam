@@ -36,13 +36,12 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
-    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat,
-    paint_channel_scene, paint_dialog_scene, paint_lanking_board, paint_lanking_scene,
-    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
-    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet, paint_myroom_data,
-    paint_myroom_figure, paint_payment_notice, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    list_row_hit, paint_avi_scene, paint_cash_charge_frame, paint_channel_chat, paint_dialog_scene,
+    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_wallet,
+    paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
@@ -6404,11 +6403,11 @@ impl ScreenGame {
     /// 2013/2014/2019 rows paint below the list in both cases; empty
     /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
-        let board = self.staged_channel_board();
         // The exe's relay-down frame (`baf781b8…`) keeps the planet
         // board, Channel dialog and its rows behind the one-OK sheet.
         // Boot-held rows are not interactive (the modal owns input),
         // but they still paint; deferring them to OK painted black.
+        let board = self.staged_channel_board();
         let rows = if self.planet_modal() == Some(PlanetModal::RelayDown) {
             &self.relay_down_pending_channels
         } else {
@@ -6422,12 +6421,6 @@ impl ScreenGame {
                 board,
                 self.hovered_channel_row(),
             ),
-            (Some(art), true) if self.relay_down_dialog_open() => {
-                // The held rows drained, but the exe's one-OK sheet
-                // still sits over the board and the Channel dialog
-                // (`baf781b8…`, spec #316 story 26).
-                paint_channel_scene(frame, &[], 0, 0, art, board, None);
-            }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
             (None, false) => self.channel_scene.paint_rows(rows, frame, None, None, None),
             (None, true) => paint_screen(frame, Screen::Channel),
