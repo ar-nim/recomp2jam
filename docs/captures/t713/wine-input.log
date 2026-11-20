@@ -1,0 +1,57 @@
+16:17:44 drive start display=:170 target=options account=tester host_user=3
+frame 1 screen=planet mean_luma=61.2 cue=probe:board shot=planet.png t=16:17:50
+16:17:50 aim board-prime at (557,195) evidence=live b1-explore/explore/02-after-x-557-195.png sha256=5b38c0d05467e9280d6122f210899c97dd1946f158c86c41828aa0db439c3482; harmless board click that primes the canvas before the first control
+16:17:50 inject send-click board-prime (557,195) opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 557 195
+16:17:51 aim option-gear at (729,580) evidence=docs/planet.md OPTION gear rect (710,561)-(748,599); live ~/scratch/side-scenes/b1-explore/explore/04-after-gear.png sha256=6d17a781e4d5e522da5ad72e62c26281ae0d7317b20bde9d7bad73421548043e
+16:17:52 inject send-click option-gear (729,580) opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 729 580
+16:17:54 inject send-click option-gear (729,580) opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 729 580
+16:17:58 options signature orange=0.780 box=240,50,480,90 min=0.40 evidence=~/scratch/side-scenes/b1-explore/explore aim=click:option-gear (boot-1 frame sha256 in that aim's AIMS entry)
+frame 2 screen=options mean_luma=86.5 cue=click:option-gear shot=options.png t=16:17:58
+16:17:58 inject send-key escape down
+16:17:59 inject send-key escape up
+16:18:00 drive done reached=planet,options probe_dir=/tmp/wine-scene-probe-w1r06nf9
+# --- custom Options playthrough ---
+16:18:00 playthrough start display=:170 prefix=play
+16:18:00 aim gear at (729,580) local=(509,537)
+16:18:00 inject click 729 580 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 729 580
+16:18:02 capture play-01-sound-open sha256=8324481211241abe59b91fe252ad83e8085fe557b6e90813eb7be5bbfdc23e24
+16:18:02 aim tab-key at (299,124) local=(79,81)
+16:18:02 inject click 299 124 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 299 124
+16:18:03 capture play-02-key-rest sha256=80693114d98b5aa6665db7738192ab642b3caa6165951ffb673a511de384410b
+16:18:03 aim key1 at (323,363) local=(103,320)
+16:18:04 inject click 323 363 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 323 363
+16:18:05 capture play-03-key1-armed sha256=cca1bf1c630a0cf8609f826433917345484152e3fbedd1bd738d3052a142010d
+16:18:05 inject key a down rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 key a down
+16:18:06 inject key a up rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 key a up
+16:18:07 capture play-04-key1-bound sha256=85ffe1eb2492a1b5f008fc122f2793ede8306613fa03e6d4ddc9a4a35b23d087
+16:18:07 aim tab-sound at (408,124) local=(188,81)
+16:18:07 inject click 408 124 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 408 124
+16:18:09 capture play-05-sound-rest sha256=113d16f6b3bab43070a84531da8c863de42f343e171c9101a18084e7ffa68ac2
+16:18:09 aim gamemusic-down at (304,394) local=(84,351)
+16:18:09 inject click 304 394 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 304 394
+16:18:10 capture play-06-gamemusic-down sha256=6e9198e2151fac7b04fbb395cefdad1c93cb6edc08653117404662bb5d7d9628
+16:18:10 aim gamemusic-up at (501,394) local=(281,351)
+16:18:11 inject click 501 394 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 501 394
+16:18:12 capture play-07-gamemusic-restored sha256=5d594cc6025d01d171540a10eba97f5c10c58c3c7a6f808c2ed5a56002be70a2
+16:18:12 aim bgmusic-down at (304,213) local=(84,170)
+16:18:13 inject click 304 213 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 304 213
+16:18:14 capture play-08-bgmusic-down sha256=8e51dd533193996d87b332926b7d6417e4aff0aea6f99e54bda0216ce4973920
+16:18:14 aim tab-game at (512,124) local=(292,81)
+16:18:14 inject click 512 124 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 512 124
+16:18:16 capture play-09-game-rest sha256=e4b8354ccf1ffd8db938a3ed92bf6fd6cc4d1783c707b8f17c0666db576b7f12
+16:18:16 aim notetype2 at (403,334) local=(183,291)
+16:18:16 inject click 403 334 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 403 334
+16:18:17 capture play-10-notetype2 sha256=f6ae214c3359997b714836afe06dee46d17027d700240d7cb7589ce3c4cfa761
+16:18:17 aim notetype1 at (279,334) local=(59,291)
+16:18:18 inject click 279 334 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 279 334
+16:18:19 capture play-11-notetype1-restored sha256=cff7aa094f777d8ced09dea6449d0a86117d8398b807f90a668b8dcefe13cdd4
+16:18:19 aim guide-short at (407,412) local=(187,369)
+16:18:20 inject click 407 412 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 407 412
+16:18:21 capture play-12-guide-short sha256=01419bd21246a77914a92ddaa33cca09034ea2a63107c26196fa3517a444ac8d
+16:18:21 aim guide-long at (279,412) local=(59,369)
+16:18:21 inject click 279 412 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 279 412
+16:18:22 capture play-13-guide-long-restored sha256=adffc3aa790b53a481b717dcaf57a9a3d6d9585313c9abf6c062e5bd051c1f34
+16:18:22 aim default at (336,533) local=(116,490)
+16:18:23 inject click 336 533 rc=0 opendesktop=0x58 err=14007 setthreaddesktop=1 err=0 click 336 533
+16:18:24 capture play-14-game-default sha256=bdb8550ab59944da87fe39c1fbd5abb967c7a80a4dd09ca674015922099675d8
+16:18:24 playthrough done captures=14

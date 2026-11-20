@@ -1,0 +1,195 @@
+{
+  "schema": "rig-provenance-v1",
+  "created_at": "2026-11-20T08:24:17+00:00",
+  "run": {
+    "out_dir": "/home/arnim/scratch/options-pt/win1/exe",
+    "pair": "wine-x11-sendinput",
+    "build": "9a51b54fbf5d6b95761e150b20bfb2d32ecd8286",
+    "seed": "216295607",
+    "manifest_json": "manifest.json"
+  },
+  "producer": {
+    "kind": "exe",
+    "name": "OTwo.exe",
+    "path": "/home/arnim/scratch/run-full/OTwo.exe",
+    "sha256": "83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b",
+    "size_bytes": 5029888,
+    "version": "7.55"
+  },
+  "session": {
+    "display": ":170",
+    "wayland_display": "",
+    "xdg_session_type": "wayland",
+    "pulse_sink": "rig_null_1186805",
+    "command": [
+      "scripts/rig-wine.sh",
+      "launch",
+      "/home/arnim/scratch/options-pt/win1/exe/argv.txt",
+      "(wine",
+      "explorer",
+      "/desktop=o2jam,800x600",
+      "/home/arnim/scratch/run-full/OTwo.exe,",
+      "argv",
+      "blob",
+      "+",
+      "5",
+      "mirrors)"
+    ]
+  },
+  "tools": {
+    "python3": {
+      "name": "python3",
+      "version": "Python 3.14.10",
+      "available": true
+    },
+    "xvfb": {
+      "name": "Xvfb",
+      "version": "21.1.26-1",
+      "available": true
+    },
+    "wine": {
+      "name": "wine",
+      "version": "11.22",
+      "available": true
+    },
+    "capture": {
+      "name": "ffmpeg",
+      "version": "n9.0.2",
+      "available": true
+    },
+    "injector": {
+      "name": "sendinput-helper.exe.so",
+      "version": "5778ff1132cb",
+      "available": true
+    }
+  },
+  "artifacts": [
+    {
+      "path": "argv.txt",
+      "sha256": "1c95d47820e67954823e35787853d71f5401acdac47576a64d636045e2aab7d5",
+      "size_bytes": 846,
+      "media": "other"
+    },
+    {
+      "path": "argv.txt.fields",
+      "sha256": "c273f072f8f9c641faa840ddd85097cc58ebb5f059fce1ffe1321bfb96c545e1",
+      "size_bytes": 302,
+      "media": "other"
+    },
+    {
+      "path": "artifacts/screenshots/options.png",
+      "sha256": "6d17a781e4d5e522da5ad72e62c26281ae0d7317b20bde9d7bad73421548043e",
+      "size_bytes": 159065,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/planet.png",
+      "sha256": "235f53521171be4f1d4c725d16143332fa47b66813f9e1c5b8e8b09fe68ddc21",
+      "size_bytes": 186191,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-01-sound-open.png",
+      "sha256": "8324481211241abe59b91fe252ad83e8085fe557b6e90813eb7be5bbfdc23e24",
+      "size_bytes": 176788,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-02-key-rest.png",
+      "sha256": "80693114d98b5aa6665db7738192ab642b3caa6165951ffb673a511de384410b",
+      "size_bytes": 177879,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-03-key1-armed.png",
+      "sha256": "cca1bf1c630a0cf8609f826433917345484152e3fbedd1bd738d3052a142010d",
+      "size_bytes": 202085,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-04-key1-bound.png",
+      "sha256": "85ffe1eb2492a1b5f008fc122f2793ede8306613fa03e6d4ddc9a4a35b23d087",
+      "size_bytes": 164695,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-05-sound-rest.png",
+      "sha256": "113d16f6b3bab43070a84531da8c863de42f343e171c9101a18084e7ffa68ac2",
+      "size_bytes": 163038,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-06-gamemusic-down.png",
+      "sha256": "6e9198e2151fac7b04fbb395cefdad1c93cb6edc08653117404662bb5d7d9628",
+      "size_bytes": 177030,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-07-gamemusic-restored.png",
+      "sha256": "5d594cc6025d01d171540a10eba97f5c10c58c3c7a6f808c2ed5a56002be70a2",
+      "size_bytes": 177117,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-08-bgmusic-down.png",
+      "sha256": "8e51dd533193996d87b332926b7d6417e4aff0aea6f99e54bda0216ce4973920",
+      "size_bytes": 201269,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-09-game-rest.png",
+      "sha256": "e4b8354ccf1ffd8db938a3ed92bf6fd6cc4d1783c707b8f17c0666db576b7f12",
+      "size_bytes": 196483,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-10-notetype2.png",
+      "sha256": "f6ae214c3359997b714836afe06dee46d17027d700240d7cb7589ce3c4cfa761",
+      "size_bytes": 158589,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-11-notetype1-restored.png",
+      "sha256": "cff7aa094f777d8ced09dea6449d0a86117d8398b807f90a668b8dcefe13cdd4",
+      "size_bytes": 172583,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-12-guide-short.png",
+      "sha256": "01419bd21246a77914a92ddaa33cca09034ea2a63107c26196fa3517a444ac8d",
+      "size_bytes": 172617,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-13-guide-long-restored.png",
+      "sha256": "adffc3aa790b53a481b717dcaf57a9a3d6d9585313c9abf6c062e5bd051c1f34",
+      "size_bytes": 196585,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/play-14-game-default.png",
+      "sha256": "bdb8550ab59944da87fe39c1fbd5abb967c7a80a4dd09ca674015922099675d8",
+      "size_bytes": 198508,
+      "media": "image"
+    },
+    {
+      "path": "audio/audio.wav",
+      "sha256": "577cf211c7a7332fd5deefba0b1445a308b53f8e9dd932fc5dde7077f0790992",
+      "size_bytes": 20709464,
+      "media": "audio"
+    },
+    {
+      "path": "audio/route-baseline.txt",
+      "sha256": "b0f3b77d906a7aa98aaa3c1384a8c2c69bdd469d93b1f0bb4be51f952f3f2222",
+      "size_bytes": 783,
+      "media": "other"
+    },
+    {
+      "path": "audio/route-snapshot.txt",
+      "sha256": "240fadaa7f8a021ecf8775a638d096ac7381909fbb24a5c9a06df06e658f44a6",
+      "size_bytes": 2530,
+      "media": "other"
+    }
+  ],
+  "manifest_sha256": "55f8d1957d5ef513347b0f0301aede79a4a3955eae6669a1481ba3eebf6ecdab"
+}
