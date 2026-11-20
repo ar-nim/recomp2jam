@@ -25423,6 +25423,71 @@ mod game_tests {
     }
 
     #[test]
+    fn tutorial_guide_art_has_no_wall_clock_timer_beyond_the_chart() {
+        // Spec #313 story 12: the tutorial adds no invented timer. The
+        // only cadence the exe pins is chart-derived (helper `0x495110`
+        // writes song id 8888 before `ChangeState(0xb)`; `S-PLAY-B3`),
+        // so guide art holds the B7 frame 0 across wall-clock paints.
+        // Live chain: boot -> Channel -> Room -> staged FIRSTSTEP ->
+        // Tutorial globals -> `paint_tutorial_scene` frame selector.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let mut instruction = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16] {
+            use crate::avatar::FigureLayer;
+            let pixels = [word.to_le_bytes(); 16].concat();
+            instruction.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                dx: 374,
+                dy: 297,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_tutorial_scene(
+            vec![ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(TUTORIAL_INSTRUCTION_SPRITE.to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([(TUTORIAL_INSTRUCTION_SPRITE.to_owned(), instruction)]),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(
+            game.tutorial_chart_globals().map(|globals| globals.song_id),
+            Some(8888),
+            "only the pinned chart can drive cadence"
+        );
+
+        let paint = |game: &mut ScreenGame, now_ms| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            buf[298 * 800 + 375]
+        };
+        let frame_zero = pack_xrgb(255, 0, 0);
+        assert_eq!(paint(&mut game, 0), frame_zero);
+        assert_eq!(paint(&mut game, 45_000), frame_zero, "no wall-clock page");
+        game.lane_key(0, true);
+        assert_eq!(paint(&mut game, 45_000), frame_zero, "no key-driven page");
+    }
+
+    #[test]
     fn firststep_tutorial_lane_press_lights_only_its_own_cap_with_no_judgement() {
         // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
         // click → Tutorial → lane-key press → painter. Boot2 pack
