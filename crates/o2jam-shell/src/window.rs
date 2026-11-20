@@ -12,7 +12,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use super::{menu_of, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use super::{menu_of, GameLoop, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 
 mod capture;
 
@@ -490,6 +490,13 @@ fn plan_repaint(
     }
 }
 
+/// Whether the frame just painted answered a quit-confirm OK. The
+/// decision is extracted so the window seam can guard the same
+/// `GameLoop` call the `RedrawRequested` arm makes (#691).
+fn should_exit_after_frame(game: &dyn GameLoop) -> bool {
+    game.quit_requested()
+}
+
 impl ApplicationHandler for WindowHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.attach_window(event_loop);
@@ -560,7 +567,7 @@ impl ApplicationHandler for WindowHandler {
                 self.capture_frame();
                 // Planet quit-confirm OK (`GameLoop::quit_requested`):
                 // the game asked to leave, so the loop exits.
-                if self.shell.game.quit_requested() {
+                if should_exit_after_frame(self.shell.game.as_ref()) {
                     event_loop.exit();
                 }
             }
@@ -1024,6 +1031,43 @@ mod tests {
             [("down", 729, 580), ("up", 729, 580)],
             "both planet edges crossed the seam"
         );
+    }
+
+    /// The window exit arm reads the same `GameLoop` call the
+    /// `RedrawRequested` handler uses (#691). Live chain:
+    /// `WindowHandler::window_event` -> `route_mouse_input` ->
+    /// `deliver_snapshot` -> `SeamGame::ingest_snapshot` ->
+    /// `ScreenGame::click_planet_modal` -> `confirm_quit` ->
+    /// `should_exit_after_frame`.
+    #[test]
+    fn quit_confirm_ok_reaches_the_window_exit_decision() {
+        let (mut handler, game, _) = seamed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.route_key(KeyCode::Escape, true);
+        handler.route_key(KeyCode::Escape, false);
+        handler.deliver_snapshot();
+        assert_eq!(handler.shell.game.screen_name(), "planet");
+
+        handler.track_motion(769.0, 580.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        handler.deliver_snapshot();
+        assert_eq!(
+            game.borrow().planet_modal(),
+            Some(super::super::screens::game::PlanetModal::QuitConfirm)
+        );
+        assert!(!should_exit_after_frame(handler.shell.game.as_ref()));
+
+        handler.track_motion(350.0, 253.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        handler.deliver_snapshot();
+
+        assert_eq!(
+            game.borrow().last_quit_confirm_outcome(),
+            Some(super::super::screens::game::QuitConfirmOutcome::Confirmed)
+        );
+        assert!(should_exit_after_frame(handler.shell.game.as_ref()));
     }
 
     #[test]

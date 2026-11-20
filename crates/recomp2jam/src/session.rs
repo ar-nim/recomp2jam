@@ -11755,6 +11755,58 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// #691 OK leg. Frame capture name `S316-QUIT-CANCEL-04`; the
+    /// bounded exe boot with a post-OK process-state line and exit
+    /// socket tap is still an OPEN evidence step.
+    ///
+    /// Live caller chain: `main.rs::run_play` -> `run_windowed_session`
+    /// -> `Shell::run` -> `WindowHandler::handle_window_event`
+    /// (`RedrawRequested`) -> `should_exit_after_frame` ->
+    /// `GameLoop::quit_requested` -> `OnlineSession::quit_requested`
+    /// -> `ScreenGame::quit_confirmed`, fed by the sheet OK edge
+    /// through `ScreenGame::confirm_quit`.
+    #[test]
+    fn quit_ok_requests_exit_without_a_wire_frame() {
+        let (port, server) = fake_gateway(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(120)))
+                .unwrap();
+            let mut bytes = [0u8; 64];
+            match stream.read(&mut bytes) {
+                Ok(0) => panic!("gateway closed"),
+                Ok(count) => {
+                    let frame = decode_frame(&bytes[..count]).unwrap();
+                    panic!("OK must not put frame {} on the wire", frame.id);
+                }
+                Err(error) => assert!(matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )),
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(769, 580);
+        assert_eq!(
+            game.planet_modal(),
+            Some(o2jam_shell::screens::game::PlanetModal::QuitConfirm)
+        );
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(350, 253));
+        paint_frame(&mut session);
+
+        assert_eq!(
+            session.game.last_quit_confirm_outcome(),
+            Some(QuitConfirmOutcome::Confirmed)
+        );
+        assert!(GameLoop::quit_requested(&session), "OK must exit");
+        assert_eq!(session.game.planet_modal(), None);
+        assert_eq!(session.screen(), Screen::Planet);
+        server.join().unwrap();
+    }
+
     /// #569 row-state arm: the 07DA fuse owns the socket while its
     /// node is tracked, so a 2003 room-list probe read by that drain
     /// is deferred. The overdue node then opens the one-OK sheet;
