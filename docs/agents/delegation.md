@@ -80,6 +80,13 @@ The senior puts the grant in the brief; every write outside it stays senior work
   Once the owner had to point out the agent would never receive the steer.
   The senior assumed delivery and never checked status.
 
+1. **Two-round rework cap.** A leg that fails verification twice is
+   reassigned to senior hands; no third steer. Retro #240: three steer
+   rounds before the agent stood down after byte-identical captures and a
+   trimmed input log; the ticket stayed open for a fresh senior-owned leg.
+   Count rounds with a recorded verification verdict, not delivery checks or
+   status pokes.
+
 ## Show two, then delegate
 
 Before delegating a batch of similar items (guards, backfills, ports):
