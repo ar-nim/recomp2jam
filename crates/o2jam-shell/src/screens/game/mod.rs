@@ -25,7 +25,7 @@ use self::musicshop::MusicShopState;
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
-use self::room_fuse::RoomNoResponseFuse;
+use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
@@ -381,6 +381,17 @@ pub enum PlanetModal {
     ChannelEnterRefused,
 }
 
+/// Local outcome of the quit-confirm choice. No wire frame belongs
+/// to either arm: CANCEL only closes the sheet, OK asks the windowed
+/// shell to exit (`GameLoop::quit_requested`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitConfirmOutcome {
+    /// CANCEL (or Escape) closed the sheet; the game keeps running.
+    Cancelled,
+    /// OK closed the sheet and requested the process exit.
+    Confirmed,
+}
+
 /// The shell's Space lane (`crate::lane_key(3)`): while the fuse's
 /// sheet owns Room, Space shares the Information OK handler (#367).
 const ROOM_FUSE_SPACE_LANE: usize = 3;
@@ -687,6 +698,9 @@ pub struct ScreenGame {
     /// event loop ([`GameLoop::quit_requested`]); headless walks
     /// read the flag instead.
     quit_requested: bool,
+    /// Last local quit-confirm choice, for the window and exit-arm
+    /// guards; reset whenever a fresh sheet opens (#690/#691).
+    quit_confirm_outcome: Option<QuitConfirmOutcome>,
     /// Options modal state (#139): three staged tab sheets, open tab,
     /// settings, install root, and armed rebind live behind one seam;
     /// `ScreenGame` keeps modal ownership and flow.
@@ -1096,6 +1110,7 @@ impl ScreenGame {
             arena_stage: DEFAULT_ARENA_STAGE,
             planet_board: PlanetBoardState::default(),
             quit_requested: false,
+            quit_confirm_outcome: None,
             options_dialog: OptionsDialog::new(),
             play_longnote: None,
             planet_quit_art: None,
@@ -1677,7 +1692,19 @@ impl ScreenGame {
     /// sheet was staged. No timer sleeps, and no sheet outside Room.
     pub fn pump_room_user_list_fuse_at(&mut self, now: Instant) -> bool {
         let in_room = self.flow.current() == Screen::Room;
-        self.room_no_response.pump(in_room, now)
+        let covered = self.open_dialog_layers();
+        self.room_no_response.pump(in_room, now, &covered)
+    }
+
+    /// Sheets already under a new fuse sheet, bottom first. The
+    /// type-100 pump pops them one at a time after the fuse (#689).
+    fn open_dialog_layers(&self) -> Vec<DialogLayer> {
+        let mut layers = Vec::new();
+        if self.room_dialog.is_some() {
+            layers.push(DialogLayer::RoomSheet);
+        }
+        layers.extend(self.planet_modal().map(DialogLayer::PlanetSheet));
+        layers
     }
 
     /// Watchdog pass at the current wall clock.
@@ -1720,9 +1747,36 @@ impl ScreenGame {
 
     /// Pump one queued type-100 dismissal: pop the top dialog. This
     /// is the exe's pump handler 100 (VA `0x47748f`); the OK handler
-    /// itself sends no packet and attributes no FFF0.
+    /// itself sends no packet and attributes no FFF0. One record
+    /// touches one layer, even when the fuse covered another sheet.
     pub fn pump_dialog_queue(&mut self) -> bool {
-        self.room_no_response.take_dismissal()
+        let Some(layer) = self.room_no_response.take_dismissal() else {
+            return false;
+        };
+        self.close_dismissed_dialog_layer(layer);
+        true
+    }
+
+    /// Apply one popped layer to its owner. Notice sheets keep their
+    /// side effects (held rows, refusal text); the fuse layer itself
+    /// was already closed by the dismissal stack.
+    fn close_dismissed_dialog_layer(&mut self, layer: DialogLayer) {
+        match layer {
+            DialogLayer::FuseNotice => {}
+            DialogLayer::RoomSheet => self.room_dialog = None,
+            DialogLayer::PlanetSheet(modal) => match modal {
+                PlanetModal::RelayDown => {
+                    let _ = self.dismiss_relay_down_dialog();
+                }
+                PlanetModal::ChannelEnterRefused => {
+                    let _ = self.dismiss_channel_refusal_dialog();
+                }
+                PlanetModal::QuitConfirm | PlanetModal::Options => {
+                    self.planet_board.close_modal();
+                    self.options_dialog.clear_rebind();
+                }
+            },
+        }
     }
 
     /// Rooms from the last online list (empty offline). Free slots are
@@ -4826,6 +4880,7 @@ impl ScreenGame {
         // or step the scene (VA `0x48e087` exit, `0x48e316` emblem).
         if matches!(action, PlanetAction::QuitConfirm) {
             self.cue_ui_effect(UiEffectId::PlanetExit);
+            self.quit_confirm_outcome = None;
         }
         if self
             .planet_board
@@ -4847,6 +4902,32 @@ impl ScreenGame {
     #[must_use]
     pub fn quit_confirmed(&self) -> bool {
         self.quit_requested
+    }
+
+    /// Last local CANCEL/OK choice on a quit-confirm sheet.
+    #[must_use]
+    pub const fn last_quit_confirm_outcome(&self) -> Option<QuitConfirmOutcome> {
+        self.quit_confirm_outcome
+    }
+
+    /// CANCEL leg: close the sheet and record the local outcome.
+    /// Nothing else changes: no screen, socket, or quit request.
+    fn cancel_quit_confirm(&mut self) {
+        if self.planet_modal() != Some(PlanetModal::QuitConfirm) {
+            return;
+        }
+        self.quit_confirm_outcome = Some(QuitConfirmOutcome::Cancelled);
+        self.planet_board.close_modal();
+    }
+
+    /// OK leg: close the sheet and ask the windowed shell to exit.
+    fn confirm_quit(&mut self) {
+        if self.planet_modal() != Some(PlanetModal::QuitConfirm) {
+            return;
+        }
+        self.quit_confirm_outcome = Some(QuitConfirmOutcome::Confirmed);
+        self.quit_requested = true;
+        self.planet_board.close_modal();
     }
 
     /// Stage the options sheet for the first-open tab. Staging never
@@ -4972,11 +5053,10 @@ impl ScreenGame {
                 let (ok_hit, cancel_hit) = self.quit_button_hits(x, y);
                 if ok_hit {
                     self.cue_ui_effect(UiEffectId::DialogAccept);
-                    self.quit_requested = true;
-                    self.planet_board.close_modal();
+                    self.confirm_quit();
                 } else if cancel_hit {
                     self.cue_ui_effect(UiEffectId::DialogDecline);
-                    self.planet_board.close_modal();
+                    self.cancel_quit_confirm();
                 }
             }
             Some(PlanetModal::Options) => {
@@ -7417,6 +7497,8 @@ impl GameLoop for ScreenGame {
                     self.dismiss_relay_down_dialog();
                 } else if self.planet_modal() == Some(PlanetModal::ChannelEnterRefused) {
                     self.dismiss_channel_refusal_dialog();
+                } else if self.planet_modal() == Some(PlanetModal::QuitConfirm) {
+                    self.cancel_quit_confirm();
                 } else {
                     self.planet_board.close_modal();
                     self.options_dialog.clear_rebind();
@@ -16279,6 +16361,28 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(450, 253));
         assert!(!game.quit_confirmed());
         assert_eq!(game.planet_modal(), None);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    /// Escape takes the same local CANCEL leg as the sheet's button:
+    /// seam guard for the keyboard arm the window routes through
+    /// `GameLoop::menu_key`; the live click arm has its own gateway
+    /// guard in `recomp2jam::session_tests`.
+    #[test]
+    fn escape_on_quit_confirm_records_cancel_without_quitting() {
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+
+        game.menu_key(MenuKey::Back, true);
+
+        assert_eq!(game.planet_modal(), None);
+        assert_eq!(
+            game.last_quit_confirm_outcome(),
+            Some(QuitConfirmOutcome::Cancelled)
+        );
+        assert!(!game.quit_confirmed());
         assert_eq!(game.screen(), Screen::Planet);
     }
 
