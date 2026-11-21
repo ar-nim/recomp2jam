@@ -2873,8 +2873,11 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == EquipItemResponse::COMMAND => {
-                    if EquipItemResponse::decode_body(&frame.payload).is_err() {
-                        tracing::debug!(id = frame.id, "dropping undecodable equip reply");
+                    match EquipItemResponse::decode_body(&frame.payload) {
+                        Ok(reply) => self.game.apply_myroom_equip_reply(&reply),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable equip reply")
+                        }
                     }
                     return None;
                 }
@@ -5859,26 +5862,44 @@ pub(super) mod session_tests {
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(|mut stream| {
-            let entry = read_frame(&mut stream);
-            assert_eq!(entry.id, 5017);
-            let empty = GetGiftMessageListResponse {
-                invalid: false,
-                messages: Vec::new(),
-            };
-            stream
-                .write_all(&encode_frame(5018, &empty.encode_body()))
-                .unwrap();
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, 5004);
-            let equip = EquipItem::decode_body(&frame.payload).unwrap();
-            assert_eq!((equip.slot, equip.item_id), (0, 1));
-            let reply = EquipItemResponse {
-                result: 0,
-                tail: None,
-            };
-            stream
-                .write_all(&encode_frame(5005, &reply.encode_body()))
-                .unwrap();
+            // The equip leg now also starts at the bag-cell pick, so
+            // the session's per-frame flushes can put 5004 before the
+            // entry's 5017. Answer both in arrival order.
+            let mut saw_equip = false;
+            let mut saw_gift_list = false;
+            while !saw_equip || !saw_gift_list {
+                let frame = read_frame(&mut stream);
+                match frame.id {
+                    5017 => {
+                        let empty = GetGiftMessageListResponse {
+                            invalid: false,
+                            messages: Vec::new(),
+                        };
+                        stream
+                            .write_all(&encode_frame(5018, &empty.encode_body()))
+                            .unwrap();
+                        saw_gift_list = true;
+                    }
+                    5004 => {
+                        let equip = EquipItem::decode_body(&frame.payload).unwrap();
+                        assert_eq!((equip.slot, equip.item_id), (0, 1));
+                        let reply = EquipItemResponse {
+                            result: 0,
+                            tail: Some(o2jam_net::shop::EquipTail {
+                                slot_select: 0,
+                                reserved_a: 0,
+                                entry_id: 1,
+                                reserved_b: 0,
+                            }),
+                        };
+                        stream
+                            .write_all(&encode_frame(5005, &reply.encode_body()))
+                            .unwrap();
+                        saw_equip = true;
+                    }
+                    other => panic!("unexpected frame {other}"),
+                }
+            }
         });
 
         use o2jam_render::Rect;
@@ -5934,6 +5955,12 @@ pub(super) mod session_tests {
         paint_until(&mut session, |s| !s.game.has_pending_equip_send());
         let _ = server.join();
         assert!(!session.game.has_pending_equip_send());
+        assert_eq!(
+            session.game.myroom().bag_cell(),
+            None,
+            "the live 5005 drain clears the picked cell"
+        );
+        assert_eq!(session.game.myroom_counts()[0], 1, "live 5005 fold");
     }
 
     #[test]

@@ -16,11 +16,11 @@ use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
     myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
     myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, MyRoomAction, MyRoomLowerTab,
-    MyRoomPanel, MyRoomState, SideScreen,
+    MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
-use o2jam_net::shop::EquipItem;
+use o2jam_net::shop::{EquipItem, EquipItemResponse};
 use o2jam_net::CharacterInfo;
 use o2jam_render::Frame;
 
@@ -30,6 +30,9 @@ use o2jam_render::Frame;
 /// contradicted by the string, so the exe text wins (EV
 /// `ev_85bc1fde…`, `docs/myroom.md`).
 pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯이 필요합니다.";
+
+/// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
+const MYROOM_COUNT_CAP: u32 = 999;
 
 impl ScreenGame {
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
@@ -133,7 +136,7 @@ impl ScreenGame {
                 let pages = self.myroom_bag_page_count();
                 self.myroom.turn_bag_page(step, pages);
             }
-            MyRoomAction::PickBagCell(cell) => self.myroom.pick_bag_cell(Some(cell)),
+            MyRoomAction::PickBagCell(cell) => self.apply_myroom_bag_pick(cell),
             MyRoomAction::GiftPage(step) => {
                 let pages = self.myroom_gift_page_count();
                 self.myroom.turn_gift_page(step, pages);
@@ -146,6 +149,66 @@ impl ScreenGame {
             MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
+    }
+
+    /// Pick one owned bag cell: record the cursor and queue the
+    /// exe's 5004 immediately. The send case (file `0xa4bb6`..`0xa4bcb`)
+    /// derives the slot from the record's type/slot bytes and passes
+    /// the clicked bag index as the second word; the worn id it reads
+    /// is never appended. The server's 5005 then owns the visible
+    /// restage, so the pick itself mirrors no local equipment.
+    fn apply_myroom_bag_pick(&mut self, cell: usize) {
+        self.myroom.pick_bag_cell(Some(cell));
+        let Some(item_id) = self.myroom_items.as_ref().and_then(|table| {
+            self.myroom_character.as_ref().and_then(|character| {
+                myroom_bag_rows(table, &character.inventory, self.myroom.bag_page())
+                    .get(cell)
+                    .map(|row| row.item_id)
+            })
+        }) else {
+            return;
+        };
+        let Some((item_type, record_slot)) = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| avatar_item_by_id(table, item_id))
+            .map(|row| (row.item_type, myroom_record_slot(row)))
+        else {
+            return;
+        };
+        let Some(slot) = myroom_equip_slot(item_type, record_slot) else {
+            return;
+        };
+        let global_index = self
+            .myroom
+            .bag_page()
+            .saturating_mul(MYROOM_BAG_CELLS)
+            .saturating_add(cell);
+        let Ok(item_id) = i32::try_from(global_index) else {
+            return;
+        };
+        self.outbox.pending_equip = Some(EquipItem {
+            slot: i32::from(slot),
+            item_id,
+        });
+    }
+
+    /// Apply a successful 5005 equip reply: the exe repaints the wells
+    /// and bag from its staged records, advances the count vector for
+    /// the answered slot (capped at 999, file `0x4a54e0` reply arm)
+    /// and clears the cell cursor now that the rows have moved.
+    /// Painting is already a projection of staged data; this seam
+    /// changes only the server-confirmed state.
+    pub fn apply_myroom_equip_reply(&mut self, response: &EquipItemResponse) {
+        let Some(tail) = response.tail else {
+            return;
+        };
+        if let Ok(slot) = usize::try_from(tail.slot_select) {
+            if let Some(count) = self.myroom_counts.get_mut(slot) {
+                *count = count.saturating_add(1).min(MYROOM_COUNT_CAP);
+            }
+        }
+        self.myroom.pick_bag_cell(None);
     }
 
     /// Equip the selected bag cell: the slot derives from the item

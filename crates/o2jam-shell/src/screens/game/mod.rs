@@ -880,6 +880,9 @@ pub struct ScreenGame {
     /// the worn-well miss at file `0x2491f4`). It owns clicks until
     /// OK like the other Information sheets.
     myroom_notice: Option<String>,
+    /// Per-slot MyRoom count vector advanced by a successful 5005
+    /// reply (capped at 999 by the exe's reply handler).
+    myroom_counts: [u32; 17],
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1269,6 +1272,7 @@ impl ScreenGame {
             room_no_response: RoomNoResponseFuse::default(),
             messenger_liveness_open: false,
             myroom_notice: None,
+            myroom_counts: [0; 17],
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1892,6 +1896,12 @@ impl ScreenGame {
     /// also calls this through [`Self::click_dispatch`].
     pub fn dismiss_myroom_notice(&mut self) {
         self.myroom_notice = None;
+    }
+
+    /// Per-slot MyRoom counts from server-confirmed equip replies.
+    #[must_use]
+    pub const fn myroom_counts(&self) -> [u32; 17] {
+        self.myroom_counts
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -15109,6 +15119,53 @@ mod game_tests {
         assert_eq!(game.myroom().bag_page(), 0);
         game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0);
+    }
+
+    #[test]
+    fn myroom_bag_cell_pick_queues_5004_with_the_exe_bag_index() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // bag cell -> click_myroom_side -> session flush take_equip_send.
+        // Static pin `FUN_004a49f0` file `0xa4bb6..0xa4bcb`: the
+        // type->slot rule picks the slot word and the clicked bag
+        // index is the second word. The currently worn id is read
+        // but not appended by the exe; that ticket gloss is wrong.
+        let mut game = myroom_open_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        let send = game.take_equip_send().expect("cell pick queues 5004");
+        assert_eq!(
+            (send.slot, send.item_id),
+            (0, 0),
+            "derived slot + bag index"
+        );
+
+        // The 5005 reply repaints from staged rows (already a
+        // projection of the character), clears the cell cursor and
+        // advances the slot count with the exe's 999 cap.
+        use o2jam_net::shop::{EquipItemResponse, EquipTail};
+        game.apply_myroom_equip_reply(&EquipItemResponse {
+            result: 0,
+            tail: Some(EquipTail {
+                slot_select: 0,
+                reserved_a: 0,
+                entry_id: 1,
+                reserved_b: 0,
+            }),
+        });
+        assert_eq!(game.myroom().bag_cell(), None, "reply clears selection");
+        assert_eq!(game.myroom_counts()[0], 1);
+        for _ in 0..1_000 {
+            game.apply_myroom_equip_reply(&EquipItemResponse {
+                result: 0,
+                tail: Some(EquipTail {
+                    slot_select: 0,
+                    reserved_a: 0,
+                    entry_id: 1,
+                    reserved_b: 0,
+                }),
+            });
+        }
+        assert_eq!(game.myroom_counts()[0], 999, "999 cap on the vector");
     }
 
     #[test]
