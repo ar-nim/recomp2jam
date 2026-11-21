@@ -9,8 +9,8 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
     sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
-    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
-    MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
+    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
+    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -24,6 +24,8 @@ pub(crate) enum MusicShopEffect {
     Buy,
     /// Hand these owned song ids to the staged download engine.
     StartDownloads(Vec<u16>),
+    /// A confirmed DOWN_CANCEL dropped the queued fetches.
+    CancelDownloads,
 }
 
 /// One owned-list row: a 4031 song id, its catalog title, the local
@@ -346,6 +348,15 @@ impl MusicShopState {
             MusicShopAction::Face(face) => {
                 self.music_shop_face = face;
                 MusicShopEffect::None
+            }
+            MusicShopAction::DownCancel => {
+                let confirmation = Some((MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE));
+                if armed_notice == confirmation {
+                    MusicShopEffect::CancelDownloads
+                } else {
+                    self.post_notice(MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE);
+                    MusicShopEffect::None
+                }
             }
             MusicShopAction::DownStart => {
                 let song_ids: Vec<u16> = self
