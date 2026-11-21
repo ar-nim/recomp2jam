@@ -26,11 +26,11 @@ use crate::screens::messenger::{
 use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
     shop_child_geometry, PlanetOptionTab, ShopChildGeometry, SideScreen, CASH_CHARGE_DIALOG_BLOCK,
-    CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK,
-    PASSWORD_DIALOG_BLOCK, PAYMENT_BIND_FILE, PAYMENT_BLOCK, PAYMENT_PAGE, QUIT_DIALOG_BLOCK,
-    SELECT_MUSIC_DIALOG_BLOCK, SHOPPINGBAG_ADD_DIALOG_BLOCK, SHOP_CHILD_ORIGIN_Y,
-    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
-    TUTORIAL_RECEPTOR_SPRITES,
+    CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, GIFT_PAGE, INFORMATION_DIALOG_BLOCK,
+    PASSWORD_DIALOG_BLOCK, PAYMENT2_BIND_FILE, PAYMENT2_BLOCK, PAYMENT_BIND_FILE, PAYMENT_BLOCK,
+    PAYMENT_PAGE, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK, SHOPPINGBAG_ADD_DIALOG_BLOCK,
+    SHOP_CHILD_ORIGIN_Y, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
+    TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -780,40 +780,57 @@ impl PaymentPage {
     }
 }
 
-/// Billing pages in exe State order. The code is the shipped
-/// block-self control `IDC_STATE_PAYMENT` (`0x1D000000`); no
-/// geometry is invented.
-pub const PAYMENT_PAGES: [PaymentPage; 1] = [PaymentPage {
-    state: State::Payment,
-    block: PAYMENT_BLOCK,
-    bind_file: PAYMENT_BIND_FILE,
-    page: PAYMENT_PAGE,
-    code_prefix: 0x1D00_0000,
-}];
+/// Billing pages in exe State order. The codes are the shipped
+/// block-self controls `IDC_STATE_PAYMENT` (`0x1D000000`) and
+/// `IDC_STATE_PAYMENT2` (`0x1E000000`); no geometry is invented.
+pub const PAYMENT_PAGES: [PaymentPage; 2] = [
+    PaymentPage {
+        state: State::Payment,
+        block: PAYMENT_BLOCK,
+        bind_file: PAYMENT_BIND_FILE,
+        page: PAYMENT_PAGE,
+        code_prefix: 0x1D00_0000,
+    },
+    PaymentPage {
+        state: State::Payment2,
+        block: PAYMENT2_BLOCK,
+        bind_file: PAYMENT2_BIND_FILE,
+        page: GIFT_PAGE,
+        code_prefix: 0x1E00_0000,
+    },
+];
 
-/// Each billing page staged from its own declaration. Pages stay
-/// separate here; the painter still receives one merged sheet.
+/// Each billing page staged from its own declaration, keyed by
+/// [`PAYMENT_PAGES`] order. Pages stay separate here; the painter
+/// still receives one merged sheet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaymentPages {
-    /// `STATE_PAYMENT` chrome (nine bound rects on 7.55).
-    pub payment: Option<StagedArt>,
+    art: [Option<StagedArt>; PAYMENT_PAGES.len()],
 }
 
 impl PaymentPages {
-    /// One page's staged art, if the declaration resolved.
+    /// One page's staged art, if its declaration resolved.
     #[must_use]
     pub fn art_for(&self, page: PaymentPage) -> Option<&StagedArt> {
-        match page.state {
-            State::Payment => self.payment.as_ref(),
-            _ => None,
-        }
+        let index = PAYMENT_PAGES
+            .iter()
+            .position(|candidate| *candidate == page)?;
+        self.art.get(index).and_then(Option::as_ref)
     }
 
     /// The merged sheet today's Payment painter consumes, in page
     /// order. Missing pages contribute nothing (ADR-0003).
     #[must_use]
     pub fn into_merged(self) -> StagedArt {
-        self.payment.unwrap_or_default()
+        let mut merged = StagedArt::default();
+        for art in self.art {
+            let Some(art) = art else {
+                continue;
+            };
+            merged.placements.extend(art.placements);
+            merged.figures.extend(art.figures);
+        }
+        merged
     }
 }
 
@@ -821,14 +838,11 @@ impl PaymentPages {
 /// the live boot uses. A missing Block or bind leaves that page empty.
 #[must_use]
 pub fn stage_payment_pages(archive: &[u8], ctx: StageContext) -> PaymentPages {
-    let mut pages = PaymentPages::default();
-    for page in PAYMENT_PAGES {
-        let art = stage_state(archive, page.state, ctx).art;
-        if page.state == State::Payment {
-            pages.payment = art;
-        }
+    let mut art: [Option<StagedArt>; PAYMENT_PAGES.len()] = std::array::from_fn(|_| None);
+    for (index, page) in PAYMENT_PAGES.iter().enumerate() {
+        art[index] = stage_state(archive, page.state, ctx).art;
     }
-    pages
+    PaymentPages { art }
 }
 
 /// Staged chrome placements owned by one billing page, in `.bnd`

@@ -196,11 +196,7 @@ fn stage_room_dialogs(game: &mut ScreenGame, archive: &[u8]) {
 /// reads the side slots, so paint wiring rides a later ticket.
 fn stage_payment_sheets(game: &mut ScreenGame, archive: &[u8]) {
     let ctx = StageContext::default();
-    let mut merged = stage_payment_pages(archive, ctx).into_merged();
-    if let Some(gift) = stage_state(archive, State::Payment2, ctx).art {
-        merged.placements.extend(gift.placements);
-        merged.figures.extend(gift.figures);
-    }
+    let merged = stage_payment_pages(archive, ctx).into_merged();
     if merged.placements.is_empty() {
         return;
     }
