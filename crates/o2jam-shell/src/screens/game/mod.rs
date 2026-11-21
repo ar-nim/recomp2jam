@@ -27,7 +27,10 @@ pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
-use self::myroom::{MyRoomConfirm, MyRoomConfirmAction, BAG_SORT_FAILURE_NOTICE};
+use self::myroom::{
+    MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
+    BAG_SORT_FAILURE_NOTICE,
+};
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
@@ -108,7 +111,9 @@ use o2jam_net::rooms::{
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
+use o2jam_net::shop::{
+    ChangeName, EquipItem, SellItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse,
+};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
@@ -1915,6 +1920,43 @@ impl ScreenGame {
         self.outbox.queue_myroom_send(command, body);
     }
 
+    /// Queue the request body for one exe dialog OK (`FUN_004a4c50`).
+    /// The opcode and field widths are pinned by the send builder's
+    /// byte/dword tables (file `0xa54ac` / `0xa5484`); the rename
+    /// buffer's contents and the two request words stay OPEN on the
+    /// MyRoom path, so our staged cell/index stand in without a live
+    /// tap claim.
+    pub fn queue_myroom_dialog_send(&mut self, dialog_id: u32, selection: i32, entry: i32) {
+        match dialog_id {
+            0x04 => {
+                let sell = SellItem { selection, entry };
+                self.outbox
+                    .queue_myroom_send(5002, o2jam_net::WireMessage::encode_body(&sell));
+            }
+            0x23 => {
+                let rename = ChangeName {
+                    name: String::new(),
+                    selection,
+                    entry,
+                };
+                self.outbox
+                    .queue_myroom_send(5030, o2jam_net::WireMessage::encode_body(&rename));
+            }
+            0x24 => {
+                // Send-builder case 0xa52ce: two fixed-size words.
+                let mut body = Vec::with_capacity(8);
+                body.extend_from_slice(&selection.to_le_bytes());
+                body.extend_from_slice(&entry.to_le_bytes());
+                self.outbox.queue_myroom_send(5034, body);
+            }
+            0x26 => {
+                // Send-builder case 0xa540f: opcode + length only.
+                self.outbox.queue_myroom_send(5036, Vec::new());
+            }
+            _ => {}
+        }
+    }
+
     /// Post the exe's failure copy for a failed MyRoom request. Only
     /// BAGSORT's string is pinned today; other commands stay quiet.
     pub fn post_myroom_send_failure_notice(&mut self, command: u16) {
@@ -1978,10 +2020,25 @@ impl ScreenGame {
                 }
                 self.restage_worn_figure();
             }
-            // #808: the confirm caption is pinned; the OK arm's wire
-            // body is added by the next ticket (#809), so this arm
-            // closes the sheet without minting a request yet.
-            MyRoomConfirmAction::UseSpecialItem { .. } => {}
+            MyRoomConfirmAction::UseSpecialItem {
+                kind,
+                selection,
+                item_id,
+            } => {
+                // The exe's OK handler indexes dialog ids by
+                // `id - 4` (`FUN_004a4c50`, file `0xa4c6d`). The
+                // nickname item uses 0x23 here; the main click
+                // handler also opens 0x25 for that item, whose OK
+                // posts a "0" notice instead. That disagreement is
+                // documented, not resolved: the 5030 body's new
+                // name also stays OPEN until a live press + tap.
+                let dialog_id = match kind {
+                    MyRoomSpecialKind::Nickname => 0x23,
+                    MyRoomSpecialKind::PenaltyReset => 0x24,
+                    MyRoomSpecialKind::BagExpansion => 0x26,
+                };
+                self.queue_myroom_dialog_send(dialog_id, selection, item_id);
+            }
         }
     }
 
@@ -15730,6 +15787,76 @@ mod game_tests {
             assert_eq!(game.myroom_confirm_text(), None);
             assert!(game.take_myroom_sends().is_empty(), "CANCEL sends nothing");
         }
+    }
+
+    #[test]
+    fn myroom_special_item_confirm_ok_queues_the_exe_request() {
+        // Live caller chain: MyRoom bag cell -> confirm sheet -> OK ->
+        // confirm_myroom_action -> queue_myroom_dialog_send ->
+        // session flush. Static pins: dialog id table file `0xa4d80`
+        // and send cases `0xa4cb0`/`0xa4ce7`/`0xa4d00`/`0xa4c94`.
+        use super::super::side::MYROOM_BAG_FIRST_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let rows = [0x19_u32, 0x1A, 0x1B]
+            .into_iter()
+            .enumerate()
+            .map(|(index, item_type)| o2jam_file::AvatarItemRow {
+                item_id: 25 + u32::try_from(index).unwrap_or(0),
+                item_type,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Special{item_type:#x}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![25, 26, 27],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        let placements: Vec<_> = (0..3)
+            .map(|cell| {
+                myroom_hit_placement(
+                    MYROOM_BAG_FIRST_CODE + u32::try_from(cell).unwrap_or(0),
+                    100 + cell * 60,
+                    10,
+                )
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        for (cell, command) in [5030_u16, 5034, 5036].into_iter().enumerate() {
+            game.ingest_snapshot(&InputSnapshot::click_at(110 + cell as i32 * 60, 20));
+            let _ = game.take_equip_send();
+            game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+            let sends = game.take_myroom_sends();
+            assert_eq!(sends.len(), 1, "one request per confirmed item");
+            assert_eq!(sends[0].command, command);
+            assert_eq!(
+                sends[0].body.len(),
+                match command {
+                    5030 => 9, // null-terminated (empty) name + two words
+                    5034 => 8, // two words
+                    _ => 0,    // header only
+                }
+            );
+        }
+
+        // The goods dialog's id 4 arm is the same send builder's 5002.
+        game.queue_myroom_dialog_send(4, 3, 25);
+        let sells = game.take_myroom_sends();
+        assert_eq!(sells.len(), 1);
+        assert_eq!(sells[0].command, 5002);
+        assert_eq!(
+            sells[0].body,
+            o2jam_net::WireMessage::encode_body(&SellItem {
+                selection: 3,
+                entry: 25,
+            })
+        );
     }
 
     #[test]
