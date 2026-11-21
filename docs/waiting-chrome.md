@@ -93,6 +93,33 @@ sources. A two-client capture isolating each icon byte stays OPEN.
   of the `+0x298` word was resolved statically. Next step: one tapped
   tab-switch capture with two differently addressed chat rows.
 
+## WAITING stamp, change-title and emotion (#774) — PINNED data and arms
+
+- `ControlList_Interface.txt` authors `IDC_IMAGE_SWAIT_WAITTEXTIMG
+  0x16500067` (`Wait_Btn_WaittextIMG.ojs`), `IDC_IMAGE_SWAIT_WAITIMG_ANI
+  0x16500068` (`Wait_Btn_WaitIMG_Ani.ojs`),
+  `IDC_BUTTON_SWAIT_CHANGE_TITLE 0x16200047` (`Wait_ChangeTitle.ojs`)
+  and `IDC_BUTTON_SWAIT_EMOTION 0x16200048` (`Wait_Btn_Emotion.ojs`).
+  The earlier scan missed the two button codes because they are
+  compared as computed dispatcher cases, not pushed as immediates.
+- Waiting setup `FUN_004ba6c0` shows the wait-text image (setter
+  `FUN_0042f870(1,0)` paints its first record) and starts the animation
+  control (`FUN_0042f5a0(3)`, then `FUN_0042f400(0,0x4b,0,0)`) when a
+  seat other than the local one carries playing-state 1 (files
+  `0xba7b7`-`0xba89f`). Waiting update `FUN_004b9dc0` clears the text and
+  stops the animation every 5000 ms while `0x778a54 == 0` (files
+  `0xba60e`-`0xba68a`, dossier `ev_87cb91...`). The shell pins the arm
+  and the 5-second window, not the animation's individual frames.
+- `FUN_004b2540` case `0x16200047` posts `(4<<16)|8` when the local
+  master byte is set (file `0xb26ac`); `FUN_004b81e0` case `0x16200048`
+  posts `(0xb<<16)|0x48` for every seat. `FUN_00478c90` composes the
+  word and posts it through `FUN_0047edf0` (dossier
+  `ev_63d154f8e8c9f6d017c1d16e69eb3b4fb973946af8988956945420e10838e44e`).
+  `Dialog_ChangeTitle.bnd` and `Dialog_EmotionHelp.bnd` are unmounted
+  (`docs/bnd-consumption.md` E bucket), so the shell records the pinned
+  request and does not invent a sheet. A dwell capture of the animation
+  stays OPEN.
+
 ## Shell rule
 
 `WaitingEffect` in `screens/paint/waiting.rs` carries the two codes,

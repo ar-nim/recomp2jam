@@ -223,6 +223,8 @@ pub struct WaitingCaptions<'a> {
     pub chat_channel: WaitingChatChannel,
     /// Whether either authored messenger lamp shows its alert frame.
     pub messenger_lamp_lit: bool,
+    /// Whether the two WAITING stamp controls show their armed frame.
+    pub wait_stamp_lit: bool,
     /// Local nickname from 2001, used on the self cover when the 3003
     /// slot list does not carry the guest's own member.
     pub local_name: Option<&'a str>,
@@ -477,6 +479,7 @@ pub fn paint_waiting_scene_with_confirm(
     // the backdrop pass before it selected its own record.
     paint_waiting_confirm_face(frame, art, is_room_master, confirm.armed);
     paint_waiting_seat_marks(frame, &seats, art);
+    paint_waiting_stamp(frame, art, captions.wait_stamp_lit);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, art, captions);
     } else {
@@ -503,6 +506,7 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || WAIT_EFFECT_IDS.contains(&id)
         || WAIT_CHAT_TAB_IDS.contains(&id)
         || WAIT_MESSENGER_LAMP_IDS.contains(&id)
+        || WAIT_STAMP_IDS.contains(&id)
 }
 
 /// Header class chips have no staged wire source. The p343 matched exe
@@ -1484,6 +1488,8 @@ const WAIT_MESSENGER_LAMP_IDS: [&str; 2] = [
     "IDC_IMAGE_SWAIT_MESSENGER_ALRAM",
     "IDC_IMAGE_SWAIT_MESSENGER_ALRAM1",
 ];
+/// WAITING stamp bodies (`0x16500067/68`) from the `STATE_WAITING` block.
+const WAIT_STAMP_IDS: [&str; 2] = ["IDC_IMAGE_SWAIT_WAITTEXTIMG", "IDC_IMAGE_SWAIT_WAITIMG_ANI"];
 
 /// Paint one exclusive toggle group: record 1 on the selected code,
 /// record 0 on every sibling. Both the effect pair and the four chat
@@ -1521,6 +1527,29 @@ fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, channel: Waiti
 fn paint_waiting_messenger_lamps(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
     let alert_code = if lit { 0x1650_006B } else { 0 };
     paint_waiting_toggle_group(frame, art, &WAIT_MESSENGER_LAMP_IDS, alert_code);
+}
+
+/// Paint the armed WAITING stamp: the exe shows the wait-text image
+/// and its animation control when another seat is playing, then clears
+/// both through the 5-second updater (`FUN_004ba6c0` files
+/// `0xba7b7`-`0xba89f`, `FUN_004b9dc0` files `0xba60e`-`0xba68a`).
+/// Record 0 is a pinned stand-in for the animation's own frames; no
+/// new frame sequence is invented.
+fn paint_waiting_stamp(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
+    if !lit {
+        return;
+    }
+    let shared = shared_sprite_names(&art.placements);
+    for id in WAIT_STAMP_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
+    }
 }
 
 /// Champion win count at the `WINNERSCORE` rect (rect 108, the Wins

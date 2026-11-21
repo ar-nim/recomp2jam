@@ -35,6 +35,7 @@ use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
+pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
     AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
@@ -369,6 +370,10 @@ const ROOM_ACTIVE_CHROME_CODES: [u32; 1] = [0x1320_100E];
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
 const MAX_CHAT_INPUT_CHARS: usize = 50;
+
+/// Waiting updater period for the WAITING stamp reset (exe timer
+/// `FUN_004b9dc0` calls its delay helper with 5000 ms, file `0xba60e`).
+const WAITING_STAMP_PERIOD_MS: u64 = 5_000;
 
 /// Planet-board modal dialog open over the bare board (the power
 /// quit-confirm or the gear options dialog). The board stays the
@@ -772,6 +777,15 @@ pub struct ScreenGame {
     /// Effect layer selected by the two staged Waiting toggles (exe
     /// global `0x7789e0`; default BOTTOM per `FUN_00495110`).
     waiting_effect: WaitingEffect,
+    /// Exe's WAITING stamp arm: another seat's playing-state 1 at room
+    /// stage (`FUN_004ba6c0` files `0xba7b7`-`0xba89f`).
+    waiting_stamp_armed: bool,
+    /// Paint clock of the first armed frame; the 5 s updater clears the
+    /// stamp relative to this instant (`FUN_004b9dc0`).
+    waiting_stamp_started_at: Option<u64>,
+    /// Last ambient Waiting press that posts a UI message, recorded
+    /// because neither exe sheet is staged here.
+    last_waiting_ambient_request: Option<WaitingAmbientRequest>,
     /// Announced room master from a 3007 leave event (`docs/relay.md`
     /// section 10: the sibling handler compares the local member id to
     /// the announced master id for its `+0x30` flag). `None` keeps the
@@ -1180,6 +1194,9 @@ impl ScreenGame {
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
             waiting_effect: WaitingEffect::default(),
+            waiting_stamp_armed: false,
+            waiting_stamp_started_at: None,
+            last_waiting_ambient_request: None,
             announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
@@ -1977,6 +1994,15 @@ impl ScreenGame {
     /// clears the chat history and draft: rows come from that room's
     /// 3012/3013 packets only, never carried across rooms.
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
+        self.waiting_stamp_armed = room.slots.iter().any(|slot| {
+            slot.index != room.member_id
+                && slot
+                    .member
+                    .as_ref()
+                    .is_some_and(|member| member.playing_state == 1)
+        });
+        self.waiting_stamp_started_at = None;
+        self.last_waiting_ambient_request = None;
         if let Some(stage) = arena_stage_word(room.arena) {
             self.arena_stage = stage;
         }
@@ -3141,6 +3167,30 @@ impl ScreenGame {
         self
     }
 
+    /// Last ambient Waiting press that posts an exe UI message.
+    #[must_use]
+    pub const fn last_waiting_ambient_request(&self) -> Option<WaitingAmbientRequest> {
+        self.last_waiting_ambient_request
+    }
+
+    /// Whether the 5-second WAITING stamp window still stands.
+    #[must_use]
+    pub fn waiting_stamp_lit_at(&self, now_ms: u64) -> bool {
+        self.waiting_stamp_started_at.is_some_and(|start| {
+            now_ms >= start && now_ms.saturating_sub(start) < WAITING_STAMP_PERIOD_MS
+        })
+    }
+
+    /// Commit one staged ambient control press. Only the two authored
+    /// codes reach a message; CHANGE_TITLE is master-owned in the exe.
+    fn press_waiting_ambient(&mut self, code: u32) {
+        let request = match WaitingAmbientRequest::from_code_for_role(code, self.is_room_master()) {
+            Some(request) => request,
+            None => return,
+        };
+        self.last_waiting_ambient_request = Some(request);
+    }
+
     /// Commit one staged effect toggle. Only the two authored codes
     /// `0x16201020/21` reach the flag; every other code is ignored.
     fn press_waiting_effect(&mut self, code: u32) {
@@ -4005,6 +4055,18 @@ impl ScreenGame {
             return;
         };
         let placements = &art.placements;
+        // Change-title (master only) and emotion post UI messages.
+        // Neither sheet is staged, so the press records the pinned
+        // request instead of inventing a dialog.
+        for code in [
+            WaitingAmbientRequest::ChangeTitle.code(),
+            WaitingAmbientRequest::Emotion.code(),
+        ] {
+            if staged_code_hit(placements, code, x, y) {
+                self.press_waiting_ambient(code);
+                return;
+            }
+        }
         // The MESSENGER press resets both lamps before it opens its
         // sheet (`FUN_004b81e0` case `0x1620006a` calls
         // `FUN_004c0690(0)`); the shell has no messenger sheet to open.
@@ -7076,7 +7138,10 @@ impl ScreenGame {
     /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
     /// `paint_waiting_staged` never paints those rects (see the
     /// `paint_waiting_music` docs and the chat/cards absence tests).
-    fn paint_waiting(&self, frame: &mut Frame<'_>, now_ms: u64) {
+    fn paint_waiting(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        if self.waiting_stamp_armed && self.waiting_stamp_started_at.is_none() {
+            self.waiting_stamp_started_at = Some(now_ms);
+        }
         let captions = WaitingCaptions {
             song: self.waiting_song(),
             song_bpm: self.waiting_song_bpm(),
@@ -7088,6 +7153,7 @@ impl ScreenGame {
             effect: self.waiting_effect,
             chat_channel: self.waiting_chat_channel(),
             messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
+            wait_stamp_lit: self.waiting_stamp_lit_at(now_ms),
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -11721,6 +11787,122 @@ mod game_tests {
                 "{label} must light on the armed peer seat"
             );
         }
+    }
+
+    fn waiting_ambient_game(member_id: u8, peer_playing: bool) -> ScreenGame {
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        peer.playing_state = u8::from(peer_playing);
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        room.member_id = member_id;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let controls = [
+            ("IDC_IMAGE_SWAIT_WAITTEXTIMG", 0x1650_0067, 100, 100),
+            ("IDC_IMAGE_SWAIT_WAITIMG_ANI", 0x1650_0068, 120, 100),
+            ("IDC_BUTTON_SWAIT_CHANGE_TITLE", 0x1620_0047, 478, 13),
+            ("IDC_BUTTON_SWAIT_EMOTION", 0x1620_0048, 533, 562),
+        ];
+        let placements = controls
+            .into_iter()
+            .map(|(id, code, x, y)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_Ambient.ojs".to_owned()),
+                rect: Rect { x, y, w: 8, h: 8 },
+            })
+            .collect();
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Ambient.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn waiting_stamp_arms_on_a_playing_peer_and_clears_after_five_seconds() {
+        // Live chain: 3003 `set_joined_room` (other seat playing-state 1
+        // — exe setup `FUN_004ba6c0` files `0xba7b7`-`0xba89f`) ->
+        // boot/Waiting -> `paint_at` -> `paint_waiting_stamp`. The exe's
+        // 5-second updater (`FUN_004b9dc0`, files `0xba60e`-`0xba68a`,
+        // dossier `ev_87cb91...`) resets the wait text and stops the
+        // animation after 5000 ms.
+        let mut game = waiting_ambient_game(0, true);
+        let paint = |game: &mut ScreenGame, now_ms| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            (buf[100 * 800 + 100], buf[100 * 800 + 120])
+        };
+        assert_eq!(
+            paint(&mut game, 1_000),
+            (pack_xrgb(0, 0, 255), pack_xrgb(0, 0, 255))
+        );
+        assert_eq!(
+            paint(&mut game, 5_099),
+            (pack_xrgb(0, 0, 255), pack_xrgb(0, 0, 255))
+        );
+        assert_eq!(paint(&mut game, 6_000), (0, 0));
+
+        let mut idle = waiting_ambient_game(0, false);
+        assert_eq!(paint(&mut idle, 1_000), (0, 0));
+    }
+
+    #[test]
+    fn change_title_and_emotion_presses_record_pinned_dialog_messages() {
+        // `FUN_004b2540` case `0x16200047` posts `(4<<16)|8` when the
+        // local player is master; `FUN_004b81e0` case `0x16200048`
+        // posts `(0xb<<16)|0x48` for any seat. Both go through
+        // `FUN_00478c90` -> `FUN_0047edf0` (dossier
+        // `ev_63d154f...`); no ChangeTitle/Emotion sheet is staged yet.
+        assert_eq!(
+            WaitingAmbientRequest::ChangeTitle.message_word(),
+            0x0004_0008
+        );
+        assert_eq!(WaitingAmbientRequest::Emotion.message_word(), 0x000B_0048);
+        let mut game = waiting_ambient_game(0, false);
+        game.ingest_snapshot(&InputSnapshot::click_at(480, 15));
+        assert_eq!(
+            game.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::ChangeTitle),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(535, 564));
+        assert_eq!(
+            game.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::Emotion),
+        );
+
+        let mut guest = waiting_ambient_game(1, false);
+        guest.ingest_snapshot(&InputSnapshot::click_at(480, 15));
+        assert_eq!(guest.last_waiting_ambient_request(), None);
+        guest.ingest_snapshot(&InputSnapshot::click_at(535, 564));
+        assert_eq!(
+            guest.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::Emotion),
+        );
     }
 
     #[test]
