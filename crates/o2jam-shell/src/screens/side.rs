@@ -960,6 +960,24 @@ pub fn shop_cart_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
     slots
 }
 
+/// Cart total cell rects: `CHECKGEM` then `CHECKMONEY`. `FUN_004a0660`
+/// (file `0xa0660`, `ev_3e020a4a…`) stages these two cells into object
+/// offsets `+0x247c`/`+0x248c`; our staged `State_ItemShop.bnd` rects
+/// carry the same geometry, so the painter reads them instead of using
+/// literals. `None` when either cell is unstaged.
+#[must_use]
+pub fn shop_cart_total_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let gem = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_CART_CHECKGEM_CODE)?
+        .rect;
+    let money = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_CART_CHECKMONEY_CODE)?
+        .rect;
+    Some((gem, money))
+}
+
 /// Cart page-number rects: current-page tens+ones union, then total
 /// tens+ones union (`None` when any digit slot is unstaged).
 #[must_use]

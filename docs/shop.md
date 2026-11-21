@@ -316,6 +316,14 @@ behavior also live in spec #178's enrichment rows.
   our model; guard
   `cart_pager_steps_only_while_the_cart_face_flag_is_set` uses a
   six-good, five-row cart fixture. Live multi-page press frames OPEN.
+- Cart total cells: `FUN_004a1010` (`ev_ec83763a…`) enables `CHECKMONEY`
+  and the buy/gift/pager row by the cart-count word `+0x2334`;
+  `FUN_004a0660` (`ev_3e020a4a…`) stages `CHECKMONEY`/`CHECKGEM` rects
+  into object `+0x247c`/`+0x248c`. Our painter now reads the staged
+  pair and inks nothing for an empty cart. The staged-price sum stays
+  ours-by-design (#515); the exe's total-ink writer is still OPEN
+  (qualified cart-pick frame, then writer REA). Guard:
+  `cart_total_cells_ink_only_when_the_cart_count_gate_is_open`.
 
 ## OPEN
 
