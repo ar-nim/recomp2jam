@@ -3942,6 +3942,13 @@ impl GameLoop for OnlineSession {
         if !down {
             return;
         }
+        // An open sheet owns Confirm: its own handler may dismiss it,
+        // but the screen's networked Confirm must not fire behind it
+        // (#692/#694). Back keeps its pinned exit path. No wire here.
+        if key == MenuKey::Confirm && self.game.dialog_owns_input() {
+            self.game.menu_key(key, down);
+            return;
+        }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Waiting {
             self.confirm_waiting();
             return;
@@ -13891,5 +13898,138 @@ pub(super) mod session_tests {
         );
         drop(master);
         master_server.join().unwrap();
+    }
+
+    /// One scripted gateway client with the frames it pushes and a tap of
+    /// every opcode it sends. `stage` runs after the socket is live but
+    /// before the first paint, so pushed frames queue in the socket; the
+    /// written signal lets a virtual-clock guard wait before advancing.
+    fn scripted_client(
+        incoming: Vec<(u16, Vec<u8>)>,
+        stage: impl FnOnce(&mut OnlineSession),
+    ) -> (
+        OnlineSession,
+        mpsc::Receiver<u16>,
+        mpsc::Receiver<()>,
+        thread::JoinHandle<()>,
+    ) {
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            for (id, body) in incoming {
+                stream.write_all(&encode_frame(id, &body)).unwrap();
+            }
+            written_tx.send(()).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(20)))
+                .unwrap();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue
+                    }
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                stream.read_exact(&mut body).unwrap();
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&body);
+                wire_tx
+                    .send(decode_frame(&bytes).unwrap().id)
+                    .expect("the test reads its wire tap");
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        stage(&mut session);
+        (session, wire_rx, written_rx, server)
+    }
+
+    /// Stage the Room lobby the way the live boot does: Confirm from the
+    /// Channel dialog, the relay gate, then the wire rows.
+    fn stage_room_rows(
+        session: &mut OnlineSession,
+        rooms: Vec<o2jam_net::RoomListEntry>,
+        relay_down: bool,
+    ) {
+        session.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(session.game_mut(), vec![], relay_down);
+        session.game.set_rooms(rooms);
+    }
+
+    /// Only join/ready/start opcodes count; the session's stats heartbeat
+    /// is not a sheet action.
+    fn sheet_action_opcodes(tap: &mpsc::Receiver<u16>) -> Vec<u16> {
+        tap.try_iter()
+            .filter(|id| matches!(id, 3002 | 3003 | 4008 | 4009 | 4010))
+            .collect()
+    }
+
+    /// #692 / story 32. Qualified exe quit-confirm frame
+    /// `a21896be01328edb70b143b05eecf32a116302a0505eade7841eeaa6b5921efd`
+    /// (pack `06c3d14a65cc2e2d80625895c68d74ce44e6a98f9b0100b3819e831707798168`)
+    /// and one-OK Information frame `9bf5463c…` name the sheet; the one
+    /// click behind it stays `OPEN — S316-CROSS-DIALOG-05` in the exe.
+    /// This guard pins the client half: a Room sheet owns the click even
+    /// while a 2007 master disband arrives on the same socket.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed` ->
+    /// `ScreenGame::remove_room`, then `OnlineSession::ingest_snapshot`
+    /// -> `dispatch_pointer_edge` -> `ScreenGame::press_kind_at` ->
+    /// `ScreenGame::click_dispatch` -> `click_room_dialog`.
+    #[test]
+    fn room_sheet_blocks_the_row_click_while_a_disband_event_arrives() {
+        let incoming = vec![(2007, 0i32.to_le_bytes().to_vec())];
+        let (mut actor, tap, written, server) = scripted_client(incoming, |session| {
+            stage_room_rows(
+                session,
+                vec![
+                    listed_p380_room(0, "SHEETBLOCK"),
+                    listed_p380_room(1, "KEEP"),
+                ],
+                false,
+            );
+            session.game.open_create_room_dialog();
+        });
+        written.recv().unwrap();
+        assert_eq!(actor.game.room_dialog(), Some(RoomDialog::CreateRoom));
+        let before = painted_game_frame(&mut actor);
+
+        paint_frame(&mut actor);
+        assert_eq!(
+            actor.game.listed_rooms().len(),
+            1,
+            "the master's 2007 must still reach the row list under the sheet"
+        );
+        assert_ne!(
+            painted_game_frame(&mut actor),
+            before,
+            "the wire event repaints the board behind the sheet"
+        );
+
+        actor.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        paint_frame(&mut actor);
+        assert_eq!(actor.screen(), Screen::Room, "the sheet ate the row click");
+        assert_eq!(actor.game.room_dialog(), Some(RoomDialog::CreateRoom));
+        drop(actor);
+        server.join().unwrap();
+        assert!(
+            sheet_action_opcodes(&tap).is_empty(),
+            "a click behind the sheet must put no join on the wire"
+        );
     }
 }

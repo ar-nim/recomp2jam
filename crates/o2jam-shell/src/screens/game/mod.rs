@@ -3270,15 +3270,26 @@ impl ScreenGame {
         self.channel_scene.highlighted()
     }
 
+    /// Whether an open sheet owns input before screen dispatch. The
+    /// session's press gate must return [`PressKind::Local`] while this
+    /// holds, so a click behind a sheet cannot send a wire frame (#692).
+    #[must_use]
+    pub fn dialog_owns_input(&self) -> bool {
+        self.messenger_liveness_open
+            || self.room_no_response_dialog_open()
+            || self.planet_modal().is_some()
+            || self.room_dialog.is_some()
+    }
+
     /// The one press-kind word for the session gate. Staged rect
     /// readers stay private here (ADR-0003/0013): the game owns the
     /// hit tests, the session owns what the hit means for the wire.
     /// Replaces four separate public queries (#258).
     #[must_use]
     pub fn press_kind_at(&self, x: i32, y: i32) -> PressKind {
-        // The fuse's sheet owns the pointer: a click under it never
+        // An open sheet owns the pointer: a click under it never
         // reaches a Room row (the exe's dialog manager consumes it).
-        if self.room_no_response_dialog_open() {
+        if self.dialog_owns_input() {
             return PressKind::Local;
         }
         match self.flow.current() {

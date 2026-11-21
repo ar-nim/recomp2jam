@@ -74,6 +74,10 @@ candidate, not a closure: closing still needs the live caller chain and gates.
 
 - [x] 33. As a master, I want my joining peer visible even while a message sheet is up on another client, so the two-client member matrix stays symmetric in dialog scenarios. — RE-SCOPED on the exe oracle: the observable 7.55 leg is the peer's `3002`/`3003` member pair while the master's CREATE ROOM sheet keeps painting. The master's socket had zero new frames; no master-side `3004`/`3003` join event is claimed or wired. Paired frames `12287270…74b185` / `af89f031…4171d`, trace `W6FC-DIALOG-02`; guard `peer_join_pair_leaves_the_create_room_sheet_and_master_frame_unchanged` drives the scripted gateway. The old "master sees the peer through a sheet" premise stays OPEN as a negative claim; this tick covers only the re-scoped pair.
 
+## #692 tick — story 32 (modal input ownership)
+
+- [x] 32. As a room actor, I want a YES/NO sheet up on my client to block host clicks until a choice, so a question cannot be missed. — Client behavior pinned from the #689 dialog-layer stack: every open sheet owns `ScreenGame::press_kind_at`, so a click behind a Room sheet cannot start a `3002` join while a master disband (`2007`) still repaints the row list. Guard `room_sheet_blocks_the_row_click_while_a_disband_event_arrives` drives the scripted gateway from boot entry through `OnlineSession::ingest_snapshot`. Named frames: quit-confirm `a21896be…` and one-OK relay `9bf5463c…`; the qualified one-click-behind-sheet exe pair stays `OPEN — S316-CROSS-DIALOG-05`.
+
 Counts: **130 cells** — 54 EVIDENCED, 35 GAP, 2 LIVE-FILLED, 1 OPEN-FIX,
 38 NA-DESIGN. Counts were re-parsed from the table; every GAP names its next
 evidence step. A cell is a story candidate, not a closure.
