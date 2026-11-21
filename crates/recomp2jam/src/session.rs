@@ -11090,6 +11090,60 @@ pub(super) mod session_tests {
         );
     }
 
+    /// #559 guardable remainder: the 4037 Ready arm must clear the
+    /// seat's 4039 percentage as it clears the DOWNLOADING badge, so
+    /// the readouts and the START verdict agree. The equal-07E8-slice
+    /// exe/Rust A/B is still a separate capture task (docs/parity/
+    /// waiting.md).
+    ///
+    /// Live chain: `OnlineSession::paint` -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_download_progress` (4039) /
+    /// `apply_member_music_state` (4037) ->
+    /// `ScreenGame::set_member_music_state` -> `start_gate_verdict`.
+    #[test]
+    fn ready_state_clears_the_seats_download_progress_and_opens_start() {
+        use o2jam_net::SyncMemberMusicStateEvent;
+        let mut room = joined_snapshot();
+        room.music_id = 757;
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let ready = SyncMemberMusicStateEvent {
+            member_id: 1,
+            state: MusicState::Ready,
+        };
+        let progress = DownloadProgressChanged {
+            percentage: 42,
+            member_id: 1,
+        };
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&progress.encode()).unwrap();
+            stream.write_all(&ready.encode()).unwrap();
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, Request::StartGame.id());
+            assert_quiet(&mut stream);
+        });
+        session
+            .game
+            .set_member_music_state(1, MusicState::Downloading.code());
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::MusicDownloading
+        );
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.member_music_state(1) == Some(MusicState::Ready.code())
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.member_download_progress(1),
+            None,
+            "the ready arm clears the seat's 4039 percentage with the badge"
+        );
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::Startable
+        );
+    }
+
     /// Ticket #559 gate arm: with a downloading peer the master's START
     /// press arms the face but sends nothing; once the 4037 state clears
     /// the same press sends the pinned 4010. Live chain: `menu_key` ->

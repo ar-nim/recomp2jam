@@ -294,3 +294,28 @@ and the promoted-seat master flag → `ScreenGame::promote_waiting_master`.
 RED proof: removing the mirror's promotion loop leaves the seat clear
 but fails on the promoted member's master flag; restoring passes.
 Synthetic gateway; hidden install-root is N/A.
+
+## #559 DOWNLOAD badges — guardable arm landed, A/B still BLOCKED (2026-11-21)
+
+Wire pins in `docs/music-availability.md` §2 and the #291 DOWNLOAD
+cell: matched-ab-339 `4037 0004` proof `0580bc8d…`, p343 proof
+`20fbe170…`, plus 4026/4037/3009 and 4039. The staged seat badge and
+bar are guarded by `downloading_state_and_progress_from_the_gateway_stage_the_seat`
+and `start_stays_closed_while_a_peer_reports_downloading` (commit
+`16c2b9a`). The remaining guardable readouts are now pinned by
+`ready_state_clears_the_seats_download_progress_and_opens_start`: 4039
+progress must clear when the same seat's 4037 reports Ready, so the
+badge mirror and the START verdict do not disagree. RED proof: removing
+the clear in `ScreenGame::set_member_music_state` leaves the stale 42 %
+on the ready seat and the guard fails; restoring passes.
+
+BLOCKED: the player-visible A/B claim still needs one qualified
+two-client capture — exe 7.55 (sha256 `83a04541…72c823b`) and Rust
+frames of the *same* Waiting room with the *same* 07E8 badge slice lit
+by a 4037 `0004` on the same peer seat, before either client's START
+verdict, with the matched `~/scratch/p559-badge-ab/{exe,rust}/`
+manifest plus a gateway tap showing 4037/4039. The existing matched
+packs (`0580bc8d…`, `20fbe170…`) pin the wire and the badge art, but
+do not carry equal 07E8 slices in a verdict window. Until that pair
+exists, no pixel-equality claim is made and the #291 story row stays
+unchecked.
