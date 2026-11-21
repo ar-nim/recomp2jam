@@ -101,9 +101,9 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
-    ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, GameMode, Gender, JoinRoom,
-    JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame,
-    EQUIPMENT_SLOTS,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
+    Gender, JoinRoom, JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam,
+    StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -2205,6 +2205,18 @@ impl ScreenGame {
     pub fn take_result_back(&mut self) -> Option<ExitPlaying> {
         self.outbox.take_result_back()
     }
+    /// Stage the pinned Waiting room leave on the click arm. The
+    /// body is the W8 Normal exit (`ExitWaiting` 3005, u16 0); the
+    /// session bridge owns the send, exactly as it owns Result and
+    /// channel leaves (ticket #734).
+    pub fn queue_waiting_exit(&mut self) {
+        self.outbox.pending_waiting_exit = Some(ExitWaiting { exit_type: 0 });
+    }
+    /// Queued Waiting leave for the session bridge, if any
+    /// (`ExitWaiting` 3005). One take sends once.
+    pub fn take_waiting_exit(&mut self) -> Option<ExitWaiting> {
+        self.outbox.take_waiting_exit()
+    }
     /// Queued channel leave for the session bridge, if any
     /// (`ChannelLogout` 2021, empty — the exe's channel-exit dispatch,
     /// ticket #175 pin). One take sends once; the next leave replaces
@@ -3950,6 +3962,12 @@ impl ScreenGame {
             y,
         );
         if back {
+            // The session bridge must see a leave before this local
+            // advance: the exe's BACK destroys the room (3005 ->
+            // 2007), while the old click arm only moved the screen
+            // (#734). Geometry stays staged: `back` came from the
+            // button's own `.bnd` rect.
+            self.queue_waiting_exit();
             self.enter(Screen::Room);
         } else if confirm {
             self.confirm_waiting();
@@ -8442,6 +8460,11 @@ mod game_tests {
 
     #[test]
     fn menu_backs_out_of_lobbies() {
+        // #735: this menu-edge back is ours-by-design. The exe statics
+        // pin ESC for splash/dialog close and Room/Waiting/Planet/Channel
+        // back as chrome control-code dispatch, not a scene key handler
+        // (`docs/back-navigation-735.md`). The staged chrome buttons
+        // carry the pinned path (#734 pins Waiting BACK -> 3005).
         use MenuKey;
         let mut game = ScreenGame::new();
         game.menu_key(MenuKey::Back, true);
@@ -11427,10 +11450,11 @@ mod game_tests {
 
     #[test]
     fn channel_back_closes_to_the_planet_board() {
-        // Esc symmetry with the verified X close (bnd-pinned rect
-        // (541,151)-(589,189), verified native click (577,171)):
-        // Back on the dialog-up phase returns to the bare board.
-        // Exe key-code pin stays OPEN (rig next step in parity).
+        // The dialog-up Back edge returns to the bare board.
+        // #735 statics: ESC is pinned for splash/dialog close; no exe
+        // scene key handler routes it to the Channel back transition.
+        // This edge is therefore ours-by-design, kept alongside the
+        // pinned chrome close (`docs/back-navigation-735.md`).
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());

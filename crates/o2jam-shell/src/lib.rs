@@ -184,7 +184,9 @@ impl FrameClock {
 pub enum MenuKey {
     /// Confirm / advance (Enter).
     Confirm,
-    /// Back out (Escape).
+    /// Back out. Escape is pinned for splash dismissal and dialog
+    /// close in 7.55 (`docs/back-navigation-735.md`); its scene-level
+    /// back uses in our client are labeled ours-by-design (#735).
     Back,
     /// Highlight up (`ArrowUp`).
     Up,
@@ -520,6 +522,21 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #735 pin: Escape maps to the Back edge because 7.55 wires that
+    /// key to splash dismissal (`0x4f3e70`, file `0xf3e70`) and dialog
+    /// close (e.g. `0x4369b0`, file `0x4369b0`). The same statics find
+    /// no Room/Waiting/Planet/Channel scene key handler for the state
+    /// back transition, so our scene Back edges stay ours-by-design;
+    /// chrome BACK buttons carry the pinned navigation path.
+    /// Seam suffices: `menu_of` is a pure key-code mapping with no
+    /// caller beyond the window's edge queue.
+    #[test]
+    fn escape_stays_the_pinned_splash_and_dialog_key() {
+        assert_eq!(menu_of(KeyCode::Escape), Some(MenuKey::Back));
+        assert_eq!(menu_of(KeyCode::Enter), Some(MenuKey::Confirm));
+        assert_ne!(menu_of(KeyCode::Space), Some(MenuKey::Back));
+    }
 
     #[test]
     fn lane_keys_cover_all_seven_lanes() {
