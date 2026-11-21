@@ -1831,6 +1831,36 @@ pub fn music_shop_top100_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
     rects.into_iter().map(|(_, rect)| rect).collect()
 }
 
+/// First/last of the seven download caption texts (`0x1A40001B..21`)
+/// and the one extra shifted control (`0x1A400071`).
+pub const MSHOP_DOWN_CAPTION_FIRST_CODE: u32 = 0x1A40_001B;
+pub const MSHOP_DOWN_CAPTION_LAST_CODE: u32 = 0x1A40_0021;
+pub const MSHOP_EXTRA_CAPTION_CODE: u32 = 0x1A40_0071;
+
+/// Staged rect with the exe's per-control placement offsets
+/// (`FUN_004c72a0`, evidence
+/// `ev_5f3fca6dbfdacd694bb430ed098c54fd03447398cc676c5987a0c050139f889b`).
+/// All seven captions get y+2 first; the first two are then
+/// rewritten to y−1 and the last to y−2. The extra control shifts
+/// x−2/y+1/w+2. Other rects keep their parsed geometry.
+#[must_use]
+pub fn music_shop_caption_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> {
+    let mut rect = placements.iter().find(|placed| placed.code == code)?.rect;
+    if (MSHOP_DOWN_CAPTION_FIRST_CODE..=MSHOP_DOWN_CAPTION_LAST_CODE).contains(&code) {
+        rect.y = rect.y.saturating_add(2);
+        if code <= MSHOP_DOWN_CAPTION_FIRST_CODE + 1 {
+            rect.y = rect.y.saturating_sub(3);
+        } else if code == MSHOP_DOWN_CAPTION_LAST_CODE {
+            rect.y = rect.y.saturating_sub(4);
+        }
+    } else if code == MSHOP_EXTRA_CAPTION_CODE {
+        rect.x = rect.x.saturating_sub(2);
+        rect.y = rect.y.saturating_add(1);
+        rect.w = rect.w.saturating_add(2);
+    }
+    Some(rect)
+}
+
 /// Staged song-row hit areas in top-to-bottom order (the five
 /// `MS_EX` rects tiling the song box).
 #[must_use]
@@ -6527,6 +6557,67 @@ mod side_tests {
         assert_eq!(
             shop_action_at(&placements, 318, 565),
             Some(ShopAction::CartNext)
+        );
+    }
+
+    #[test]
+    fn music_shop_caption_rects_carry_the_pinned_y_offsets() {
+        // seam: pure staged-rect geometry. `FUN_004c72a0` adds +2 to
+        // all seven caption rects, then overwrites 0x1B/0x1C with
+        // −1 and 0x21 with −2; the 0x71 rect shifts x−2/y+1/w+2.
+        let area = |code: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 80,
+                h: 16,
+            },
+        };
+        let placements: Vec<ScenePlacement> = [
+            MSHOP_DOWN_TEXT_CODE,
+            0x1A40_001C,
+            0x1A40_001D,
+            0x1A40_0021,
+            0x1A40_0071,
+            MSHOP_MONEY_GEM_CODE,
+        ]
+        .map(area)
+        .to_vec();
+        assert_eq!(
+            music_shop_caption_rect(&placements, MSHOP_DOWN_TEXT_CODE).map(|rect| rect.y),
+            Some(99),
+            "0x1B is rewritten to y−1"
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_001C).map(|rect| rect.y),
+            Some(99)
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_001D).map(|rect| rect.y),
+            Some(102)
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_0021).map(|rect| rect.y),
+            Some(98),
+            "0x21 is rewritten to y−2"
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_0071),
+            Some(Rect {
+                x: 98,
+                y: 101,
+                w: 82,
+                h: 16,
+            })
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, MSHOP_MONEY_GEM_CODE).map(|rect| rect.y),
+            Some(100),
+            "money rects are stored without a shift"
         );
     }
 

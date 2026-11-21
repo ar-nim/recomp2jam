@@ -45,23 +45,24 @@ use super::game::OwnedRow;
 use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
-    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
-    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
-    planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
-    shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects, wallet_amount_caption,
-    wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
-    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE,
-    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CURRENT_PROGRESS_CODE,
-    MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE,
-    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT,
-    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
-    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
-    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    music_shop_caption_rect, music_shop_cart_page_rects, music_shop_cart_slots,
+    music_shop_owned_slots, music_shop_page_rects, music_shop_slots, music_shop_tiled_rect,
+    planet_action_for_code, planet_band_rect, planet_caption_for_code, planet_plate_clip,
+    shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects,
+    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice,
+    MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel,
+    WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
+    MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
+    MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE,
+    MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE,
+    MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE,
+    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
+    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1699,11 +1700,8 @@ pub fn paint_music_shop_progress(
             MUSIC_SHOP_PROGRESS_FILL_TONE,
         );
     }
-    if let Some(staged) = placements
-        .iter()
-        .find(|placed| placed.code == MSHOP_DOWN_TEXT_CODE)
-    {
-        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    if let Some(native_rect) = music_shop_caption_rect(placements, MSHOP_DOWN_TEXT_CODE) {
+        let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
         paint_text_into_rect(frame, rect, &format!("{completed}/{total}"), CP949_INK);
     }
 }
@@ -2087,7 +2085,7 @@ pub fn paint_music_shop_wallet(
     ];
     let labels = ["G", "W"];
     for ((code, amount), label) in cells.into_iter().zip(labels) {
-        if let Some(rect) = shop_template_rect(placements, code) {
+        if let Some(rect) = music_shop_caption_rect(placements, code) {
             let text = format!("{} {}", label, wallet_amount_caption(amount));
             paint_text_into_rect(frame, rect, &text, CP949_INK);
         }
