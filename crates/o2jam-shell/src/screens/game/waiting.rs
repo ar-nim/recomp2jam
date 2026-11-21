@@ -4,7 +4,7 @@
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
-use o2jam_net::{CreateRoom, ExitPlaying, JoinRoom, Ready, SetRoomTeam, StartGame};
+use o2jam_net::{CreateRoom, ExitPlaying, ExitWaiting, JoinRoom, Ready, SetRoomTeam, StartGame};
 
 /// Qualified boot-3 Result/RETRY manifest (#418). The checked #294
 /// story claimed Waiting re-entry; these frames show the personal-room
@@ -47,6 +47,11 @@ pub(crate) struct PendingOutbox {
     /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
     /// the result BACK button and its Back arm own it).
     pub(crate) pending_result_back: bool,
+    /// Queued Waiting room leave awaiting the session (`ExitWaiting`
+    /// 3005, u16 exit type 0 — the pinned W8 body; the staged BACK
+    /// button owns it). The shell advances locally on the click; the
+    /// session flushes this before its next wire poll.
+    pub(crate) pending_waiting_exit: Option<ExitWaiting>,
     /// Queued channel leave awaiting the session (`ChannelLogout`
     /// 2021, empty — the exe's channel-exit dispatch sends it, ticket
     /// #175 pin; the Room Back key and BACK button own it). Memoryer
@@ -134,6 +139,12 @@ impl PendingOutbox {
         } else {
             None
         }
+    }
+    /// Queued Waiting leave for the session bridge, if any
+    /// (`ExitWaiting` 3005). One take sends once; a second BACK
+    /// replaces the unsent leave.
+    pub(crate) fn take_waiting_exit(&mut self) -> Option<ExitWaiting> {
+        self.pending_waiting_exit.take()
     }
     /// Queued channel leave for the session bridge, if any
     /// (`ChannelLogout` 2021, empty — ticket #175 pin). One take sends

@@ -2465,6 +2465,43 @@ impl OnlineSession {
         }
     }
 
+    /// Send one pinned Waiting leave and forget the joined room
+    /// only after the socket accepted it. Both live BACK arms
+    /// (the Menu edge and the staged click) funnel through here, so
+    /// the 3005 body and its failure rule have one home (#734).
+    /// `false` keeps the caller's local state untouched for a retry.
+    fn send_waiting_leave(&mut self) -> bool {
+        let leave = ExitWaiting { exit_type: 0 };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::ExitWaiting.id(), &leave.encode_body())
+        {
+            tracing::warn!(%source, "room leave send failed");
+            return false;
+        }
+        self.joined_waiting = false;
+        self.joined_room = None;
+        true
+    }
+
+    /// Per-frame Waiting-leave flush: a staged BACK click advances
+    /// the shell at once, so the queued body crosses the wire on the
+    /// next poll (the same shape as the Result/back bridge). A
+    /// shell with no joined room never invents a packet.
+    fn flush_waiting_exit(&mut self) {
+        if self.game.take_waiting_exit().is_none() {
+            return;
+        }
+        if !self.joined_waiting {
+            tracing::debug!("Waiting BACK without a joined room; no leave sent");
+            return;
+        }
+        // The screen already advanced on the click, so a failed
+        // send only warns (inside the shared helper). The Result
+        // bridge uses the same one-shot shape.
+        self.send_waiting_leave();
+    }
+
     /// Per-frame channel-leave flush: one queued Room-back
     /// `ChannelLogout` 2021 (empty — the exe's exit dispatch sends it,
     /// ticket #175 pin). It runs before the login poll so a back-then-
@@ -3807,6 +3844,7 @@ impl OnlineSession {
     /// until the leave resets the session, ticket #175 probe).
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
+        self.flush_waiting_exit();
         self.flush_channel_logout();
         self.flush_exit_shop();
         self.poll_attempts();
@@ -3851,16 +3889,9 @@ impl GameLoop for OnlineSession {
             // is ours, so the remaining members receive 3007 and can
             // clear this seat (#379). A failed send keeps the intent:
             // shell state is unchanged and the next Back retries it.
-            let leave = ExitWaiting { exit_type: 0 };
-            if let Err(source) = self
-                .gateway
-                .send_frame(Request::ExitWaiting.id(), &leave.encode_body())
-            {
-                tracing::warn!(%source, "room leave send failed");
+            if !self.send_waiting_leave() {
                 return;
             }
-            self.joined_waiting = false;
-            self.joined_room = None;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
             // A Room Back can queue the 2021 leave without a paint in
@@ -10600,6 +10631,123 @@ pub(super) mod session_tests {
         });
         server.join().unwrap();
         assert!(session.game.staged_waiting_member(0).unwrap().ready);
+    }
+
+    /// Stage a Waiting BACK rect and click it through the live
+    /// snapshot path. Synthetic placement, no install-root read.
+    fn click_staged_waiting_back(session: &mut OnlineSession) {
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![staged_waiting_button("IDC_BUTTON_SWAIT_BACK", 100, 100)],
+            std::collections::HashMap::new(),
+        );
+        session.ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    /// Ticket #734 red proof: the live click seam must reach the
+    /// same 3005 send as the scripted `menu_key(Back)` seam.
+    /// Live chain: main.rs::run_play -> window deliver_snapshot ->
+    /// OnlineSession::ingest_snapshot -> dispatch_pointer_edge(Local)
+    /// -> ScreenGame::apply_pointer_down -> click_waiting_button ->
+    /// ScreenGame::queue_waiting_exit -> OnlineSession::poll_wire ->
+    /// ExitWaiting 3005 on the fake gateway.
+    #[test]
+    fn waiting_back_click_sends_the_room_leave_on_the_live_snapshot_path() {
+        let (reported, report) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let leave = read_frame_until_eof(&mut stream);
+            assert_quiet(&mut stream);
+            reported
+                .send(leave.map(|frame| (frame.id, frame.payload)))
+                .unwrap();
+        });
+        click_staged_waiting_back(&mut session);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(
+            report.recv().unwrap(),
+            Some((3005, vec![0, 0])),
+            "the clicked BACK sent the pinned Normal-exit body once"
+        );
+    }
+
+    /// Ticket #734 room-disappear leg: the 3005 send must be
+    /// followed by the pinned 2007 disband, which removes the row
+    /// from the Room list the other clients paint.
+    #[test]
+    fn waiting_back_click_disband_answer_removes_the_room_row() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let leave = read_frame(&mut stream);
+            assert_eq!(leave.id, 3005);
+            stream
+                .write_all(&encode_frame(2007, &0i32.to_le_bytes()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_rooms(vec![
+            listed_p380_room(0, "P380ROOM"),
+            listed_p380_room(1, "OTHER"),
+        ]);
+        click_staged_waiting_back(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.listed_rooms().len() == 1
+        });
+        server.join().unwrap();
+        let titles: Vec<&str> = session
+            .game
+            .listed_rooms()
+            .iter()
+            .map(|room| room.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["OTHER"]);
+    }
+
+    /// Ticket #734 disband leg on the click path: the #732 rule
+    /// (a BACK exit destroys the staged pick) must survive the new
+    /// queueing arm. Live chain: window snapshot ->
+    /// OnlineSession::ingest_snapshot -> click_waiting_button ->
+    /// ScreenGame::queue_waiting_exit -> enter(Room) ->
+    /// ScreenGame::disband_waiting_room -> discard_music_send.
+    #[test]
+    fn waiting_back_click_disbands_the_staged_pick_before_a_reentry() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let leave = read_frame(&mut stream);
+            assert_eq!(leave.id, 3005);
+            assert_quiet(&mut stream);
+        });
+        click_master_song_row_and_ok(&mut session);
+        assert!(session.game.has_pending_music_send());
+
+        click_staged_waiting_back(&mut session);
+        assert!(
+            !session.game.has_pending_music_send(),
+            "the exited room's pick cannot follow into a re-entry"
+        );
+        paint_frame(&mut session);
+        server.join().unwrap();
+    }
+
+    /// Ticket #734 menu-key leg: the live Menu edge through a
+    /// snapshot (what the window queues for Escape) keeps its
+    /// existing 3005 send after the click arm is fixed.
+    #[test]
+    fn waiting_back_menu_edge_sends_the_room_leave_once() {
+        let (reported, report) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let leave = read_frame_until_eof(&mut stream);
+            assert_quiet(&mut stream);
+            reported.send(leave.map(|frame| frame.id)).unwrap();
+        });
+        let mut snapshot = InputSnapshot::new();
+        snapshot.push_edge(o2jam_shell::InputEdge::Menu {
+            key: MenuKey::Back,
+            down: true,
+        });
+        session.ingest_snapshot(&snapshot);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(report.recv().unwrap(), Some(3005));
     }
 
     #[test]
