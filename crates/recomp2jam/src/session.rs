@@ -604,9 +604,10 @@ pub struct OnlineSession {
     /// flight; the per-frame [`Self::poll_shop_buy`] owns it).
     shop_buy_attempt: Option<ShopBuyAttempt>,
     /// A 5028 wallet refresh was sent after BACK and its 5029 answer
-    /// is still expected. Gates the read-side drain so unrelated
-    /// lobby/waiting frames keep their own polls.
-    wallet_refresh_expected: bool,
+    /// is still expected before this deadline. Gates the read-side
+    /// drain so unrelated lobby/waiting frames keep their own polls;
+    /// quiet paints retry a late answer (#698).
+    wallet_refresh_expected: Option<Instant>,
     /// Live song-shop buy (`None` while no buy commit is in
     /// flight; the per-frame [`Self::poll_music_buy`] owns it).
     music_buy_attempt: Option<MusicBuyAttempt>,
@@ -703,7 +704,7 @@ impl OnlineSession {
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
-            wallet_refresh_expected: false,
+            wallet_refresh_expected: None,
             music_buy_attempt: None,
             gift_list_attempt: None,
             gift_claim_attempt: None,
@@ -2574,7 +2575,7 @@ impl OnlineSession {
         if let Err(source) = self.gateway.send_frame(SyncCashPoint::COMMAND, &[]) {
             tracing::warn!(%source, "wallet refresh send failed after BACK");
         } else {
-            self.wallet_refresh_expected = true;
+            self.wallet_refresh_expected = Some(Instant::now() + PENDING_WIRE_WINDOW);
         }
     }
 
@@ -2583,7 +2584,11 @@ impl OnlineSession {
     /// words: gem and cash point, the same slots the 5001 prefix and
     /// post-list wallets refresh.
     fn poll_wallet_answer(&mut self) {
-        if !self.wallet_refresh_expected {
+        let Some(deadline) = self.wallet_refresh_expected else {
+            return;
+        };
+        if Instant::now() > deadline {
+            self.wallet_refresh_expected = None;
             return;
         }
         self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "wallet refresh", |session| loop {
@@ -2595,17 +2600,17 @@ impl OnlineSession {
                             tracing::debug!(id = frame.id, "dropping undecodable wallet answer")
                         }
                     }
-                    session.wallet_refresh_expected = false;
+                    session.wallet_refresh_expected = None;
                     break;
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-wallet frame in wallet drain");
                 }
-                Err(_) => {
-                    session.wallet_refresh_expected = false;
-                    break;
-                }
+                // The answer can still be in flight. Keep the node so a
+                // later paint drains it instead of losing the refresh
+                // to a 1 ms quiet timeout (#698).
+                Err(_) => break,
             }
         });
     }
@@ -2687,7 +2692,12 @@ impl OnlineSession {
     /// and leave it alone on a failure verdict. Runs before the lobby
     /// drains so a 5003 is never skipped as a foreign frame.
     fn poll_sell_response(&mut self) {
-        if self.game.side() != Some(SideScreen::Shop) || self.wire_attempt_pending() {
+        if self.game.side() != Some(SideScreen::Shop)
+            || self.wire_attempt_pending()
+            || self.wallet_refresh_expected.is_some()
+        {
+            // A pending refresh owns the socket: the sell drain would
+            // read its 5029 as a foreign frame and lose the answer.
             return;
         }
         loop {
@@ -4304,19 +4314,77 @@ pub(super) mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
     }
-    /// Game walked Avi → Channel → Room, paired with a live fake
-    /// gateway; the server end runs `with_server`.
-    pub(super) fn room_session(
-        with_server: impl FnOnce(TcpStream) + Send + 'static,
-    ) -> (OnlineSession, thread::JoinHandle<()>) {
-        let (port, server) = fake_gateway(with_server);
+
+    /// Game walked Avi → Channel → Room on a chosen gateway port.
+    fn room_session_at(port: u16) -> OnlineSession {
         let mut game = ScreenGame::new();
         game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        OnlineSession::new(game, gateway)
+    }
+
+    /// Game walked Avi → Channel → Room, paired with a live fake
+    /// gateway; the server end runs `with_server`.
+    pub(super) fn room_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (port, server) = fake_gateway(with_server);
+        (room_session_at(port), server)
+    }
+
+    /// Waiting session on the Shop side with an item-shop BACK tap
+    /// queued. The fake gateway server runs `with_server`.
+    fn shop_back_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(with_server);
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: String::new(),
+                code: SHOP_BACK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 744,
+                    y: 570,
+                    w: 40,
+                    h: 25,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(757, 580);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
+    }
+
+    /// Gateway that pushes one frame and reports the write on a channel.
+    /// A guard receives the signal before it paints, so the paint cannot
+    /// outrun the server thread's write under fleet load (#754). The
+    /// frame is a response to no client request, as Memoryer's 2005
+    /// broadcast is.
+    fn pushing_gateway(frame: Vec<u8>) -> (u16, mpsc::Receiver<()>, thread::JoinHandle<()>) {
+        let (written_tx, written) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            stream.write_all(&frame).unwrap();
+            written_tx.send(()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        (port, written, server)
     }
 
     /// Minimal joined snapshot: master seat of a 7-key room titled
@@ -4478,11 +4546,10 @@ pub(super) mod session_tests {
         *due = session.idle_repaint_interval().map(|gap| now + gap);
     }
 
-    /// How long a drained-state assertion may wait for the fake
-    /// gateway's pushes to land. Generous on purpose: the deadline
-    /// only burns when the session genuinely never reaches the
-    /// expected state, never on a loaded scheduler.
-    const DRAIN_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Paint budget for a drained-state assertion. Counting paints,
+    /// not wall time, keeps a loaded scheduler out of the assertion;
+    /// each miss yields 1 ms so the server thread can run (#698).
+    const DRAIN_POLL_LIMIT: usize = 1_000;
 
     /// Repaint until `condition` holds, instead of trusting one paint
     /// to absorb everything the fake gateway pushed. The session's
@@ -4495,18 +4562,17 @@ pub(super) mod session_tests {
         session: &mut OnlineSession,
         condition: impl Fn(&OnlineSession) -> bool,
     ) {
-        let deadline = std::time::Instant::now() + DRAIN_POLL_TIMEOUT;
-        loop {
+        for attempt in 0..DRAIN_POLL_LIMIT {
             paint_frame(session);
             if condition(session) {
                 return;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "session never reached the expected state within {DRAIN_POLL_TIMEOUT:?}"
-            );
+            if attempt + 1 == DRAIN_POLL_LIMIT {
+                break;
+            }
             thread::sleep(Duration::from_millis(1));
         }
+        panic!("session never reached the expected state after {DRAIN_POLL_LIMIT} paints");
     }
 
     /// Read one 4014 tick off the fake server's socket and decode it.
@@ -5069,15 +5135,17 @@ pub(super) mod session_tests {
         // The BACK tap's wire `94b2ea8f…a2508` carries `5029` body
         // `7202000000000000` (gem 626, cash point 0); the exe paints
         // `G 626 / W 0` in the same frame. Tier 2 scripted gateway.
+        // The gateway releases its 5029 only after the BACK paint sent
+        // 5007/5028, so no 1 ms drain can race the scripted write
+        // (#698); the paint budget then waits for the real wire answer.
         use o2jam_net::frame::encode_frame;
-        use o2jam_render::Rect;
-        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
-        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
-        use std::collections::HashMap;
 
-        let (port, server) = fake_gateway(|mut stream| {
-            let exit = read_frame(&mut stream);
-            assert_eq!(exit.id, 5007);
+        let (release_reply, reply_released) = mpsc::channel();
+        let (mut session, server) = shop_back_session(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5007);
+            reply_released
+                .recv()
+                .expect("the BACK paint must precede 5029");
             stream
                 .write_all(&encode_frame(
                     5029,
@@ -5085,33 +5153,12 @@ pub(super) mod session_tests {
                 ))
                 .unwrap();
         });
-
-        let mut game = ScreenGame::new();
-        game.menu_key(MenuKey::Back, true);
-        game.click_planet(136, 88);
-        game.menu_key(MenuKey::Confirm, true);
-        game.menu_key(MenuKey::Confirm, true);
-        game.load_side_scene(
-            vec![ScenePlacement {
-                id: String::new(),
-                code: SHOP_BACK_CODE,
-                sprite: None,
-                rect: Rect {
-                    x: 744,
-                    y: 570,
-                    w: 40,
-                    h: 25,
-                },
-                role: PlacementRole::Single,
-            }],
-            HashMap::new(),
-        );
-        assert!(game.visit_side(SideScreen::Shop));
-        game.click_shop(757, 580);
-
-        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        let mut session = OnlineSession::new(game, gateway);
         paint_frame(&mut session);
+        release_reply.send(()).unwrap();
+        paint_until(&mut session, |session| {
+            session.game.shop_gem_caption() == "GEM 626"
+                && session.game.wallet().cash_point == Some(0)
+        });
         server.join().unwrap();
 
         assert_eq!(session.game.shop_gem_caption(), "GEM 626");
@@ -7310,10 +7357,11 @@ pub(super) mod session_tests {
             premium: false,
             room_type: 0,
         };
-        let (mut session, server) = room_session(move |mut stream| {
-            stream.write_all(&created.encode()).unwrap();
-            assert_quiet(&mut stream);
-        });
+        let (port, written, server) = pushing_gateway(created.encode());
+        let mut session = room_session_at(port);
+        written
+            .recv()
+            .expect("the gateway wrote the 2005 broadcast");
         paint_frame(&mut session);
         server.join().unwrap();
         let titles: Vec<&str> = session

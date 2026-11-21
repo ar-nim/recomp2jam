@@ -141,36 +141,54 @@ mod live_boot_gate_tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            serve_boot_frames(&mut stream, channels)
+            serve_boot_frames(&mut stream, channels, None)
         });
         (port, server)
     }
 
-    /// Gateway port, release handle and the joined answer clock.
-    type HeldBootGateway = (
-        u16,
-        mpsc::Sender<()>,
-        thread::JoinHandle<(CharacterInfo, Vec<u16>, Instant)>,
-    );
+    /// Ordered signals of the relay-notice bracket. A channel gives
+    /// the three events one happens-before order; wall-clock stamps
+    /// taken on two threads can invert when the gateway thread is
+    /// descheduled between its write and its stamp (#754).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NoticeEvent {
+        /// The guarded "1003" answer (RoomList 2003) is on the wire.
+        AnswerWritten,
+        /// The notice sheet is up in the client.
+        SheetShown,
+        /// The OK click dismissed the sheet.
+        OkClicked,
+    }
+
+    /// Handles of a gateway held open across the relay notice.
+    struct HeldBootGateway {
+        port: u16,
+        release: mpsc::Sender<()>,
+        events: mpsc::Receiver<NoticeEvent>,
+        staged_events: mpsc::Sender<NoticeEvent>,
+        server: thread::JoinHandle<(CharacterInfo, Vec<u16>)>,
+    }
 
     /// Same boot, but the socket stays open until the test releases it
-    /// after the OK click. The gateway records the instant of its 1003
-    /// answer and checks that no later frame arrives before release.
+    /// after the OK click. The gateway signals its 1003 write on the
+    /// wire and checks that no later frame arrives before release. The
+    /// socket's quiet window stays a real-time leg: the timing is the
+    /// exe behavior pinned by #696.
     fn spawn_boot_gateway_channels_held(channels: Vec<ChannelState>) -> HeldBootGateway {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (release, released) = mpsc::channel();
+        let (events_tx, events) = mpsc::channel();
+        let staged_events = events_tx.clone();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let (hero, order) = serve_boot_frames(&mut stream, channels);
-            let answer_at = Instant::now();
-            assert!(
-                released.recv_timeout(Duration::from_secs(10)).is_ok(),
-                "the OK-click guard must release the gateway"
-            );
+            let (hero, order) = serve_boot_frames(&mut stream, channels, Some(&events_tx));
+            released
+                .recv()
+                .expect("the OK-click guard must release the gateway");
             stream
                 .set_read_timeout(Some(Duration::from_millis(100)))
                 .unwrap();
@@ -179,18 +197,26 @@ mod live_boot_gate_tests {
                 Ok(0) | Err(_) => {}
                 Ok(_) => panic!("a gateway frame arrived after the 1003 answer"),
             }
-            (hero, order, answer_at)
+            (hero, order)
         });
-        (port, release, server)
+        HeldBootGateway {
+            port,
+            release,
+            events,
+            staged_events,
+            server,
+        }
     }
 
     /// Serve one whole 1000/1001/1002/1003 exchange and return the
     /// observed frame order plus the fetched character. Both gateway
     /// spawns share this script so the quiet-window guard cannot drift
-    /// from the boot guard's wire order.
+    /// from the boot guard's wire order. A held gateway also receives
+    /// a signal at the 1003 write, before any wall clock is read.
     fn serve_boot_frames(
         stream: &mut TcpStream,
         channels: Vec<ChannelState>,
+        answer_signal: Option<&mpsc::Sender<NoticeEvent>>,
     ) -> (CharacterInfo, Vec<u16>) {
         let mut order = Vec::new();
 
@@ -237,6 +263,9 @@ mod live_boot_gate_tests {
             .write_all(&RoomList { rooms: vec![] }.encode())
             .unwrap();
         order.push(Response::RoomList.id());
+        if let Some(signal) = answer_signal {
+            signal.send(NoticeEvent::AnswerWritten).unwrap();
+        }
 
         let fetched = read_frame(stream);
         order.push(fetched.id);
@@ -1795,10 +1824,13 @@ mod live_boot_gate_tests {
     /// -> `enter_screen(Channel)` -> `open_relay_down_dialog` -> OK at
     /// the pinned (400,365) rect -> `dismiss_relay_down_dialog`.
     /// Pin `64caf0c4…8ebd629bbec7208`: 1003 at 15:37:32, popup at :33,
-    /// no gateway frame in between. Here the gateway keeps the socket
-    /// open through the click and records the 1003 answer instant, so
-    /// the bracket is answer < sheet < OK with a quiet wire in the
-    /// whole window. No timeout is invented as an exe rule.
+    /// no gateway frame in between. The gateway signals its 1003 write
+    /// on a channel; the test stages the sheet and OK events on that
+    /// same channel, so the bracket is ordered by happens-before, not
+    /// by wall-clock stamps on two threads (#754). The gateway keeps
+    /// the socket open through the click and checks a quiet wire in
+    /// the whole window — the leg where the timing is the behavior.
+    /// No timeout is invented as an exe rule.
     #[test]
     fn relay_notice_ok_click_comes_after_the_1003_answer_with_no_wire_gap() {
         let row = ChannelState {
@@ -1808,9 +1840,14 @@ mod live_boot_gate_tests {
             population: 3,
             active: true,
         };
-        let (port, release, server) = spawn_boot_gateway_channels_held(vec![row]);
+        let held = spawn_boot_gateway_channels_held(vec![row]);
         let (report, _gateway) =
-            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+            connect::connect_and_login_with_transport(&boot_options(held.port)).unwrap();
+        let answer_written = held
+            .events
+            .recv()
+            .expect("the gateway wrote the 1003 answer");
+        assert_eq!(answer_written, NoticeEvent::AnswerWritten);
 
         let mut game = o2jam_shell::ScreenGame::new();
         crate::stage_channel_list_after_relay_gate(&mut game, report.channels.clone(), true);
@@ -1820,17 +1857,17 @@ mod live_boot_gate_tests {
         );
         assert!(game.enter_screen(Screen::Planet));
         assert!(game.enter_screen(Screen::Channel));
-        let sheet_at = Instant::now();
         assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
         assert!(game.channel_rows().is_empty(), "rows wait behind the sheet");
+        held.staged_events.send(NoticeEvent::SheetShown).unwrap();
 
         game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
-        let ok_at = Instant::now();
+        held.staged_events.send(NoticeEvent::OkClicked).unwrap();
         assert_eq!(game.planet_modal(), None, "OK dismisses the notice");
         assert_eq!(game.channel_rows(), [row], "OK reveals the 1003 rows");
 
-        release.send(()).unwrap();
-        let (hero, order, answer_at) = server.join().unwrap();
+        held.release.send(()).unwrap();
+        let (hero, order) = held.server.join().unwrap();
         stage_online_identity(&mut game, Some(&hero));
 
         assert_eq!(
@@ -1849,8 +1886,18 @@ mod live_boot_gate_tests {
             ],
             "no gateway frame between the 1003 answer and the OK click"
         );
-        assert!(answer_at <= sheet_at, "the sheet follows 1003");
-        assert!(sheet_at <= ok_at, "OK follows the sheet");
+        let bracket: Vec<NoticeEvent> = std::iter::once(answer_written)
+            .chain(held.events.try_iter())
+            .collect();
+        assert_eq!(
+            bracket,
+            [
+                NoticeEvent::AnswerWritten,
+                NoticeEvent::SheetShown,
+                NoticeEvent::OkClicked,
+            ],
+            "answer, sheet, OK in happens-before order"
+        );
     }
 
     /// Ticket #393: the blue "NORMAL mode only" sheet owns the
