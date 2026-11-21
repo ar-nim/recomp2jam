@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use super::shop::EquippedAvatarBlock;
 use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
@@ -40,6 +41,7 @@ impl ScreenGame {
         // cash lands here, and every money caption paints from the
         // wallet afterwards — never from this record again.
         self.wallet.apply_character_cash(&character);
+        self.equipped_block = Some(EquippedAvatarBlock::from_character(&character));
         self.myroom_character = Some(character);
         self.restage_shop_avatar();
         self

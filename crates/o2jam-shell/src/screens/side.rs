@@ -511,10 +511,20 @@ pub const SHOP_BAG_PAGE_CUR_ONES_CODE: u32 = 0x1450_004F;
 pub const SHOP_BAG_PAGE_TOT_TENS_CODE: u32 = 0x1450_0050;
 pub const SHOP_BAG_PAGE_TOT_ONES_CODE: u32 = 0x1450_0051;
 /// First per-row preview button (`IDC_BUTTON_SSHOP_ITEMPRE1`); eight
-/// run contiguously through `+7` (block walk + staged dump).
+/// run contiguously through `+7` (block walk + staged dump). The exe
+/// gate reads category `0x18..0x1b` (byte `+4`) and worn slot
+/// `(word +6 >> 7) & 0xf`; slot 2 is always try-on-able, another slot
+/// only when it equals the active slot at global `0x77cd28`. An
+/// occupied slot (`+0x8ad`) outside categories `0x0b`/`0x16` posts
+/// the string at VA `0x648878` (`ev_f3ad15be…`).
 pub const SHOP_ITEMPRE_FIRST_CODE: u32 = 0x1420_0064;
 /// Preview clear (`IDC_BUTTON_SSHOP_ITEMBACK`).
 pub const SHOP_ITEMBACK_CODE: u32 = 0x1420_006C;
+/// Byte width of the equipped block ITEMBACK copies from global
+/// `0x77cd00` over object `+0x65` (`ev_f3ad15be…`). The original is a
+/// whole-block revert; our model snapshots the worn-equipment slice
+/// because the rest of the block is server-authoritative.
+pub const SHOP_EQUIPPED_BLOCK_BYTES: usize = 0x2190;
 /// Preview comment text (`IDC_TEXT_SSHOP_ITEMCOMMENT`): the tooltip
 /// panel the preview name inks (pairing ASSUMED — `ITEMCOMMENT2`
 /// mirrors it; next step: rig capture of a preview press).
@@ -583,8 +593,13 @@ pub const SHOP_EXTMENU_BUTTONS: usize = 12;
 /// lands nowhere (labeled no-op).
 pub const SHOP_PLANET_UP_CODE: u32 = 0x1420_0008;
 pub const SHOP_PLANET_DOWN_CODE: u32 = 0x1420_0009;
-/// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): sort semantics unpinned,
-/// lands nowhere (labeled no-op).
+/// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
+/// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
+/// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
+/// (`ev_ec83763a…`) gates it on cart state. Sort semantics stay
+/// unpinned; `docs/shop.md` records the control as a live no-op, so
+/// the static send and that live absence are both kept with a wire
+/// tap as the next step.
 pub const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
 /// First item icon (`IDC_IMAGE_SSHOP_ITEMSHOW1`); eight run
 /// contiguously (paint targets, never dispatch).
@@ -592,8 +607,10 @@ pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
 /// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
-/// Owned-panel tab anchors and selection frame (rects only, no art;
-/// `MYBAGSELECT` uses the archive frame body like MyRoom's frame).
+/// Owned-panel tab anchors and selection frame (`MYBAGSELECT` uses
+/// the archive frame body like MyRoom's frame). The static arms at
+/// file `0xa5a75` / `0xa5b63` clear / set the cart flag `+0x8cd`,
+/// gating the MYCART pager (`ev_f3ad15be…`).
 pub const SHOP_MYBACK_POS_CODE: u32 = 0x1460_006D;
 pub const SHOP_MYCART_POS_CODE: u32 = 0x1460_006E;
 pub const SHOP_MYBAGSELECT_CODE: u32 = 0x1450_0052;
@@ -689,6 +706,223 @@ pub struct ShopGood {
     /// beside won `4500`, so no table→entry map is pinned yet. Only
     /// an explicitly staged pinned word may set this (#395 partial).
     pub gem_price: Option<u32>,
+}
+
+/// Try-on gate fields the exe reads from a staged item record:
+/// category byte `+4` and worn slot `(word +6 >> 7) & 0xf`
+/// (`ev_f3ad15be…`, arm `0x14200064..6b`). The file→record join is
+/// not pinned, so callers stage these words explicitly; an ungated
+/// good never gets a try-on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TryOnGate {
+    pub category: u8,
+    pub worn_slot: u8,
+}
+
+/// Notice the exe posts from the ITEMPRE gate. The bytes are read
+/// from the 7.55 image (VA in each variant); the notice sheet that
+/// mounts them stays OPEN — the next step is one qualified ITEMPRE
+/// press frame on the blocked slot naming the dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryOnNotice {
+    /// Object `+0x8ad` set: string at VA `0x648878`,
+    /// `[ 정보 ]\n\n코스튬 아바타를 착용하고 있을 경우\n'소품'`.
+    CostumeSlotOccupied,
+    /// Worn slot differs from global `0x77cd28` and from slot 2:
+    /// string at VA `0x6488e4`,
+    /// `성별이 다른 아이템은 입을 수 없습니다.`.
+    WrongWornSlot,
+}
+
+impl TryOnNotice {
+    /// Exact CP949 bytes pinned at the notice string VA.
+    #[must_use]
+    pub const fn cp949_bytes(self) -> &'static [u8] {
+        match self {
+            Self::CostumeSlotOccupied => &[
+                0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x5B,
+                0x20, 0xC1, 0xA4, 0xBA, 0xB8, 0x20, 0x5D, 0x0A, 0x0A, 0xC4, 0xDA, 0xBD, 0xBA, 0xC6,
+                0xAC, 0x20, 0xBE, 0xC6, 0xB9, 0xD9, 0xC5, 0xB8, 0xB8, 0xA6, 0x20, 0xC2, 0xF8, 0xBF,
+                0xEB, 0xC7, 0xCF, 0xB0, 0xED, 0x20, 0xC0, 0xD6, 0xC0, 0xBB, 0x20, 0xB0, 0xE6, 0xBF,
+                0xEC, 0x0A,
+            ],
+            Self::WrongWornSlot => &[
+                0xBC, 0xBA, 0xBA, 0xB0, 0xC0, 0xCC, 0x20, 0xB4, 0xD9, 0xB8, 0xA5, 0x20, 0xBE, 0xC6,
+                0xC0, 0xCC, 0xC5, 0xDB, 0xC0, 0xBA, 0x20, 0xC0, 0xD4, 0xC0, 0xBB, 0x20, 0xBC, 0xF6,
+                0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+            ],
+        }
+    }
+}
+
+/// Outcome of one ITEMPRE press after the exe's gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryOnDecision {
+    /// Stage the row good and repaint the figure.
+    Stage,
+    /// Category outside `0x18..0x1b`: the exe falls through silently.
+    WrongCategory,
+    /// Worn slot mismatch (`0x77cd28` or 2) posts a notice.
+    Notice(TryOnNotice),
+}
+
+/// Apply the pinned ITEMPRE gate to one staged good.
+#[must_use]
+pub fn shop_try_on_decision(
+    gate: Option<TryOnGate>,
+    active_slot: Option<u8>,
+    occupied: bool,
+) -> TryOnDecision {
+    let Some(gate) = gate else {
+        return TryOnDecision::WrongCategory;
+    };
+    if !(0x18..=0x1B).contains(&gate.category) {
+        return TryOnDecision::WrongCategory;
+    }
+    if gate.worn_slot != 2 && Some(gate.worn_slot) != active_slot {
+        return TryOnDecision::Notice(TryOnNotice::WrongWornSlot);
+    }
+    if occupied && gate.category != 0x0B && gate.category != 0x16 {
+        return TryOnDecision::Notice(TryOnNotice::CostumeSlotOccupied);
+    }
+    TryOnDecision::Stage
+}
+
+/// Payment mode word at exe object `+0x969`: BUYITEM writes 1,
+/// GIFTITEM writes 2 before the virtual `0x1397` send
+/// (`ev_f3ad15be…`, file `0x99fe9`/`0x9a705`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutMode {
+    /// BUYITEM mode 1.
+    Buy = 1,
+    /// GIFTITEM mode 2.
+    Gift = 2,
+}
+
+impl CheckoutMode {
+    /// Word the exe writes at `+0x969`.
+    #[must_use]
+    pub const fn word(self) -> u32 {
+        self as u32
+    }
+}
+
+/// Notice the checkout ladder posts. VAs are the exact 7.55 strings;
+/// the dialog that mounts them stays OPEN until a press frame names
+/// it (the live tap emitted no opcode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutNotice {
+    /// Empty cart (string VA `0x648cc8`).
+    EmptyCart,
+    /// Cart list blocked (string VA `0x648c48`).
+    CartBlocked,
+    /// No bag space at all (string VA `0x648c24`).
+    BagFull,
+    /// Too little bag space (string VA `0x648c00`).
+    BagSpaceShort,
+    /// Maximum bag with special item `0x5bc` (string VA `0x648b88`).
+    SpecialItemAtMaximum,
+    /// O2CASH shortfall (string VA `0x648b38`).
+    InsufficientCash,
+    /// Gem shortfall; the exe clears the cart (string VA `0x648b14`).
+    InsufficientGem,
+}
+
+/// Staged inputs the exe reads before its 5015 send: web-busy gate
+/// `FUN_00556680(0)`, bag capacity `0x77cce4`, and the cart.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CheckoutGate {
+    /// A busy web gate makes the press silent (`0x14200070/71`).
+    pub web_busy: bool,
+    /// Total owned-bag slots, `None` until a pinned source stages it.
+    pub bag_slots: Option<usize>,
+    /// Owned-bag rows already used.
+    pub bag_used: usize,
+}
+
+/// Outcome of one BUYITEM/GIFTITEM press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutDecision {
+    /// Write the mode word and virtually send 5015.
+    Approved(CheckoutMode),
+    /// A gate blocked the press with no notice.
+    Silent,
+    /// A gate blocked the press with the pinned notice.
+    Notice(CheckoutNotice),
+    /// A source is missing; no exe claim is made.
+    Unpinned,
+}
+
+/// Apply the exe's BUYITEM/GIFTITEM ladder to staged state. The
+/// capacity checks belong to BUYITEM only; both arms share the cash
+/// and gem comparisons and the empty send (`ev_f3ad15be…`).
+#[must_use]
+pub fn shop_checkout_decision(
+    cart: &[ShopGood],
+    wallet: &WalletState,
+    gate: &CheckoutGate,
+    mode: CheckoutMode,
+) -> CheckoutDecision {
+    if gate.web_busy {
+        return CheckoutDecision::Silent;
+    }
+    if cart.is_empty() {
+        return CheckoutDecision::Notice(CheckoutNotice::EmptyCart);
+    }
+    if mode == CheckoutMode::Buy {
+        let Some(slots) = gate.bag_slots else {
+            return CheckoutDecision::Unpinned;
+        };
+        let free = slots.saturating_sub(gate.bag_used);
+        if free == 0 {
+            return CheckoutDecision::Notice(CheckoutNotice::BagFull);
+        }
+        if free < cart.len() {
+            return CheckoutDecision::Notice(CheckoutNotice::BagSpaceShort);
+        }
+        if cart.len() == 0xB4 && cart.iter().any(|good| good.item_id == 0x5BC) {
+            return CheckoutDecision::Notice(CheckoutNotice::SpecialItemAtMaximum);
+        }
+    }
+    if !wallets_allow(cart, wallet) {
+        return CheckoutDecision::Notice(CheckoutNotice::InsufficientCash);
+    }
+    if !gem_allows(cart, wallet) {
+        return CheckoutDecision::Notice(CheckoutNotice::InsufficientGem);
+    }
+    CheckoutDecision::Approved(mode)
+}
+
+/// Three cash wallets against the summed cart price. The exe posts
+/// only when the price exceeds both compared wallets.
+fn wallets_allow(cart: &[ShopGood], wallet: &WalletState) -> bool {
+    let (Some(o2_cash), Some(music_cash), Some(item_cash)) =
+        (wallet.o2_cash, wallet.music_cash, wallet.item_cash)
+    else {
+        return false;
+    };
+    let total = i64::from(
+        cart.iter()
+            .fold(0u32, |sum, good| sum.saturating_add(good.price)),
+    );
+    let o2 = i64::from(o2_cash);
+    !(total > o2 && total > i64::from(music_cash)) && !(total > o2 && total > i64::from(item_cash))
+}
+
+/// Gem wallet against the summed staged gem prices. An unstaged gem
+/// word is a missing source, never an invented price.
+fn gem_allows(cart: &[ShopGood], wallet: &WalletState) -> bool {
+    let Some(gem) = wallet.gem else {
+        return false;
+    };
+    let mut total = 0u32;
+    for good in cart {
+        let Some(price) = good.gem_price else {
+            return false;
+        };
+        total = total.saturating_add(price);
+    }
+    i64::from(total) <= i64::from(gem)
 }
 
 /// Staged shop goods in table order; empty without catalog data.
@@ -799,6 +1033,10 @@ pub enum ShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// MYBACK face: clears the cart flag (exe object `+0x8cd`).
+    ShowMyBag,
+    /// MYCART face: sets the cart flag (exe object `+0x8cd`).
+    ShowShoppingBag,
     /// Item Shop charge plate: opens the Cash Charge web view
     /// (b8 input log, plate at `(92,355)`).
     OpenCashCharge,
@@ -806,6 +1044,9 @@ pub enum ShopAction {
     BagPrev,
     /// Bag pager stepped forward over the owned panel.
     BagNext,
+    /// Bag sort: the static BAGSORT arm queues the empty 5038
+    /// RefreshBag send (live wire tap OPEN, see [`SHOP_BAGSORT_CODE`]).
+    SortBag,
 }
 
 /// Board click under native pixel (`x`, `y`): the staged placement
@@ -874,8 +1115,11 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
         SHOP_CART_RIGHT_CODE => Some(ShopAction::CartNext),
+        SHOP_MYBACK_POS_CODE => Some(ShopAction::ShowMyBag),
+        SHOP_MYCART_POS_CODE => Some(ShopAction::ShowShoppingBag),
         SHOP_BAG_LEFT_CODE => Some(ShopAction::BagPrev),
         SHOP_BAG_RIGHT_CODE => Some(ShopAction::BagNext),
+        SHOP_BAGSORT_CODE => Some(ShopAction::SortBag),
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
@@ -941,6 +1185,24 @@ pub fn shop_cart_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
         .collect();
     slots.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
     slots
+}
+
+/// Cart total cell rects: `CHECKGEM` then `CHECKMONEY`. `FUN_004a0660`
+/// (file `0xa0660`, `ev_3e020a4a…`) stages these two cells into object
+/// offsets `+0x247c`/`+0x248c`; our staged `State_ItemShop.bnd` rects
+/// carry the same geometry, so the painter reads them instead of using
+/// literals. `None` when either cell is unstaged.
+#[must_use]
+pub fn shop_cart_total_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let gem = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_CART_CHECKGEM_CODE)?
+        .rect;
+    let money = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_CART_CHECKMONEY_CODE)?
+        .rect;
+    Some((gem, money))
 }
 
 /// Cart page-number rects: current-page tens+ones union, then total

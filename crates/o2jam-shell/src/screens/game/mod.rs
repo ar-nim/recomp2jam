@@ -32,7 +32,7 @@ use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
 pub use self::room_fuse::FuseClock;
 use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
-use self::shop::ShopState;
+use self::shop::{EquippedAvatarBlock, ShopState};
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
@@ -105,8 +105,10 @@ use o2jam_net::rooms::{
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
-use o2jam_net::wallet::SyncCashPointResponse;
+use o2jam_net::shop::{
+    EquipItem, RefreshBag, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse,
+};
+use o2jam_net::wallet::{StartPayment, SyncCashPointResponse};
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
     GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
@@ -976,6 +978,11 @@ pub struct ScreenGame {
     /// inventory, gifts, identity and cash captions (`None` until the
     /// session stages it).
     myroom_character: Option<CharacterInfo>,
+    /// Equipped block snapshotted on character staging. ITEMBACK
+    /// copies it back wholesale (exe `0x2190` bytes from `0x77cd00`,
+    /// `ev_f3ad15be…`), so later slot edits cannot leak into a
+    /// preview revert.
+    equipped_block: Option<EquippedAvatarBlock>,
     /// Staged worn figure per waiting seat (seat 0 self, seats 1..7
     /// wire peers): the same `avatar.opa` stack the Result banner and
     /// the Room panel paint, keyed by seat so each occupied slot
@@ -1295,6 +1302,7 @@ impl ScreenGame {
             myroom: MyRoomState::new(),
             myroom_items: None,
             myroom_character: None,
+            equipped_block: None,
             waiting_figures: std::array::from_fn(|_| None),
             avatar_source: None,
             room_avatar: None,
@@ -6671,6 +6679,12 @@ impl ScreenGame {
         self.outbox.take_exit_shop()
     }
 
+    /// Queued BAGSORT refresh for the session bridge, if any (5038).
+    #[must_use]
+    pub fn take_refresh_bag(&mut self) -> Option<RefreshBag> {
+        self.outbox.take_refresh_bag()
+    }
+
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
     /// opens the local web-purchase surface without a game opcode,
@@ -6702,7 +6716,13 @@ impl ScreenGame {
                     self.visit_side(SideScreen::Payment);
                 }
             }
-            ShopAction::GiftRow(_) | ShopAction::GiftCart => self.record_shop_gift_noop(action),
+            ShopAction::GiftRow(_) => self.record_shop_gift_noop(action),
+            ShopAction::GiftCart => {
+                // The web-only gift record stays; the static arm also
+                // sets mode 2 and sends 5015 when its ladder passes.
+                self.record_shop_gift_noop(action);
+                self.run_checkout(super::side::CheckoutMode::Gift, owned_len);
+            }
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
                 // avatar-pane figure (restage) and the comment preview.
@@ -6711,21 +6731,50 @@ impl ScreenGame {
                 self.restage_shop_avatar();
             }
             ShopAction::RevertTryOn => {
+                // Exe arm `0x1420006c`: FUN_00540500, then a full
+                // 0x2190-byte copy from global `0x77cd00` into the
+                // local avatar block and a repaint. The snapshot was
+                // taken on character staging, so every slot reverts.
                 self.shop.apply_action(action, owned_len);
                 self.shop.clear_preview();
+                if let (Some(block), Some(character)) =
+                    (self.equipped_block.as_ref(), self.myroom_character.as_mut())
+                {
+                    block.restore_equipment(character);
+                }
                 self.restage_shop_avatar();
             }
             ShopAction::CartBuy => {
                 // W-a: the local SHOPPING BAG confirmation face is
                 // already staged by the row pick; BUYITEM opens the
-                // web purchase surface and sends no game opcode.
+                // web purchase surface. The static ladder below also
+                // queues 5015 when every staged gate passes.
                 if self.shop.apply_action(action, owned_len) {
                     self.shop_purchase_web_open = true;
                 }
+                self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
+            }
+            ShopAction::SortBag => {
+                // Static arm `0x142000b7` (file `0x9bfa8`): the sort
+                // press itself stages nothing, but queues the empty
+                // 5038. The session owns the wire; live no-wire tap
+                // stays recorded beside the pin.
+                self.shop.apply_action(action, owned_len);
+                self.outbox.pending_refresh_bag = Some(RefreshBag);
             }
             _ => {
                 self.shop.apply_action(action, owned_len);
             }
+        }
+    }
+
+    /// Run the BUYITEM/GIFTITEM ladder and queue its static 5015
+    /// send when every staged gate passes. The web surface and the
+    /// gift no-op record stay as the live-observed arms.
+    fn run_checkout(&mut self, mode: super::side::CheckoutMode, owned_len: usize) {
+        self.shop.stage_checkout_bag_used(owned_len);
+        if self.shop.approve_checkout(mode, &self.wallet) {
+            self.outbox.pending_start_payment = Some(StartPayment);
         }
     }
 
@@ -6758,6 +6807,57 @@ impl ScreenGame {
     #[must_use]
     pub fn shop_try_on(&self) -> Option<u32> {
         self.shop.try_on()
+    }
+
+    /// Stage the exe's ITEMPRE gate words for one catalog good.
+    pub fn stage_shop_try_on_gate(&mut self, item_id: u32, category: u8, worn_slot: u8) {
+        self.shop.stage_try_on_gate(item_id, category, worn_slot);
+    }
+
+    /// Stage the exe's occupied-worn-slot word (object `+0x8ad`).
+    pub fn stage_occupied_worn_slot(&mut self, occupied: bool) {
+        self.shop.stage_occupied_worn_slot(occupied);
+    }
+
+    /// Stage the EXE's staged gem-price word for one good.
+    pub fn stage_item_gem_price(&mut self, item_id: u32, price: u32) {
+        self.shop.stage_item_gem_price(item_id, price);
+    }
+
+    /// Stage the owned-bag capacity gate for BUYITEM.
+    pub fn stage_checkout_bag_capacity(&mut self, slots: usize) {
+        self.shop.stage_checkout_bag_capacity(slots);
+    }
+
+    /// Stage the web-busy gate (`FUN_00556680(0)`).
+    pub fn stage_payment_web_busy(&mut self, busy: bool) {
+        self.shop.stage_payment_web_busy(busy);
+    }
+
+    /// Payment mode word (`+0x969`) written by the last approved
+    /// BUYITEM/GIFTITEM press.
+    #[must_use]
+    pub fn shop_payment_mode(&self) -> Option<super::side::CheckoutMode> {
+        self.shop.payment_mode()
+    }
+
+    /// Notice posted by the last BUYITEM/GIFTITEM press.
+    #[must_use]
+    pub fn shop_checkout_notice(&self) -> Option<super::side::CheckoutNotice> {
+        self.shop.checkout_notice()
+    }
+
+    /// Queued 5015 StartPayment for the session bridge, if any.
+    #[must_use]
+    pub fn take_start_payment(&mut self) -> Option<StartPayment> {
+        self.outbox.take_start_payment()
+    }
+
+    /// Notice posted by the last ITEMPRE press, if any. The dialog
+    /// sheet that mounts the pinned CP949 bytes stays OPEN.
+    #[must_use]
+    pub fn shop_try_on_notice(&self) -> Option<super::side::TryOnNotice> {
+        self.shop.try_on_notice()
     }
 
     /// Whether the avatar pane holds a staged figure (equipped or
@@ -8482,6 +8582,15 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     hash_u64(&mut hash, u64::from(game.shop_purchase_web_open));
     if game.outbox.pending_exit_shop.is_some() {
         hash_u64(&mut hash, 5_007);
+    }
+    if game.outbox.pending_refresh_bag.is_some() {
+        hash_u64(&mut hash, 5_038);
+    }
+    if game.outbox.pending_start_payment.is_some() {
+        hash_u64(&mut hash, 5_015);
+    }
+    if let Some(mode) = game.shop.payment_mode() {
+        hash_u64(&mut hash, u64::from(mode.word()));
     }
     if let Some(category) = game.shop.category() {
         hash_u64(&mut hash, u64::try_from(category).unwrap_or(u64::MAX));
@@ -22957,8 +23066,8 @@ mod game_tests {
     fn shop_unwired_browse_chrome_lands_nowhere() {
         // Live caller chain: same catalog staging as the preview
         // guard, then click_shop on ControlList-named chrome the live
-        // dump never stages (gender, submenu, ext-menu, bag-sort,
-        // planet pager, per-row gifts, gift commit), plus
+        // dump never stages (gender, submenu, ext-menu, planet
+        // pager, per-row gifts, gift commit), plus
         // the music-shop TOP100 arm (#181: music-shop-only — the item
         // shop owns no TOP100 control), plus the paint-target codes
         // (icons, comment, gem cells, cart totals). Every one lands
@@ -22971,7 +23080,6 @@ mod game_tests {
             SHOP_PLANET_DOWN_CODE,
             SHOP_GIFTITEM_CODE,
             SHOP_EXTMENU_ON_CODE,
-            SHOP_BAGSORT_CODE,
             SHOP_ITEMSHOW_FIRST_CODE,
             SHOP_MYBAGITEM_FIRST_CODE,
             SHOP_ITEMCOMMENT_CODE,
@@ -23016,7 +23124,92 @@ mod game_tests {
         assert_eq!(game.shop_bag_page(), 0);
         assert_eq!(game.shop_preview(), None);
         assert_eq!(game.take_shop_buy(), None);
+        assert_eq!(
+            game.take_refresh_bag(),
+            None,
+            "BAGSORT owns the static 5038, not this no-op family"
+        );
         assert_eq!(game.side(), Some(SideScreen::Shop));
+    }
+
+    #[test]
+    fn cart_pager_steps_only_while_the_cart_face_flag_is_set() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(ITEMBUY/MYBACK_POS/MYCART_POS/MYCART_RIGHT/LEFT)
+        //   -> ShopState::apply_action -> paint cart page readout.
+        // Static arms `0x14200072/73` (ev_f3ad15be…) step page `0x8ce`
+        // modulo count `0x8cf` only when flag `0x8cd` is set; MYBACK_POS
+        // clears it and MYCART_POS sets it (files `0xa5a75`/`0xa5b63`).
+        // Multi-page cart fixture: six checked goods over five rows.
+        let mut game = open_shop_board(12);
+        for slot in 0..6i32 {
+            game.click_shop(221 + (slot % 4) * 141, 188 + (slot / 4) * 153);
+        }
+        assert_eq!(game.shop_cart().len(), 6);
+        assert_eq!(game.shop_cart_pages(), 2);
+        for (code, x) in [
+            (super::super::side::SHOP_MYBACK_POS_CODE, 510),
+            (super::super::side::SHOP_MYCART_POS_CODE, 560),
+        ] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: format!("CART_FACE_{code:X}"),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 40,
+                    h: 20,
+                },
+            });
+        }
+
+        game.click_shop(515, 40);
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 0, "cleared face flag blocks RIGHT");
+
+        game.click_shop(565, 40);
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 1, "set face flag allows RIGHT");
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 1, "RIGHT holds at the last page");
+        game.click_shop(220, 570);
+        assert_eq!(game.shop_cart_page(), 0, "LEFT returns to the first page");
+    }
+
+    #[test]
+    fn bagsort_queues_the_exe_refresh_bag_send() {
+        // Live caller chain:
+        //   main.rs::run_play -> ScreenGame::ingest_snapshot ->
+        //   click_side_screen -> click_shop(SHOP_BAGSORT_CODE) ->
+        //   PendingOutbox -> OnlineSession::poll_wire -> 5038.
+        // Static arm `0x142000b7` pushes virtual send `0x13ae`
+        // (file `0x9bfa8`, ev_f3ad15be…) — keep the live no-wire
+        // contradiction named: one BAGSORT press wire tap is OPEN.
+        let mut game = open_shop_board(2);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_BAGSORT".to_owned(),
+            code: SHOP_BAGSORT_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(
+            game.take_refresh_bag(),
+            Some(o2jam_net::shop::RefreshBag),
+            "the static BAGSORT arm queues 5038 RefreshBag"
+        );
+        assert_eq!(game.take_refresh_bag(), None, "one press queues one send");
     }
 
     #[test]
@@ -23251,6 +23444,11 @@ mod game_tests {
         walk_to_waiting(&mut game);
         let table = shop_preview_table();
         game.set_shop_catalog(&table);
+        // The exe gate's category/slot words are staged explicitly:
+        // no parsed file→record join is pinned. Slot 2 is always
+        // try-on-able, so both synthetic goods can stack.
+        game.stage_shop_try_on_gate(1, 0x18, 2);
+        game.stage_shop_try_on_gate(2, 0x18, 2);
         game.set_myroom_character(shop_preview_hero());
         game.set_avatar_source(shop_preview_archive(), table);
         let mut placements = shop_side_placements();
@@ -23321,6 +23519,238 @@ mod game_tests {
         // The synthetic archive stacks, so the pane holds the
         // preview figure on the fly.
         assert!(game.shop_avatar_staged());
+    }
+
+    #[test]
+    fn a_valid_cart_sets_the_buy_mode_and_queues_the_5015_send() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_shop(ITEMBUY,
+        //   BUYITEM) -> ShopState::checkout_ladder -> PendingOutbox ->
+        //   OnlineSession::poll_wire -> 5015 StartPayment.
+        // Static arm `0x14200070` (ev_f3ad15be…) checks the web gate,
+        // cart, bag space, three cash wallets and gem, then writes mode
+        // word `+0x969 = 1` and virtually sends `0x1397`.
+        // CONTRADICTION: qualified live taps emitted no opcode, so the
+        // send sits behind gates we stage here; one wire tap through a
+        // valid cart is OPEN.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 25);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 500;
+        game.wallet.apply_character_cash(&hero);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_GIFTITEM".to_owned(),
+            code: super::super::side::SHOP_GIFTITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Buy)
+        );
+        assert_eq!(
+            game.take_start_payment(),
+            Some(o2jam_net::wallet::StartPayment),
+            "the passing ladder queues the empty 5015"
+        );
+        assert_eq!(game.take_start_payment(), None, "one press sends once");
+        assert!(game.shop_purchase_web_open());
+    }
+
+    #[test]
+    fn giftitem_with_a_valid_cart_writes_mode_two_and_sends_the_5015() {
+        // Same live chain as the buy guard, with the GIFTITEM arm
+        // `0x14200071`: mode word `+0x969 = 2` and virtual `0x1397`.
+        // Gift's web-only no-op record stays alongside the static
+        // pin; the live tap wire sweep is still OPEN.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 25);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 500;
+        game.wallet.apply_character_cash(&hero);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_GIFTITEM".to_owned(),
+            code: super::super::side::SHOP_GIFTITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(
+            game.shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Gift)
+        );
+        assert_eq!(game.take_start_payment(), Some(StartPayment));
+        assert_eq!(
+            game.shop_gift_noop().map(|noop| noop.id),
+            Some(super::super::side::SHOP_GIFTITEM_ID)
+        );
+    }
+
+    #[test]
+    fn an_empty_cart_blocks_the_static_payment_leg() {
+        // The first ladder gate (`FUN_0053c1d0`, string VA `0x648cc8`)
+        // stops BUYITEM before the mode word and 5015 write. The
+        // qualified live tap was empty, so this arm keeps the
+        // recorded no-op leg.
+        let mut game = open_shop_board(2);
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(super::super::side::CheckoutNotice::EmptyCart)
+        );
+        assert_eq!(game.shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
+    }
+
+    #[test]
+    fn a_gem_shortfall_blocks_the_static_payment_leg() {
+        // The gem comparison (`0x768b44` vs the entry `+0x18` getter,
+        // string VA `0x648b14`) stops the ladder before the 5015.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 500);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 10;
+        game.wallet.apply_character_cash(&hero);
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(super::super::side::CheckoutNotice::InsufficientGem)
+        );
+        assert_eq!(game.shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
+    }
+
+    #[test]
+    fn occupied_worn_slot_posts_the_exe_notice_and_blocks_the_try_on() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_online_identity ->
+        //   visit_side(Shop) -> click_shop(ITEMPRE2) ->
+        //   ShopState::preview_slot -> shop_try_on_notice (no figure).
+        // Static pin: arm `0x14200065` checks category `+4` inside
+        // `0x18..0x1b`, worn slot `+6 >> 7 & 0xf` equal to global
+        // `0x77cd28` or 2, then blocks on object `+0x8ad` and posts
+        // the string at VA `0x648878` (`ev_f3ad15be…`). The visible
+        // notice dialog stays OPEN: one qualified ITEMPRE press frame
+        // on an occupied slot must name the mounted sheet.
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x18, 2);
+        game.stage_occupied_worn_slot(true);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None, "no figure stages");
+        assert_eq!(
+            game.shop_try_on_notice(),
+            Some(super::super::side::TryOnNotice::CostumeSlotOccupied)
+        );
+        assert_eq!(
+            game.shop_preview_equipment(),
+            None,
+            "the equipped set is untouched"
+        );
+    }
+
+    #[test]
+    fn a_wrong_category_preview_press_stages_nothing_and_posts_no_notice() {
+        // Same live chain as the occupied-slot guard. Category `0x17`
+        // is outside the exe's `0x18..0x1b` range, where the arm falls
+        // through without a notice (`ev_f3ad15be…`).
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x17, 2);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(game.shop_try_on_notice(), None);
+    }
+
+    #[test]
+    fn a_mismatched_worn_slot_posts_the_exe_gender_notice() {
+        // Same live chain. Slot 1 differs from global `0x77cd28`
+        // (unset here) and from the always-allowed slot 2, so the
+        // notice string at VA `0x6488e4` is the only outcome.
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x18, 1);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(
+            game.shop_try_on_notice(),
+            Some(super::super::side::TryOnNotice::WrongWornSlot)
+        );
+    }
+
+    #[test]
+    fn itemback_restores_the_full_equipped_block_not_one_slot() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_online_identity ->
+        //   ScreenGame::set_myroom_character (block snapshot) ->
+        //   visit_side(Shop) -> click_shop(ITEMBACK) ->
+        //   EquippedAvatarBlock::restore -> restage_shop_avatar.
+        // Static pin: `0x1420006c` calls FUN_00540500 then copies
+        // 0x2190 bytes from global `0x77cd00` into object `+0x65`
+        // (ev_f3ad15be…): a full block revert, not a per-part undo.
+        // Live before/after figure frames stay OPEN.
+        let mut game = open_shop_preview_board();
+        assert_eq!(
+            super::super::side::SHOP_EQUIPPED_BLOCK_BYTES,
+            0x2190,
+            "the copied block width stays pinned"
+        );
+        let equipped_at_entry = game.myroom_character().expect("hero staged").equipment;
+        {
+            let hero = game.myroom_character.as_mut().expect("hero staged");
+            hero.equipment[0] = 7;
+            hero.equipment[1] = 8;
+        }
+        game.click_shop(362, 208);
+        assert_eq!(game.shop_try_on(), Some(2));
+
+        game.click_shop(140, 574);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(
+            game.myroom_character().expect("hero staged").equipment,
+            equipped_at_entry,
+            "ITEMBACK restores every slot from the equipped block"
+        );
     }
 
     #[test]

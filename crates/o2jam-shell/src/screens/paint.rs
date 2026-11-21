@@ -47,18 +47,17 @@ use super::side::{
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, planet_action_for_code, planet_band_rect, planet_caption_for_code,
     planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots,
-    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow, PlanetAction, PlanetBand,
-    PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
-    MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE,
+    shop_cart_total_rects, wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow,
+    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow,
+    WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1443,17 +1442,23 @@ pub fn paint_shop_bag_pager(
 /// Cart checkout totals: the summed `ITEMWON` prices into
 /// `CHECKMONEY`, `--` into `CHECKGEM` (no gem-price source is
 /// pinned — same OPEN as the `ITEMGEM` row cells).
+///
+/// `FUN_004a1010` (`ev_ec83763a…`) enables these cells only when the
+/// cart-count word `+0x2334` is non-zero, so an empty cart leaves both
+/// staged cells dark. The exe's own total-ink writer stays OPEN.
 fn paint_shop_cart_totals(frame: &mut Frame<'_>, placements: &[ScenePlacement], cart: &[ShopGood]) {
-    if let Some(rect) = shop_template_rect(placements, SHOP_CART_CHECKGEM_CODE) {
-        paint_text_into_rect(frame, rect, super::side::UNKNOWN_AMOUNT, CP949_INK);
+    if cart.is_empty() {
+        return;
     }
-    if let Some(rect) = shop_template_rect(placements, SHOP_CART_CHECKMONEY_CODE) {
-        let total = cart
-            .iter()
-            .map(|good| good.price)
-            .fold(0u32, |total, price| total.saturating_add(price));
-        paint_text_into_rect(frame, rect, &total.to_string(), CP949_INK);
-    }
+    let Some((gem_cell, money_cell)) = shop_cart_total_rects(placements) else {
+        return;
+    };
+    paint_text_into_rect(frame, gem_cell, super::side::UNKNOWN_AMOUNT, CP949_INK);
+    let total = cart
+        .iter()
+        .map(|good| good.price)
+        .fold(0u32, |total, price| total.saturating_add(price));
+    paint_text_into_rect(frame, money_cell, &total.to_string(), CP949_INK);
 }
 
 /// Item-shop avatar pane over the staged side art: the equipped (or
@@ -3637,8 +3642,9 @@ mod paint_tests {
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
         MSHOP_TITLE_CODE, PLANET_OPTION_CODE, PLANET_PROMO_IMAGE_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
         SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
-        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE,
+        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_TOGGLE_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE,
     };
     use super::*;
     use crate::avatar::load_worn_figure;
@@ -4016,6 +4022,64 @@ mod paint_tests {
         assert!(lit(200, 288, 95, 13), "won balance paints");
         assert!(lit(82, 320, 95, 13), "cart gem total paints");
         assert!(lit(200, 320, 95, 13), "cart money total paints");
+    }
+
+    #[test]
+    fn cart_total_cells_ink_only_when_the_cart_count_gate_is_open() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::paint ->
+        //   ScreenGame::paint_shop -> paint_shop_board ->
+        //   paint_shop_cart_totals -> staged CHECKMONEY/CHECKGEM rects.
+        // Static pins: FUN_004a1010 (ev_ec83763a…) enables the total
+        // cells by cart-count `+0x2334`; FUN_004a0660
+        // (ev_3e020a4a…) stages their rects into object `+0x247c`/
+        // `+0x248c`. The exe's own total-ink writer stays OPEN; our
+        // staged-price sum remains the labeled source.
+        let placements = vec![
+            shop_placement(SHOP_CART_CHECKGEM_CODE, 82, 320, 95, 13),
+            shop_placement(SHOP_CART_CHECKMONEY_CODE, 200, 320, 95, 13),
+        ];
+        let good = ShopGood {
+            item_id: 1,
+            name: "TotalGood".to_owned(),
+            price: 1200,
+            gem_price: None,
+        };
+        let cells_ink = |cart: &[ShopGood]| {
+            let mut buf = vec![0u32; 800 * 600];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            paint_shop_board(
+                &mut frame,
+                &placements,
+                ShopBoard {
+                    panel: ShopPanel::ShoppingBag,
+                    goods: &[],
+                    wallet: &WalletState::default(),
+                    cart,
+                    cart_page: 0,
+                    cart_pages: 1,
+                },
+            );
+            (
+                has_ink_in(&buf, 800, 82, 320, 95, 13),
+                has_ink_in(&buf, 800, 200, 320, 95, 13),
+            )
+        };
+
+        assert_eq!(
+            cells_ink(&[]),
+            (false, false),
+            "an empty cart leaves both cells dark"
+        );
+        assert_eq!(
+            cells_ink(std::slice::from_ref(&good)),
+            (true, true),
+            "the staged-price writer inks both cells"
+        );
     }
 
     #[test]

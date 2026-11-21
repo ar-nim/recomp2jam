@@ -294,6 +294,74 @@ status frame. The peer sees nothing about the shop visit. The peer's
 audio sidecar records `route=sink`, `on_default_sink=0`,
 `preboot_breach=0`.
 
+## #178 enrichment pins (2026-11-22)
+
+Static audit of `FUN_00499760` (`ev_f3ad15be…`, VA `0x499760`) adds
+pins that the earlier live sweeps did not see. Evidence IDs and own-word
+behavior also live in spec #178's enrichment rows.
+
+- BAGSORT `0x142000b7` pushes virtual send `0x13ae` (file `0x9bfa8`),
+  the empty 5038 RefreshBag; `FUN_004a1010` (`ev_ec83763a…`) gates the
+  control on cart state. This CONTRADICTS the #195 note above that
+  BAGSORT "records nothing". Both claims stay recorded: our shell now
+  queues the static send, and the next step is one BAGSORT press wire
+  tap (a NULL tap retires the static claim rather than inventing a
+  handler). Guard: `bagsort_queues_the_exe_refresh_bag_send` and
+  `bagsort_press_sends_one_empty_5038_on_the_game_socket`.
+- MYCART_LEFT/RIGHT `0x14200072/73` step page `+0x8ce` modulo count
+  `+0x8cf` only when the cart flag `+0x8cd` is set; RIGHT holds at the
+  last page, LEFT holds at the first. MYBACK_POS `0x1460006d` clears
+  the flag, MYCART_POS `0x1460006e` sets it, and a row check sets it
+  (same evidence `ev_f3ad15be…`). The panel face carries that flag in
+  our model; guard
+  `cart_pager_steps_only_while_the_cart_face_flag_is_set` uses a
+  six-good, five-row cart fixture. Live multi-page press frames OPEN.
+- Cart total cells: `FUN_004a1010` (`ev_ec83763a…`) enables `CHECKMONEY`
+  and the buy/gift/pager row by the cart-count word `+0x2334`;
+  `FUN_004a0660` (`ev_3e020a4a…`) stages `CHECKMONEY`/`CHECKGEM` rects
+  into object `+0x247c`/`+0x248c`. Our painter now reads the staged
+  pair and inks nothing for an empty cart. The staged-price sum stays
+  ours-by-design (#515); the exe's total-ink writer is still OPEN
+  (qualified cart-pick frame, then writer REA). Guard:
+  `cart_total_cells_ink_only_when_the_cart_count_gate_is_open`.
+- ITEMBACK `0x1420006c` calls FUN_00540500, copies `0x2190` bytes
+  from global `0x77cd00` over the local block at object `+0x65`, then
+  repaints (`ev_f3ad15be…`). Our shell snapshots the equipped slice on
+  character staging and overwrites every slot on ITEMBACK, so a later
+  slot edit cannot leak into the revert; the rest of the exe block
+  (wallet/inventory) stays server-authoritative, not minted locally.
+  Guard: `itemback_restores_the_full_equipped_block_not_one_slot`.
+  Live before/after figure frames OPEN.
+- ITEMPRE `0x14200064..6b` gates on category byte `+4` inside
+  `0x18..0x1b` and worn slot `(word +6 >> 7) & 0xf` equal to global
+  `0x77cd28` or slot 2. An occupied word at object `+0x8ad` blocks
+  categories other than `0x0b`/`0x16` and posts the CP949 string at
+  VA `0x648878` (`ev_0a8d91c7…`, `[ 정보 ] … '소품'`); a slot
+  mismatch posts the string at VA `0x6488e4` (`ev_9b1586a2…`,
+  `성별이 다른 아이템은 입을 수 없습니다.`). A good passes to
+  FUN_0049fba0 (`ev_82741b08…`) and repaints only then. The
+  file→record join for the gate words is not pinned, so callers stage
+  them explicitly. Guards: `occupied_worn_slot_posts_the_exe_notice_and_blocks_the_try_on`,
+  `a_wrong_category_preview_press_stages_nothing_and_posts_no_notice`,
+  `a_mismatched_worn_slot_posts_the_exe_gender_notice`. The notice
+  dialog mount stays OPEN: one qualified ITEMPRE press frame on a
+  blocked slot, plus the before/after figure pixel pair.
+- BUYITEM `0x14200070` / GIFTITEM `0x14200071` share the web gate
+  `FUN_00556680(0)`, empty-cart (`0x648cc8`) and cash/gem checks
+  (`0x768b4c/50/54`, `0x768b44`; notices `0x648b38`/`0x648b14`).
+  BUYITEM alone checks bag room (`0x648c24`/`0x648c00`) and rejects
+  item `0x5bc` at a 180-entry bag (`0x648b88`). The passing arm writes
+  mode word `+0x969` = 1/2 and virtually sends `0x1397` = 5015 empty
+  (`ev_f3ad15be…`). CONTRADICTION: the qualified live taps emitted no
+  5000-family opcode, so our web surface and gift no-op record stay;
+  the 5015 send is staged behind the gates above. Next step: one wire
+  tap through a valid cart beside the painted notice. Guards:
+  `a_valid_cart_sets_the_buy_mode_and_queues_the_5015_send`,
+  `giftitem_with_a_valid_cart_writes_mode_two_and_sends_the_5015`,
+  `an_empty_cart_blocks_the_static_payment_leg`,
+  `a_gem_shortfall_blocks_the_static_payment_leg`,
+  `a_valid_cart_sends_one_empty_5015_after_the_buy_ladder`.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.

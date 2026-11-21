@@ -2,9 +2,39 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_goods, shop_page_count, ShopAction, ShopGood, ShopPanel,
-    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    lanking_page_window, shop_checkout_decision, shop_goods, shop_page_count, shop_try_on_decision,
+    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGood, ShopPanel,
+    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    SHOP_ITEM_ROWS,
 };
+use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
+use std::collections::HashMap;
+
+/// Equipped block the ITEMBACK arm restores. The exe takes `0x2190`
+/// bytes from global `0x77cd00` and writes them over the local copy at
+/// object `+0x65` before repainting (`ev_f3ad15be…`, arm
+/// `0x1420006c`): a whole-block revert, never a per-part undo. Only
+/// the worn-equipment slice is modeled here — the rest of that block
+/// (wallet, inventory) belongs to server-authoritative state and is
+/// never minted locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EquippedAvatarBlock {
+    equipment: [i32; EQUIPMENT_SLOTS],
+}
+
+impl EquippedAvatarBlock {
+    /// Snapshot the equipped slice when a character stages.
+    pub(crate) fn from_character(character: &CharacterInfo) -> Self {
+        Self {
+            equipment: character.equipment,
+        }
+    }
+
+    /// Overwrite every equipped slot from the snapshot.
+    pub(crate) fn restore_equipment(&self, character: &mut CharacterInfo) {
+        character.equipment = self.equipment;
+    }
+}
 
 /// Item-shop goods, pages, and the checked cart behind the shop
 /// side screen (#139 cluster 3: the Data Clump of all four
@@ -43,6 +73,24 @@ pub(crate) struct ShopState {
     /// Previewed item id (`ITEMPRE` pick, `ITEMBACK` clears; `None`
     /// until picked). Ids stay stable across pages (unlike slots).
     pub(crate) preview: Option<u32>,
+    /// Try-on gate words staged per item id (`+4`/`+6` of the exe
+    /// record). The file→record join is not pinned, so an ungated
+    /// good never stages a figure.
+    try_on_gates: HashMap<u32, TryOnGate>,
+    /// Active worn slot (exe global `0x77cd28`) and its occupancy
+    /// word (object `+0x8ad`); slot 2 bypasses both slot checks.
+    active_worn_slot: Option<u8>,
+    occupied_worn_slot: bool,
+    /// Last notice the ITEMPRE gate posted (`None` on a clean try-on
+    /// or ITEMBACK). The notice sheet that mounts these bytes stays
+    /// OPEN.
+    last_try_on_notice: Option<TryOnNotice>,
+    /// Staged BUYITEM/GIFTITEM gate inputs and the resulting mode
+    /// word (`+0x969`) plus notice. The 5015 send itself belongs to
+    /// the outbox, not this board state.
+    checkout_gate: CheckoutGate,
+    payment_mode: Option<CheckoutMode>,
+    checkout_notice: Option<CheckoutNotice>,
     /// Owned-panel page (ten `MYBAGITEM` icons per page, the staged
     /// `BAGLEFT`/`BAGRIGHT` pager).
     pub(crate) bag_page: usize,
@@ -72,6 +120,13 @@ impl ShopState {
         self.shop_cart_page
     }
 
+    /// Cart flag (exe object `+0x8cd`): only the SHOPPING BAG face
+    /// answers MYCART_LEFT/RIGHT. MYBACK clears it, MYCART_POS sets
+    /// it, and a row check enters the face (`ev_f3ad15be…`).
+    pub(crate) fn cart_face_open(&self) -> bool {
+        self.panel == ShopPanel::ShoppingBag
+    }
+
     /// Selected category tab (`None` until a FASHION-class press).
     pub(crate) fn category(&self) -> Option<usize> {
         self.shop_category
@@ -80,6 +135,95 @@ impl ShopState {
     /// Checked cart item ids in toggle order.
     pub(crate) fn cart(&self) -> Vec<u32> {
         self.shop_cart.clone()
+    }
+
+    /// Stage the exe's try-on gate words for one catalog good.
+    pub(crate) fn stage_try_on_gate(&mut self, item_id: u32, category: u8, worn_slot: u8) {
+        if self.shop_goods.iter().any(|good| good.item_id == item_id) {
+            self.try_on_gates.insert(
+                item_id,
+                TryOnGate {
+                    category,
+                    worn_slot,
+                },
+            );
+        }
+    }
+
+    /// Stage the occupied-slot word (exe object `+0x8ad`).
+    pub(crate) fn stage_occupied_worn_slot(&mut self, occupied: bool) {
+        self.occupied_worn_slot = occupied;
+    }
+
+    /// Notice posted by the last try-on press, if any.
+    pub(crate) fn try_on_notice(&self) -> Option<TryOnNotice> {
+        self.last_try_on_notice
+    }
+
+    /// Stage the exe's gem-price word for one good. The parsed table
+    /// carries no gem word, so only an explicitly staged pin may set
+    /// it (#395).
+    pub(crate) fn stage_item_gem_price(&mut self, item_id: u32, price: u32) {
+        if let Some(good) = self
+            .shop_goods
+            .iter_mut()
+            .find(|good| good.item_id == item_id)
+        {
+            good.gem_price = Some(price);
+        }
+    }
+
+    /// Stage the owned-bag capacity used by the BUYITEM ladder.
+    pub(crate) fn stage_checkout_bag_capacity(&mut self, slots: usize) {
+        self.checkout_gate.bag_slots = Some(slots);
+    }
+
+    /// Stage the owned-bag rows already used (`0x77cce4` list count).
+    pub(crate) fn stage_checkout_bag_used(&mut self, used: usize) {
+        self.checkout_gate.bag_used = used;
+    }
+
+    /// Stage the web-busy gate (`FUN_00556680(0)`).
+    pub(crate) fn stage_payment_web_busy(&mut self, busy: bool) {
+        self.checkout_gate.web_busy = busy;
+    }
+
+    /// Mode word written at `+0x969` by the last approved press.
+    pub(crate) fn payment_mode(&self) -> Option<CheckoutMode> {
+        self.payment_mode
+    }
+
+    /// Notice posted by the last checkout press, if any.
+    pub(crate) fn checkout_notice(&self) -> Option<CheckoutNotice> {
+        self.checkout_notice
+    }
+
+    /// Run the exe's validation ladder. Returns `true` only when the
+    /// mode word was written and the caller must queue 5015.
+    pub(crate) fn approve_checkout(&mut self, mode: CheckoutMode, wallet: &WalletState) -> bool {
+        let cart: Vec<ShopGood> = self
+            .shop_cart
+            .iter()
+            .filter_map(|item_id| {
+                self.shop_goods
+                    .iter()
+                    .find(|good| good.item_id == *item_id)
+                    .cloned()
+            })
+            .collect();
+        let decision = shop_checkout_decision(&cart, wallet, &self.checkout_gate, mode);
+        match decision {
+            CheckoutDecision::Approved(approved) => {
+                self.payment_mode = Some(approved);
+                self.checkout_notice = None;
+                true
+            }
+            CheckoutDecision::Notice(notice) => {
+                self.checkout_notice = Some(notice);
+                false
+            }
+            CheckoutDecision::Silent | CheckoutDecision::Unpinned => false,
+        }
     }
 
     /// Summed `ITEMWON` prices over the checked cart (saturating;
@@ -97,22 +241,39 @@ impl ShopState {
         self.shop_try_on
     }
 
-    /// Preview the visible row's good (`ITEMPRE` try-on): stages the
-    /// id and reports whether a row good was staged. Never touches
-    /// the cart or the wire.
+    /// Preview the visible row's good (`ITEMPRE` try-on): applies the
+    /// pinned category/slot/occupancy gate, stages the id only when
+    /// the exe would repaint, and records a notice otherwise. Never
+    /// touches the cart or the wire.
     pub(crate) fn preview_slot(&mut self, slot: usize) -> bool {
-        match self.visible_goods().get(slot).map(|good| good.item_id) {
-            Some(item_id) => {
-                self.shop_try_on = Some(item_id);
+        let Some(good) = self.visible_goods().get(slot).cloned() else {
+            return false;
+        };
+        let gate = self.try_on_gates.get(&good.item_id).copied();
+        match shop_try_on_decision(gate, self.active_worn_slot, self.occupied_worn_slot) {
+            TryOnDecision::Stage => {
+                self.shop_try_on = Some(good.item_id);
+                if let Some(gate) = gate {
+                    self.active_worn_slot = Some(gate.worn_slot);
+                }
+                self.last_try_on_notice = None;
                 true
             }
-            None => false,
+            TryOnDecision::WrongCategory => {
+                self.last_try_on_notice = None;
+                false
+            }
+            TryOnDecision::Notice(notice) => {
+                self.last_try_on_notice = Some(notice);
+                false
+            }
         }
     }
 
     /// Revert the preview to the equipped avatar (`ITEMBACK`).
     pub(crate) fn clear_try_on(&mut self) {
         self.shop_try_on = None;
+        self.last_try_on_notice = None;
     }
 
     /// Check one catalog good into the cart (id must exist; the
@@ -283,18 +444,33 @@ impl ShopState {
                 false
             }
             ShopAction::CartPrev => {
-                self.shop_cart_page = self.shop_cart_page.saturating_sub(1);
+                // Exe `0x14200072`: `(page - 1 + count) % count`, only
+                // while page and the cart flag are both non-zero. The
+                // guard makes the modulo equal to `page - 1`.
+                if self.cart_face_open() && self.shop_cart_page != 0 {
+                    self.shop_cart_page = (self.shop_cart_page - 1) % self.cart_pages();
+                }
                 false
             }
             ShopAction::CartNext => {
-                if self
-                    .shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(SHOP_CART_ROWS)
-                    < self.shop_cart.len()
+                // Exe `0x14200073`: hold at the last page, never wrap.
+                if self.cart_face_open()
+                    && self
+                        .shop_cart_page
+                        .saturating_add(1)
+                        .saturating_mul(SHOP_CART_ROWS)
+                        < self.shop_cart.len()
                 {
-                    self.shop_cart_page = self.shop_cart_page.saturating_add(1);
+                    self.shop_cart_page = (self.shop_cart_page + 1) % self.cart_pages();
                 }
+                false
+            }
+            ShopAction::ShowMyBag => {
+                self.panel = ShopPanel::MyBag;
+                false
+            }
+            ShopAction::ShowShoppingBag => {
+                self.panel = ShopPanel::ShoppingBag;
                 false
             }
             ShopAction::BagPrev => {
@@ -312,6 +488,10 @@ impl ShopState {
                 }
                 false
             }
+            // Sorting changes no staged board state: the exe's sort
+            // semantics stay OPEN and the wire send belongs to the
+            // click caller, not to this pure board.
+            ShopAction::SortBag => false,
         }
     }
 }
