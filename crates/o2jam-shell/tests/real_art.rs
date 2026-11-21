@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use o2jam_file::data_root::install_root;
 use o2jam_file::{
     decode_control_text, find_opi_entry, opi_entry_body, parse_bnd, parse_control_list, parse_opi,
     Bnd,
@@ -66,11 +67,6 @@ const READY_GREEN: u32 = pack_xrgb(0x30, 0xE0, 0x30);
 const OPEN_BAR_GREEN: u32 = pack_xrgb(0x30, 0xB0, 0x30);
 /// Highway note ink.
 const NOTE_BLUE: u32 = pack_xrgb(0x40, 0xC0, 0xFF);
-
-/// Repository-local `install-root` (git-ignored game data).
-fn install_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
-}
 
 /// Archive path under `install-root`.
 fn archive_path(name: &str) -> PathBuf {

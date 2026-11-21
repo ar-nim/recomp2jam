@@ -14,9 +14,9 @@ use std::path::PathBuf;
 
 use o2jam_file::decrypt_ojn_new_format;
 
-/// Repository-local `install-root` (git-ignored game data).
+/// Runtime install root's `Music` folder (git-ignored game data).
 fn music_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam/Music");
+    let dir = o2jam_file::data_root::install_root().join("O2Jam/Music");
     dir.is_dir().then_some(dir)
 }
 

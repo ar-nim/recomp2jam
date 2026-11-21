@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use o2jam_file::data_root::install_root;
 use o2jam_file::{installed_music, InstalledMusic};
 
 /// Folder under the install root the chart files live in (`Music\`,
@@ -17,9 +18,7 @@ pub const MUSIC_FOLDER: &str = "O2Jam/Music";
 /// The install's `Music` folder.
 #[must_use]
 pub fn install_music_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../install-root")
-        .join(MUSIC_FOLDER)
+    install_root().join(MUSIC_FOLDER)
 }
 
 /// Scan the install's `Music` folder into the local music seat (§1).
