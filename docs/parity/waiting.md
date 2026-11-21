@@ -272,3 +272,25 @@ RED proofs: forcing the painter's master seat to 0 fails the face guard
 on the armed START record; counting the local seat as a peer fails the
 verdict guard on the first NoMusic scenario. Restoring both passes.
 Synthetic three-record art and gateway; hidden install-root is N/A.
+
+## #576 member removal, promotion, and final disband (2026-11-21)
+
+Wire pins CP35/CP37/CP38 in
+`~/scratch/close-wr/wire-only/{master,peer,observer}.log`: peer exit
+`3007 body=0100000000000000` keeps the row; master exit with a resident
+peer `3007 body=0001000000000000` promotes seat 1 without 2007; last
+exit `2007 body=00000000` removes it. The CP35/CP38 branch is pinned by
+`evidence_room_3007_keeps_the_row_and_2007_removes_it`; the CP37 seat
+and role swap by `master_leave_promotes_the_resident_peer_to_room_master`
+plus the new readout guard. The session's joined-room mirror cleared the
+departed seat but left the old master flag on it, so a later re-stage
+from that snapshot (a 4003 arena echo) restored the departed master.
+The 3007 arm now moves the master flag in the mirror too.
+
+Guard `leave_handoff_updates_the_joined_room_master_readout` — live
+chain: `OnlineSession::paint` (Waiting) → `poll_waiting_chat` →
+`drain_waiting_chat` → `apply_user_left` → `JoinedRoom::clear_member`
+and the promoted-seat master flag → `ScreenGame::promote_waiting_master`.
+RED proof: removing the mirror's promotion loop leaves the seat clear
+but fails on the promoted member's master flag; restoring passes.
+Synthetic gateway; hidden install-root is N/A.

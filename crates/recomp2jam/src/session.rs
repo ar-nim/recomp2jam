@@ -3590,6 +3590,11 @@ impl OnlineSession {
         self.game.promote_waiting_master(left.new_master_id);
         if let Some(room) = self.joined_room.as_mut() {
             room.clear_member(left.member_id);
+            for slot in &mut room.slots {
+                if let Some(member) = slot.member.as_mut() {
+                    member.master = slot.index == left.new_master_id;
+                }
+            }
         }
     }
 
@@ -10724,6 +10729,40 @@ pub(super) mod session_tests {
                 .staged_waiting_member(1)
                 .is_some_and(|member| member.master),
             "the promoted seat must carry the master emblem"
+        );
+    }
+
+    /// #576 CP37 wire half: the 3007 handoff moves the master flag in
+    /// the session's joined-room readout as well as the staged seat.
+    /// Without the mirror write, a later re-stage from that snapshot
+    /// (`note_arena_selected` after a 4003) would put the departed
+    /// master back and drop the promoted seat's role.
+    ///
+    /// Live chain: `OnlineSession::paint` (Waiting) ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` -> `apply_user_left`
+    /// -> `JoinedRoom::clear_member` / promoted-seat master flag ->
+    /// `ScreenGame::promote_waiting_master`. CP38's final 2007 branch
+    /// is pinned by `evidence_room_3007_keeps_the_row_and_2007_removes_it`.
+    #[test]
+    fn leave_handoff_updates_the_joined_room_master_readout() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &hex_bytes("0001000000000000")))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(0).is_none() && session.game.is_room_master()
+        });
+        server.join().unwrap();
+
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert!(room.slots[0].member.is_none(), "departed seat cleared");
+        assert_eq!(room.user_count, 1, "headcount follows the seat");
+        assert_eq!(
+            room.slots[1].member.as_ref().map(|member| member.master),
+            Some(true),
+            "the announced seat is master in the readout too"
         );
     }
 
