@@ -7039,6 +7039,18 @@ impl ScreenGame {
         self.music_shop.top100_pressed()
     }
 
+    /// Last staged song-shop preview plate code (#814). No live
+    /// producer is pinned yet; the pager clear is.
+    #[must_use]
+    pub fn music_shop_preview_plate(&self) -> Option<u32> {
+        self.music_shop.preview_plate()
+    }
+
+    /// Stage a preview plate at the board seam for the pager guard.
+    pub fn stage_music_shop_preview_plate(&mut self, code: u32) {
+        self.music_shop.stage_preview_plate(code);
+    }
+
     /// Checked song-shop cart ids in pick order.
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
@@ -24294,6 +24306,43 @@ mod game_tests {
         game.click_music_shop(341, 156);
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn music_shop_msall_left_wraps_from_the_first_page_and_right_clamps_at_the_last() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(MsPrev/MsNext).
+        // The exe's left arm wraps modulo the page count; our saturating
+        // left arm parks at page zero, so this guard must fail first.
+        let mut game = open_music_shop_board(7);
+        game.click_music_shop(199, 533);
+        assert_eq!(game.music_shop_page(), 1, "left from page one wraps");
+        game.click_music_shop(318, 533);
+        assert_eq!(game.music_shop_page(), 1, "right at the last page clamps");
+    }
+
+    #[test]
+    fn music_shop_msall_page_turn_clears_the_staged_preview_and_rank_plates() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(MsPrev). The preview plate has
+        // no live producer in our shell, so its staging is seeded at
+        // the board seam; the clearing arm is the pinned behavior.
+        let mut game = open_music_shop_board(7);
+        game.click_music_shop(318, 533);
+        game.click_music_shop(19, 105);
+        game.stage_music_shop_preview_plate(0x1A20_0003);
+        assert_eq!(game.music_shop_page(), 1);
+        assert_eq!(
+            game.music_shop_preview_plate(),
+            Some(0x1A20_0003),
+            "the preview plate was staged"
+        );
+        game.click_music_shop(199, 533);
+        assert_eq!(game.music_shop_preview_plate(), None, "preview cleared");
+        assert_eq!(game.music_shop_selected_row(), None, "row art cleared");
+        assert_eq!(game.music_shop_top100_pressed(), None, "rank key cleared");
     }
 
     #[test]

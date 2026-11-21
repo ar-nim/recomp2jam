@@ -90,6 +90,11 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Last staged song-shop preview plate control code. The exe
+    /// clears `0x1A200003`/`0x1A500002` on a page turn; our shell has
+    /// no live producer for those art plates, so this records the
+    /// staged code and only pins the clearing arm (#814).
+    pub(crate) music_shop_preview_plate: Option<u32>,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -275,6 +280,25 @@ impl MusicShopState {
         self.music_shop_top100_pressed
     }
 
+    /// Last staged preview plate code, if any.
+    pub(crate) fn preview_plate(&self) -> Option<u32> {
+        self.music_shop_preview_plate
+    }
+
+    /// Stage a preview plate at the board seam. No live click arm
+    /// stages one yet; the pinned behavior is the page-turn clear.
+    pub(crate) fn stage_preview_plate(&mut self, code: u32) {
+        self.music_shop_preview_plate = Some(code);
+    }
+
+    /// Drop the art a page turn makes stale: preview plate, picked
+    /// row, and pressed rank key (exe `MSALL` arm, #814).
+    fn clear_page_plates(&mut self) {
+        self.music_shop_preview_plate = None;
+        self.music_shop_selected_row = None;
+        self.music_shop_top100_pressed = None;
+    }
+
     /// Checked song-shop cart ids in pick order.
     pub(crate) fn cart(&self) -> Vec<u32> {
         self.music_shop_cart.clone()
@@ -445,21 +469,19 @@ impl MusicShopState {
                 MusicShopEffect::None
             }
             MusicShopAction::MsPrev => {
-                self.music_shop_page = self.music_shop_page.saturating_sub(1);
-                self.music_shop_selected_row = None;
-                self.music_shop_top100_pressed = None;
+                let pages = self.list_pages();
+                self.music_shop_page = self
+                    .music_shop_page
+                    .checked_sub(1)
+                    .unwrap_or_else(|| pages.saturating_sub(1));
+                self.clear_page_plates();
                 MusicShopEffect::None
             }
             MusicShopAction::MsNext => {
-                if self
-                    .music_shop_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_SONG_ROWS)
-                    < self.music_shop_songs.len()
-                {
-                    self.music_shop_page = self.music_shop_page.saturating_add(1);
-                    self.music_shop_selected_row = None;
-                    self.music_shop_top100_pressed = None;
+                let next = self.music_shop_page.saturating_add(1);
+                if next < self.list_pages() {
+                    self.music_shop_page = next;
+                    self.clear_page_plates();
                 }
                 MusicShopEffect::None
             }
