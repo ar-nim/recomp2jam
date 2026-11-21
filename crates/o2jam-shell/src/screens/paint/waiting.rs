@@ -230,6 +230,46 @@ pub struct WaitingCaptions<'a> {
     pub local_name: Option<&'a str>,
 }
 
+/// Captions whose exe source is still OPEN (7.55 sha256
+/// `83a04541…72c823b`, `docs/caption-sources.md` OPEN 1/2). Keeping
+/// the codes and next evidence steps next to the painter records the
+/// negative: no shell value reaches these rects, so they stay silent
+/// instead of growing an invented caption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingOpenCaption {
+    /// `IDC_TEXT_SWAIT_INSTNAME`, no code immediate in the whole image.
+    InstrumentName,
+    /// `IDC_IMAGE_SWAIT_NOTICE_TEXT`, imageless; its content comes from
+    /// the untraced dialog `+0x46c` fill.
+    Notice,
+}
+
+impl WaitingOpenCaption {
+    /// Control code the caption would need a source for.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::InstrumentName => 0x1640_0019,
+            Self::Notice => 0x1650_0062,
+        }
+    }
+
+    /// Next evidence step that can lift this caption out of OPEN.
+    #[must_use]
+    pub const fn next_evidence_step(self) -> &'static str {
+        match self {
+            Self::InstrumentName => concat!(
+                "full-image scan finds zero immediates for 0x16400019; trace the cached ",
+                "pointer/array reader or record the negative, then pin 4006 SetInstrument"
+            ),
+            Self::Notice => concat!(
+                "read the content behind the 0x50b320 call on dialog +0x46c, file 0xbca0f, ",
+                "and pin the writer that fills it"
+            ),
+        }
+    }
+}
+
 /// Which decorative effect layer the exe's Waiting toggle selects.
 /// The 7.55 init sets global `0x7789e0` to 1 (`FUN_00495110`, file
 /// `0x914b`), so BOTTOM is the default. The two staged buttons

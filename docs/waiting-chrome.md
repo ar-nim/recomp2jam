@@ -120,6 +120,25 @@ sources. A two-client capture isolating each icon byte stays OPEN.
   request and does not invent a sheet. A dwell capture of the animation
   stays OPEN.
 
+## INSTNAME and NOTICE (#768) — still OPEN, negative pinned
+
+The 7.55 image scan in `docs/caption-sources.md` finds zero immediates
+for `0x16400019`, so no writer of `INSTNAME` is known; the imageless
+`NOTICE_TEXT 0x16500062` paints no glyphs of its own, and the content
+call `0x50b320` over dialog `+0x46c` (file `0xbca0f`) is untraced.
+`NOTICEBOARD 0x16500063` authors `Lanking_NoticeBoard.oji`, but no
+board content writer is pinned. The shell therefore keeps both rects
+silent and records the two next steps in `WaitingOpenCaption`:
+
+1. INSTNAME: trace the cached pointer/array reader, or record the
+   negative; then pin the 4006 `SetInstrument` wire body.
+2. NOTICE: read the content behind the `0x50b320` fill at dialog
+   `+0x46c` and name its writer.
+
+A future ticket must produce a source before these captions ink; the
+guard `instname_and_notice_stay_silent_while_their_open_sources_are_unpinned`
+fails if a stand-in appears.
+
 ## Shell rule
 
 `WaitingEffect` in `screens/paint/waiting.rs` carries the two codes,

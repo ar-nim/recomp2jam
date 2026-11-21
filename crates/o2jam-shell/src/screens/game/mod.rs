@@ -8043,6 +8043,7 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
 
 #[cfg(test)]
 mod game_tests {
+    use super::super::paint::WaitingOpenCaption;
     use super::super::paint::{
         background_of, channel_chat_row_text, paint_myroom_data, rank_notice_board_text,
         seat_origin, RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET,
@@ -11903,6 +11904,52 @@ mod game_tests {
             guest.last_waiting_ambient_request(),
             Some(WaitingAmbientRequest::Emotion),
         );
+    }
+
+    #[test]
+    fn instname_and_notice_stay_silent_while_their_open_sources_are_unpinned() {
+        // Ticket #768 (grade OPEN): `INSTNAME 0x16400019` has zero code
+        // immediates and NOTICE's `+0x46c` content call is untraced
+        // (`docs/caption-sources.md` OPEN 1/2). The honest shell state
+        // is silence at those staged rects, with the two evidence steps
+        // pinned in code so nobody invents a caption.
+        let instrument = WaitingOpenCaption::InstrumentName;
+        let notice = WaitingOpenCaption::Notice;
+        assert_eq!(instrument.code(), 0x1640_0019);
+        assert_eq!(notice.code(), 0x1650_0062);
+        assert!(instrument.next_evidence_step().contains("0x16400019"));
+        assert!(notice.next_evidence_step().contains("0xbca0f"));
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let placements = [
+            ("IDC_TEXT_SWAIT_INSTNAME", 0x1640_0019, 480, 40),
+            ("IDC_IMAGE_SWAIT_NOTICE_TEXT", 0x1650_0062, 100, 455),
+            ("IDC_IMAGE_SWAIT_NOTICEBOARD", 0x1650_0063, 100, 480),
+        ]
+        .into_iter()
+        .map(|(id, code, x, y)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 40, h: 10 },
+        })
+        .collect();
+        game.load_scene(Screen::Waiting, placements, HashMap::new());
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for (x, y) in [(482, 42), (102, 457), (102, 482)] {
+            assert_eq!(buf[y * 800 + x], 0, "no invented caption at ({x},{y})");
+        }
     }
 
     #[test]
