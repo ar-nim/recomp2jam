@@ -706,8 +706,8 @@ pub struct ScreenGame {
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
     /// `4039` download percentage per waiting seat (`None` until the
-    /// server reports one). The bar's frame/rect mapping stays OPEN;
-    /// staging the pinned byte keeps the wire half observable.
+    /// server reports one). Its presence arms the seat's badge and bar
+    /// (#559 refutation); the bar's fill mapping still stays OPEN.
     member_download_progress: [Option<u8>; 8],
     /// One-based channel number for the waiting `CHNUM` digit wells
     /// (`1003 channel_id + 1`), staged on resident channel login.
@@ -8202,6 +8202,7 @@ impl ScreenGame {
             chat_channel: self.waiting_chat_channel(),
             messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
             wait_stamp_lit: self.waiting_stamp_lit_at(now_ms),
+            member_download_progress: self.member_download_progress,
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -13139,6 +13140,118 @@ mod game_tests {
                 "{label} must light on the armed peer seat"
             );
         }
+    }
+
+    /// Waiting scene whose only staged bodies are the two download
+    /// indicators at their seat-template `.bnd` origins. Solid pixels
+    /// keep the guard independent of archived art.
+    fn waiting_download_badge_game() -> ScreenGame {
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let mut placements = Vec::new();
+        for (parent, parent_x) in [
+            ("IDC_BUTTON_SWAIT_EXTEND1", 48),
+            ("IDC_BUTTON_SWAIT_EXTEND2", 190),
+        ] {
+            for (sprite, x, y) in [
+                ("Wait_Downloding.ojs", 0, 0),
+                ("Wait_Downloding_Bar.ojs", 18, 36),
+            ] {
+                placements.push(ScenePlacement {
+                    role: PlacementRole::Clone,
+                    id: parent.to_owned(),
+                    code: 0,
+                    sprite: Some(sprite.to_owned()),
+                    rect: Rect {
+                        x: parent_x + x,
+                        y: 127 + y,
+                        w: 8,
+                        h: 8,
+                    },
+                });
+            }
+        }
+        // One staged cover takes the real-art paint path; the flat
+        // fallback would ink text over the probe pixels.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x1650_003D,
+            sprite: None,
+            rect: Rect {
+                x: 28,
+                y: 53,
+                w: 141,
+                h: 175,
+            },
+        });
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([
+                (
+                    "Wait_Downloding.ojs".to_owned(),
+                    solid_test_figure([0x00, 0x7C]),
+                ),
+                (
+                    "Wait_Downloding_Bar.ojs".to_owned(),
+                    solid_test_figure([0xE0, 0x03]),
+                ),
+            ]),
+        );
+        game
+    }
+
+    #[test]
+    fn download_badge_stays_dark_on_4037_state_without_4039_progress() {
+        // Live chain: `OnlineSession::apply_member_music_state` (the
+        // 4037 `0004` arm in p559-badge-ab4) -> `ScreenGame` seat mirror
+        // -> `paint_at` -> `paint_waiting` ->
+        // `paint_waiting_scene_with_confirm` -> `staged_seats` ->
+        // `paint_waiting_seat_marks`. The exe seat stays badge-free on
+        // that arm; no 4039 frame was sent in the matched capture.
+        let mut game = waiting_download_badge_game();
+        game.set_member_music_state(1, o2jam_net::MusicState::Downloading.code());
+
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+
+        assert_eq!(frame[127 * 800 + 190], 0, "4037 alone paints no badge");
+        assert_eq!(frame[163 * 800 + 208], 0, "4037 alone paints no bar");
+    }
+
+    #[test]
+    fn download_badge_lights_when_4039_progress_follows_4037_state() {
+        // Same live chain as the refutation guard, now with the second
+        // wire arm: `OnlineSession::apply_download_progress` (4039) ->
+        // `ScreenGame::set_member_download_progress` -> `paint_at` ->
+        // `paint_waiting_scene_with_confirm` -> the two seat bodies.
+        let mut game = waiting_download_badge_game();
+        game.set_member_music_state(1, o2jam_net::MusicState::Downloading.code());
+        game.set_member_download_progress(1, 42);
+
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+
+        assert_eq!(
+            frame[127 * 800 + 190],
+            pack_xrgb(0xFF, 0, 0),
+            "4039 arms the peer badge"
+        );
+        assert_eq!(
+            frame[163 * 800 + 208],
+            pack_xrgb(0, 0xFF, 0),
+            "4039 arms the peer bar"
+        );
+        assert_eq!(frame[127 * 800 + 48], 0, "own seat stays badge-free");
+        assert_eq!(frame[163 * 800 + 66], 0, "own seat stays bar-free");
     }
 
     fn waiting_ambient_game(member_id: u8, peer_playing: bool) -> ScreenGame {
