@@ -343,6 +343,35 @@ impl super::message::WireMessage for SyncMusicPurchaseResponse {
     }
 }
 
+/// One 5011 answer classified by its body shape (#405).
+///
+/// The full body family is the pinned SERVER-WIRE state sync (5010 -> 5011,
+/// 2885 B, sha256 `876e3bc1…014fd6`). The four-byte body is the
+/// SCRIPTED-GATEWAY failure fixture (`01000000` in the W3+ proxy); its word
+/// stays opaque — no server verdict value is invented. The genuine server
+/// failure shape is OPEN (`E-W-5011`): next step is a funded Memoryer
+/// insufficient-funds fixture captured on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MusicPurchaseReply {
+    /// Full pinned 2885-byte state-sync body; the existing fold applies.
+    Completed(SyncMusicPurchaseResponse),
+    /// Four-byte scripted-gateway body; the shell posts its native notice.
+    Failure,
+}
+
+impl MusicPurchaseReply {
+    /// Classify a 5011 body without interpreting the short body's word.
+    pub fn decode_body(body: &[u8]) -> Result<Self, super::error::Error> {
+        if body.len() == SCRIPTED_FAILURE_BODY_LEN {
+            return Ok(Self::Failure);
+        }
+        SyncMusicPurchaseResponse::decode_body(body).map(Self::Completed)
+    }
+}
+
+/// Body length of the scripted-gateway 5011 failure fixture (one i32 word).
+const SCRIPTED_FAILURE_BODY_LEN: usize = 4;
+
 /// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
 /// four-word wallet prefix (`Gem`, `Point`, `O2Cash`, `CashPoint`).
 ///
@@ -1895,6 +1924,31 @@ mod tests {
         let response = purchased_two_songs();
         let body = response.encode_body();
         assert_eq!(SyncMusicPurchaseResponse::decode_body(&body), Ok(response));
+    }
+
+    #[test]
+    fn scripted_failure_body_classifies_as_music_purchase_failure() {
+        // seam: pure codec. The 4-byte body is the scripted gateway's
+        // synthetic failure fixture (~/scratch/maxwave-w2/scripts/proxy.py);
+        // its word stays opaque, no server verdict shape is pinned.
+        let body = [0x01, 0x00, 0x00, 0x00];
+        assert_eq!(
+            MusicPurchaseReply::decode_body(&body),
+            Ok(MusicPurchaseReply::Failure)
+        );
+    }
+
+    #[test]
+    fn pinned_success_body_family_classifies_as_completed_music_purchase() {
+        // seam: pure codec. The nested decoder owns the pinned 2885-byte
+        // SERVER-WIRE body family (sha 876e3bc1...014fd6); this synthetic
+        // body only proves the classification does not steal success legs.
+        let expected = purchased_two_songs();
+        let body = expected.encode_body();
+        assert_eq!(
+            MusicPurchaseReply::decode_body(&body),
+            Ok(MusicPurchaseReply::Completed(expected))
+        );
     }
 
     #[test]
