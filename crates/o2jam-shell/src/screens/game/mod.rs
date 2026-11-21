@@ -742,10 +742,11 @@ pub struct ScreenGame {
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
-    /// Staged catalog tempos by song id (`OJNList.dat` row +20 BPM
-    /// column, the waiting `BPM` caption source; the title table
-    /// above drops the column).
-    catalog_bpm: HashMap<u32, f32>,
+    /// Staged catalog tempos in `OJNList.dat` order (`+20` BPM column,
+    /// the waiting `BPM` caption source; the title table above drops
+    /// the column). The exe's lookup stops at the first row whose id
+    /// matches, so a later duplicate cannot overwrite it.
+    catalog_bpm: Vec<(u32, f32)>,
     /// Staged catalog container tokens by song id (`OJNList.dat` row
     /// +240 filename, e.g. `o2ma757.ojm`): the album-cover path source
     /// (see [`Self::resolve_song_cover`]).
@@ -1165,7 +1166,7 @@ impl ScreenGame {
             relay_down_notice_pending: false,
             member_download_progress: [None; 8],
             catalog_songs: Vec::new(),
-            catalog_bpm: HashMap::new(),
+            catalog_bpm: Vec::new(),
             catalog_chart_files: HashMap::new(),
             song_cover: None,
             skill_counts: [0, 0, 0],
@@ -4499,7 +4500,10 @@ impl ScreenGame {
 
     /// Catalog BPM for one song id, if a live song record stages it.
     fn catalog_song_bpm(&self, music_id: u16) -> Option<f32> {
-        self.catalog_bpm.get(&u32::from(music_id)).copied()
+        self.catalog_bpm
+            .iter()
+            .find(|(song_id, _)| *song_id == u32::from(music_id))
+            .map(|(_, bpm)| *bpm)
     }
 
     /// Catalog BPM for the song the `BPM` caption names: the staged
@@ -12457,6 +12461,93 @@ mod game_tests {
         assert_eq!(game.catalog_song_bpm(757), Some(124.0));
         assert_eq!(game.catalog_song_bpm(999), None);
         assert_eq!(game.skill_counts(), [7, 42, 1500]);
+    }
+
+    #[test]
+    fn the_first_catalog_row_for_the_room_song_names_the_bpm_caption() {
+        // Live chain: stage_session_catalog ->
+        //   ScreenGame::set_song_catalog -> catalog_bpm ->
+        //   waiting_song_bpm -> paint_waiting -> paint_waiting_bpm
+        // The exe scans the song vector from its first record and stops
+        // at the first row whose dword id matches the selected song
+        // (`FUN_004bdfa0`, file `0x4bdfa0`, evidence
+        // `ev_d8682673c3e62ae8b60a8238f8cd4d8cef6cb4deefe69af769235d1dfac683b8`).
+        // A duplicate id must not let a later row overwrite its tempo.
+        let first = waiting_song_catalog_blob();
+        let mut duplicate = waiting_song_catalog_blob();
+        duplicate[20..24].copy_from_slice(&180.0f32.to_le_bytes());
+        let mut both = first.clone();
+        both.extend_from_slice(&duplicate);
+
+        let staged = |blob: &[u8]| {
+            let mut game = waiting_game_with_song(757, 2);
+            let entries = o2jam_file::parse_ojn_list(blob).unwrap();
+            game.set_song_catalog(&entries);
+            game.load_scene(
+                Screen::Waiting,
+                bpm_and_speed_caption_placements(),
+                HashMap::new(),
+            );
+            let frame = paint_waiting_frame(&mut game, 800, 600);
+            (game.waiting_song_bpm(), frame)
+        };
+        let (first_bpm, first_frame) = staged(&first);
+        let (both_bpm, both_frame) = staged(&both);
+        assert_eq!(first_bpm, Some(124.0));
+        assert_eq!(both_bpm, Some(124.0), "the first matching row wins");
+        let bpm_rect = Rect {
+            x: 620,
+            y: 60,
+            w: 60,
+            h: 20,
+        };
+        assert_eq!(
+            o2jam_render::pixels_in_rect(&both_frame, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&first_frame, 800, bpm_rect),
+            "the BPM caption must ink the first row's tempo"
+        );
+    }
+
+    #[test]
+    fn a_song_id_absent_from_the_catalog_paints_the_bpm_mismatch_default() {
+        // Same live catalog-to-BPM chain, mismatch arm: the exe stores
+        // the pinned `-0-` string when no record matches the selected
+        // dword (file `0xbe1e4`, string `0x24a1d0`). The caption rect
+        // must ink a different frame from a catalog that carries the
+        // room song's tempo.
+        let staged = |music_id: u16, with_catalog: bool| {
+            let mut game = waiting_game_with_song(music_id, 2);
+            if with_catalog {
+                let blob = waiting_song_catalog_blob();
+                let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+                game.set_song_catalog(&entries);
+            }
+            game.load_scene(
+                Screen::Waiting,
+                bpm_and_speed_caption_placements(),
+                HashMap::new(),
+            );
+            paint_waiting_frame(&mut game, 800, 600)
+        };
+        let bpm_rect = Rect {
+            x: 620,
+            y: 60,
+            w: 60,
+            h: 20,
+        };
+        let matched = staged(757, true);
+        let mismatched = staged(999, true);
+        let no_catalog = staged(757, false);
+        assert_eq!(
+            o2jam_render::pixels_in_rect(&mismatched, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&no_catalog, 800, bpm_rect),
+            "a missing row and a missing catalog both paint `-0-`"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&matched, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&mismatched, 800, bpm_rect),
+            "a catalog tempo must differ from the mismatch default"
+        );
     }
 
     /// Staged scene for the #535 caption guards: one seat cover opens
