@@ -90,6 +90,10 @@ pub(crate) struct MusicShopState {
     /// it. The exe posts these strings through its notice helper;
     /// the host rect is ours-by-design chrome over the bnd layout.
     pub(crate) music_shop_notice: Option<(MusicShopNotice, u32)>,
+    /// Last SELECTALL toggle (`None` until the first press). The exe
+    /// flips a state word and walks both boards; which value is
+    /// "all" is OPEN, so the shell records the observed toggle.
+    pub(crate) music_shop_select_all: Option<bool>,
 }
 
 impl MusicShopState {
@@ -179,6 +183,11 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Last SELECTALL toggle, if the control was pressed.
+    pub(crate) fn select_all(&self) -> Option<bool> {
+        self.music_shop_select_all
     }
 
     /// Standing shop notice, if any, with its staging code.
@@ -316,6 +325,12 @@ impl MusicShopState {
             }
             MusicShopAction::Face(face) => {
                 self.music_shop_face = face;
+                false
+            }
+            MusicShopAction::SelectAll => {
+                let select_all = !self.music_shop_select_all.unwrap_or(false);
+                self.music_shop_select_all = Some(select_all);
+                self.music_shop_owned_marks = [select_all; MSHOP_OWNED_ROWS];
                 false
             }
             MusicShopAction::OwnedRow(slot) => {

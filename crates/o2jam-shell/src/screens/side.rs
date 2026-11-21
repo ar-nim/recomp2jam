@@ -607,10 +607,13 @@ pub const SHOP_TOOLTIP_CODES: [u32; 2] = [0x1450_0084, 0x1450_00B1];
 /// qualified press frame changes only the pointer and web-banner
 /// caption; no ranking content is inferred from the button.
 pub const MSHOP_TOP100_CODE: u32 = 0x1A20_007D;
-/// Last control in the TOP100 board chrome arm (`SELECTALL`,
-/// `0x1A200084`). Codes `0x7D..0x84` pair with eight `State_MShop.bnd`
-/// rects (button, 3KEY/7KEY, four sort headers, SELECTALL).
+/// Last rect in the TOP100 board chrome arm (`0x1A200084`).
+/// Codes `0x7D..0x84` pair with eight `State_MShop.bnd` rects.
 pub const MSHOP_TOP100_LAST_CODE: u32 = 0x1A20_0084;
+/// SELECTALL (`IDC_BUTTON_MSHOP_SELECTALL`): inside the eight-rect
+/// TOP100 arm, but its click walks the owned marks instead of
+/// choosing a rank table (FUN_004c7f70).
+pub const MSHOP_SELECT_ALL_CODE: u32 = 0x1A20_0084;
 /// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): opens the local web-purchase
 /// surface; no game-socket buy opcode follows (W-a NULL, #397).
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
@@ -1289,6 +1292,8 @@ pub enum MusicShopAction {
     Face(MusicShopFace),
     /// Owned `MY_EX` row picked (0-based on the owned list).
     OwnedRow(usize),
+    /// SELECTALL toggled the owned marks.
+    SelectAll,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1328,6 +1333,9 @@ pub fn music_shop_action_at(
 fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
+    }
+    if code == MSHOP_SELECT_ALL_CODE {
+        return Some(MusicShopAction::SelectAll);
     }
     if (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&code) {
         return Some(MusicShopAction::Top100Chrome { code });
