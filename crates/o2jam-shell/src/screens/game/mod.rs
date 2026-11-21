@@ -1978,6 +1978,10 @@ impl ScreenGame {
                 }
                 self.restage_worn_figure();
             }
+            // #808: the confirm caption is pinned; the OK arm's wire
+            // body is added by the next ticket (#809), so this arm
+            // closes the sheet without minting a request yet.
+            MyRoomConfirmAction::UseSpecialItem { .. } => {}
         }
     }
 
@@ -15667,6 +15671,65 @@ mod game_tests {
             paint_first_pixel(&after),
             o2jam_render::pack_xrgb(255, 0, 0)
         );
+    }
+
+    #[test]
+    fn myroom_special_bag_items_open_the_exe_confirm_texts() {
+        // Live caller chain: boot -> MyRoom side -> staged bag cell
+        // with record byte +4 of 0x19/0x1a/0x1b -> main click dispatch
+        // (FUN_004a3ee0, files 0xa41d4/0xa423d/0xa427d) -> confirm
+        // sheet. The count-word "스킬 정보" arm at file 0x24886c is
+        // OPEN: our 2001 inventory has no count vector, so no notice
+        // is invented. Live capture: one exe press per type with the
+        // confirm button visible (#808).
+        use super::super::side::MYROOM_BAG_FIRST_CODE;
+        const TEXTS: [&str; 3] = [
+            "\n현재 사용중이신 닉네임을 \n변경할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+            "\n패널티 레벨을 'O' 으로\n초기화 시켜주는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+            "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+        ];
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let rows = [0x19_u32, 0x1A, 0x1B]
+            .into_iter()
+            .enumerate()
+            .map(|(index, item_type)| o2jam_file::AvatarItemRow {
+                item_id: 25 + u32::try_from(index).unwrap_or(0),
+                item_type,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Special{item_type:#x}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![25, 26, 27],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        let placements: Vec<_> = (0..3)
+            .map(|cell| {
+                myroom_hit_placement(
+                    MYROOM_BAG_FIRST_CODE + u32::try_from(cell).unwrap_or(0),
+                    100 + cell * 60,
+                    10,
+                )
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        for (cell, text) in TEXTS.into_iter().enumerate() {
+            let x = 110 + i32::try_from(cell).unwrap_or(0) * 60;
+            game.ingest_snapshot(&InputSnapshot::click_at(x, 20));
+            assert_eq!(game.myroom_confirm_text(), Some(text), "type {cell:#x}");
+            let _ = game.take_equip_send(); // the bag-pick equip leg
+                                            // CANCEL leaves the item in the bag (no request is invented).
+            game.ingest_snapshot(&InputSnapshot::click_at(520, 368));
+            assert_eq!(game.myroom_confirm_text(), None);
+            assert!(game.take_myroom_sends().is_empty(), "CANCEL sends nothing");
+        }
     }
 
     #[test]

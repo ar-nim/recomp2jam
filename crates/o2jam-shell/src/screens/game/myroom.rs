@@ -34,6 +34,15 @@ pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯�
 /// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
 const MYROOM_COUNT_CAP: u32 = 999;
 
+/// Nickname-item confirm, exact bytes read at file `0x2487f8`.
+pub(super) const NICKNAME_ITEM_CONFIRM: &str = "\n현재 사용중이신 닉네임을 \n변경할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+/// Penalty-reset-item confirm, exact bytes at file `0x248788`.
+pub(super) const PENALTY_ITEM_CONFIRM: &str =
+    "\n패널티 레벨을 'O' 으로\n초기화 시켜주는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+/// Slot-expansion-item confirm, exact bytes at file `0x248718`.
+pub(super) const EXPANSION_ITEM_CONFIRM: &str =
+    "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+
 /// BAGSORT failure notice, exact cp949 string decoded from the
 /// oracle at file `0x248f40` (VA `0x648f40`).
 pub(super) const BAG_SORT_FAILURE_NOTICE: &str =
@@ -58,6 +67,50 @@ pub(crate) enum MyRoomConfirmAction {
         /// Item id the confirm named; a changed slot is left alone.
         item_id: i32,
     },
+    /// Spend one special bag item after its confirm sheet.
+    UseSpecialItem {
+        /// Special item family, from the record's type byte.
+        kind: SpecialItemKind,
+        /// Selected bag cell, the exe's first request word.
+        selection: i32,
+        /// Item id, the exe's second request word where present.
+        item_id: i32,
+    },
+}
+
+/// The three special bag-item families the exe's bag-cell dispatch
+/// opens confirms for (`FUN_004a3ee0`, file `0xa41d4`..`0xa42ac`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecialItemKind {
+    /// Record type `0x19`: nickname change (file `0x2487f8`).
+    Nickname,
+    /// Record type `0x1a`: penalty reset (file `0x248788`).
+    PenaltyReset,
+    /// Record type `0x1b`: slot expansion (file `0x248718`).
+    BagExpansion,
+}
+
+impl SpecialItemKind {
+    /// Classify one item-record type byte, `None` for ordinary items.
+    #[must_use]
+    pub(crate) const fn from_item_type(item_type: u32) -> Option<Self> {
+        match item_type & 0xFF {
+            0x19 => Some(Self::Nickname),
+            0x1A => Some(Self::PenaltyReset),
+            0x1B => Some(Self::BagExpansion),
+            _ => None,
+        }
+    }
+
+    /// Exact confirm caption read from the oracle's byte tables.
+    #[must_use]
+    pub(crate) const fn confirm_text(self) -> &'static str {
+        match self {
+            Self::Nickname => NICKNAME_ITEM_CONFIRM,
+            Self::PenaltyReset => PENALTY_ITEM_CONFIRM,
+            Self::BagExpansion => EXPANSION_ITEM_CONFIRM,
+        }
+    }
 }
 
 /// One MyRoom confirm sheet: the exe's exact caption plus the local
@@ -196,7 +249,7 @@ impl ScreenGame {
     /// restage, so the pick itself mirrors no local equipment.
     fn apply_myroom_bag_pick(&mut self, cell: usize) {
         self.myroom.pick_bag_cell(Some(cell));
-        let Some(item_id) = self.myroom_items.as_ref().and_then(|table| {
+        let Some(row_item_id) = self.myroom_items.as_ref().and_then(|table| {
             self.myroom_character.as_ref().and_then(|character| {
                 myroom_bag_rows(table, &character.inventory, self.myroom.bag_page())
                     .get(cell)
@@ -208,7 +261,7 @@ impl ScreenGame {
         let Some((item_type, record_slot)) = self
             .myroom_items
             .as_ref()
-            .and_then(|table| avatar_item_by_id(table, item_id))
+            .and_then(|table| avatar_item_by_id(table, row_item_id))
             .map(|row| (row.item_type, myroom_record_slot(row)))
         else {
             return;
@@ -221,13 +274,24 @@ impl ScreenGame {
             .bag_page()
             .saturating_mul(MYROOM_BAG_CELLS)
             .saturating_add(cell);
-        let Ok(item_id) = i32::try_from(global_index) else {
+        let Ok(bag_index) = i32::try_from(global_index) else {
             return;
         };
         self.outbox.pending_equip = Some(EquipItem {
             slot: i32::from(slot),
-            item_id,
+            item_id: bag_index,
         });
+        if let Some(kind) = SpecialItemKind::from_item_type(item_type) {
+            self.myroom_notice = None;
+            self.myroom_confirm = Some(MyRoomConfirm {
+                text: kind.confirm_text().to_owned(),
+                action: MyRoomConfirmAction::UseSpecialItem {
+                    kind,
+                    selection: bag_index,
+                    item_id: i32::try_from(row_item_id).unwrap_or(0),
+                },
+            });
+        }
     }
 
     /// Apply a successful 5005 equip reply: the exe repaints the wells
