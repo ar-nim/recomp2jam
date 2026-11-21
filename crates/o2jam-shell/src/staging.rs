@@ -6,7 +6,8 @@
 //! `o2jam-game`; this module never stores into the game.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use o2jam_file::{Bnd, ControlBlock, ControlList};
 use o2jam_render::{rect_from_corners, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
@@ -1356,29 +1357,55 @@ pub const PLAYING_ARCHIVE_RELATIVE: &str = "O2Jam/Image/Playing1.opi";
 
 /// Archives read from an install root: `None` per missing file, so
 /// callers keep their flat fallbacks with no game data present.
+/// Each archive is shared immutable bytes, not a per-caller copy.
+/// `Arc<Vec<u8>>` moves the file buffer into the allocation: converting
+/// to `Arc<[u8]>` would copy all 284 MB on first staging.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallArchives {
     /// Interface art (`ControlList_Interface.txt` Blocks).
-    pub interface: Option<Vec<u8>>,
+    pub interface: Option<Arc<Vec<u8>>>,
     /// Playing art (Loading gate, Playing gauges).
-    pub playing: Option<Vec<u8>>,
+    pub playing: Option<Arc<Vec<u8>>>,
 }
+
+/// One decoded pair per install root, filled on first access.
+/// The key is the caller-supplied root: #736 can move root resolution
+/// to runtime without changing what this cache means.
+static DECODED_ARCHIVE_CACHE: OnceLock<Mutex<HashMap<PathBuf, InstallArchives>>> = OnceLock::new();
 
 /// Read the staging archives under `root`: the repository-local
 /// `install-root/` for development and tests, the client's own
 /// install directory for the shipped game. No `env!`: the edge
-/// that boots the client decides the root.
+/// that boots the client decides the root. Repeated reads of one
+/// root share the same decoded bytes for the life of the process.
 #[must_use]
 pub fn read_install_archives(root: &Path) -> InstallArchives {
+    if !root.is_dir() {
+        return InstallArchives::default();
+    }
+    let cache = DECODED_ARCHIVE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .entry(key)
+        .or_insert_with(|| decode_install_archives(root))
+        .clone()
+}
+
+/// Read both archives once when their root is first staged.
+fn decode_install_archives(root: &Path) -> InstallArchives {
     InstallArchives {
         interface: read_archive_file(&root.join(INTERFACE_ARCHIVE_RELATIVE)),
         playing: read_archive_file(&root.join(PLAYING_ARCHIVE_RELATIVE)),
     }
 }
 
-/// Read one archive read-only, if present.
-fn read_archive_file(path: &Path) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+/// Read one archive read-only, if present, as shared immutable bytes.
+fn read_archive_file(path: &Path) -> Option<Arc<Vec<u8>>> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(Arc::new(bytes))
 }
 
 #[cfg(test)]

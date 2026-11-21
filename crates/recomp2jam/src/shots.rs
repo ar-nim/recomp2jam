@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
@@ -206,6 +207,21 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     Ok(shots)
 }
 
+/// One scripted walk per process; the guards read this snapshot
+/// instead of rebuilding the full scene set.
+static CAPTURED_SHOTS: OnceLock<Result<Vec<Shot>, String>> = OnceLock::new();
+
+/// Borrow the process-wide shot snapshot, walking once on first use.
+///
+/// # Errors
+///
+/// The scripted walk leaving its expected screen.
+fn shared_shots() -> anyhow::Result<&'static [Shot]> {
+    let shots = CAPTURED_SHOTS
+        .get_or_init(|| capture_all().map_err(|error| format!("scripted walk failed: {error:#}")));
+    shots.as_deref().map_err(anyhow::Error::msg)
+}
+
 /// Write captures as `<out_dir>/<name>.png`, except `avi`: the
 /// checked-in `avi.png` is real 7.55 splash evidence (spectacle
 /// capture of `O2mediaLogo.ojs`) and must not be overwritten by the
@@ -217,7 +233,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
 pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(out_dir)?;
     let mut written = Vec::new();
-    for shot in capture_all()? {
+    for shot in shared_shots()? {
         if shot.name == "avi" {
             continue;
         }
@@ -2046,9 +2062,9 @@ mod tests {
     #[test]
     fn walk_covers_all_scenes_plus_solo_result() {
         let loading_staged = loading_caption_staged();
-        let shots: Vec<Shot> = capture_all()
+        let shots: Vec<&Shot> = shared_shots()
             .unwrap()
-            .into_iter()
+            .iter()
             .filter(|shot| loading_staged || shot.name != "loading")
             .collect();
         let names: Vec<&str> = shots.iter().map(|shot| shot.name).collect();
@@ -4043,7 +4059,7 @@ mod tests {
 
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
-        let shots = capture_all().unwrap();
+        let shots = shared_shots().unwrap();
         let side_count = [
             SideScreen::Shop,
             SideScreen::MusicShop,
@@ -4064,7 +4080,7 @@ mod tests {
         // side and one native per staged #207 side.
         assert_eq!(shots.len(), 16 + side_count + native_count);
         let loading_staged = loading_caption_staged();
-        for shot in &shots {
+        for shot in shots {
             if !loading_staged && shot.name == "loading" {
                 continue;
             }
@@ -4130,7 +4146,7 @@ mod tests {
         // Same walked instant, same painter: downscaling each native
         // XRGB frame must reproduce its preview RGB byte-exact, and
         // each native must carry full 800x600 detail.
-        let shots = capture_all().unwrap();
+        let shots = shared_shots().unwrap();
         let by_name = |name: &str| {
             shots
                 .iter()
@@ -4749,7 +4765,7 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         }
-        let shots = capture_all().unwrap();
+        let shots = shared_shots().unwrap();
         let by_name = |name: &str| {
             shots
                 .iter()
@@ -4765,6 +4781,16 @@ mod tests {
             by_name("waiting-guest").rgb,
             by_name("musicselect").rgb,
             "master select pixels must be absent from the guest view"
+        );
+    }
+
+    #[test]
+    fn capture_snapshot_reuses_one_walk_when_guards_share_it() {
+        let first = shared_shots().unwrap();
+        let second = shared_shots().unwrap();
+        assert!(
+            std::ptr::eq(first.as_ptr(), second.as_ptr()),
+            "every guard must read the same immutable walk"
         );
     }
 

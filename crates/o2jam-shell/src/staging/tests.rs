@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 use crate::avatar::{
     is_playing_backdrop_sprite, playing_backdrop_sprite, playing_member_frame,
@@ -889,7 +891,7 @@ fn placements_survive_total_figure_miss() {
     assert_eq!(report.misses.len(), 2);
 }
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
@@ -1595,8 +1597,14 @@ fn install_loader_reads_archives_from_given_root() {
         .expect("scratch file writable");
     std::fs::write(interface_dir.join("Playing1.opi"), &playing).expect("scratch file writable");
     let loaded = read_install_archives(&root);
-    assert_eq!(loaded.interface, Some(interface));
-    assert_eq!(loaded.playing, Some(playing));
+    assert_eq!(
+        loaded.interface.as_ref().map(|bytes| bytes.as_slice()),
+        Some(interface.as_slice())
+    );
+    assert_eq!(
+        loaded.playing.as_ref().map(|bytes| bytes.as_slice()),
+        Some(playing.as_slice())
+    );
 }
 
 #[test]
@@ -1605,6 +1613,57 @@ fn install_loader_skips_cleanly_without_game_data() {
     std::fs::create_dir_all(&root).expect("scratch dir writable");
     let loaded = read_install_archives(&root);
     assert_eq!(loaded, InstallArchives::default());
+}
+
+#[test]
+fn repeated_staging_reuses_one_cached_archive_pair_when_root_is_present() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let first = read_install_archives(&root);
+    let (Some(first_interface), Some(first_playing)) =
+        (first.interface.as_ref(), first.playing.as_ref())
+    else {
+        println!("skip: missing install-root archives");
+        return;
+    };
+    let second = read_install_archives(&root);
+    assert!(
+        Arc::ptr_eq(
+            first_interface,
+            second.interface.as_ref().expect("interface stays staged")
+        ),
+        "interface bytes must be shared, not copied"
+    );
+    assert!(
+        Arc::ptr_eq(
+            first_playing,
+            second.playing.as_ref().expect("playing stays staged")
+        ),
+        "playing bytes must be shared, not copied"
+    );
+}
+
+#[test]
+fn missing_root_never_displaces_cached_archives_when_data_is_hidden() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let present = read_install_archives(&root);
+    let Some(interface) = present.interface.as_ref() else {
+        println!("skip: missing install-root archives");
+        return;
+    };
+    let hidden = root.join("No/Such");
+    assert_eq!(
+        read_install_archives(&hidden),
+        InstallArchives::default(),
+        "a missing root stages no archives"
+    );
+    let after_hidden = read_install_archives(&root);
+    assert!(
+        Arc::ptr_eq(
+            interface,
+            after_hidden.interface.as_ref().expect("still staged")
+        ),
+        "a missing root must not evict cached archives"
+    );
 }
 
 /// Scratch dir under `target/`: hermetic, never `/tmp`, and
