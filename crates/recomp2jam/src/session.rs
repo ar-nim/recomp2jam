@@ -3851,24 +3851,27 @@ impl OnlineSession {
     }
 
     fn drain_room_user_list_reply(&mut self) {
-        self.with_drain_timeout(
-            PENDING_DRAIN_TIMEOUT,
-            "room user list",
-            |session| match session.gateway.next_frame() {
-                Ok(frame) if frame.id == Response::GetUserList as u16 => {
-                    session.game.track_room_user_list_reply();
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "room user list", |session| {
+            // While our 07DA node is tracked, no other drain may read
+            // the socket. Keep reading until the 07DB answer or quiet
+            // and defer every foreign frame, so a 2003 row-state probe
+            // reaches the list on the next paint even when another
+            // client holds a modal (#569/#695).
+            loop {
+                match session.gateway.next_frame() {
+                    Ok(frame) if frame.id == Response::GetUserList as u16 => {
+                        session.game.track_room_user_list_reply();
+                        break;
+                    }
+                    Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                    Ok(frame) => {
+                        tracing::debug!(id = frame.id, "deferring non-07DB frame from fuse drain");
+                        session.deferred_frames.push_back(frame);
+                    }
+                    Err(_) => break,
                 }
-                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
-                Ok(frame) => {
-                    // The socket is a stream: once read, this frame is
-                    // gone. Keep it for the owning drain at the next
-                    // paint instead of dropping a live broadcast (#380).
-                    tracing::debug!(id = frame.id, "deferring non-07DB frame from fuse drain");
-                    session.deferred_frames.push_back(frame);
-                }
-                Err(_) => {}
-            },
-        );
+            }
+        });
     }
 
     /// `true` while a Confirm-paced attempt still awaits its answers
@@ -14107,5 +14110,89 @@ pub(super) mod session_tests {
             sheet_action_opcodes(&tap).is_empty(),
             "a click behind the peer's sheet must not send READY or START"
         );
+    }
+
+    /// #695 / story 35. The observer's 2003 polls are the row-state pin;
+    /// room-handoff attempt 4 has `H606-BEFORE`/`H606-AFTER` and
+    /// `P582-BEFORE`/`P582-AFTER` polls bracketing the two clients' frames
+    /// with no modal held. This guard holds one client's fuse modal while
+    /// both clients read the same 2003 row-state change.
+    /// `OPEN — S316-RELAY-TAP-06` stays the exe leg.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_room_user_list_fuse` ->
+    /// `drain_room_user_list_reply` -> `deferred_frames` ->
+    /// `replay_deferred_frames` -> `apply_room_list` ->
+    /// `ScreenGame::set_rooms`; the observer reaches the same fold through
+    /// `poll_lobby_chat` -> `apply_room_list`.
+    #[test]
+    fn observer_2003_row_state_holds_while_another_client_keeps_its_fuse_sheet() {
+        use o2jam_net::RoomList;
+
+        let playing = o2jam_net::RoomListEntry {
+            state_code: 2,
+            ..listed_p380_room(0, "MODALROW")
+        };
+        let waiting_list = RoomList {
+            rooms: vec![listed_p380_room(0, "MODALROW")],
+        };
+        let playing_list = RoomList {
+            rooms: vec![playing],
+        };
+        let sent_at = Instant::now();
+        let (mut actor, _actor_tap, actor_written, actor_server) = scripted_client(
+            vec![(RoomList::COMMAND, playing_list.encode_body())],
+            |session| {
+                stage_room_rows(session, vec![listed_p380_room(0, "MODALROW")], true);
+                session
+                    .game
+                    .set_room_fuse_clock(FuseClock::virtual_at(sent_at));
+                assert!(session.game.track_room_user_list_send());
+            },
+        );
+        let (mut observer, _observer_tap, observer_written, observer_server) = scripted_client(
+            vec![
+                (RoomList::COMMAND, waiting_list.encode_body()),
+                (RoomList::COMMAND, playing_list.encode_body()),
+            ],
+            |session| {
+                stage_room_rows(session, vec![listed_p380_room(0, "MODALROW")], true);
+            },
+        );
+        actor_written.recv().unwrap();
+        observer_written.recv().unwrap();
+
+        paint_frame(&mut actor);
+        paint_frame(&mut observer);
+        assert_eq!(observer.game.listed_rooms()[0].state_code, 1);
+        assert_eq!(
+            actor.game.listed_rooms()[0].state_code,
+            1,
+            "fuse defers 2003"
+        );
+
+        // One paint to defer the observer's polls, one to replay them;
+        // no wall clock moves on either client.
+        paint_frame(&mut observer);
+        paint_frame(&mut observer);
+        actor
+            .game
+            .set_room_fuse_clock(FuseClock::virtual_at(sent_at + Duration::from_secs(21)));
+        paint_frame(&mut actor);
+        assert!(actor.game.room_no_response_dialog_open());
+        assert_eq!(
+            actor.game.listed_rooms()[0].state_code,
+            2,
+            "the held modal replays its deferred row state"
+        );
+        assert_eq!(
+            observer.game.listed_rooms()[0].state_code,
+            2,
+            "the observer's row state follows the same 2003 while the modal is up"
+        );
+        drop(actor);
+        drop(observer);
+        actor_server.join().unwrap();
+        observer_server.join().unwrap();
     }
 }
