@@ -23,7 +23,7 @@ use crate::screens::side::{
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
-use o2jam_net::shop::EquipItem;
+use o2jam_net::shop::{EquipItem, ExitShop};
 use o2jam_net::CharacterInfo;
 use o2jam_render::Frame;
 
@@ -105,7 +105,12 @@ impl ScreenGame {
         let action = myroom_action_at(&self.side_placements, x, y);
         match action {
             Some(MyRoomAction::BackToLobby) => {
-                self.leave_side();
+                // The exe's BACK case changes state and sends 5007
+                // (FUN_004a3ee0 case 0x15200002, file 0xa3ee0); the
+                // session bridge owns the wire, the shell the return.
+                if self.leave_side() {
+                    self.outbox.pending_exit_shop = Some(ExitShop);
+                }
             }
             Some(action) => self.apply_myroom_action(action),
             None => {}
@@ -258,7 +263,8 @@ impl ScreenGame {
     /// Slot selection, equip commit, bag/gift pagers, and gift claim
     /// ride [`Self::click_myroom_side`]; vacate clears the selected worn
     /// slot and restages but queues nothing (send shape OPEN,
-    /// `docs/myroom.md`); goshop/shop-hop send nothing (same OPEN).
+    /// `docs/myroom.md`); BACK queues the pinned 5007 exit, GOSHOP
+    /// changes state without an extra send (#802).
     pub(super) fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {

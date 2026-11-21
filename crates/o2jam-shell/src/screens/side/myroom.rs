@@ -71,7 +71,8 @@ pub const MYROOM_GIFT_RIGHT_CODE: u32 = 0x1520_0049;
 /// queued `ClaimGift` 5023 shape is exe-pinned (`docs/gifts.md`);
 /// next step: rig walk of the gift-box claim gesture.
 pub const MYROOM_MOVE_CODE: u32 = 0x1550_0053;
-/// BACK button (`Myroom_Back.ojs`): returns to the opening lobby.
+/// BACK button (`Myroom_Back.ojs`): returns to the opening lobby and
+/// queues the exe's empty 5007 ExitShop send (#802).
 pub const MYROOM_BACK_CODE: u32 = 0x1520_0002;
 /// GOSHOP button (`Myroom_GoShop.ojs`): opens the item shop.
 /// Records only — nested sides stay rejected, so the hop is OPEN

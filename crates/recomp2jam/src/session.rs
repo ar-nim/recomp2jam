@@ -6164,6 +6164,69 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn myroom_back_sends_one_empty_5007_and_goshop_sends_nothing() {
+        // Live caller chain:
+        //   OnlineSession::ingest_snapshot -> click_myroom_side
+        //   (BACK) -> PendingOutbox.pending_exit_shop ->
+        //   OnlineSession::poll_wire -> flush_exit_shop -> 5007/5028.
+        // GOSHOP only changes state; no opcode is queued (#802 static
+        // pin, live BACK tap #426 stays OPEN).
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, MYROOM_BACK_CODE, MYROOM_GOSHOP_CODE};
+        use std::collections::HashMap;
+        use std::time::Duration;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        let placement = |code: u32, x: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: o2jam_render::Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+        };
+        game.load_side_scene(
+            vec![
+                placement(MYROOM_GOSHOP_CODE, 100),
+                placement(MYROOM_BACK_CODE, 200),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let _ = game.take_gift_list_request(); // entry fetch, not this press
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.ingest_snapshot(&InputSnapshot::click_at(120, 20));
+        assert_eq!(session.game.side(), Some(SideScreen::MyRoom));
+
+        session.ingest_snapshot(&InputSnapshot::click_at(220, 20));
+        paint_frame(&mut session);
+        assert_eq!(session.game.side(), None, "BACK leaves the side");
+        drop(session);
+        server.join().unwrap();
+        assert_eq!(
+            wire_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            vec![5007, 5028]
+        );
+    }
+
+    #[test]
     fn myroom_penalty_reply_opens_the_pinned_one_ok_sheet_through_scripted_gateway() {
         // Live caller chain:
         //   OnlineSession::paint -> poll_wire -> poll_myroom_replies

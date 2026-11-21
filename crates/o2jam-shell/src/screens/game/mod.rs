@@ -16727,6 +16727,12 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(551, 11));
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(
+            game.take_exit_shop(),
+            Some(o2jam_net::shop::ExitShop),
+            "MyRoom BACK queues the same empty 5007 as shop BACK"
+        );
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
     }
 
     #[test]

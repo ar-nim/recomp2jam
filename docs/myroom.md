@@ -214,6 +214,20 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## BACK / GOSHOP wire split (ticket #802, 2026-11-22)
+
+`FUN_004a3ee0` (VA `0x4a3ee0`, file `0xa3ee0`,
+EV `ev_aa8752511eb19d9d34701592a529586e5808751c2b8169e2b5009cdeb3b66c20`)
+case `0x15200002` changes state and calls the send builder with opcode
+`0x138f`/5007 (EV `ev_d3647af672ca1747c74f03fd9ce38e9d79e589b278186fd70c5606f7a3b42b94`);
+case `0x15200003` (GOSHOP) only changes state. Our BACK now queues the
+same empty `ExitShop` as the item-shop BACK; `OnlineSession::flush_exit_shop`
+sends 5007 and the 5028 wallet-refresh follow-up. GOSHOP stays local.
+The live BACK press/tap remains ticket #426.
+Guard: `myroom_back_sends_one_empty_5007_and_goshop_sends_nothing`
+(scripted gateway), plus the shell guard
+`myroom_back_click_returns_to_the_lobby`.
+
 ## NOTICE board path (ticket #801, 2026-11-22)
 
 `FUN_004a9890` (VA `0x4a9890`, file `0xa9890`,
