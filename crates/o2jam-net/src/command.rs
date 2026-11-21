@@ -385,6 +385,12 @@ mod tests {
         assert_eq!(Event::from_id(5012), None);
     }
 
+    fn known_shop_family_requests() -> Vec<u16> {
+        (5000..=5100)
+            .filter(|id| Request::from_id(*id).is_some())
+            .collect()
+    }
+
     #[test]
     fn music_shop_has_no_visitor_request_in_the_shop_family() {
         // Static-sweep guard for #179 story 35: the 5000 shop family
@@ -392,12 +398,21 @@ mod tests {
         // request that asks to view another seat's Music Shop; the
         // side screen is local through `visit_side(MusicShop)` and
         // must never be graded as a passed visitor cell.
-        let known_requests: Vec<u16> = (5000..=5100)
-            .filter(|id| Request::from_id(*id).is_some())
-            .collect();
-        assert_eq!(known_requests, vec![5012]);
+        assert_eq!(known_shop_family_requests(), vec![5012]);
         assert_eq!(Request::from_id(5042), None, "no visitor opcode");
         assert_eq!(Response::from_id(5043), None, "no visitor answer");
+    }
+
+    #[test]
+    fn item_shop_has_no_visitor_request_in_the_shop_family() {
+        // #178 story 39: the Item Shop shares this request family with
+        // the Music Shop. A visit is a local `visit_side(Shop)` staging
+        // change; no opcode names another seat's board, status, or
+        // location. The two-client capture keeps the observer's Room
+        // frame and wire unchanged while the exe sends only 5006.
+        assert_eq!(known_shop_family_requests(), vec![5012]);
+        assert_eq!(Request::from_id(5041), None, "no shop visitor request");
+        assert_eq!(Response::from_id(5044), None, "no shop visitor answer");
     }
 
     #[test]

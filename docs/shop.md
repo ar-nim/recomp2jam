@@ -273,6 +273,27 @@ Live status: the archive-backed staging/press guard is tier 3
 guards are SEAM. The paired Rust live re-run (wave 2) is still
 OPEN for D1-D11; no live paired frame hash is claimed here.
 
+## Privacy static sweep (#387)
+
+The Item Shop is a local side screen: `visit_side(Shop)` stages this
+seat's art and wallet. Both shops share the 5000 request family, whose
+only known request is the 5012 download announce. No request or answer
+names another seat's board, status, or location. Guard
+`item_shop_has_no_visitor_request_in_the_shop_family` sweeps ids
+5000..=5100 alongside the Music Shop guard from #402. This is a
+NA-DESIGN result, never a passed visitor cell.
+
+Live cross-check (trace `S-EVSHOPS-MASTER-01`, exe SHA-256
+`83a04541…72c823b`, local Memoryer pid 37333 / epoch 1795246022):
+the exe's Item Shop entry frame
+`92cc37515fe7d588b78db03e45fea5ea275e2545fef4ed7d60d85bbc80d76693`
+shows four goods cards, won `4500`, gem `0`, and wallet `G 15527 / W 0`.
+Its wire tap logs only `C2S 5006` on entry; the observing Rust peer's
+Room frame `c6edd59d…` and wire log contain no 5006/5007 or shop
+status frame. The peer sees nothing about the shop visit. The peer's
+audio sidecar records `route=sink`, `on_default_sink=0`,
+`preboot_breach=0`.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.
