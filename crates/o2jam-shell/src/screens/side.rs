@@ -418,6 +418,17 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 /// Code `0x1420_0001` follows the pinned `(code & 0xFFF) - 1` ordinal
 /// pairing from `docs/shop.md`; no separate `EXIT` id exists in-block.
 pub const SHOP_BACK_CODE: u32 = 0x1420_0001;
+/// Static BACK arm (`IDC_BUTTON_SSHOP_BACK`, `0x14200002`): the
+/// dispatcher `FUN_00499760` (`ev_f3ad15be…`) cues two UI sounds, changes
+/// screen, and virtually sends `0x138f` = 5007 ExitShop — the same exit
+/// the tapped full-bleed [`SHOP_BACK_CODE`] plate emits live (#386). The
+/// two sound slots are unpinned; no effect is invented.
+pub const SHOP_STATIC_BACK_CODE: u32 = 0x1420_0002;
+/// GO MYROOM arm (`IDC_BUTTON_SSHOP_GOMYROOM`, `0x14200003`): the same
+/// dispatcher changes screen with **no** virtual send (`ev_f3ad15be…`).
+/// OPEN (next step): one tapped GO MYROOM frame with a wire tap naming
+/// the destination and confirming opcode absence.
+pub const SHOP_GOMYROOM_CODE: u32 = 0x1420_0003;
 /// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
 /// contiguously through `+7` (block walk + staged dump).
 pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
@@ -1023,8 +1034,12 @@ pub enum ShopAction {
     /// Category tab selected (0-based in the five-button row). The
     /// FASHION press frame pins the highlight, not a filter rule.
     SelectCategory(usize),
-    /// Full-bleed BACK plate: leave the side and send `ExitShop` 5007.
+    /// Full-bleed BACK plate or static BACK arm: leave the side and
+    /// send `ExitShop` 5007.
     BackToLobby,
+    /// Static GO MYROOM arm: change screen only, no wire (the exit
+    /// 5007 belongs to BACK alone).
+    GoMyRoom,
     /// Item-list scroll pager stepped back.
     ItemPrev,
     /// Item-list scroll pager stepped forward.
@@ -1110,7 +1125,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
         SHOP_CHARGE_MONEY_CODE => Some(ShopAction::OpenCashCharge),
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
-        SHOP_BACK_CODE => Some(ShopAction::BackToLobby),
+        SHOP_BACK_CODE | SHOP_STATIC_BACK_CODE => Some(ShopAction::BackToLobby),
+        SHOP_GOMYROOM_CODE => Some(ShopAction::GoMyRoom),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),

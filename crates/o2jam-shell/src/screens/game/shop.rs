@@ -422,7 +422,7 @@ impl ShopState {
                 false
             }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
-            ShopAction::OpenCashCharge | ShopAction::BackToLobby => false,
+            ShopAction::OpenCashCharge | ShopAction::BackToLobby | ShopAction::GoMyRoom => false,
             ShopAction::SelectCategory(slot) => {
                 self.shop_category = Some(slot);
                 false

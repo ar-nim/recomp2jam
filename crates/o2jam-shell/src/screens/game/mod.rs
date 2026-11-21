@@ -6709,6 +6709,13 @@ impl ScreenGame {
                     self.outbox.pending_exit_shop = Some(o2jam_net::shop::ExitShop);
                 }
             }
+            ShopAction::GoMyRoom => {
+                // Static arm `0x14200003` (`ev_f3ad15be…`): screen
+                // change only. The session outbox stays untouched —
+                // no 5007 and no invented opcode on this arm. The
+                // tapped destination frame is the OPEN next step.
+                let _ = self.leave_side();
+            }
             ShopAction::OpenCashCharge => {
                 // The charge plate leaves the shop board and opens
                 // the Cash Charge view from the same lobby (b8).
@@ -8634,12 +8641,13 @@ mod game_tests {
         SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
         SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
         SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
-        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
-        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
-        SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
+        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+        SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE,
+        SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE,
+        SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
+        SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -23831,6 +23839,70 @@ mod game_tests {
         assert_eq!(game.take_exit_shop(), Some(ExitShop));
         assert_eq!(game.take_exit_shop(), None, "one press sends once");
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn item_shop_go_myroom_leaves_without_an_exit_send() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GOMYROOM 0x14200003) -> leave_side (screen change
+        //   only). Static pin `FUN_00499760` arm `0x14200003` emits no
+        //   virtual send, unlike the 5007 on BACK `0x14200002`.
+        //   OPEN (next step): one tapped GO MYROOM frame + wire tap.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GOMYROOM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.side(), None, "GOMYROOM changes the screen");
+        assert_eq!(
+            game.take_exit_shop(),
+            None,
+            "GOMYROOM sends no 5007 ExitShop"
+        );
+        assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn item_shop_static_back_arm_sends_the_same_empty_5007() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(BACK 0x14200002) -> leave_side + pending_exit_shop
+        //   -> OnlineSession flush -> C2S 5007. The tapped BACK plate
+        //   `ff522720..`/`94b2ea8f..` pins the same pair (#386).
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        use o2jam_net::shop::ExitShop;
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_STATIC_BACK_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 540,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(550, 40);
+
+        assert_eq!(game.side(), None, "static BACK leaves the shop");
+        assert_eq!(game.take_exit_shop(), Some(ExitShop));
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
     }
 
     #[test]

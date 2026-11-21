@@ -362,9 +362,24 @@ behavior also live in spec #178's enrichment rows.
   `a_gem_shortfall_blocks_the_static_payment_leg`,
   `a_valid_cart_sends_one_empty_5015_after_the_buy_ladder`.
 
+## #178 enrichment — exit pair (#775)
+
+`FUN_00499760` (`ev_f3ad15be…`) names two static exit arms beside the
+live-pinned full-bleed BACK plate: `0x14200002` BACK cues two UI sounds,
+changes screen, and virtually sends `0x138f` = 5007 ExitShop; `0x14200003`
+GOMYROOM changes screen with **no** send. Both codes now route through
+`shop_action_for_code`: the static BACK arm shares the pinned empty-5007
+outbox with the tapped plate, GOMYROOM calls `leave_side` alone. The two
+sound slots are not pinned, so no UI effect is invented. Guards:
+`item_shop_static_back_arm_sends_the_same_empty_5007` and
+`item_shop_go_myroom_leaves_without_an_exit_send` (synthetic placements,
+hidden-arm safe). **OPEN (next step):** one tapped GO MYROOM frame with a
+wire tap to name the destination and confirm opcode absence.
+
 ## OPEN
 
-1. Entry/exit dispatch call sites.
+1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
+   MYROOM arms now dispatch; the GO MYROOM destination frame is OPEN.
 2. TEXT caption and icon staging sources (row GEM cells now ink the
    exe's observed `0` per #722; the table→entry `+0x18` map is still
    unpinned. `MGASH`→`o2_cash` join OPEN — rig capture at known
