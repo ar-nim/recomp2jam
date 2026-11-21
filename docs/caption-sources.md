@@ -138,15 +138,18 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   rides the same `JoinedRoom.speed` the `SPEED_NUM` caption paints, so
   both name one local speed; a per-member speed distinct from the room
   echo is not staged yet.
-  Two arithmetic branches stay OPEN and never paint in the shell:
-  (a) an EX chart whose music-record EX level word (`+0x14`) exceeds 3
-  shifts the family by `0x30` into the MX block (files
-  `0x4b3372`-`0x4b33b7`) — the shell stages no per-chart level, so the
-  next evidence step is a per-chart level source; (b) a selected-song
-  dword with a set top nibble (`0x7789d8 & 0xf0000000`) always paints
-  the AX family at `speed + 0x25` regardless of the difficulty byte
-  (files `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is
-  untraced (OPEN 5 states the global, not the flag).
+  The MX branch (a) is wired (#761): an EX chart (difficulty byte 0)
+  whose record level word at `+0x14` exceeds 3 shifts the family by
+  `0x30` into the MX block (files `0x4b3372`-`0x4b33b7`). The level
+  word is the catalog's `OJNList.dat` `+24` low half (file `0x44268`),
+  staged on `SelectMusicSong::levels[0]`; `WaitingLevel` carries it and
+  `waiting_level_layer` adds the shift. Guard
+  `an_ex_chart_above_level_three_paints_the_mx_badge_family` names the
+  live paint chain. Branch (b) stays OPEN: a selected-song dword with
+  a set top nibble (`0x7789d8 & 0xf0000000`) always paints the AX family
+  at `speed + 0x25` regardless of the difficulty byte (files
+  `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is untraced
+  (OPEN 5 states the global, not the flag).
   Guards: `staged_pick_badge_paints_the_level_frame_the_pick_names` and
   `room_without_a_song_paints_no_level_badge` (Tier 0 seam, synthetic
   cells), `live_waiting_badge_paints_the_bound_level_frame` (real

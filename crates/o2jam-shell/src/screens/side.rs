@@ -2071,12 +2071,14 @@ impl SelectMusicRow<'_> {
         SELECT_DIFFICULTY_LETTERS[self.slot]
     }
 
-    /// Per-chart level: never staged. The catalog's level word is
-    /// range-shaped (`level_flags`, both halves 1..38), not per-chart,
-    /// so the cell draws blank rather than an invented number.
+    /// Per-chart level from this row's catalog record (`entry+0x212`
+    /// in the exe's select entry, file `0x44268`). A zeroed word names
+    /// no chart, so the cell keeps its dash rather than printing zero.
     #[must_use]
     pub fn level(self) -> Option<u8> {
-        None
+        u8::try_from(self.song.chart_level(self.slot))
+            .ok()
+            .filter(|level| *level > 0)
     }
 
     /// Personal grade: never staged (no score table ships with the
@@ -6608,6 +6610,25 @@ mod side_tests {
         let songs = select_music_songs(&entries, None);
         let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert!(rows.iter().all(|row| row.level().is_none()));
+        assert!(rows.iter().all(|row| row.grade().is_none()));
+    }
+
+    #[test]
+    fn select_rows_name_each_chart_level_from_the_catalog_record() {
+        // The select-entry builder reads the level as `u16[difficulty]`
+        // over the catalog record words (file `0x44268`): easy = low
+        // half of `+24`, normal = high half, hard = `+28`. A row must
+        // ink that chart's level, not a shared dash.
+        let mut blob = side_song_record(757, 124.0, "First", "o2ma757.ojm");
+        blob[24..28].copy_from_slice(&((14u32 << 16) | 5u32).to_le_bytes());
+        blob[28..32].copy_from_slice(&20u32.to_le_bytes());
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let songs = select_music_songs(&entries, None);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
+        assert_eq!(
+            rows.iter().map(|row| row.level()).collect::<Vec<_>>(),
+            vec![Some(5), Some(14), Some(20)]
+        );
         assert!(rows.iter().all(|row| row.grade().is_none()));
     }
 

@@ -61,10 +61,15 @@ back; #285 makes them paint-gated families instead of absent art.
 - **Rows and filters** — `EXTEND1..10` are the ten visible row hit
   bands (ticket #15). `STEP1_*` bands, `STEP2_*` buckets and `STEP3_*`
   genres are the three wired filter columns (ticket #273). OK is
-  ticket #232. Other playlist-family controls (sort, check-all,
-  remove-all, tabs, download/hear/info/rank) are display-only on the
-  result tab this client stages; their playlist-tab behavior stays
-  OPEN with the exe jump table above as the next evidence step.
+  ticket #232. The level cell now inks the row's per-chart catalog
+  level (`entry+0x212` from record words `+24` low/high and `+28`, file
+  `0x44268`; #761), with a dash for a zeroed word. The note and grade
+  icon frames are still staged art only; no personal score table is
+  available to stage a grade (#761 stays OPEN on that half). Other
+  playlist-family controls (sort, check-all, remove-all, tabs,
+  download/hear/info/rank) are display-only on the result tab this
+  client stages; their playlist-tab behavior stays OPEN with the exe
+  jump table above as the next evidence step.
 
 ## Full inventory (134 controls, block order)
 

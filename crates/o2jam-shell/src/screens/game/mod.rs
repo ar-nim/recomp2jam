@@ -4440,17 +4440,30 @@ impl ScreenGame {
     /// that names no song paints no badge: the exe resets the control to
     /// no image (file `0x4ba88d`, setter arg 0).
     fn waiting_level(&self) -> Option<WaitingLevel> {
-        if let Some(pick) = self.selected_music {
-            return (pick.music_id != 0).then_some(WaitingLevel {
-                difficulty: pick.difficulty,
-                speed: pick.speed,
-            });
-        }
-        let room = self.waiting.as_ref()?;
-        (room.music_id != 0).then_some(WaitingLevel {
-            difficulty: room.difficulty,
-            speed: room.speed,
+        let (music_id, difficulty, speed) = match self.selected_music {
+            Some(pick) => (pick.music_id, pick.difficulty, pick.speed),
+            None => {
+                let room = self.waiting.as_ref()?;
+                (room.music_id, room.difficulty, room.speed)
+            }
+        };
+        (music_id != 0).then(|| WaitingLevel {
+            difficulty,
+            speed,
+            ex_chart_level: self.catalog_ex_chart_level(music_id),
         })
+    }
+
+    /// EX chart level of one catalog song (`entry+0x212` slot 0, the
+    /// `+24` low word of the `OJNList.dat` row; file `0x44268`). The
+    /// MX branch of the badge frame tests this word (files
+    /// `0x4b3372`-`0x4b33b7`); no catalog row leaves it unstaged.
+    fn catalog_ex_chart_level(&self, music_id: u16) -> Option<u16> {
+        self.catalog_songs
+            .iter()
+            .find(|song| song.song_id == u32::from(music_id))
+            .and_then(|song| song.levels.first().copied())
+            .filter(|level| *level > 0)
     }
 
     /// Catalog BPM for one song id, if a live song record stages it.
@@ -12072,9 +12085,9 @@ mod game_tests {
         );
     }
 
-    /// Cell count of the synthetic `Wait_Level.ojs` body: the three
-    /// standard difficulty families at their 12 speed cells.
-    const LEVEL_BADGE_CELLS: u8 = 36;
+    /// Cell count of the synthetic `Wait_Level.ojs` body: five 12-cell
+    /// families (EX/NX/HX/AX/MX), matching the 60-frame shipped body.
+    const LEVEL_BADGE_CELLS: u8 = 60;
 
     /// RGB555 body pixel of one synthetic badge cell: full red plus the
     /// cell's own code in green, so the painted frame names itself and
@@ -12195,6 +12208,36 @@ mod game_tests {
             level_badge_ink(&game, &frame),
             vec![level_badge_cell_ink(27)],
             "the badge must paint the pick's single frame (HX at speed 3)"
+        );
+    }
+
+    #[test]
+    fn an_ex_chart_above_level_three_paints_the_mx_badge_family() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // `FUN_004b2e30` shifts the badge into the MX family only for
+        // difficulty 0 (EX) when the record's level word at `+0x14`
+        // exceeds 3 (files `0x4b3372`-`0x4b33b7`). Speed 3 must ink
+        // cell `0x30 + 3`, not the EX cell 3.
+        let mut game = level_badge_game(
+            757,
+            Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 0,
+                speed: 3,
+            }),
+        );
+        let mut blob = waiting_song_catalog_blob();
+        blob[24..28].copy_from_slice(&5u32.to_le_bytes());
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(0x30 + 3)],
+            "an EX level above three must paint the MX family cell"
         );
     }
 
@@ -12661,6 +12704,47 @@ mod game_tests {
                 },
             ),
         ]
+    }
+
+    #[test]
+    fn a_catalog_level_inks_the_row_level_cell_instead_of_the_dash() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at ->
+        //   paint_select_music_text -> paint_select_text ->
+        //   paint_select_row -> SelectMusicRow::level
+        // The catalog's per-chart level word (file `0x44268`) inks the
+        // first row's level cell; a zeroed word keeps the dash. Only
+        // that cell may change between the two staged catalogs.
+        let painted = |level_word: u32| {
+            let mut game = select_structure_game();
+            let mut blob = waiting_song_catalog_blob();
+            blob[24..28].copy_from_slice(&level_word.to_le_bytes());
+            let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+            game.set_song_catalog(&entries);
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let level_cell = Rect {
+            x: 331 + 309,
+            y: 150 + 6,
+            w: 15,
+            h: 12,
+        };
+        let with_level = painted(5);
+        let without_level = painted(0);
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&with_level, 800, level_cell),
+            o2jam_render::pixels_in_rect(&without_level, 800, level_cell),
+            "the row level cell must name the catalog's per-chart level"
+        );
     }
 
     #[test]

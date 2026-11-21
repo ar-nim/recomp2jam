@@ -13342,18 +13342,22 @@ mod paint_tests {
             WaitingLevel {
                 difficulty: 0,
                 speed: 0,
+                ex_chart_level: None,
             },
             WaitingLevel {
                 difficulty: 2,
                 speed: 5,
+                ex_chart_level: None,
             },
             WaitingLevel {
                 difficulty: 4,
                 speed: 11,
+                ex_chart_level: None,
             },
             WaitingLevel {
                 difficulty: 1,
                 speed: 12,
+                ex_chart_level: None,
             },
         ] {
             let layer = waiting_level_layer(level).unwrap_or(usize::MAX);
@@ -13394,6 +13398,7 @@ mod paint_tests {
             level: Some(WaitingLevel {
                 difficulty: 2,
                 speed: 5,
+                ex_chart_level: None,
             }),
             notice: None,
             ..Default::default()
