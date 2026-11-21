@@ -7,6 +7,7 @@ mod dialog_frame;
 mod lanking;
 pub mod messenger_frame;
 mod musicshop;
+mod myroom;
 mod options;
 mod options_key_labels;
 mod planet;
@@ -48,41 +49,39 @@ use super::paint::{
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
-    paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_music_shop_wallet, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
     can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
-    default_room_title, lanking_action_at, music_shop_action_at, myroom_action_at,
-    myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions, myroom_gift_page,
-    myroom_gift_pages, myroom_gift_views, myroom_identity_captions, myroom_panel_kept,
-    myroom_record_slot, myroom_wallet_captions, paint_side_scene, paint_side_scene_live,
+    default_room_title, lanking_action_at, music_shop_action_at, myroom_equip_slot,
+    myroom_panel_kept, myroom_record_slot, paint_side_scene, paint_side_scene_live,
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
     select_filter_button_id, select_filter_choice_at, select_music_rows,
     select_music_songs_with_labels, select_row_hit, shop_action_at, shop_panel_kept,
     shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
     CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
-    MyRoomAction, MyRoomLowerTab, MyRoomPanel, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
+    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
+    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
+    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
+    TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -93,7 +92,7 @@ use o2jam_audio::{
 };
 use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
-use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
+use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
@@ -5466,34 +5465,6 @@ impl ScreenGame {
             .tick_promo_clocked(now_ms, self.promo_frame_count());
     }
 
-    /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
-    /// and gift name source. Staging never moves the flow.
-    pub fn set_myroom_items(&mut self, table: AvatarItemTable) -> &mut Self {
-        self.myroom_items = Some(table);
-        self
-    }
-
-    /// Stage fetched character data (`GetCharacterInfo` 2001):
-    /// equipment, inventory, gifts, identity and cash captions.
-    /// Staging never moves the flow.
-    pub fn set_myroom_character(&mut self, character: CharacterInfo) -> &mut Self {
-        // The character record feeds the single wallet (#202): its
-        // cash lands here, and every money caption paints from the
-        // wallet afterwards — never from this record again.
-        self.wallet.apply_character_cash(&character);
-        self.myroom_character = Some(character);
-        self.restage_shop_avatar();
-        self
-    }
-
-    /// Fetched character data (`GetCharacterInfo` 2001), if the live
-    /// boot staged it (`None` until the windowed entries fetch on
-    /// channel login).
-    #[must_use]
-    pub fn myroom_character(&self) -> Option<&CharacterInfo> {
-        self.myroom_character.as_ref()
-    }
-
     /// Stage the worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`). The binary stacks it
     /// from `avatar.opa` exactly like the Result figure; a missing
@@ -5602,20 +5573,6 @@ impl ScreenGame {
         );
     }
 
-    /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
-    #[must_use]
-    pub const fn myroom(&self) -> MyRoomState {
-        self.myroom
-    }
-
-    /// Show the other upper-right MyRoom face. Seam suffices: the exe
-    /// pack pins the default face but no switching gesture, so no
-    /// staged control maps here yet (capture OPEN in `docs/myroom.md`).
-    pub fn show_myroom_panel(&mut self, panel: MyRoomPanel) -> &mut Self {
-        self.myroom.show_panel(panel);
-        self
-    }
-
     /// Committed equip send for the session bridge, if any (5004).
     /// One take sends once; the next apply replaces the queued send.
     pub fn take_equip_send(&mut self) -> Option<EquipItem> {
@@ -5646,142 +5603,6 @@ impl ScreenGame {
         self.outbox.take_gift_list_request()
     }
 
-    /// Bag pages over the staged inventory (page 0 without data).
-    #[must_use]
-    fn myroom_bag_page_count(&self) -> usize {
-        match (&self.myroom_items, &self.myroom_character) {
-            (Some(table), Some(character)) => myroom_bag_pages(&character.inventory, table),
-            _ => 1,
-        }
-    }
-
-    /// Gift-box pages over the staged box run (page 0 without data).
-    #[must_use]
-    fn myroom_gift_page_count(&self) -> usize {
-        match (&self.myroom_items, &self.myroom_character) {
-            (Some(table), Some(character)) => {
-                let views = myroom_gift_views(table, &self.catalog_songs, character);
-                myroom_gift_pages(&views)
-            }
-            _ => 1,
-        }
-    }
-
-    /// Avatar-room click over the side overlay: the staged `.bnd`
-    /// placement whose code dispatches and whose rect contains the
-    /// point drives one [`MyRoomAction`]. BACK returns to the
-    /// opening lobby; other clicks land on the selection state.
-    /// The flow screen shares no dispatch: the transition map has
-    /// no lobby edge into it, so only the overlay routes here.
-    pub fn click_myroom_side(&mut self, x: i32, y: i32) {
-        if self.side != Some(SideScreen::MyRoom) {
-            return;
-        }
-        let action = myroom_action_at(&self.side_placements, x, y);
-        match action {
-            Some(MyRoomAction::BackToLobby) => {
-                self.leave_side();
-            }
-            Some(action) => self.apply_myroom_action(action),
-            None => {}
-        }
-    }
-
-    /// Apply one avatar-room action to the selection state (BACK
-    /// aside: callers own the leave). Equip and claim resolve
-    /// against staged data and queue their exe-pinned wire bodies
-    /// for the session bridge; without staged rows the press
-    /// records nothing. Server-driven proofs ride a scripted stub
-    /// behind this seam and stay labeled ASSUMED, never exe proof.
-    fn apply_myroom_action(&mut self, action: MyRoomAction) {
-        match action {
-            MyRoomAction::SelectSlot(slot) => self.myroom.select_slot(slot),
-            MyRoomAction::ShowBagTab => {
-                // Exe3 `8515a7e5…`: the MY BAG press leaves the gift
-                // panel open, so no lower-tab or panel state changes.
-            }
-            MyRoomAction::ShowGiftTab => self.myroom.show_lower_tab(MyRoomLowerTab::Gifts),
-            MyRoomAction::BagPage(step) => {
-                let pages = self.myroom_bag_page_count();
-                self.myroom.turn_bag_page(step, pages);
-            }
-            MyRoomAction::PickBagCell(cell) => self.myroom.pick_bag_cell(Some(cell)),
-            MyRoomAction::GiftPage(step) => {
-                let pages = self.myroom_gift_page_count();
-                self.myroom.turn_gift_page(step, pages);
-            }
-            MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
-            MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
-            MyRoomAction::ClaimGift => self.apply_myroom_claim(),
-            MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
-            MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
-            MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
-        }
-    }
-
-    /// Equip the selected bag cell: the slot derives from the item
-    /// record exactly like the exe derives it (`docs/equip.md` —
-    /// type 5 forces slot 11, else the record slot byte, below 17),
-    /// then the 5004 body queues for the session bridge and the
-    /// staged worn set mirrors it. Without a picked cell, staged
-    /// rows, or a derivable slot the press records nothing.
-    fn apply_myroom_equip(&mut self) {
-        let Some(cell) = self.myroom.bag_cell() else {
-            return;
-        };
-        let page = self.myroom.bag_page();
-        let staged = self.myroom_items.as_ref().and_then(|table| {
-            self.myroom_character.as_ref().and_then(|character| {
-                let rows = myroom_bag_rows(table, &character.inventory, page);
-                rows.get(cell).map(|row| row.item_id)
-            })
-        });
-        let Some(item_id) = staged else {
-            return;
-        };
-        let record = self
-            .myroom_items
-            .as_ref()
-            .and_then(|table| avatar_item_by_id(table, item_id))
-            .map(|row| (row.item_type, myroom_record_slot(row)));
-        let Some((item_type, record_slot)) = record else {
-            return;
-        };
-        let Some(slot) = myroom_equip_slot(item_type, record_slot) else {
-            return;
-        };
-        let Ok(item_word) = i32::try_from(item_id) else {
-            return;
-        };
-        self.outbox.pending_equip = Some(EquipItem {
-            slot: i32::from(slot),
-            item_id: item_word,
-        });
-        if let Some(character) = self.myroom_character.as_mut() {
-            character.equipment[usize::from(slot)] = item_word;
-        }
-        self.restage_worn_figure();
-    }
-
-    /// Vacate the selected slot: the same-ordinal equipment cell
-    /// clears to 0 and the worn figure restages through the #193 hook.
-    /// The button-ordinal to equipment-slot identity is ours-by-design
-    /// (the 11 staged buttons name no equipment slot in the block dump;
-    /// equip slots 11..16 have no button) — next step: rig walk of the
-    /// vacate gesture naming the slot and any wire send. Queues nothing:
-    /// the vacate send shape is unpinned (OPEN, `docs/myroom.md`).
-    fn apply_myroom_vacate(&mut self) {
-        let slot = usize::from(self.myroom.selected_slot());
-        if let Some(cell) = self
-            .myroom_character
-            .as_mut()
-            .and_then(|character| character.equipment.get_mut(slot))
-        {
-            *cell = 0;
-        }
-        self.restage_worn_figure();
-    }
-
     /// Restage the worn figure after the equipment table changed
     /// (ticket #30 stale-figure leftover): the Room lobby slot and
     /// the Result banner re-stack from the staged avatar source like
@@ -5805,40 +5626,6 @@ impl ScreenGame {
         }
         self.restage_waiting_figures();
         self.restage_shop_avatar();
-    }
-
-    /// Claim the selected gift cell: the 5023 body queues for the
-    /// session bridge (`GiftType` follows the picked run — item or
-    /// song — while `is_attributive` stays false: countable stacks
-    /// are unpinned on this path). Without a picked cell or staged
-    /// box rows the press records nothing.
-    fn apply_myroom_claim(&mut self) {
-        let Some(cell) = self.myroom.gift_cell() else {
-            return;
-        };
-        let page = self.myroom.gift_page();
-        let picked = self.myroom_items.as_ref().and_then(|table| {
-            self.myroom_character
-                .as_ref()
-                .map(|character| myroom_gift_views(table, &self.catalog_songs, character))
-        });
-        let Some(views) = picked else {
-            return;
-        };
-        let Some(view) = myroom_gift_page(&views, page).get(cell) else {
-            return;
-        };
-        let gift_type = if view.is_music {
-            GiftType::Music
-        } else {
-            GiftType::Item
-        };
-        self.outbox.pending_gift_claim = Some(ClaimGift {
-            gift_type,
-            gift_id: view.gift_id,
-            resource_id: view.resource_id,
-            is_attributive: false,
-        });
     }
 
     /// Fold a successful `ClaimGift` 5024 reply into the staged room:
@@ -6243,14 +6030,6 @@ impl ScreenGame {
     #[must_use]
     pub const fn wallet(&self) -> WalletState {
         self.wallet
-    }
-
-    /// MyRoom money captions from the single wallet (the O2/MUSIC/
-    /// ITEM cash TEXT controls): the same state the shop readout and
-    /// both post-purchase refreshes share.
-    #[must_use]
-    pub fn myroom_money_captions(&self) -> Vec<(u32, String)> {
-        myroom_wallet_captions(&self.wallet)
     }
 
     /// Fold a successful 5011 music purchase into the shell: the
@@ -6891,92 +6670,6 @@ impl ScreenGame {
             Some(art) => paint_shop_scene(frame, art),
             None => paint_screen(frame, Screen::Shop),
         }
-    }
-
-    /// Avatar room: staged art when present, else the flat card.
-    /// Staged character and item rows paint the bag names, gift
-    /// names, and identity captions into their staged `.bnd` rects;
-    /// without staged data the art paints alone (oracle-neutral).
-    /// Slot selection, equip commit, bag/gift pagers, and gift claim
-    /// ride [`Self::click_myroom_side`]; vacate clears the selected worn
-    /// slot and restages but queues nothing (send shape OPEN,
-    /// `docs/myroom.md`); goshop/shop-hop send nothing (same OPEN).
-    fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
-        match self.scene_art(Screen::Myroom) {
-            Some(art) => {
-                let panel = self.myroom.panel();
-                art.paint_backdrop_live(frame, Screen::Myroom, |placed| {
-                    myroom_panel_kept(placed, panel)
-                });
-                paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
-                self.paint_myroom_overlay(frame, &art.placements, &art.figures);
-            }
-            None => paint_screen(frame, Screen::Myroom),
-        }
-    }
-
-    /// Staged worn figure behind the avatar-room portrait: the same
-    /// stack the Room lobby slot and the Result banner show (kept live
-    /// by the login staging and the equip restage hook), so the MyRoom
-    /// portrait always wears the current equipment. `None` until the
-    /// live boot stages a character with a stackable archive.
-    fn myroom_worn_figure(&self) -> Option<&AvatarFigure> {
-        self.room_avatar.as_ref()
-    }
-
-    /// Avatar-room rows and captions over staged placements: the
-    /// visible bag names, gift names, and identity/gift captions.
-    /// Reads staged data only — without a staged item table and
-    /// character nothing paints (no fallback geometry is invented).
-    fn paint_myroom_overlay(
-        &self,
-        frame: &mut Frame<'_>,
-        placements: &[ScenePlacement],
-        figures: &HashMap<String, AvatarFigure>,
-    ) {
-        let Some(table) = self.myroom_items.as_ref() else {
-            return;
-        };
-        let Some(character) = self.myroom_character.as_ref() else {
-            return;
-        };
-        let bag: Vec<String> = myroom_bag_rows(table, &character.inventory, self.myroom.bag_page())
-            .iter()
-            .map(|row| row.name.to_string())
-            .collect();
-        let views = myroom_gift_views(table, &self.catalog_songs, character);
-        let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
-        let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
-        paint_myroom_slot_icons(
-            frame,
-            placements,
-            &character.equipment,
-            &self.shop_item_portraits,
-        );
-        // Identity fields belong to the status face; the exe's default
-        // Inventory face hides them with the rest of that plate (#369).
-        let mut captions = if self.myroom.panel() == MyRoomPanel::Status {
-            myroom_identity_captions(character)
-        } else {
-            Vec::new()
-        };
-        // Money paints from the single wallet (#202): the character
-        // record fed it at staging, purchases refresh it after.
-        captions.extend(myroom_wallet_captions(&self.wallet));
-        captions.extend(myroom_gift_captions(
-            &views,
-            self.myroom.gift_page(),
-            self.myroom.gift_cell(),
-        ));
-        paint_myroom_data(
-            frame,
-            placements,
-            figures,
-            self.myroom,
-            &bag,
-            &gifts,
-            &captions,
-        );
     }
 
     /// Rankings: staged art when present, else the flat card. The
@@ -8192,37 +7885,37 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
 #[cfg(test)]
 mod game_tests {
     use super::super::paint::{
-        background_of, channel_chat_row_text, rank_notice_board_text, seat_origin,
-        RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET, RESULT_TICKET_URL_FILE_OFFSET,
-        RESULT_TICKET_URL_VIRTUAL_ADDRESS,
+        background_of, channel_chat_row_text, paint_myroom_data, rank_notice_board_text,
+        seat_origin, RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET,
+        RESULT_TICKET_URL_FILE_OFFSET, RESULT_TICKET_URL_VIRTUAL_ADDRESS,
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
-        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
-        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
-        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE,
-        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE,
-        MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
-        MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
-        MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
-        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
-        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
-        MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE,
-        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
-        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
-        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
-        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
-        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
-        SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
-        SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
-        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
-        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_BUTTONS,
-        SHOP_SUBMENU_FIRST_CODE,
+        MyRoomLowerTab, MyRoomPanel, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
+        LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE,
+        LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
+        MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
+        MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE,
+        MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE,
+        MSHOP_MSALL_RIGHT_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
+        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE,
+        ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
+        SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
+        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
+        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
+        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
+        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
+        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
+        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -14213,6 +13906,52 @@ mod game_tests {
         // W cell reads the other settled 5029 word: file `0x163900`
         // routes it to the wallet cash slot (`docs/shop-buy.md`).
         assert_eq!(caption(MYROOM_O2JAM_MONEY_CODE), Some("22"));
+    }
+
+    #[test]
+    fn myroom_screen_cluster_pins_clicks_captions_and_painted_pixels() {
+        // Live caller chain (feed):
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_myroom_items / set_myroom_character.
+        // Live caller chain (click):
+        //   window press -> OnlineSession::press -> ScreenGame::click_dispatch
+        //   -> click_side_screen -> click_myroom_side.
+        // Live caller chain (paint):
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_at
+        //   -> paint_side -> paint_myroom -> paint_myroom_overlay.
+        // Pure shell state plus a synthetic frame: no archives read.
+        let mut game = myroom_open_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
+        for (x, y) in [
+            (10, 10),
+            (100, 10),
+            (150, 10),
+            (200, 10),
+            (300, 10),
+            (400, 10),
+            (450, 10),
+            (10, 40),
+        ] {
+            game.click_myroom_side(x, y);
+        }
+        let selection = game.myroom();
+        let equip_send = game.take_equip_send();
+        let captions = game.myroom_money_captions();
+        let pixels = paint_myroom_panel(&mut game);
+
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        hash_str(&mut hash, game.screen_name());
+        hash_str(
+            &mut hash,
+            &format!("{selection:?}|{equip_send:?}|{captions:?}"),
+        );
+        for pixel in pixels {
+            hash_u64(&mut hash, u64::from(pixel));
+        }
+        assert_eq!(
+            hash, 0x570F_AD14_1C10_0CCB,
+            "MyRoom ScreenGame cluster output drifted"
+        );
     }
 
     #[test]
