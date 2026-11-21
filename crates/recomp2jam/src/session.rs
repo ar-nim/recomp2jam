@@ -3851,24 +3851,27 @@ impl OnlineSession {
     }
 
     fn drain_room_user_list_reply(&mut self) {
-        self.with_drain_timeout(
-            PENDING_DRAIN_TIMEOUT,
-            "room user list",
-            |session| match session.gateway.next_frame() {
-                Ok(frame) if frame.id == Response::GetUserList as u16 => {
-                    session.game.track_room_user_list_reply();
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "room user list", |session| {
+            // While our 07DA node is tracked, no other drain may read
+            // the socket. Keep reading until the 07DB answer or quiet
+            // and defer every foreign frame, so a 2003 row-state probe
+            // reaches the list on the next paint even when another
+            // client holds a modal (#569/#695).
+            loop {
+                match session.gateway.next_frame() {
+                    Ok(frame) if frame.id == Response::GetUserList as u16 => {
+                        session.game.track_room_user_list_reply();
+                        break;
+                    }
+                    Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                    Ok(frame) => {
+                        tracing::debug!(id = frame.id, "deferring non-07DB frame from fuse drain");
+                        session.deferred_frames.push_back(frame);
+                    }
+                    Err(_) => break,
                 }
-                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
-                Ok(frame) => {
-                    // The socket is a stream: once read, this frame is
-                    // gone. Keep it for the owning drain at the next
-                    // paint instead of dropping a live broadcast (#380).
-                    tracing::debug!(id = frame.id, "deferring non-07DB frame from fuse drain");
-                    session.deferred_frames.push_back(frame);
-                }
-                Err(_) => {}
-            },
-        );
+            }
+        });
     }
 
     /// `true` while a Confirm-paced attempt still awaits its answers
@@ -3940,6 +3943,13 @@ impl GameLoop for OnlineSession {
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
         if !down {
+            return;
+        }
+        // An open sheet owns Confirm: its own handler may dismiss it,
+        // but the screen's networked Confirm must not fire behind it
+        // (#692/#694). Back keeps its pinned exit path. No wire here.
+        if key == MenuKey::Confirm && self.game.dialog_owns_input() {
+            self.game.menu_key(key, down);
             return;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Waiting {
@@ -13891,5 +13901,298 @@ pub(super) mod session_tests {
         );
         drop(master);
         master_server.join().unwrap();
+    }
+
+    /// One scripted gateway client with the frames it pushes and a tap of
+    /// every opcode it sends. `stage` runs after the socket is live but
+    /// before the first paint, so pushed frames queue in the socket; the
+    /// written signal lets a virtual-clock guard wait before advancing.
+    fn scripted_client(
+        incoming: Vec<(u16, Vec<u8>)>,
+        stage: impl FnOnce(&mut OnlineSession),
+    ) -> (
+        OnlineSession,
+        mpsc::Receiver<u16>,
+        mpsc::Receiver<()>,
+        thread::JoinHandle<()>,
+    ) {
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            for (id, body) in incoming {
+                stream.write_all(&encode_frame(id, &body)).unwrap();
+            }
+            written_tx.send(()).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(20)))
+                .unwrap();
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue
+                    }
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                stream.read_exact(&mut body).unwrap();
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&body);
+                wire_tx
+                    .send(decode_frame(&bytes).unwrap().id)
+                    .expect("the test reads its wire tap");
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        stage(&mut session);
+        (session, wire_rx, written_rx, server)
+    }
+
+    /// Stage the Room lobby the way the live boot does: Confirm from the
+    /// Channel dialog, the relay gate, then the wire rows.
+    fn stage_room_rows(
+        session: &mut OnlineSession,
+        rooms: Vec<o2jam_net::RoomListEntry>,
+        relay_down: bool,
+    ) {
+        session.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(session.game_mut(), vec![], relay_down);
+        session.game.set_rooms(rooms);
+    }
+
+    /// Only join/ready/start opcodes count; the session's stats heartbeat
+    /// is not a sheet action.
+    fn sheet_action_opcodes(tap: &mpsc::Receiver<u16>) -> Vec<u16> {
+        tap.try_iter()
+            .filter(|id| matches!(id, 3002 | 3003 | 4008 | 4009 | 4010))
+            .collect()
+    }
+
+    /// #692 / story 32. Qualified exe quit-confirm frame
+    /// `a21896be01328edb70b143b05eecf32a116302a0505eade7841eeaa6b5921efd`
+    /// (pack `06c3d14a65cc2e2d80625895c68d74ce44e6a98f9b0100b3819e831707798168`)
+    /// and one-OK Information frame `9bf5463c…` name the sheet; the one
+    /// click behind it stays `OPEN — S316-CROSS-DIALOG-05` in the exe.
+    /// This guard pins the client half: a Room sheet owns the click even
+    /// while a 2007 master disband arrives on the same socket.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_lobby_chat` -> `apply_room_removed` ->
+    /// `ScreenGame::remove_room`, then `OnlineSession::ingest_snapshot`
+    /// -> `dispatch_pointer_edge` -> `ScreenGame::press_kind_at` ->
+    /// `ScreenGame::click_dispatch` -> `click_room_dialog`.
+    #[test]
+    fn room_sheet_blocks_the_row_click_while_a_disband_event_arrives() {
+        let incoming = vec![(2007, 0i32.to_le_bytes().to_vec())];
+        let (mut actor, tap, written, server) = scripted_client(incoming, |session| {
+            stage_room_rows(
+                session,
+                vec![
+                    listed_p380_room(0, "SHEETBLOCK"),
+                    listed_p380_room(1, "KEEP"),
+                ],
+                false,
+            );
+            session.game.open_create_room_dialog();
+        });
+        written.recv().unwrap();
+        assert_eq!(actor.game.room_dialog(), Some(RoomDialog::CreateRoom));
+        let before = painted_game_frame(&mut actor);
+
+        paint_frame(&mut actor);
+        assert_eq!(
+            actor.game.listed_rooms().len(),
+            1,
+            "the master's 2007 must still reach the row list under the sheet"
+        );
+        assert_ne!(
+            painted_game_frame(&mut actor),
+            before,
+            "the wire event repaints the board behind the sheet"
+        );
+
+        actor.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        paint_frame(&mut actor);
+        assert_eq!(actor.screen(), Screen::Room, "the sheet ate the row click");
+        assert_eq!(actor.game.room_dialog(), Some(RoomDialog::CreateRoom));
+        drop(actor);
+        server.join().unwrap();
+        assert!(
+            sheet_action_opcodes(&tap).is_empty(),
+            "a click behind the sheet must put no join on the wire"
+        );
+    }
+
+    /// #694 / story 34. The qualified paired exe frame with a sheet on P
+    /// and a master action on M stays `OPEN — S316-CROSS-DIALOG-05` (boots
+    /// 3-4 frame `5e118db0…` is our client, not the oracle). The wire half
+    /// is pinned: room-handoff attempt 4's master 3005 gave the remaining
+    /// member `3007 body=0001000000000000` with no 2007.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_waiting_chat` -> `apply_user_left` ->
+    /// `ScreenGame::clear_waiting_member_seat`/`promote_waiting_master`,
+    /// then `OnlineSession::ingest_snapshot` -> `dispatch_pointer_edge`
+    /// -> `ScreenGame::press_kind_at` -> `ScreenGame::click_dispatch` ->
+    /// `click_waiting` -> `click_select_music`.
+    #[test]
+    fn peer_sheet_keeps_the_master_leave_event_and_blocks_its_own_ready_click() {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+
+        let confirm_plate = |id: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 200,
+                h: 50,
+            },
+        };
+        let placements = vec![
+            confirm_plate("IDC_BUTTON_SWAIT_READY"),
+            confirm_plate("IDC_BUTTON_SWAIT_START"),
+        ];
+        let room = guest_snapshot();
+        let incoming = vec![(3007, vec![0, 1, 0, 0, 0, 0, 0, 0])];
+        let (mut peer, tap, written, server) = scripted_client(incoming, move |session| {
+            session.game.menu_key(MenuKey::Confirm, true);
+            session.game.set_joined_room(room.clone());
+            session.joined_room = Some(room.clone());
+            session.joined_waiting = true;
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Waiting);
+            session.game.load_scene(
+                Screen::Waiting,
+                placements.clone(),
+                std::collections::HashMap::new(),
+            );
+            session
+                .game
+                .load_select_music_scene(Vec::new(), std::collections::HashMap::new());
+        });
+        written.recv().unwrap();
+        assert!(peer.game.select_music_dialog_open());
+
+        paint_frame(&mut peer);
+        assert!(
+            peer.game.staged_waiting_member(0).is_none(),
+            "the master's 3007 clears its seat while the peer's sheet is up"
+        );
+        assert!(peer.game.is_room_master(), "the 3007 promotes the peer");
+        assert!(peer.game.select_music_dialog_open());
+
+        peer.ingest_snapshot(&InputSnapshot::click_at(150, 120));
+        paint_frame(&mut peer);
+        assert!(
+            peer.game.select_music_dialog_open(),
+            "the sheet survives the click"
+        );
+        drop(peer);
+        server.join().unwrap();
+        assert!(
+            sheet_action_opcodes(&tap).is_empty(),
+            "a click behind the peer's sheet must not send READY or START"
+        );
+    }
+
+    /// #695 / story 35. The observer's 2003 polls are the row-state pin;
+    /// room-handoff attempt 4 has `H606-BEFORE`/`H606-AFTER` and
+    /// `P582-BEFORE`/`P582-AFTER` polls bracketing the two clients' frames
+    /// with no modal held. This guard holds one client's fuse modal while
+    /// both clients read the same 2003 row-state change.
+    /// `OPEN — S316-RELAY-TAP-06` stays the exe leg.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_room_user_list_fuse` ->
+    /// `drain_room_user_list_reply` -> `deferred_frames` ->
+    /// `replay_deferred_frames` -> `apply_room_list` ->
+    /// `ScreenGame::set_rooms`; the observer reaches the same fold through
+    /// `poll_lobby_chat` -> `apply_room_list`.
+    #[test]
+    fn observer_2003_row_state_holds_while_another_client_keeps_its_fuse_sheet() {
+        use o2jam_net::RoomList;
+
+        let playing = o2jam_net::RoomListEntry {
+            state_code: 2,
+            ..listed_p380_room(0, "MODALROW")
+        };
+        let waiting_list = RoomList {
+            rooms: vec![listed_p380_room(0, "MODALROW")],
+        };
+        let playing_list = RoomList {
+            rooms: vec![playing],
+        };
+        let sent_at = Instant::now();
+        let (mut actor, _actor_tap, actor_written, actor_server) = scripted_client(
+            vec![(RoomList::COMMAND, playing_list.encode_body())],
+            |session| {
+                stage_room_rows(session, vec![listed_p380_room(0, "MODALROW")], true);
+                session
+                    .game
+                    .set_room_fuse_clock(FuseClock::virtual_at(sent_at));
+                assert!(session.game.track_room_user_list_send());
+            },
+        );
+        let (mut observer, _observer_tap, observer_written, observer_server) = scripted_client(
+            vec![
+                (RoomList::COMMAND, waiting_list.encode_body()),
+                (RoomList::COMMAND, playing_list.encode_body()),
+            ],
+            |session| {
+                stage_room_rows(session, vec![listed_p380_room(0, "MODALROW")], true);
+            },
+        );
+        actor_written.recv().unwrap();
+        observer_written.recv().unwrap();
+
+        paint_frame(&mut actor);
+        paint_frame(&mut observer);
+        assert_eq!(observer.game.listed_rooms()[0].state_code, 1);
+        assert_eq!(
+            actor.game.listed_rooms()[0].state_code,
+            1,
+            "fuse defers 2003"
+        );
+
+        // One paint to defer the observer's polls, one to replay them;
+        // no wall clock moves on either client.
+        paint_frame(&mut observer);
+        paint_frame(&mut observer);
+        actor
+            .game
+            .set_room_fuse_clock(FuseClock::virtual_at(sent_at + Duration::from_secs(21)));
+        paint_frame(&mut actor);
+        assert!(actor.game.room_no_response_dialog_open());
+        assert_eq!(
+            actor.game.listed_rooms()[0].state_code,
+            2,
+            "the held modal replays its deferred row state"
+        );
+        assert_eq!(
+            observer.game.listed_rooms()[0].state_code,
+            2,
+            "the observer's row state follows the same 2003 while the modal is up"
+        );
+        drop(actor);
+        drop(observer);
+        actor_server.join().unwrap();
+        observer_server.join().unwrap();
     }
 }

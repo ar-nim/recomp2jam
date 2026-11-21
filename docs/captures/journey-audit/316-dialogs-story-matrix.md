@@ -74,6 +74,18 @@ candidate, not a closure: closing still needs the live caller chain and gates.
 
 - [x] 33. As a master, I want my joining peer visible even while a message sheet is up on another client, so the two-client member matrix stays symmetric in dialog scenarios. — RE-SCOPED on the exe oracle: the observable 7.55 leg is the peer's `3002`/`3003` member pair while the master's CREATE ROOM sheet keeps painting. The master's socket had zero new frames; no master-side `3004`/`3003` join event is claimed or wired. Paired frames `12287270…74b185` / `af89f031…4171d`, trace `W6FC-DIALOG-02`; guard `peer_join_pair_leaves_the_create_room_sheet_and_master_frame_unchanged` drives the scripted gateway. The old "master sees the peer through a sheet" premise stays OPEN as a negative claim; this tick covers only the re-scoped pair.
 
+## #692 tick — story 32 (modal input ownership)
+
+- [x] 32. As a room actor, I want a YES/NO sheet up on my client to block host clicks until a choice, so a question cannot be missed. — Client behavior pinned from the #689 dialog-layer stack: every open sheet owns `ScreenGame::press_kind_at`, so a click behind a Room sheet cannot start a `3002` join while a master disband (`2007`) still repaints the row list. Guard `room_sheet_blocks_the_row_click_while_a_disband_event_arrives` drives the scripted gateway from boot entry through `OnlineSession::ingest_snapshot`. Named frames: quit-confirm `a21896be…` and one-OK relay `9bf5463c…`; the qualified one-click-behind-sheet exe pair stays `OPEN — S316-CROSS-DIALOG-05`.
+
+## #694 tick — story 34 (peer sheet over master events)
+
+- [x] 34. As a peer, I want a dialog shown on my client while the master acts not to swallow room events, so my own sheet never hides a join or ready. — The scripted peer gateway folds the master's `3007 body=0001000000000000` handoff while its song-select sheet is up, then a click on the sheet's START plate sends no `4008`/`4009`. Guard `peer_sheet_keeps_the_master_leave_event_and_blocks_its_own_ready_click` names the `OnlineSession::paint` -> `poll_waiting_chat` -> `apply_user_left` chain and the press gate. Named our-client frame `5e118db0…` is not an oracle; the qualified paired exe frame stays `OPEN — S316-CROSS-DIALOG-05`.
+
+## #695 tick — story 35 (observer row state under a held modal)
+
+- [x] 35. As a channel observer, I want row state pinned while one client holds a modal, so a blocked actor is not mistaken for a server failure. — The tracked 07DA drain now defers every foreign frame until its 07DB answer, not just the first, so a 2003 row-state probe reaches the list on the next paint while another client holds the fuse sheet. Guard `observer_2003_row_state_holds_while_another_client_keeps_its_fuse_sheet` drives two scripted sessions through the live `poll_wire` chain. Named observer polls: room-handoff `H606-BEFORE`/`H606-AFTER` and `P582-BEFORE`/`P582-AFTER`; the modal-bracketed exe tap stays `OPEN — S316-RELAY-TAP-06`.
+
 Counts: **130 cells** — 54 EVIDENCED, 35 GAP, 2 LIVE-FILLED, 1 OPEN-FIX,
 38 NA-DESIGN. Counts were re-parsed from the table; every GAP names its next
 evidence step. A cell is a story candidate, not a closure.
