@@ -7228,10 +7228,11 @@ impl ScreenGame {
             return;
         }
         if action == MusicShopAction::BackToLobby {
-            // Local return to the opening lobby. No 5007 ExitShop
-            // body is pinned from a qualified BACK tap, so none is
-            // queued here (#399 stays OPEN on the wire arm).
-            self.leave_side();
+            // BACK leaves the side and emits the same empty 5007 the
+            // Item Shop plate sends (`94b2ea8f…a2508`, #835).
+            if self.leave_side() {
+                self.outbox.pending_exit_shop = Some(o2jam_net::shop::ExitShop);
+            }
             return;
         }
         match self.music_shop.apply_action(action) {
@@ -24322,13 +24323,13 @@ mod game_tests {
     }
 
     #[test]
-    fn music_shop_back_button_returns_to_the_room_that_opened_it() {
-        // Red proof for #399: the staged EXIT/BACK rect
-        // (711,569)-(794,593) holds the visible BACK plate, but
-        // `music_shop_action_for_code` has no arm for code
-        // `0x1A200008`, so the click lands nowhere and the side
-        // stays open. The 5007 ExitShop wire is still OPEN; this
-        // guard only claims the local return.
+    fn music_shop_back_button_returns_and_queues_empty_5007() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopAction::BackToLobby -> PendingOutbox::pending_exit_shop
+        // -> OnlineSession::flush_exit_shop -> send_frame(5007, []).
+        // The 5007 body is pinned by the Item Shop BACK tap
+        // (`94b2ea8f…a2508`); the Music Shop dispatcher path is #835.
         let mut game = ScreenGame::new();
         walk_to_waiting(&mut game);
         let placements = vec![ScenePlacement {
@@ -24347,6 +24348,12 @@ mod game_tests {
         assert!(game.visit_side(SideScreen::MusicShop));
         game.click_music_shop(757, 580);
         assert_eq!(game.side(), None, "BACK leaves the music shop side");
+        assert_eq!(
+            game.take_exit_shop(),
+            Some(o2jam_net::shop::ExitShop),
+            "BACK sends the shared empty 5007"
+        );
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
         assert!(game.take_music_buy().is_none(), "BACK queues no buy");
     }
 
