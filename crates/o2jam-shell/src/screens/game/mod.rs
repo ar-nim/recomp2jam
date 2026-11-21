@@ -3279,6 +3279,7 @@ impl ScreenGame {
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
             || self.room_dialog.is_some()
+            || self.select_music_dialog_open()
     }
 
     /// The one press-kind word for the session gate. Staged rect

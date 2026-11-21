@@ -14032,4 +14032,80 @@ pub(super) mod session_tests {
             "a click behind the sheet must put no join on the wire"
         );
     }
+
+    /// #694 / story 34. The qualified paired exe frame with a sheet on P
+    /// and a master action on M stays `OPEN — S316-CROSS-DIALOG-05` (boots
+    /// 3-4 frame `5e118db0…` is our client, not the oracle). The wire half
+    /// is pinned: room-handoff attempt 4's master 3005 gave the remaining
+    /// member `3007 body=0001000000000000` with no 2007.
+    ///
+    /// Live caller chain: `main.rs::run_online` -> `OnlineSession::paint`
+    /// -> `poll_wire` -> `poll_waiting_chat` -> `apply_user_left` ->
+    /// `ScreenGame::clear_waiting_member_seat`/`promote_waiting_master`,
+    /// then `OnlineSession::ingest_snapshot` -> `dispatch_pointer_edge`
+    /// -> `ScreenGame::press_kind_at` -> `ScreenGame::click_dispatch` ->
+    /// `click_waiting` -> `click_select_music`.
+    #[test]
+    fn peer_sheet_keeps_the_master_leave_event_and_blocks_its_own_ready_click() {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+
+        let confirm_plate = |id: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 200,
+                h: 50,
+            },
+        };
+        let placements = vec![
+            confirm_plate("IDC_BUTTON_SWAIT_READY"),
+            confirm_plate("IDC_BUTTON_SWAIT_START"),
+        ];
+        let room = guest_snapshot();
+        let incoming = vec![(3007, vec![0, 1, 0, 0, 0, 0, 0, 0])];
+        let (mut peer, tap, written, server) = scripted_client(incoming, move |session| {
+            session.game.menu_key(MenuKey::Confirm, true);
+            session.game.set_joined_room(room.clone());
+            session.joined_room = Some(room.clone());
+            session.joined_waiting = true;
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Waiting);
+            session.game.load_scene(
+                Screen::Waiting,
+                placements.clone(),
+                std::collections::HashMap::new(),
+            );
+            session
+                .game
+                .load_select_music_scene(Vec::new(), std::collections::HashMap::new());
+        });
+        written.recv().unwrap();
+        assert!(peer.game.select_music_dialog_open());
+
+        paint_frame(&mut peer);
+        assert!(
+            peer.game.staged_waiting_member(0).is_none(),
+            "the master's 3007 clears its seat while the peer's sheet is up"
+        );
+        assert!(peer.game.is_room_master(), "the 3007 promotes the peer");
+        assert!(peer.game.select_music_dialog_open());
+
+        peer.ingest_snapshot(&InputSnapshot::click_at(150, 120));
+        paint_frame(&mut peer);
+        assert!(
+            peer.game.select_music_dialog_open(),
+            "the sheet survives the click"
+        );
+        drop(peer);
+        server.join().unwrap();
+        assert!(
+            sheet_action_opcodes(&tap).is_empty(),
+            "a click behind the peer's sheet must not send READY or START"
+        );
+    }
 }
