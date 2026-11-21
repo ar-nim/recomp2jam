@@ -26,8 +26,9 @@ use o2jam_shell::screens::paint::{
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
     read_install_archives, stage_byname_sheet, stage_cash_charge, stage_dialog,
-    stage_messenger_sheet, stage_room_hover_overlay, stage_shopping_bag_add_sheet, stage_state,
-    Dialog, StageContext, StagingArchive, State, BYNAME_TABLE, MESSENGER_SHEETS,
+    stage_messenger_sheet, stage_payment_pages, stage_room_hover_overlay,
+    stage_shopping_bag_add_sheet, stage_state, Dialog, StageContext, StagingArchive, State,
+    BYNAME_TABLE, MESSENGER_SHEETS,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -195,19 +196,15 @@ fn stage_room_dialogs(game: &mut ScreenGame, archive: &[u8]) {
 /// reads the side slots, so paint wiring rides a later ticket.
 fn stage_payment_sheets(game: &mut ScreenGame, archive: &[u8]) {
     let ctx = StageContext::default();
-    let mut placements = Vec::new();
-    let mut figures = HashMap::new();
-    for state in [State::Payment, State::Payment2] {
-        let Some(art) = stage_state(archive, state, ctx).art else {
-            continue;
-        };
-        placements.extend(art.placements);
-        figures.extend(art.figures);
+    let mut merged = stage_payment_pages(archive, ctx).into_merged();
+    if let Some(gift) = stage_state(archive, State::Payment2, ctx).art {
+        merged.placements.extend(gift.placements);
+        merged.figures.extend(gift.figures);
     }
-    if placements.is_empty() {
+    if merged.placements.is_empty() {
         return;
     }
-    game.load_payment_scene(placements, figures);
+    game.load_payment_scene(merged.placements, merged.figures);
 }
 
 /// Stage the Cash Charge view through the same declaration: the

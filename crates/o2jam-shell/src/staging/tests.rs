@@ -2017,3 +2017,90 @@ fn probe_waiting_right_side() {
         }
     }
 }
+
+/// #428: the payment page's nine bound placements map to their parsed
+/// `.bnd` rects. Live caller chain: main.rs::run_play ->
+/// assemble_online_session -> session::OnlineSession::stage_live_art ->
+/// live_art::stage_payment_sheets -> staging::stage_payment_pages ->
+/// stage_state -> bind_scene_rects -> o2jam_file::parse_bnd (the same
+/// rows are staged here; install data is local-only and CI skips).
+#[test]
+fn payment_page_maps_its_nine_bound_rects_from_the_installed_declaration() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let page = PAYMENT_PAGES[0];
+    let pages = stage_payment_pages(&interface, StageContext::default());
+    let art = pages.art_for(page).expect("payment page stages");
+    let rows: Vec<_> = payment_page_placements(&art.placements, page)
+        .into_iter()
+        .map(|placed| (placed.id.clone(), placed.rect))
+        .collect();
+    let expected = [
+        ("IDC_BACK_SPAYMENT", rect_from_corners(0, 0, 800, 600)),
+        (
+            "IDC_TEXT_SPAYMENT_MGMONEY",
+            rect_from_corners(82, 513, 177, 526),
+        ),
+        (
+            "IDC_TEXT_SPAYMENT_O2MONEY",
+            rect_from_corners(82, 540, 177, 553),
+        ),
+        (
+            "IDC_BUTTON_SPAYMENT_EXIT",
+            rect_from_corners(712, 570, 793, 592),
+        ),
+        (
+            "IDC_IMAGE_SPAYMENT_WEB",
+            rect_from_corners(26, 61, 773, 481),
+        ),
+        (
+            "IDC_IMAGE_SPAYMENT_LOADING",
+            rect_from_corners(619, 529, 738, 552),
+        ),
+        (
+            "IDC_TEXT_SPAYMENT_O2CASH",
+            rect_from_corners(259, 513, 333, 525),
+        ),
+        (
+            "IDC_TEXT_SPAYMENT_MUSICCASH",
+            rect_from_corners(259, 535, 333, 547),
+        ),
+        (
+            "IDC_TEXT_SPAYMENT_ITEMCASH",
+            rect_from_corners(259, 557, 333, 569),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, rect)| (id.to_owned(), rect))
+    .collect::<Vec<_>>();
+    assert_eq!(rows, expected);
+}
+
+/// #428 seam arm: a zero-record bind stages a zero rect, never a
+/// canned geometry. No install-root dependency.
+#[test]
+fn payment_page_keeps_a_zero_rect_record_without_inventing_geometry() {
+    let list = [
+        "NUMBER_OF_STATE 0x01",
+        "STATE_PAYMENT 0x01",
+        "{",
+        "BOUND \"State_Payment.bnd\"",
+        "IDC_BACK_SPAYMENT 0X1D100001",
+        "}",
+        "",
+    ]
+    .join("\n");
+    let archive = o2jam_file::test_archive::build_archive(&[
+        ("ControlList_Interface.txt", list.as_bytes()),
+        ("State_Payment.bnd", &bnd_blob(&[(0, 0, 0, 0)])),
+    ]);
+    let art = stage_state(&archive, State::Payment, StageContext::default())
+        .art
+        .expect("dead record still stages its parsed slot");
+    let mapped = payment_page_placements(&art.placements, PAYMENT_PAGES[0]);
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].rect, rect_from_corners(0, 0, 0, 0));
+}
