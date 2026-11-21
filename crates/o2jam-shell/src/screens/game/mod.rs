@@ -4828,6 +4828,7 @@ impl ScreenGame {
     /// Catalog staging may run before or after this call: the staged
     /// songs take the new answer in place either way.
     pub fn set_installed_music(&mut self, installed: Option<InstalledMusic>) -> &mut Self {
+        self.music_shop.set_installed(installed.as_ref());
         self.installed_music = installed;
         for song in &mut self.catalog_songs {
             song.set_installed(song_installed(song.song_id, self.installed_music.as_ref()));
@@ -24060,6 +24061,40 @@ mod game_tests {
         assert_ne!(before[band], after[band], "press inks the staged band");
         let outside = 20 * 800 + 400;
         assert_eq!(before[outside], after[outside], "no chrome outside");
+    }
+
+    #[test]
+    fn music_shop_installed_mark_comes_from_the_local_chart_scan() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session ->
+        // setup_online (install scan) -> ScreenGame::set_installed_music ->
+        // MusicShopState::set_installed -> visible_rows ->
+        // paint_music_shop_rows. The 4031 board only annotates ownership;
+        // the local `o2ma<id>.ojn` scan names the installed mark (§1).
+        // No install-root read: a synthetic chart name feeds the pure seat.
+        let mut game = open_music_shop_board(2);
+        game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+
+        let rows = game.music_shop_visible_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].installed, "the local chart marks its row installed");
+        assert!(!rows[1].installed, "no local chart leaves the row unmarked");
+
+        let mut buf = vec![0_u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let installed_pixel = buf[106 * 800 + 20];
+        let missing_pixel = buf[190 * 800 + 20];
+        assert_eq!(installed_pixel, pack_xrgb(0x50, 0xE0, 0x70));
+        assert_ne!(
+            installed_pixel, missing_pixel,
+            "only the installed row inks"
+        );
     }
 
     #[test]

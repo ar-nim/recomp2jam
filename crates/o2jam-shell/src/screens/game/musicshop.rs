@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use o2jam_file::{OjnListEntry, OjnMidParamEntry};
+use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
@@ -59,6 +59,9 @@ pub(crate) struct MusicShopState {
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
     pub(crate) music_shop_face: MusicShopFace,
+    /// Local `Music\` scan (§1); `None` means no local knowledge, so
+    /// no installed mark is invented from the 4031 flag list.
+    pub(crate) music_shop_installed: Option<InstalledMusic>,
 }
 
 impl MusicShopState {
@@ -72,6 +75,13 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+    }
+
+    /// Stage the local `Music\` scan (§1) behind the shop. The
+    /// server's 4031 flags never write this bit: only a chart file
+    /// the client can play does.
+    pub(crate) fn set_installed(&mut self, installed: Option<&InstalledMusic>) {
+        self.music_shop_installed = installed.cloned();
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -211,6 +221,7 @@ impl MusicShopState {
             &songs[start..end],
             self.music_shop_board.as_ref(),
             &self.music_shop_prices,
+            self.music_shop_installed.as_ref(),
         )
     }
 

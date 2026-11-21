@@ -1536,6 +1536,11 @@ const MUSIC_SHOP_TOP100_TONE: u32 = pack_xrgb(0xE2, 0x8A, 0x3C);
 /// on this marker (#820).
 const MUSIC_SHOP_FACE_TONE: u32 = pack_xrgb(0xE2, 0xC8, 0x4A);
 
+/// Own-by-design ink for a row whose `o2ma<id>.ojn` exists: a small
+/// tick inside the row's staged hit rect. The exe's bit `0x8` is
+/// pinned; the tick's size and color are presentation (§1).
+const MUSIC_SHOP_INSTALLED_TONE: u32 = pack_xrgb(0x50, 0xE0, 0x70);
+
 /// Ink the selected owned-face tab inside its staged `.bnd` rect.
 /// An unstaged tab paints nothing (ADR-0003).
 pub fn paint_music_shop_face(
@@ -1791,6 +1796,19 @@ fn paint_music_shop_rows(
         return;
     }
     for (slot, row) in slots.iter().zip(rows.iter()) {
+        if row.installed {
+            let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
+            fill_rect(
+                frame,
+                &Rect {
+                    x: scaled.x + 2,
+                    y: scaled.y + 2,
+                    w: 3_u32.min(scaled.w),
+                    h: 3_u32.min(scaled.h),
+                },
+                MUSIC_SHOP_INSTALLED_TONE,
+            );
+        }
         let cells = [
             row.song.title.clone(),
             music_shop_buy_caption(row),
@@ -4132,6 +4150,7 @@ mod paint_tests {
             listed: false,
             gem_price: Some(3000),
             won_price: Some(0),
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(
@@ -4184,6 +4203,7 @@ mod paint_tests {
             listed: false,
             gem_price: Some(3000),
             won_price: Some(0),
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(
@@ -4264,6 +4284,7 @@ mod paint_tests {
             listed: false,
             gem_price: None,
             won_price: None,
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(

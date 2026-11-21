@@ -1170,6 +1170,10 @@ pub struct MusicShopRow {
     /// Won price from `OJNList.dat` table 3 (`param_a`); unknown
     /// words stay `None` and ink no cell.
     pub won_price: Option<u32>,
+    /// Local `o2ma<id>.ojn` chart presence (bit `0x8`, §1). The
+    /// server's 4031 row only annotates ownership; this bit names
+    /// what this client can actually play.
+    pub installed: bool,
 }
 
 /// One catalog price pair (`OJNList.dat` table 3, data-verified).
@@ -1189,6 +1193,7 @@ pub fn music_shop_rows(
     songs: &[LankingSong],
     answer: Option<&MusicListAnswer>,
     prices: &HashMap<u32, MusicShopPrice>,
+    installed: Option<&InstalledMusic>,
 ) -> Vec<MusicShopRow> {
     songs
         .iter()
@@ -1196,12 +1201,14 @@ pub fn music_shop_rows(
         .map(|song| {
             let (free, listed) = shop_flags_for(song.song_id, answer);
             let price = prices.get(&song.song_id).copied();
+            let installed = song_installed(song.song_id, installed);
             MusicShopRow {
                 song,
                 free,
                 listed,
                 gem_price: price.map(|entry| entry.gem),
                 won_price: price.map(|entry| entry.won),
+                installed,
             }
         })
         .collect()
