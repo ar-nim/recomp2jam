@@ -354,3 +354,23 @@ OPEN (ticket's next step): the writer of catalog byte `+0x1b0` and
 global `0x7798bc` are untraced, so staged rows use `lanes = 0` until a
 pinned source lands; no lane/level value is invented. A 3KEY/5KEY/7KEY
 pick leg with a gateway tap and matched frames stays open.
+
+## #291 enrichment — 3001 key-mode change (#758)
+
+Case `0xbb9` of `FUN_004b0a50` (EV `ev_e1395126…`, file `0xb0fc7`)
+compares new/old key-mode bytes at VAs `0x4b0ff6`/`0x4b1004`. On a
+change, and only for the master mode byte, it clears its two select
+vectors (stride `0x238` and stride `8`, destructors at VAs
+`0x452a00`/`0x452bd0`), resets the two dialog globals, copies the
+high nibble of song id `0x7789d8` into `0x77890c` (file `0xb10d2`),
+and sends 4000 at VA `0x4b10de`. No live 3001 key-change frame exists:
+the body layout is OPEN, and `o2jam_net::KeyModeChanged` decodes only
+the one byte the shell arm needs.
+
+`ScreenGame::apply_key_mode_change` stages that arm: clear the stale
+pick/query/page, mirror the high nibble, and queue the standing room
+song as 4000; an equal key mode is a no-op.
+`OnlineSession::apply_key_mode_changed` calls it from the 3001 match
+in `apply_waiting_frame`. Guards:
+`key_mode_change_clears_stale_rows_and_resends_the_room_song` and
+`key_mode_change_requeues_the_room_song_after_clearing_rows`.

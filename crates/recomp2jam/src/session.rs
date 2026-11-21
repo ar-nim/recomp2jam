@@ -163,10 +163,10 @@ use o2jam_net::{
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
     DownloadProgressChanged, Event, ExitPlaying, ExitWaiting, FinalizeRank, Frame, GameMode,
     GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
-    JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, MusicState, Ready, Request,
-    Response, RoomCreated, RoomRemoved, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame,
-    SubmitScore, SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, UserJoinedWaiting,
-    UserLeftWaiting, WaitingMusicChanged, WireMessage,
+    JoinRoomResponse, JoinedRoom, KeyMode, KeyModeChanged, MemberReadyStateChanged, MusicState,
+    Ready, Request, Response, RoomCreated, RoomRemoved, SetDownloadProgress, SetRoomArena,
+    SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent, SyncMusicDownload,
+    UpdateMusicState, UserJoinedWaiting, UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
     AutoPickOutcome, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
@@ -3305,6 +3305,7 @@ impl OnlineSession {
             id if id == WaitingMusicChanged::COMMAND => {
                 self.apply_waiting_music_changed(&frame);
             }
+            id if id == KeyModeChanged::COMMAND => self.apply_key_mode_changed(&frame),
             id if announces_room_music_state(id) => {
                 self.apply_auto_pick_after_seat_change(id);
                 self.announce_music_state();
@@ -3600,6 +3601,30 @@ impl OnlineSession {
             .seat_waiting_member(joined.member_id, joined.member.clone());
         if let Some(room) = self.joined_room.as_mut() {
             room.seat_member(joined.member_id, joined.member);
+        }
+    }
+
+    /// Fold one 3001 key-mode change event. The exe's master arm
+    /// (case `0xbb9` of `FUN_004b0a50`, EV `ev_e1395126…`) clears the
+    /// select vectors, mirrors the song nibble and re-sends 4000; a
+    /// peer only learns the new room key mode. The wire body is OPEN,
+    /// so only the first byte (the new mode) is decoded.
+    fn apply_key_mode_changed(&mut self, frame: &Frame) {
+        let Ok(change) = KeyModeChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable key-mode change");
+            return;
+        };
+        if !self.joined_waiting || self.game.screen() != Screen::Waiting {
+            return;
+        }
+        if self.game.is_room_master() && self.game.apply_key_mode_change(change.key_mode) {
+            tracing::info!(
+                key_mode = change.key_mode,
+                "key-mode change cleared the select rows and queued 4000"
+            );
+        }
+        if let Some(room) = self.joined_room.as_mut() {
+            room.key_mode = change.key_mode;
         }
     }
 
@@ -8391,6 +8416,47 @@ pub(super) mod session_tests {
                 placement.id
             );
         }
+    }
+
+    #[test]
+    fn key_mode_change_requeues_the_room_song_after_clearing_rows() {
+        // Ticket #758, live chain: OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat ->
+        //   apply_waiting_frame (3001 / 0xbb9, `FUN_004b0a50`) ->
+        //   ScreenGame::apply_key_mode_change ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // The exe compares new/old bytes at VAs `0x4b0ff6`/`0x4b1004`,
+        // clears the select vectors and re-sends 4000 at `0x4b10de`.
+        let mut room = joined_snapshot();
+        room.key_mode = 0;
+        room.music_id = 0xF757;
+        room.difficulty = 1;
+        room.speed = 2;
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(room.clone());
+        session.joined_room = Some(room);
+        session.joined_waiting = true;
+        session.apply_waiting_frame(Frame {
+            id: 3001,
+            payload: vec![2],
+        });
+        assert_eq!(session.game.room_key_mode(), 2);
+        assert_eq!(session.game.room_song_variant_nibble(), 0xF);
+        assert_eq!(
+            session.game.take_music_send().map(|pick| pick.music_id),
+            Some(0xF757),
+            "the master re-queues the room song as 4000"
+        );
+        server.join().unwrap();
     }
 
     #[test]

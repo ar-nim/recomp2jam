@@ -705,6 +705,12 @@ pub struct ScreenGame {
     /// `0x16200002`, `FUN_004b42d0`). Painting the pressed face is a
     /// separate next step; this byte names the armed arm.
     waiting_back_armed: bool,
+    /// High nibble of the staged room song id, mirrored by the 3001
+    /// key-mode change arm into global `0x77890c` (`FUN_004b0a50`,
+    /// file `0xb10d2`). The exe lifts the variant into the top nibble
+    /// of its 32-bit id; our wire id is a `u16`, so the same nibble is
+    /// bits 12..15 here.
+    room_song_variant_nibble: u8,
     /// Level ceiling the auto-pick arm applies to catalog rows (`
     /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
     /// writer of that global stays OPEN, so an unstaged cap admits
@@ -1171,6 +1177,7 @@ impl ScreenGame {
             waiting_room_number: None,
             waiting_start_armed: false,
             waiting_back_armed: false,
+            room_song_variant_nibble: 0,
             auto_pick_level_cap: u16::MAX,
             selected_music: None,
             loading_status: None,
@@ -3793,6 +3800,41 @@ impl ScreenGame {
     #[must_use]
     pub fn waiting_back_armed(&self) -> bool {
         self.waiting_back_armed
+    }
+
+    /// High nibble the 3001 arm mirrored from the room song id.
+    #[must_use]
+    pub fn room_song_variant_nibble(&self) -> u8 {
+        self.room_song_variant_nibble
+    }
+
+    /// Apply one 3001 key-mode change event on the master's Waiting
+    /// screen (`FUN_004b0a50` case `0xbb9`, EV `ev_e1395126…`). An
+    /// unchanged byte is a no-op; a change drops the stale select rows
+    /// (pick, search page and draft — the two exe select vectors and
+    /// their dialog globals), mirrors the song's high nibble, and
+    /// queues the standing room song as a fresh 4000. The exe's wire
+    /// body is unpinned; this arm takes the new mode from the staged
+    /// frame byte named by the ticket.
+    pub fn apply_key_mode_change(&mut self, key_mode: u8) -> bool {
+        let Some(room) = self.waiting.as_mut() else {
+            return false;
+        };
+        if room.key_mode == key_mode {
+            return false;
+        }
+        room.key_mode = key_mode;
+        self.room_song_variant_nibble =
+            u8::try_from((u32::from(room.music_id) >> 12) & 0xF).unwrap_or(0);
+        self.selected_music = None;
+        self.select_page = 0;
+        self.select_search_query = None;
+        self.select_search_draft.clear();
+        self.select_music_notice = None;
+        if let Some(song) = self.room_music_selection() {
+            self.outbox.pending_music_send = Some(song);
+        }
+        true
     }
 
     /// Lane count the exe's key-mode map names (`FUN_004b42d0`,
@@ -12540,6 +12582,48 @@ mod game_tests {
             11,
             "RIGHT at the ceiling stays at speed 11"
         );
+    }
+
+    #[test]
+    fn key_mode_change_clears_stale_rows_and_resends_the_room_song() {
+        // Live chain: OnlineSession::apply_waiting_frame (3001) ->
+        //   ScreenGame::apply_key_mode_change -> clear staged rows ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // FUN_004b0a50 case 0xbb9 (EV `ev_e1395126…`) compares new and
+        // old key modes, clears the two select vectors and resets the
+        // dialog globals, copies the song's high nibble to 0x77890c,
+        // then sends 4000 (VA `0x4b10de`).
+        let mut game = auto_pick_game(0);
+        game.set_room_music(0xF757, 1, 2);
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 2,
+        });
+        game.push_select_search_char('x');
+        assert!(game.apply_key_mode_change(2));
+        assert_eq!(game.room_key_mode(), 2, "the new key mode is staged");
+        assert_eq!(game.selected_music(), None, "the stale pick is cleared");
+        assert_eq!(game.select_search_draft(), "", "the stale query is cleared");
+        assert_eq!(
+            game.room_song_variant_nibble(),
+            0xF,
+            "the song high nibble is mirrored"
+        );
+        assert_eq!(
+            game.take_music_send(),
+            Some(SetRoomMusic {
+                music_id: 0xF757,
+                difficulty: 1,
+                speed: 2,
+            }),
+            "the room song is re-sent as 4000"
+        );
+        assert!(
+            !game.apply_key_mode_change(2),
+            "an equal key mode is a no-op"
+        );
+        assert!(!game.has_pending_music_send());
     }
 
     /// One catalog row for the auto-pick seam tests: all charts,

@@ -10,7 +10,7 @@ use std::borrow::Cow;
 
 use super::error::Error;
 use super::frame::encode_frame;
-use super::message::WireMessage;
+use super::message::{KeyMode, WireMessage};
 use super::reader::Reader;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 use crate::macros::wire_enum;
@@ -874,6 +874,47 @@ impl WireMessage for UserJoinedWaiting {
                 super_manager: false,
             },
         })
+    }
+}
+
+/// Master-only key-mode change in Waiting (`0xbb9`, case arm of
+/// `FUN_004b0a50` at file `0xb0fc7`, EV `ev_e1395126…`). The exe
+/// compares new/old key-mode bytes at VAs `0x4b0ff6`–`0x4b1004`, then
+/// clears its two select vectors, mirrors the song high nibble into
+/// `0x77890c` and sends 4000 at VA `0x4b10de`. The wire body is not
+/// captured (ticket #758 OPEN); the one-byte shape here names only
+/// the new mode the shell needs for that arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyModeChanged {
+    /// New key-mode code (`KeyMode` 0/1/2).
+    pub key_mode: u8,
+}
+
+/// Body length of [`KeyModeChanged`]: one key-mode byte.
+const KEY_MODE_CHANGED_BODY_LEN: usize = 1;
+
+impl WireMessage for KeyModeChanged {
+    const COMMAND: u16 = 3001;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.key_mode]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < KEY_MODE_CHANGED_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: KEY_MODE_CHANGED_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > KEY_MODE_CHANGED_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - KEY_MODE_CHANGED_BODY_LEN));
+        }
+        KeyMode::from_u8(body[0]).map_err(|_| Error::InvalidField {
+            field: "key mode",
+            reason: "not 0, 1, or 2",
+        })?;
+        Ok(Self { key_mode: body[0] })
     }
 }
 
