@@ -31,6 +31,14 @@ One manifest per run records `pair`, `build`, `params`, `script`, and
 `seed`. One artifact layout per run holds the manifest copy, the input
 log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 
+### Owner-session clients take no flock (owner 2026-11-21)
+
+`play-local.sh` scopes the live-lane flock to RIG runs only (same predicate
+as the display pin): owner-session multi-client testing - two attended
+clients on the owner display, the #726 distinct identities - takes no
+flock. Corollary for rig operators: the flock no longer detects an owner
+session; ask before a rig wave if the owner may be testing live.
+
 ### Rust-client display pin (#719)
 
 `scripts/play-local.sh` boots only our Rust client. Before build, token lookup,

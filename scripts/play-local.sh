@@ -149,9 +149,19 @@ cd "$REPO_ROOT"
 echo "play-local: user-id $USER_ID, token ${TOKEN:0:8}…, memoryer 127.0.0.1:15010"
 # The wrapper holds the flock until this client exits; exec keeps one
 # process tree and traps inside the wrapper, not in the replaced shell.
-exec bash "$REPO_ROOT/scripts/lib/rig-live-lock.sh" \
-  run --owner "play-local:uid=$USER_ID pid=$$" -- \
-  "$BIN" online \
-  --host 127.0.0.1 --port 15010 \
-  --user-id "$USER_ID" --token "$TOKEN" \
+# The flock is a RIG-lane guard (one boot lane machine-wide); owner-session
+# multi-client testing is legitimate and takes no flock (owner report
+# 2026-11-21: the second attended client waited forever on the first).
+CLIENT_CMD=(
+  "$BIN" online
+  --host 127.0.0.1 --port 15010
+  --user-id "$USER_ID" --token "$TOKEN"
   "${EXTRA[@]}"
+)
+if [ "$RIG_RUN" -eq 1 ] || [ -n "${RIG_DISPLAY:-}" ] || [[ "${DISPLAY:-}" =~ ^:[1-9][0-9][0-9]$ ]]; then
+  exec bash "$REPO_ROOT/scripts/lib/rig-live-lock.sh" \
+    run --owner "play-local:uid=$USER_ID pid=$$" -- \
+    "${CLIENT_CMD[@]}"
+else
+  exec "${CLIENT_CMD[@]}"
+fi
