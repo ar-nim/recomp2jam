@@ -5211,6 +5211,15 @@ impl ScreenGame {
         self.play_longnote
     }
 
+    /// Effective long-note switch for the running song. The exe's one
+    /// consumer compares the play-object cache with 1 (file `0x16e372`);
+    /// the visual effect of that branch stays OPEN. Reading the snapshot
+    /// keeps a later options edit out of the running song.
+    #[must_use]
+    pub fn playing_longnote_used(&self) -> bool {
+        self.play_longnote == Some(1)
+    }
+
     /// Load `option.ini` beside `install_root` at boot and remember
     /// the root for SAVE commits: a missing or unreadable file
     /// keeps the exe defaults (misses warn, never fail the scene).
@@ -18304,6 +18313,43 @@ mod game_tests {
             Some(1),
             "later dialog edits never reach the running song"
         );
+    }
+
+    #[test]
+    fn running_song_keeps_the_longnote_mode_from_the_options_tab() {
+        // Live chain: boot -> gear disc -> Game tab -> Longnote Used click
+        // -> EXIT -> Planet walk -> Playing entry -> song-setup snapshot.
+        // The exe caches `LongnoteMode` at play `+0x17d8` (file `0x16fb06`)
+        // and its one consumer compares it with 1 (file `0x16e372`).
+        use super::super::side::OPTION_GAME_LONGNOTE_USED;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[(OPTION_GAME_LONGNOTE_USED, 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        assert!(game.options().longnote_used());
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None);
+
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        stage_armed_loading_gate(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert!(game.playing_longnote_used());
+
+        game.options_mut().set_longnote_mode(0);
+        assert!(
+            game.playing_longnote_used(),
+            "a later options edit must not change the running song"
+        );
+        assert_eq!(game.play_longnote_mode(), Some(1));
     }
 
     #[test]

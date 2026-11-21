@@ -136,6 +136,14 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
 `ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
 `click_options_dialog` → `OptionsDialog::click` → `OptionsSettings::reset_game`),
 `longnote_mode_snapshots_at_playing_entry`,
+`running_song_keeps_the_longnote_mode_from_the_options_tab` (live chain:
+`main.rs::run_online` → `run_windowed_session` →
+`window::InputHandler::route_mouse_edge` →
+`GameLoop::ingest_snapshot` → `ScreenGame::click_dispatch` →
+`click_planet` → `click_planet_modal` → `click_options_dialog` →
+`OptionsDialog::click_game_tab` → Playing entry snapshot →
+`ScreenGame::playing_longnote_used`; the visual effect of the exe's
+`0x16e372` compare stays OPEN),
 `key_strikes_play_at_the_game_effect_gain` (unity → one step → mute,
   live chain: `main.rs::run_online` → `run_windowed_session` →
   `window::InputHandler::route_key` → `GameLoop::lane_key` →
