@@ -1542,6 +1542,17 @@ mod live_art_tests {
             "Wait_Level.ojs carries 5 families x 12 cells"
         );
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
+        // #761: the badge family rides the catalog EX level word - the
+        // exe shifts EX charts above level 3 to the MX family (+0x30,
+        // files 0x4b3372-0x4b33b7). Pin the level by re-staging the
+        // catalog on the built games (paint reads the level lazily).
+        fn pin_ex_level(game: &mut ScreenGame, level: u16) {
+            let bytes = std::fs::read(install_root().join("O2Jam/Image/OJNList.dat"))
+                .expect("installed catalog bytes");
+            let mut entries = o2jam_file::parse_ojn_list(&bytes).expect("installed catalog parses");
+            entries[0].level_flags = u32::from(level);
+            game.set_song_catalog(&entries);
+        }
         let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
         let badge = |difficulty: u8, speed: u8| o2jam_net::SetRoomMusic {
             music_id: song_id,
@@ -1549,13 +1560,21 @@ mod live_art_tests {
             speed,
         };
         let mut easy = staged_waiting_pick_game(0, Some(badge(0, 1)));
+        pin_ex_level(&mut easy, 2);
         let easy_frame = painted_pixels(&mut easy, 0);
         let rect = staged_level_rect(&easy);
         let mut hard = staged_waiting_pick_game(0, Some(badge(2, 7)));
+        pin_ex_level(&mut hard, 2);
         let hard_frame = painted_pixels(&mut hard, 0);
+        // #761's MX shift: an EX chart above level 3 selects the MX
+        // family - layer 0x30 + speed, not the EX cell.
+        let mut mx = staged_waiting_pick_game(0, Some(badge(0, 1)));
+        pin_ex_level(&mut mx, 5);
+        let mx_frame = painted_pixels(&mut mx, 0);
         for (frames, layer, name) in [
-            (&easy_frame, 1usize, "EX1 (difficulty 0, speed 1)"),
+            (&easy_frame, 1usize, "EX1 (difficulty 0, speed 1, level 2)"),
             (&hard_frame, 31usize, "HX4 (difficulty 2, speed 7)"),
+            (&mx_frame, 0x30usize + 1, "MX1 (EX chart at level 5)"),
         ] {
             let frame = body.layer(layer).expect("staged badge frame");
             assert_eq!(
