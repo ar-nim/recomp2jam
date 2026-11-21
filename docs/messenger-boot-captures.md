@@ -45,3 +45,13 @@ host or from a filename.
 - Capture: Item Shop frame immediately before the press, frame after it,
   the input log, and the manifest naming the board and press point. The
   log must show no popup dismissal between the press and the response.
+
+## #650 (M7) — Waiting host press
+
+- Evidence id: `N-HOST`; host state: qualified exe boot in Waiting, peer
+  role, with the blue NORMAL-mode popup dismissed before entering the board.
+- Press: `SendInput` at the centre of the staged rect for code `0x1620006A`
+  on the Waiting board.
+- Capture: Waiting frame immediately before the press, frame after it, the
+  input log, and the manifest naming the board and press point. The popup
+  dismissal must precede the press and appear in the log.
