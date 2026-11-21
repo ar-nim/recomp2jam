@@ -319,3 +319,38 @@ packs (`0580bc8d…`, `20fbe170…`) pin the wire and the badge art, but
 do not carry equal 07E8 slices in a verdict window. Until that pair
 exists, no pixel-equality claim is made and the #291 story row stays
 unchecked.
+
+## #291 enrichment — key-mode auto-pick (#757)
+
+`FUN_004b42d0` (VA `0x4b42d0`, file `0xb42d0`, EV
+`ev_63f94a48…`) is the in-Waiting pick arm called from 3007
+(`UserLeaveWaiting`, call VA `0x4b0bf2`) and the 0xfb6/4022 seat-state
+arm (call VA `0x4b0f1c`), both in `FUN_004b0a50`. It maps key mode
+0/1/2 to 3/5/7 lanes, keeps a standing song whose catalog row carries
+availability bit `8` and the current difficulty's chart bit, then
+walks catalog rows (stride `0x1b4`) that carry the lane byte `+0x1b0`,
+the availability bit, the chart bit from the `0x680724` table
+(`1`/`2`/`4`, EV `ev_920e926b…`), and a level word `+0x1a8` of zero or
+at most global `0x7798bc`. A match writes the song id to `0x7789d8`
+and sends 4000; a miss arms BACK `0x16200002` and posts the string at
+VA `0x6498b0` (EV `ev_3f58de30…`, CP949 bytes read at EV
+`ev_18132d9a…`).
+
+`ScreenGame::auto_pick_waiting_song` mirrors that arm: the shell
+catalog row carries a lane count (`0` when no local source staged),
+the difficulty bit uses the pinned `1`/`2`/`4` table, and the level
+ceiling defaults to "no cap" until a source is staged. A match queues
+the existing `SetRoomMusic` 4000 body; a miss arms the BACK byte and
+posts the pinned notice. `OnlineSession::apply_auto_pick_after_seat_change`
+calls the arm from both 3007 and 4022 in `apply_waiting_frame`; the
+master-only gate follows the exe's role split. Guards:
+`auto_pick_uses_the_room_key_mode_lane_count`,
+`auto_pick_skips_rows_that_fail_the_pinned_filters`,
+`auto_pick_miss_arms_back_and_posts_the_notice` (synthetic catalog,
+hidden-install-root safe), and the live-frame guard
+`master_auto_picks_a_matching_chart_when_a_3007_leave_arrives`.
+
+OPEN (ticket's next step): the writer of catalog byte `+0x1b0` and
+global `0x7798bc` are untraced, so staged rows use `lanes = 0` until a
+pinned source lands; no lane/level value is invented. A 3KEY/5KEY/7KEY
+pick leg with a gateway tap and matched frames stays open.

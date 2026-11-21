@@ -1801,6 +1801,12 @@ pub struct SelectMusicSong {
     /// "not downloaded" state: the row paints the notice and refuses
     /// the pick (§3).
     pub installed: bool,
+    /// Lane count the catalog names for this song (`3`/`5`/`7`), the
+    /// in-exe catalog byte at record `+0x1b0` read by the auto-pick
+    /// arm (`FUN_004b42d0`, file `0xb42d0`). `0` means the local catalog
+    /// has no lane source staged, so the row stays eligible for any
+    /// room key mode instead of claiming an exe lane value.
+    pub lanes: u8,
 }
 
 impl SelectMusicSong {
@@ -1887,6 +1893,7 @@ pub fn select_music_songs_with_labels(
                 label: label_bucket(labels, entry.song_id),
                 charts: ChartMask::NONE,
                 installed: false,
+                lanes: 0,
             };
             song.set_installed(song_installed(entry.song_id, installed));
             song
@@ -1926,6 +1933,7 @@ pub(crate) fn staged_song(song_id: u32) -> SelectMusicSong {
         label: None,
         charts: o2jam_file::ChartMask::ALL,
         installed: true,
+        lanes: 0,
     }
 }
 

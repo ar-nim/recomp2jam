@@ -92,7 +92,9 @@ use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
 };
-use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry};
+use o2jam_file::{
+    AvatarItemTable, ChartMask, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry,
+};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
@@ -105,8 +107,8 @@ use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicP
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
-    GameSpeed, Gender, JoinRoom, JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged,
-    SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
+    GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
+    RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -535,6 +537,23 @@ pub const WAITING_START_TEAMS_NOTICE: &str = "The teams do not match.";
 /// geometry stays OPEN, so this class stands in until then.
 pub const WAITING_START_DOWNLOAD_NOTICE: &str =
     "The song is downloading. Press OK after it completes.";
+/// Auto-pick miss notice at VA `0x6498b0` (EV `ev_3f58de30…`), the
+/// CP949 text the miss arm of `FUN_004b42d0` passes to VA `0x478c90`.
+pub const WAITING_AUTO_PICK_MISS_NOTICE: &str =
+    " 구입하신곡 또는 무료곡 음악파일이\n Music 폴더에 없습니다.\n 뮤직샵에서 다운로드를 하세요!";
+
+/// Result of one in-Waiting auto-pick arm (`FUN_004b42d0`): a row was
+/// staged (`Picked`), the standing song still qualified (`Kept`), or
+/// no row qualified and the miss arm fired (`Missed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoPickOutcome {
+    /// A matching row became the room song; 4000 is queued.
+    Picked(u16),
+    /// The standing song already fits; no frame is queued.
+    Kept,
+    /// No row fits; BACK is armed and the notice is posted.
+    Missed,
+}
 
 /// Notice for one gate verdict (`None` while the verdict has no box
 /// arm: the exe sends `4034` for a missing song and shows nothing).
@@ -682,6 +701,15 @@ pub struct ScreenGame {
     /// guest's face needs no field — it follows the local seat's ready
     /// byte (see [`Self::waiting_confirm_armed`]).
     waiting_start_armed: bool,
+    /// BACK press state armed by the auto-pick miss arm (control code
+    /// `0x16200002`, `FUN_004b42d0`). Painting the pressed face is a
+    /// separate next step; this byte names the armed arm.
+    waiting_back_armed: bool,
+    /// Level ceiling the auto-pick arm applies to catalog rows (`
+    /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
+    /// writer of that global stays OPEN, so an unstaged cap admits
+    /// every row rather than inventing a limit.
+    auto_pick_level_cap: u16,
     /// Pinned Waiting-room notice standing over the top-bar room line:
     /// the exe's notice box over the START control (VA `0x4b22d0`,
     /// calls VA `0x478c90`) for the gate refusals
@@ -1142,6 +1170,8 @@ impl ScreenGame {
             waiting_channel_number: None,
             waiting_room_number: None,
             waiting_start_armed: false,
+            waiting_back_armed: false,
+            auto_pick_level_cap: u16::MAX,
             selected_music: None,
             loading_status: None,
             loading_gate_phase: 0,
@@ -3734,6 +3764,137 @@ impl ScreenGame {
         if let Some(pick) = self.selected_music.as_mut() {
             pick.speed = next;
         }
+    }
+
+    /// Stage the catalog lane count a local source names for one song
+    /// (`0` clears it back to "no lane source"). The exe reads its
+    /// per-row byte at `+0x1b0`; the shell's OJNList parser has no such
+    /// column, so unstaged rows stay eligible for any key mode.
+    pub fn set_song_lanes(&mut self, song_id: u32, lanes: u8) -> &mut Self {
+        if let Some(row) = self
+            .catalog_songs
+            .iter_mut()
+            .find(|row| row.song_id == song_id)
+        {
+            row.lanes = lanes;
+        }
+        self
+    }
+
+    /// Stage the level ceiling the auto-pick arm applies. The exe
+    /// reads global `0x7798bc`; its writer is OPEN, so the default is
+    /// "no ceiling" instead of an invented level limit.
+    pub fn set_auto_pick_level_cap(&mut self, cap: u16) -> &mut Self {
+        self.auto_pick_level_cap = cap;
+        self
+    }
+
+    /// BACK press state armed by the auto-pick miss arm.
+    #[must_use]
+    pub fn waiting_back_armed(&self) -> bool {
+        self.waiting_back_armed
+    }
+
+    /// Lane count the exe's key-mode map names (`FUN_004b42d0`,
+    /// globals `0x7789e4` → 3/5/7). Unknown bytes name no lanes.
+    #[must_use]
+    fn auto_pick_lanes(key_mode: u8) -> Option<u8> {
+        match KeyMode::from_u8(key_mode).ok()? {
+            KeyMode::ThreeKeys => Some(3),
+            KeyMode::FiveKeys => Some(5),
+            KeyMode::SevenKeys => Some(7),
+        }
+    }
+
+    /// Chart bit the exe's difficulty table names (`0x680724` holds
+    /// `1`/`2`/`4`, EV `ev_920e926b…`); `None` for an unknown code.
+    #[must_use]
+    fn auto_pick_chart_mask(difficulty: u8) -> Option<u8> {
+        Difficulty::from_code(difficulty)?;
+        1u8.checked_shl(u32::from(difficulty))
+    }
+
+    /// Whether one catalog row passes the pinned availability, chart,
+    /// lane and level filters ([`Self::auto_pick_waiting_song`]).
+    #[must_use]
+    fn auto_pick_row_fits(
+        row: &SelectMusicSong,
+        lanes: u8,
+        difficulty: u8,
+        mask: u8,
+        cap: u16,
+    ) -> bool {
+        let level = row
+            .levels
+            .get(usize::from(difficulty))
+            .copied()
+            .unwrap_or(0);
+        row.installed
+            && row.charts != ChartMask::NONE
+            && row.charts.bits() & mask != 0
+            && (row.lanes == 0 || row.lanes == lanes)
+            && (level == 0 || level <= cap)
+    }
+
+    /// In-Waiting auto-pick arm (`FUN_004b42d0`). Keep the standing
+    /// song when its row already fits; otherwise pick the first
+    /// catalog row that fits the room's key-mode lanes, availability
+    /// bit, difficulty chart and level ceiling. A match stages the
+    /// song id and queues 4000 through the existing outbox; a miss
+    /// arms BACK and posts the pinned notice. No catalog row is a
+    /// no-op for the notice: the exe reports the miss even with an
+    /// empty table.
+    pub fn auto_pick_waiting_song(&mut self) -> AutoPickOutcome {
+        let (key_mode, difficulty, speed, current_id) = {
+            let Some(room) = self.waiting.as_ref() else {
+                return AutoPickOutcome::Missed;
+            };
+            (
+                room.key_mode,
+                room.difficulty,
+                room.speed,
+                self.selected_music
+                    .map_or(room.music_id, |pick| pick.music_id),
+            )
+        };
+        let (Some(lanes), Some(mask)) = (
+            Self::auto_pick_lanes(key_mode),
+            Self::auto_pick_chart_mask(difficulty),
+        ) else {
+            return AutoPickOutcome::Missed;
+        };
+        let cap = self.auto_pick_level_cap;
+        if self.catalog_songs.iter().any(|row| {
+            u64::from(row.song_id) == u64::from(current_id)
+                && Self::auto_pick_row_fits(row, lanes, difficulty, mask, cap)
+        }) {
+            return AutoPickOutcome::Kept;
+        }
+        let mut chosen = None;
+        for row in &self.catalog_songs {
+            if !Self::auto_pick_row_fits(row, lanes, difficulty, mask, cap) {
+                continue;
+            }
+            if let Ok(music_id) = u16::try_from(row.song_id) {
+                chosen = Some(SetRoomMusic {
+                    music_id,
+                    difficulty,
+                    speed,
+                });
+                break;
+            }
+        }
+        let Some(pick) = chosen else {
+            self.waiting_back_armed = true;
+            self.waiting_notice = Some(WAITING_AUTO_PICK_MISS_NOTICE);
+            return AutoPickOutcome::Missed;
+        };
+        self.waiting_back_armed = false;
+        self.clear_waiting_notice();
+        self.set_selected_music(pick);
+        self.set_room_music(pick.music_id, pick.difficulty, pick.speed);
+        self.outbox.pending_music_send = Some(pick);
+        AutoPickOutcome::Picked(pick.music_id)
     }
 
     /// Speed surviving a dialog pick: the staged selection's speed
@@ -7986,9 +8147,10 @@ mod game_tests {
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
     use crate::screens::side::{
-        SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
+        SelectMusicSong, SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
     };
     use crate::{GameLoop, MenuKey};
+    use o2jam_file::ChartMask;
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
@@ -12378,6 +12540,105 @@ mod game_tests {
             11,
             "RIGHT at the ceiling stays at speed 11"
         );
+    }
+
+    /// One catalog row for the auto-pick seam tests: all charts,
+    /// installed, one lane count and one level per difficulty.
+    fn auto_pick_song(id: u32, lanes: u8, level: u16) -> SelectMusicSong {
+        SelectMusicSong {
+            song_id: id,
+            title: format!("Song {id}"),
+            artist: "Artist".to_owned(),
+            levels: [level, level, level],
+            genre: 0,
+            label: None,
+            charts: ChartMask::ALL,
+            installed: true,
+            lanes,
+        }
+    }
+
+    /// Master in Waiting with a key mode and a synthetic three-row
+    /// catalog (3/5/7 lanes). No install-root read.
+    fn auto_pick_game(key_mode: u8) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.key_mode = key_mode;
+        room.music_id = 0;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.catalog_songs = vec![
+            auto_pick_song(100, 3, 4),
+            auto_pick_song(200, 5, 4),
+            auto_pick_song(300, 7, 4),
+        ];
+        game
+    }
+
+    #[test]
+    fn auto_pick_uses_the_room_key_mode_lane_count() {
+        // Live chain: OnlineSession::apply_waiting_frame (3007 /**
+        // 0xfb6) -> ScreenGame::auto_pick_waiting_song ->
+        //   ScreenGame::set_selected_music ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // FUN_004b42d0: key mode 0/1/2 maps to 3/5/7 lanes; a match
+        // stages the row's song id and sends 4000.
+        for (key_mode, expected_id) in [(0u8, 100u16), (1, 200), (2, 300)] {
+            let mut game = auto_pick_game(key_mode);
+            assert_eq!(
+                game.auto_pick_waiting_song(),
+                AutoPickOutcome::Picked(expected_id),
+                "key mode {key_mode} must pick the {expected_id} row"
+            );
+            assert_eq!(game.room_music_id(), Some(expected_id));
+            assert!(game.has_pending_music_send(), "a match queues 4000");
+        }
+    }
+
+    #[test]
+    fn auto_pick_skips_rows_that_fail_the_pinned_filters() {
+        // Same live chain as `auto_pick_uses_the_room_key_mode_lane_count`.
+        // FUN_004b42d0 requires availability bit 8, the difficulty bit
+        // from the 0x680724 table (1/2/4), and a level word of zero or
+        // at most the staged cap. A zero level bypasses the cap.
+        let mut game = auto_pick_game(1);
+        game.set_auto_pick_level_cap(10);
+        game.catalog_songs = vec![
+            auto_pick_song(101, 3, 4),
+            auto_pick_song(102, 5, 20),
+            SelectMusicSong {
+                installed: false,
+                ..auto_pick_song(103, 5, 4)
+            },
+            SelectMusicSong {
+                charts: ChartMask::NONE,
+                ..auto_pick_song(104, 5, 4)
+            },
+            auto_pick_song(105, 5, 0),
+        ];
+        assert_eq!(
+            game.auto_pick_waiting_song(),
+            AutoPickOutcome::Picked(105),
+            "only the zero-level row is eligible"
+        );
+    }
+
+    #[test]
+    fn auto_pick_miss_arms_back_and_posts_the_notice() {
+        // Same live chain as the match guards. With no eligible row
+        // FUN_004b42d0 arms BACK (0x16200002) and posts the pinned
+        // Korean notice; no 4000 is queued.
+        let mut game = auto_pick_game(2);
+        game.catalog_songs = vec![auto_pick_song(100, 3, 1)];
+        assert_eq!(game.auto_pick_waiting_song(), AutoPickOutcome::Missed);
+        assert!(game.waiting_back_armed(), "the miss arm stages BACK");
+        assert!(
+            game.waiting_notice().is_some(),
+            "the miss arm posts the notice"
+        );
+        assert!(!game.has_pending_music_send(), "a miss sends no 4000");
     }
 
     /// Staged waiting covers plus the `MUSICNAME` top-bar rect
