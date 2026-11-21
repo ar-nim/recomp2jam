@@ -12,6 +12,8 @@ pub enum MyRoomNotice {
     MessengerLoading,
     /// CONFERENCE: modal 20 has no pinned caption; art only.
     Conference,
+    /// MESSENGER: modal 21 has no pinned caption; art only.
+    MessengerModal,
     /// WEBAVATAR: the helper's copy at file `0x2491e0`.
     WebAvatar,
     /// 5031 success: nickname old → new (file `0x248d60`).
@@ -73,7 +75,7 @@ impl MyRoomNotice {
         match self {
             Self::MessengerUnavailable => MESSENGER_UNAVAILABLE.to_vec(),
             Self::MessengerLoading => MESSENGER_LOADING.to_vec(),
-            Self::Conference => Vec::new(),
+            Self::Conference | Self::MessengerModal => Vec::new(),
             Self::WebAvatar => WEB_AVATAR.to_vec(),
             Self::NicknameChanged { old, new } => {
                 ink_template(NICKNAME_CHANGED, &[old.as_bytes(), new.as_bytes()])

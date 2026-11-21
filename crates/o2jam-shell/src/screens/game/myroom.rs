@@ -18,8 +18,9 @@ use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
     myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
-    myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab, MyRoomNotice,
-    MyRoomPanel, MyRoomState, SideScreen, MYROOM_NOTICE_TEXT_CODE,
+    myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab,
+    MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen,
+    MYROOM_NOTICE_TEXT_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -145,7 +146,15 @@ impl ScreenGame {
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
             MyRoomAction::MessengerLiveness => {
-                self.post_myroom_notice(MyRoomNotice::MessengerUnavailable);
+                let notice = match self.myroom.messenger_state() {
+                    MyRoomMessengerState::Disconnected => MyRoomNotice::MessengerUnavailable,
+                    MyRoomMessengerState::Loading => MyRoomNotice::MessengerLoading,
+                    MyRoomMessengerState::Available => MyRoomNotice::MessengerModal,
+                };
+                self.post_myroom_notice(notice);
+            }
+            MyRoomAction::OpenConference => {
+                self.post_myroom_notice(MyRoomNotice::Conference);
             }
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }

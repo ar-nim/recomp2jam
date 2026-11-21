@@ -214,6 +214,17 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## CONFERENCE / MESSENGER branches (ticket #803, 2026-11-22)
+
+`FUN_004a3ee0` (file `0xa3ee0`, EV `ev_aa875251…`) case `0x1520006b`
+opens modal 20; case `0x1520006d` branches on the messenger globals into
+the connection-lost string (file `0x247dc0`), the loading string (file
+`0x247e08`) or modal 21. Our client stages the branch explicitly (the
+globals' writer is OPEN) and shows the pinned one-OK sheet; the two modal
+captions are unpinned, so only staged sheet art paints, never invented
+copy. Neither press queues wire. Guard:
+`myroom_conference_and_messenger_branches_post_their_pinned_sheets`.
+
 ## BACK / GOSHOP wire split (ticket #802, 2026-11-22)
 
 `FUN_004a3ee0` (VA `0x4a3ee0`, file `0xa3ee0`,

@@ -77,15 +77,16 @@ use super::side::{
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopRow, MyRoomNotice, MyRoomPassInfo, MyRoomState, PasswordAction,
-    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
-    SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
-    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
-    ShopGood, ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow,
-    WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
-    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE,
-    SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    MusicShopAction, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
+    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
+    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
+    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
+    TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -1898,6 +1899,13 @@ impl ScreenGame {
     #[must_use]
     pub const fn myroom_notice(&self) -> Option<&MyRoomNotice> {
         self.myroom_notice.as_ref()
+    }
+
+    /// Stage which MESSENGER branch answers a press. The exe's
+    /// globals that select the branch have no wire-source pin.
+    pub fn set_myroom_messenger_state(&mut self, state: MyRoomMessengerState) -> &mut Self {
+        self.myroom.set_messenger_state(state);
+        self
     }
 
     /// Stage the pass word, date string and skill-row names behind
@@ -16063,8 +16071,8 @@ mod game_tests {
             hash_u64(&mut hash, u64::from(pixel));
         }
         assert_eq!(
-            hash, 0x570F_AD14_1C10_0CCB,
-            "MyRoom ScreenGame cluster output drifted"
+            hash, 0xEC55_086A_ACA7_6A76,
+            "MyRoom ScreenGame cluster output drifted (CONFERENCE now opens a sheet)"
         );
     }
 
@@ -16327,6 +16335,50 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_conference_and_messenger_branches_post_their_pinned_sheets() {
+        // Live caller chain: click_myroom_side -> myroom_action_at ->
+        // MyRoomAction::OpenConference / MessengerLiveness -> one-OK
+        // sheet. Static pins: FUN_004a3ee0 cases 0x1520006b/6d
+        // (file 0xa3ee0, EV ev_aa875251…); messenger strings at files
+        // 0x247dc0/0x247e08; modal 21 caption stays unpinned.
+        use super::super::side::{
+            MyRoomMessengerState, MyRoomNotice, MYROOM_CONFERENCE_CODE, MYROOM_MESSENGER_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_CONFERENCE_CODE, 10, 10),
+                myroom_hit_placement(MYROOM_MESSENGER_CODE, 60, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(20, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::Conference));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(
+            game.myroom_notice(),
+            Some(&MyRoomNotice::MessengerUnavailable),
+            "the default branch is the pinned B8 liveness sheet"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.set_myroom_messenger_state(MyRoomMessengerState::Loading);
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::MessengerLoading));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.set_myroom_messenger_state(MyRoomMessengerState::Available);
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::MessengerModal));
+        assert_eq!(game.take_equip_send(), None, "no wire from either press");
+    }
+
+    #[test]
     fn myroom_special_reply_folds_nickname_and_penalty_then_posts_its_notice() {
         // Live caller chain: OnlineSession::poll_wire ->
         // ScreenGame::apply_myroom_notice -> staged 2001 character +
@@ -16503,16 +16555,12 @@ mod game_tests {
         //   seam stays empty.
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
-            myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
-            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_NOTICEBOARD_CODE,
-            MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE, MYROOM_VACATE_CODE,
-            MYROOM_WEBAVATAR_CODE,
+            myroom_action_for_code, myroom_p0_verdict, MyRoomAction, MYROOM_ALARM_CODE,
+            MYROOM_ALARM_POPUP_CODE, MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE,
+            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
+            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
         };
-        for code in [
-            MYROOM_WEBAVATAR_CODE,
-            MYROOM_CONFERENCE_CODE,
-            MYROOM_BAGSORT_CODE,
-        ] {
+        for code in [MYROOM_WEBAVATAR_CODE, MYROOM_BAGSORT_CODE] {
             assert_eq!(
                 myroom_action_for_code(code),
                 None,
@@ -16523,6 +16571,12 @@ mod game_tests {
                 "P0 button {code:#X} carries a verdict"
             );
         }
+        assert_eq!(
+            myroom_action_for_code(MYROOM_CONFERENCE_CODE),
+            Some(MyRoomAction::OpenConference),
+            "CONFERENCE now opens its pinned modal sheet"
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_CONFERENCE_CODE), None);
         for code in [
             MYROOM_ALARM_CODE,
             MYROOM_ALARM_POPUP_CODE,

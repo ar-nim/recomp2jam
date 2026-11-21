@@ -219,6 +219,23 @@ pub enum MyRoomPanel {
     Status,
 }
 
+/// Messenger branch selected by the exe's global words before
+/// `FUN_004a3ee0` case `0x1520006d` (file `0xa3ee0`,
+/// EV `ev_aa875251…`). The disconnected branch is the B8 pack's one-OK
+/// liveness sheet; the other two strings are pinned at files
+/// `0x247dc0`/`0x247e08`, and modal 21 has no pinned caption. The wire
+/// writer of those globals is OPEN, so callers stage the branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MyRoomMessengerState {
+    /// No messenger server: one-OK connection-lost notice (default).
+    #[default]
+    Disconnected,
+    /// Info loading: one-OK loading notice.
+    Loading,
+    /// Info available: modal 21, caption unpinned.
+    Available,
+}
+
 /// Whether one staged MyRoom placement belongs to the visible panel
 /// face. The Inventory face hides the status plate and the INVENTORY
 /// button body: the latter would cover the background's STATUS label.
@@ -288,10 +305,12 @@ pub enum MyRoomAction {
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,
-    /// MESSENGER pressed: open the exe-pinned one-OK liveness sheet.
-    /// This is a UI response to the absent backend, not a Messenger
-    /// main sheet or a wire send.
+    /// MESSENGER pressed: open the branch pinned by the staged
+    /// messenger state. No wire send.
     MessengerLiveness,
+    /// CONFERENCE pressed: open modal 20. No caption is pinned, so
+    /// only the staged sheet art paints. No wire send.
+    OpenConference,
 }
 
 /// Action for one avatar-room control code (`None` for caption and
@@ -323,6 +342,7 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
         MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
+        MYROOM_CONFERENCE_CODE => Some(MyRoomAction::OpenConference),
         _ => None,
     }
 }
@@ -451,6 +471,8 @@ pub struct MyRoomState {
     panel: MyRoomPanel,
     /// Visible lower-panel tab (exe default: MY BAG).
     lower_tab: MyRoomLowerTab,
+    /// Branch of the MESSENGER notice (exe globals, staged here).
+    messenger_state: MyRoomMessengerState,
 }
 
 impl Default for MyRoomState {
@@ -472,6 +494,7 @@ impl MyRoomState {
             gift_cell: None,
             panel: MyRoomPanel::Inventory,
             lower_tab: MyRoomLowerTab::Bag,
+            messenger_state: MyRoomMessengerState::Disconnected,
         }
     }
 
@@ -528,6 +551,18 @@ impl MyRoomState {
     /// pinned exe frame, so only the gift tab has a caller today.
     pub fn show_lower_tab(&mut self, tab: MyRoomLowerTab) {
         self.lower_tab = tab;
+    }
+
+    /// Selected MESSENGER branch.
+    #[must_use]
+    pub const fn messenger_state(self) -> MyRoomMessengerState {
+        self.messenger_state
+    }
+
+    /// Stage the MESSENGER branch named by the exe globals. No wire
+    /// send is implied: this only selects which sheet answers a press.
+    pub fn set_messenger_state(&mut self, state: MyRoomMessengerState) {
+        self.messenger_state = state;
     }
 
     /// Record a slot-button press; past the eleventh button the
@@ -763,9 +798,6 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
         MYROOM_WEBAVATAR_CODE => Some(
             "WEBAVATAR P0: no wire send; web avatar page lives outside the gateway - visibly inert",
         ),
-        MYROOM_CONFERENCE_CODE => {
-            Some("CONFERENCE P0: no wire send; backend never wired - visibly inert")
-        }
         MYROOM_BAGSORT_CODE => {
             Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
         }
