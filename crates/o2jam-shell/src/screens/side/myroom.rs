@@ -5,7 +5,8 @@
 use super::super::super::avatar::{avatar_item_by_id, ScenePlacement};
 use super::super::paint::rect_hit;
 use super::{
-    equipped_item_view, wallet_amount_caption, SelectMusicSong, ShopItemView, WalletState,
+    equipped_item_view, next_up_threshold, wallet_amount_caption, SelectMusicSong, ShopItemView,
+    WalletState,
 };
 use o2jam_file::{AvatarItemRow, AvatarItemTable};
 use o2jam_net::{CharacterInfo, GiftItemInfo, GiftMusicInfo};
@@ -707,8 +708,11 @@ pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftVi
 }
 
 /// Identity captions from fetched character data: nickname, level,
-/// cash point (`N PT`), experience, next-up exp (staged experience, room
-/// precedent), win-rate (staged wins/battles percent), and penalties.
+/// cash point (`N PT`), experience, next-up exp (the exe's 99-entry
+/// level threshold), win-rate (staged wins/battles percent), and
+/// penalties. The numeric formats are exe-pinned at file `0xa7a80`
+/// (EV `ev_21ce4a71...`): `" %d"` for level, exp and next-up,
+/// `"Lv %d"` for penalty level, `"%d"` for penalty count.
 /// Cash wallets live on the
 /// single [`WalletState`] now ([`myroom_wallet_captions` paints the
 /// O2/MUSIC/ITEM cash controls), so they stay out of this record.
@@ -728,18 +732,18 @@ pub fn myroom_win_rate_text(character: &CharacterInfo) -> String {
 }
 
 pub fn myroom_next_up_exp_text(character: &CharacterInfo) -> String {
-    character.experience.to_string()
+    next_up_threshold(character.level).map_or_else(String::new, |threshold| format!(" {threshold}"))
 }
 
 pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)> {
     vec![
         (MYROOM_NICKNAME_CODE, character.nickname.clone()),
-        (MYROOM_LEVEL_CODE, character.level.to_string()),
+        (MYROOM_LEVEL_CODE, format!(" {}", character.level)),
         (
             MYROOM_CASH_POINT_CODE,
             format!("{} PT", character.cash_point),
         ),
-        (MYROOM_EXP_CODE, character.experience.to_string()),
+        (MYROOM_EXP_CODE, format!(" {}", character.experience)),
         (MYROOM_NEXTUPEXP_CODE, myroom_next_up_exp_text(character)),
         (MYROOM_WINRATE_CODE, myroom_win_rate_text(character)),
         (
@@ -748,7 +752,7 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
         ),
         (
             MYROOM_PENALTY_LEVEL_CODE,
-            character.penalty_level.to_string(),
+            format!("Lv {}", character.penalty_level),
         ),
     ]
 }

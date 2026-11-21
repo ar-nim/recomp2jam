@@ -17,7 +17,7 @@ use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
     myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
     myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, myroom_worn_well_items,
-    MyRoomAction, MyRoomLowerTab, MyRoomPanel, MyRoomState, SideScreen,
+    MyRoomAction, MyRoomLowerTab, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -137,7 +137,9 @@ impl ScreenGame {
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
-            MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
+            MyRoomAction::MessengerLiveness => {
+                self.post_myroom_notice(MyRoomNotice::MessengerUnavailable);
+            }
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }

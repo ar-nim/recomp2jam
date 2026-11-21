@@ -171,6 +171,7 @@ use o2jam_net::{
 use o2jam_shell::screens::game::{
     AutoPickOutcome, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
 };
+use o2jam_shell::screens::side::MyRoomNotice;
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -337,6 +338,45 @@ const ROOM_USER_COUNT_EVENT_COMMAND: u16 = 2009;
 fn start_broadcast_result(payload: &[u8]) -> Option<i32> {
     let bytes: [u8; 4] = payload.get(..4)?.try_into().ok()?;
     Some(i32::from_le_bytes(bytes))
+}
+
+/// One special-item reply → one MyRoom notice. Result and verdict
+/// come from the front of the body, as read by `FUN_004a54e0`
+/// (file `0xa54e0`, EV `ev_45f6c6d0…`); nickname strings use the exe's
+/// `+0xb8`/`+0x1bc` slots, and the bag-size word follows the result.
+/// Unknown codes stay silent instead of inventing a caption.
+#[must_use]
+fn myroom_notice_for_reply(command: u16, body: &[u8]) -> Option<MyRoomNotice> {
+    let result = start_broadcast_result(body)?;
+    let verdict = body.get(4).map(|byte| i8::from_le_bytes([*byte]));
+    let field = |offset: usize| {
+        o2jam_net::strings::decode_null_terminated(
+            body.get(offset..)?,
+            o2jam_net::strings::MAX_STRING_LEN,
+        )
+        .ok()
+        .map(|(text, _)| text)
+    };
+    match (command, result) {
+        (5031, 0) => Some(MyRoomNotice::NicknameChanged {
+            old: field(0xB8).unwrap_or_default(),
+            new: field(0x1BC).unwrap_or_default(),
+        }),
+        (5031, -97) => Some(MyRoomNotice::NicknameRetry),
+        (5033, 0) if verdict == Some(0) => Some(MyRoomNotice::NicknameAvailable {
+            name: field(0xB8).unwrap_or_default(),
+        }),
+        (5033, 0) if verdict == Some(1) => Some(MyRoomNotice::NicknameUnavailable),
+        (5035, 0) => Some(MyRoomNotice::PenaltyCleared),
+        (5035, -98) => Some(MyRoomNotice::PenaltyRetry),
+        (5037, 0) => {
+            let after = start_broadcast_result(body.get(4..)?)?;
+            Some(MyRoomNotice::BagExpanded { after })
+        }
+        (5037, -96) => Some(MyRoomNotice::BagRetry),
+        (5039, -95) => Some(MyRoomNotice::BagSortRetry),
+        _ => None,
+    }
 }
 
 /// Whether one wire id re-announces the room's music state: the exe's
@@ -2763,6 +2803,33 @@ impl OnlineSession {
         }
     }
 
+    /// Drain special-item replies on the MyRoom side. The exe's
+    /// handler (`FUN_004a54e0`, file `0xa54e0`, EV `ev_45f6c6d0…`)
+    /// inks one-OK notices for 5031/5033/5035/5037/5039; a pending
+    /// attempt owns the socket, so this drain only runs while idle.
+    fn poll_myroom_replies(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom)
+            || self.wire_attempt_pending()
+            || self.wallet_refresh_expected.is_some()
+        {
+            return;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if matches!(frame.id, 5031 | 5033 | 5035 | 5037 | 5039) => {
+                    if let Some(notice) = myroom_notice_for_reply(frame.id, &frame.payload) {
+                        self.game.apply_myroom_notice(notice);
+                    }
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-MyRoom frame in reply drain");
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
     fn flush_music_buy(&mut self) {
         // A buy already in flight must not be re-sent; leave any
         // queued commit staged so it retries once the reply lands.
@@ -4038,6 +4105,7 @@ impl OnlineSession {
         self.flush_start_payment();
         self.poll_attempts();
         self.poll_sell_response();
+        self.poll_myroom_replies();
         self.poll_wallet_answer();
         if self.game.screen() == Screen::Room {
             self.poll_room_user_list_fuse();
@@ -6093,6 +6161,58 @@ pub(super) mod session_tests {
         paint_until(&mut session, |s| !s.game.has_pending_equip_send());
         let _ = server.join();
         assert!(!session.game.has_pending_equip_send());
+    }
+
+    #[test]
+    fn myroom_penalty_reply_opens_the_pinned_one_ok_sheet_through_scripted_gateway() {
+        // Live caller chain:
+        //   OnlineSession::paint -> poll_wire -> poll_myroom_replies
+        //   (S2C 5035 result 0) -> ScreenGame::apply_myroom_notice
+        //   -> Dialog_Information sheet -> OK clears it.
+        // Tier 2 scripted gateway; no game data read.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::gift::GetGiftMessageListResponse;
+        use o2jam_shell::screens::side::{MyRoomNotice, SideScreen};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            // MyRoom entry queues 5017; let that attempt settle first,
+            // then push the special-item answer.
+            let request = read_frame(&mut stream);
+            assert_eq!(request.id, 5017);
+            let gifts = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &gifts.encode_body()))
+                .unwrap();
+            stream
+                .write_all(&encode_frame(5035, &[0, 0, 0, 0]))
+                .unwrap();
+            while read_frame_until_eof(&mut stream).is_some() {}
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(Vec::new(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_frame(&mut session);
+        paint_until(&mut session, |state| state.gift_list_attempt.is_none());
+        paint_frame(&mut session);
+        assert!(matches!(
+            session.game.myroom_notice(),
+            Some(MyRoomNotice::PenaltyCleared)
+        ));
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(session.game.myroom_notice(), None, "OK dismisses the sheet");
+        let _ = server.join();
     }
 
     #[test]

@@ -189,6 +189,50 @@ silent fallback. OPEN next step: a live non-sequential account, capture the
 wells and pair them with the 2001 body. Guard:
 `myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal`.
 
+## STATUS word/format table (ticket #799, 2026-11-22)
+
+`FUN_004a7a80` (VA `0x4a7a80`, file `0xa7a80`,
+EV `ev_21ce4a71b4e5b3ae8f617832f47b721dbd37c96375ae8f73086aad6a49989c9b`)
+inks STATUS from these pinned words/formats: nickname `0x15400037` from
+`0x77cd05` with a 121-pixel fit loop; level `0x38` and experience `0x3a`
+as `" %d"` (VA `0x648140`); next-up `0x3b` as `table[level]` for level < 99
+from the 99-entry u32 table at file `0x24776c` (REA read
+`ev_b062b9faf5ba4bc445bcda0356993bae5fb098c8959e8d645ccf84f6367a8f7b`),
+and nothing past the table; rank `0x3d` as `" %d 등"` (file `0x249474`)
+when its web-served word is nonzero (the overnight note transcribed this
+as `만`; raw cp949 bytes at file `0x249474` decode to `등` — code-byte pin
+wins, but no rank word is staged in our client); penalty count `0x66` as `"%d"`, level
+`0x67` as `"Lv %d"`; bonus `0x39` as `"%d PT"`. Money G/W keep their
+settled 5029 wallet source (#202).
+
+CONTRADICTION: the older hash-pinned room-panel capture read `Next Up 500`
+(level 1) and `Next Up 5001` (level 7), which no index of this table
+produces (884, 1819, …, 10404 at index 7). The exe code and table are the
+behavior oracle per project rule; the earlier capture is kept visible as
+the open question. OPEN next step: pair a known-level exe STATUS frame with
+the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
+Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
+and `myroom_status_prints_the_exe_number_and_penalty_formats`.
+
+## Special-item replies (ticket #799 body, 2026-11-22)
+
+`FUN_004a54e0` (VA `0x4a54e0`, file `0xa54e0`,
+EV `ev_45f6c6d01e4fd29e88a8123c77b2088b9bd3f10d84604d3748e9ac2057c9e7b6`)
+posts pinned one-OK copy for 5031 (nickname old→new at body `+0xb8`/`+0x1bc`,
+error -97), 5033 (new-name confirmation verdict 0, code 1), 5035 (penalty
+clear, error -98), 5037 (bag slots `after - 30 -> after`, error -96) and 5039
+(bag-sort failure -95). Strings are copied by file offset into
+`screens/side/myroom_notice.rs`; the sheet geometry is still
+`Dialog_Information.bnd`. The 5031 success and 5035 success also fold into
+the staged character (nickname, penalties). The exe's legacy encoding for
+the interpolated name bytes stays OPEN; our wire strings are UTF-8.
+
+`OnlineSession::poll_wire -> poll_myroom_replies` drains these opcodes only
+while the MyRoom side owns an idle socket; a pending attempt keeps the
+socket. Level-2 scripted-gateway guard:
+`myroom_penalty_reply_opens_the_pinned_one_ok_sheet_through_scripted_gateway`.
+The live known-state reply capture stays OPEN.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to

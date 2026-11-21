@@ -77,8 +77,8 @@ use super::side::{
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    MusicShopAction, MusicShopRow, MyRoomNotice, MyRoomState, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
     SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
     SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
     ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
@@ -874,10 +874,10 @@ pub struct ScreenGame {
     /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
     /// the type-100 dismissal queue (#367).
     room_no_response: RoomNoResponseFuse,
-    /// One-OK liveness sheet over MyRoom after a MESSENGER press
-    /// (qualified B8 pack). It owns clicks until its OK is pressed;
-    /// the Messenger main sheet stays unwired (P0).
-    messenger_liveness_open: bool,
+    /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
+    /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
+    /// bytes are exe-string pinned in [`MyRoomNotice`].
+    myroom_notice: Option<MyRoomNotice>,
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1270,7 +1270,7 @@ impl ScreenGame {
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
-            messenger_liveness_open: false,
+            myroom_notice: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1879,10 +1879,45 @@ impl ScreenGame {
         self.room_no_response.sheet_open()
     }
 
-    /// Whether the pinned Messenger liveness sheet owns input.
+    /// Whether the pinned Messenger liveness sheet owns input. Other
+    /// MyRoom notices also own it, but this query names the B8 press.
     #[must_use]
     pub const fn messenger_liveness_open(&self) -> bool {
-        self.messenger_liveness_open
+        matches!(self.myroom_notice, Some(MyRoomNotice::MessengerUnavailable))
+    }
+
+    /// Open MyRoom one-OK notice, if any (message bytes and values).
+    #[must_use]
+    pub const fn myroom_notice(&self) -> Option<&MyRoomNotice> {
+        self.myroom_notice.as_ref()
+    }
+
+    /// Post one exe-pinned MyRoom one-OK sheet. A new notice replaces
+    /// an old one; the sheet owns input until its OK is pressed.
+    pub fn post_myroom_notice(&mut self, notice: MyRoomNotice) {
+        self.myroom_notice = Some(notice);
+    }
+
+    /// Fold one special-item reply into the staged room and post its
+    /// one-OK sheet. Nickname success and penalty clear change the
+    /// staged character; the bag-size notice derives its before value
+    /// from the exe's `after - 30` rule (file `0xa54e0`).
+    pub fn apply_myroom_notice(&mut self, notice: MyRoomNotice) {
+        match &notice {
+            MyRoomNotice::NicknameChanged { new, .. } => {
+                if let Some(character) = self.myroom_character.as_mut() {
+                    character.nickname.clone_from(new);
+                }
+            }
+            MyRoomNotice::PenaltyCleared => {
+                if let Some(character) = self.myroom_character.as_mut() {
+                    character.penalty_count = 0;
+                    character.penalty_level = 0;
+                }
+            }
+            _ => {}
+        }
+        self.post_myroom_notice(notice);
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -3470,7 +3505,7 @@ impl ScreenGame {
     /// holds, so a click behind a sheet cannot send a wire frame (#692).
     #[must_use]
     pub fn dialog_owns_input(&self) -> bool {
-        self.messenger_liveness_open
+        self.myroom_notice.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
             || self.room_dialog.is_some()
@@ -3549,7 +3584,7 @@ impl ScreenGame {
 
     /// One-OK sheets that layer over a side or the Room board.
     fn overlay_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
-        if self.messenger_liveness_open {
+        if self.myroom_notice.is_some() {
             Some((DialogHost::MessengerLiveness, self.relay_down_art.as_ref()?))
         } else if self.room_no_response_dialog_open() {
             Some((DialogHost::RoomFuse, self.relay_down_art.as_ref()?))
@@ -5406,11 +5441,11 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
-        if self.messenger_liveness_open {
-            // The one-OK sheet owns every click until OK; it sends
-            // no wire (Memoryer has no messenger endpoint).
+        if self.myroom_notice.is_some() {
+            // The one-OK sheet owns every click until OK and sends no
+            // wire of its own.
             if self.information_ok_hit(x, y) {
-                self.messenger_liveness_open = false;
+                self.myroom_notice = None;
             }
             return;
         }
@@ -6341,7 +6376,7 @@ impl ScreenGame {
             self.tutorial_key_lights.clear();
         }
         self.billing_failure_notice = false;
-        self.messenger_liveness_open = false;
+        self.myroom_notice = None;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -7342,10 +7377,11 @@ impl ScreenGame {
         if self.billing_failure_notice_open() {
             paint_billing_failure_notice(frame);
         }
-        if self.messenger_liveness_open {
+        if let Some(notice) = self.myroom_notice.as_ref() {
             // Same staged Information sheet and Information origin as
-            // the relay notice; the B8 pack pins one OK and no wire.
-            paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
+            // the relay notice; the pinned copy replaces its TEXT.
+            let message = notice.message();
+            paint_information_message(frame, self.relay_down_art.as_ref(), &message);
         }
         self.paint_dialog_frame_states(frame);
     }
@@ -16041,15 +16077,15 @@ mod game_tests {
     }
 
     #[test]
-    fn myroom_info_plate_paints_next_up_exp_from_staged_experience() {
+    fn myroom_info_plate_paints_next_up_exp_from_the_level_threshold() {
         // Live caller chain (feed): same 2001 staging as
         // `myroom_info_plate_paints_win_rate_from_staged_battles`.
         // Live caller chain (read):
         //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
         //   -> myroom_identity_captions -> myroom_next_up_exp_text.
-        // Room-panel precedent: the 7.55 room capture shows `Exp.` in
-        // the next-up well, so the plate paints staged experience
-        // (single-capture pin, OPEN whether it tracks a threshold).
+        // Static oracle: FUN_004a7a80 prints table[level] in the
+        // next-up well; the old room-panel precedent painted staged
+        // experience and is documented as a contradiction.
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_identity_captions, MYROOM_EXP_CODE, MYROOM_NEXTUPEXP_CODE,
@@ -16065,8 +16101,8 @@ mod game_tests {
                 .find(|(candidate, _)| *candidate == code)
                 .map(|(_, text)| text.as_str())
         };
-        assert_eq!(caption(MYROOM_EXP_CODE), Some("2133"));
-        assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some("2133"));
+        assert_eq!(caption(MYROOM_EXP_CODE), Some(" 2133"));
+        assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some(" 884"));
     }
 
     #[test]
@@ -16151,6 +16187,60 @@ mod game_tests {
             .expect("staged")
             .inventory
             .contains(&13));
+    }
+
+    #[test]
+    fn myroom_special_reply_folds_nickname_and_penalty_then_posts_its_notice() {
+        // Live caller chain: OnlineSession::poll_wire ->
+        // ScreenGame::apply_myroom_notice -> staged 2001 character +
+        // one-OK INFORMATION sheet -> click OK clears it.
+        // Static pins: FUN_004a54e0 cases 0x13a7/0x13ab
+        // (EV ev_45f6c6d0…, file 0xa54e0).
+        use super::super::side::MyRoomNotice;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let mut character = myroom_test_character(Vec::new());
+        character.penalty_count = 3;
+        character.penalty_level = 2;
+        game.set_myroom_character(character);
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.apply_myroom_notice(MyRoomNotice::NicknameChanged {
+            old: "Before".to_owned(),
+            new: "After".to_owned(),
+        });
+        assert_eq!(
+            game.myroom_character().map(|row| row.nickname.as_str()),
+            Some("After"),
+            "the 5031 success reply renames the staged character"
+        );
+        assert!(matches!(
+            game.myroom_notice(),
+            Some(MyRoomNotice::NicknameChanged { .. })
+        ));
+
+        game.apply_myroom_notice(MyRoomNotice::PenaltyCleared);
+        let staged = game.myroom_character().expect("staged");
+        assert_eq!((staged.penalty_count, staged.penalty_level), (0, 0));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(game.myroom_notice(), None, "OK dismisses the sheet");
+    }
+
+    #[test]
+    fn myroom_special_reply_inks_the_exe_copy_in_the_one_ok_sheet() {
+        // The sheet's message bytes are the pinned exe strings; the
+        // geometry stays with `Dialog_Information.bnd` (no literals).
+        use super::super::side::MyRoomNotice;
+        let message = MyRoomNotice::NicknameChanged {
+            old: "Old".to_owned(),
+            new: "New".to_owned(),
+        }
+        .message();
+        assert!(message.windows(3).any(|window| window == b"Old"));
+        assert!(message.windows(3).any(|window| window == b"New"));
+        let retry = MyRoomNotice::PenaltyRetry.message();
+        assert_eq!(retry, MyRoomNotice::PenaltyRetry.message());
+        assert!(retry.starts_with(&[0xC6, 0xE4, 0xB3, 0xCE]));
     }
 
     #[test]
