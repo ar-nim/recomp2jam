@@ -102,7 +102,8 @@ VERIFIED); long-note `HoldState` ✅ (hold machine + release-tail
 rating + tick bonus `+10/+1 combo` VERIFIED `docs/gameplay.md`);
 lane-effect map reshuffle ✅; room teams ✅; `PeerBars` 4015 mirror ✅.
 Audio (`o2jam-audio`): lewton decode + cpal backend + sample clock ✅
-(bgRoom 53.8 s parity); mixer pending. Render (`o2jam-render`):
+(bgRoom 53.8 s parity); scene mixer landed; scene-BGM selector and the
+first pinned UI-effect cluster wired (#721, #307). Render (`o2jam-render`):
 software compositor (RGB555 blit/clip/colorkey) ✅; wgpu TODO.
 Shell (`o2jam-shell`): all 7 main scenes + 9 side states flow through
 `ScreenGame`/`load_scene`/`ScreenFlow` ✅ (14 PASS cells,
@@ -125,10 +126,10 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | States / flow | Factory `0x477990` + jump table `0x4789C4` matched; 12 classes placed by RTTI; tails decoded (`HANDOFF.md`) | **PART** — flows/transitions for all scenes ✅ (`parity.md` 14 PASS); state-class identity pins agree | Their per-state v4 body roster pinpoints where scene-entry behavior (BGM cue, control setup) lives; we have entry *behavior* for channel only |
 | Scene rendering + UI | CStateBase family, text controls, pagers, web ctrl matched; CDX boundary doc (their vendored CDX too old for mesh/texture) | **PART** — bnd rect staging ✅ (all side screens), composition FAIL (invented placement, audits cited) | Their matched text-control setters (`0x50F520/680/6A0/6F0` families, callee counts 96/37/38) corroborate our setter-trio pin; digit/combo/score anchor binding still ours to pin |
 | Channel / planet behavior | `CStatePlanet::v4` `0x48DD10` reconstructed; connect dispatcher `0x58C6C0` read; emblem→server-family mapping static-read | **PART** — live-pinned geometry/hover/host (`channel-fill.md`); entry-face click verified; emblem→family verified live | Their static read of `0x58C6C0` (host/port tables + jitter) can guide our next live trace; BGM cue for Planet (id 9, loop) now pinned, unimplemented |
-| Room / waiting | `CStateRoom` override inventory mapped (vtable `0x647BC4`); team mapping `FUN_0048C810` matched; S→C 4007 handler `0x55F470` analyzed | **PART** — flows ✅; seats grid fixed to 4×2 (Wine); teams in `o2jam-game` ✅; no create/password UI; 4007 refresh not shell-wired | Their `0x55F470` analysis (u8 idx `<8`, stride-`0x2190` slot refresh) corroborates our handler pin; waiting BGM id 6 + room BGM id 3 pinned, unimplemented |
+| Room / waiting | `CStateRoom` override inventory mapped (vtable `0x647BC4`); team mapping `FUN_0048C810` matched; S→C 4007 handler `0x55F470` analyzed | **PART** — flows ✅; seats grid fixed to 4×2 (Wine); teams in `o2jam-game` ✅; no create/password UI; 4007 refresh not shell-wired | Their `0x55F470` analysis (u8 idx `<8`, stride-`0x2190` slot refresh) corroborates our handler pin; waiting BGM id 6 + room BGM id 3 pinned and implemented via `Screen::bgm_cue` (#307) |
 | Playing / judgement / score / life / pills / long notes | Judge chain matched (`0x540A80/570510/576540/570260`); playing loops analyzed; `key_up_release` `0x576719` analyzed | **PART→IMPL in crate** — all rule layers ✅ (`TimingWindows`, scorer, pills, `LifeBar`, `HoldState`); NOT shell-wired; shell clock ≠ sample clock | Jam gauge math: their `jam_threshold_table` `0x570260` is matched — strongest lead for our OPEN gauge chain (`+0x396e/+0x3970` identity, rating sink `+0xa14` codes 1/9/14). Needs our own exe verification |
-| Result | `CStateResult_v10`, builder `FUN_004C2390` matched | **PART** — art stages, rank row 0 paints; digits at fixed anchors (audit 13); grade mapping OPEN; SubmitScore fields known | Result BGM id `0x13` cue + retry BGM re-cue pinned via selector; WinLose art wiring (`Result_WinLose.ojs` `0x24b014`) ours to finish |
-| Audio (BGM / mixer / ojm) | `SceneMusic` chain reconstructed (`0x551820→0x54BC50`, one-based `BGM.ojm`); `COjmSampleReader::render` analyzed; volume cfg matched | **PART** — vorbis decode + cpal clock ✅; mixer pending; **scene BGM: pinned today, no code** | Fresh pin (below) gives the full per-scene id table with their corroboration; implement selector + loop/once policy |
+| Result | `CStateResult_v10`, builder `FUN_004C2390` matched | **PART** — art stages, rank row 0 paints; digits at fixed anchors (audit 13); grade mapping OPEN; SubmitScore fields known | Result BGM id `0x13` once + retry BGM re-cue pinned via selector (worker bank OPEN); WinLose art wiring (`Result_WinLose.ojs` `0x24b014`) ours to finish |
+| Audio (BGM / mixer / ojm) | `SceneMusic` chain reconstructed (`0x551820→0x54BC50`, one-based `BGM.ojm`); `COjmSampleReader::render` analyzed; volume cfg matched | **IMPL (scene + first UI cluster)** — vorbis decode + cpal clock ✅; mixer landed; scene selector + per-scene table ✅; UI slots `1/2/5/9/0x23` wired on handler branches ✅ (#721); `bgEffect` bank table pinned below | Scene ids and UI first cluster are guarded (below); Result's `0x13` bank, the remaining #718 interaction clusters (buy/sell, NPC voice) and per-volume SFX levels stay pinned/OPEN |
 | Net protocol | Thin: 6 net rows + queue/dispatch under core; `CPacket_Str::GetPacket` analyzed; `CmdHost::send` matched | **PART** — `o2jam-net` protocol library ✅ + endpoint/opcode doc; shell fold: chat + peer-life only | Both sides thin on *handlers*; their `msg_*` matched set (12 handlers under core) is a checklist for our remaining S→C handler pins |
 | File formats | OJM walk (`m30_walk_a/b/c` analyzed); `ojn_header_validate` `0x5718B0` analyzed; asset gates | **IMPL** — OJM/OJN/OPI/OPA parsers ✅ tested (this is our strongest column) | `.oja` frames, outlier pixel codecs, OJNList trailer `;HD` semantics — open on both sides |
 | Input | `CInputManager`, `Input.cpp`, devices, clear_flags matched | **PART** — winit keymap ✅; exe binds OPEN; latency budget OPEN | Their matched `CKeyConfig::loadKeys/syncKeys` `0x543510/7F0` corroborates our option.ini key-table pin (file `0x245224-0x2452a8`); xTd paired table decode still OPEN |
@@ -153,8 +154,8 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | Shop | 4 | loop | |
 | Myroom | 5 | loop | |
 | Waiting | 6 | loop | |
-| MusicShop | `0x10` | loop | |
-| Result | `0x13` | loop | retry re-cues |
+| MusicShop | 10 (decimal) | loop | exe push `0xA` at file `0xC6E51`; the earlier audit's `0x10` shorthand is refuted |
+| Result | `0x13` | once | exe push `0` at file `0xC1CAF`; the earlier audit's "loop" is refuted. No such record in the 10-track `BGM.ojm`, so the channel stays silent until the worker bank at `0x4C1B90` is identified |
 | Song preview | 0 | — | |
 | Silence | −1 | — | |
 
@@ -165,6 +166,70 @@ layers implemented; **DOC** = documented/pinned only, no code;
   `+0x8C` (already pinned on our side). Next evidence step: trace the
   caller chain that mounts the `0x12` Channel block on `parent+0xF6C`
   when the phase flag at `parent+0xF64` flips to 1.
+
+## Cue-map coverage (2026-11-21, #307)
+
+Scope: the per-state cue map, the static UI-effect map, and the bank table
+that turns an effect id into a cache slot. All pins below are for OTwo.exe
+7.55 (hash and image base above); no new code landed with this audit.
+
+- **Scene cues — pinned and implemented.** The scene → `(id, loop)` table
+  above is the single source in `Screen::bgm_cue` and
+  `SideScreen::bgm_cue`; `recomp2jam::scene_bgm_cue` delegates to it. Every
+  entry re-cues through `ScreenGame::enter_screen`/`visit_side`; the exe's
+  push sites file `0xF57D4` (Avi 8 once), `0x8DE28` (Planet 9 loop),
+  `0xC6E51` (MusicShop 10), and `0xC1CAF` (Result `0x13` once) arbitrate
+  over the earlier audit shorthand. Guards: `avi_launch_cue_selects_the_logo_record_once`,
+  `scene_bgm_cues_follow_the_pinned_table`, `music_shop_cue_loops_record_ten`,
+  `result_cue_leaves_scene_bgm_silent_until_its_bank_is_found`,
+  `same_record_cue_keeps_the_running_track`, `cue_switches_on_a_different_record`.
+  Loading/Playing/Lanking and the side screens with no pinned caller cue
+  silence; Result's worker bank stays OPEN.
+- **UI-effect map — pinned (#718).** The emitter is `0x551870` (file
+  `0x151870`): ids `>= 0x34` are rejected, the id indexes a cache slot,
+  and an active sample is stopped before the new one starts (dossier
+  `ev_de048ee24121e6981c9ed6aff2d88235f8af29ca70a5200d80c284c79282c52d`).
+  The static survey resolved 66 direct call sites in 37 handlers
+  (inventory `ev_4272574b8958634793552f3ff8f347d8d3801103bd5afc139f505b650efdd1d2`;
+  per-handler evidence and the full interaction → id table live at
+  `/home/arnim/scratch/ui-sfx-static-findings.md`, sections 1–5). Sound
+  sits in the producer branch, never in the queue posters `0x478d50`/
+  `0x478c90`, the hover updaters `0x439000`/`0x48e530`, or the 1005
+  channel-refusal answer `0x55a110`; those silent paths are pinned with
+  skip reasons in that survey.
+- **Bank table — pinned and implemented.** The boot table at file
+  `0x27f728` has stride `0x48` and row-`+0` bases
+  `[0, 0x28, 0x2f, 0x2f, 0x2f, 3, 3]` (dossier
+  `ev_a9fb8aefefa70e2a45105090df82976fd44527a81a7029fd83d4f64e1a2bfd3e`).
+  The fetcher `0x54eca0` writes the mode-2 fetch ordinal at buffer `+0x2c`;
+  the bank loader `0x550db0` adds the bank base to it. Thus `bgEffect.ojm`
+  (bank 0, base 0) maps slots `1/2/5/9/0x23` to entries `2/3/6/10/36`;
+  slots `>= 0x34` and blank entries never sound. The correction to the
+  old "field never read" note is committed in `docs/file-formats/ojm.md`.
+  Guards: `boot_bank_table_names_all_seven_exe_archives`,
+  `pinned_effects_round_trip_through_their_cache_slots`,
+  `pinned_ui_effect_ids_name_the_exe_handler_cues`,
+  `installed_effect_bank_decodes_the_first_cluster_slots` (data-dependent,
+  skips cleanly with install-root hidden).
+- **Wiring — implemented for the first cluster (#721).** `ui_effect_cue`
+  beside `scene_bgm_cue` names the pinned ids; shell handler branches call
+  `ScreenGame::cue_ui_effect` → `AudioBackend::play_key` (never
+  `set_scene_bgm`), with ids recorded in CueLog's second vector and the
+  decoded `bgEffect` PCM staged by `load_ui_effect_bank`. Scenario guards
+  name live handler chains: `planet_emblem_pick_cues_effect_one`,
+  `hovering_an_emblem_cues_no_effect`,
+  `refused_channel_enter_cues_no_effect_after_the_row_pick`,
+  `slider_apply_cues_two_but_reset_and_cancel_do_not`,
+  `option_tab_switch_and_channel_exit_cue_their_pinned_ids`,
+  `planet_exit_and_dialog_ok_cancel_cue_five_one_and_two`,
+  `effect_cue_walk_records_the_pinned_sequence_in_cuelog`,
+  `a_cue_without_a_staged_bank_entry_fabricates_no_sample`. The one-shot
+  bus mixes over the continuous BGM (`bgm_keeps_its_sample_sequence_while_a_ui_effect_cue_plays`).
+- **OPEN, not claimed by this coverage:** buy/sell `0x14/0x13` and NPC
+  voice `0x28..0x2e` are pinned in #718 but have no wiring ticket; the
+  Result `0x13` worker bank (`0x4C1B90`), per-volume SFX levels
+  (`0x67ed60`), the emitter's second-argument semantics, and audio capture
+  by ear stay OPEN with the next evidence steps in the #718 survey.
 
 ## Contradictions found (exe arbitrates)
 
@@ -193,6 +258,11 @@ layers implemented; **DOC** = documented/pinned only, no code;
 5. **Scorer naming** — decomp2jam calls `0x570510` `set_judge`; our
    evidence shows the rated add paths (Cool 200 / Good 100 / Bad 4 /
    Miss −10). Same VA, same family; naming variance only.
+6. **Our own audit shorthand** — the original Fresh-pins table listed
+   MusicShop `0x10` (hex shorthand) and Result loop; the exe pushes
+   `0xA` at file `0xC6E51` and `0` at `0xC1CAF`. The exe arbitrates:
+   the table above and the code table (`Screen::bgm_cue`) use decimal 10
+   and once. Tracked here, not silently resolved (#307).
 
 ## Delta list — ranked by owner-visible value
 
