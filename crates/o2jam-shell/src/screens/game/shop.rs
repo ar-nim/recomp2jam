@@ -2,8 +2,9 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_goods, shop_page_count, shop_try_on_decision, ShopAction, ShopGood,
-    ShopPanel, TryOnDecision, TryOnGate, TryOnNotice, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    lanking_page_window, shop_checkout_decision, shop_goods, shop_page_count, shop_try_on_decision,
+    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGood, ShopPanel,
+    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
     SHOP_ITEM_ROWS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
@@ -84,6 +85,12 @@ pub(crate) struct ShopState {
     /// or ITEMBACK). The notice sheet that mounts these bytes stays
     /// OPEN.
     last_try_on_notice: Option<TryOnNotice>,
+    /// Staged BUYITEM/GIFTITEM gate inputs and the resulting mode
+    /// word (`+0x969`) plus notice. The 5015 send itself belongs to
+    /// the outbox, not this board state.
+    checkout_gate: CheckoutGate,
+    payment_mode: Option<CheckoutMode>,
+    checkout_notice: Option<CheckoutNotice>,
     /// Owned-panel page (ten `MYBAGITEM` icons per page, the staged
     /// `BAGLEFT`/`BAGRIGHT` pager).
     pub(crate) bag_page: usize,
@@ -151,6 +158,72 @@ impl ShopState {
     /// Notice posted by the last try-on press, if any.
     pub(crate) fn try_on_notice(&self) -> Option<TryOnNotice> {
         self.last_try_on_notice
+    }
+
+    /// Stage the exe's gem-price word for one good. The parsed table
+    /// carries no gem word, so only an explicitly staged pin may set
+    /// it (#395).
+    pub(crate) fn stage_item_gem_price(&mut self, item_id: u32, price: u32) {
+        if let Some(good) = self
+            .shop_goods
+            .iter_mut()
+            .find(|good| good.item_id == item_id)
+        {
+            good.gem_price = Some(price);
+        }
+    }
+
+    /// Stage the owned-bag capacity used by the BUYITEM ladder.
+    pub(crate) fn stage_checkout_bag_capacity(&mut self, slots: usize) {
+        self.checkout_gate.bag_slots = Some(slots);
+    }
+
+    /// Stage the owned-bag rows already used (`0x77cce4` list count).
+    pub(crate) fn stage_checkout_bag_used(&mut self, used: usize) {
+        self.checkout_gate.bag_used = used;
+    }
+
+    /// Stage the web-busy gate (`FUN_00556680(0)`).
+    pub(crate) fn stage_payment_web_busy(&mut self, busy: bool) {
+        self.checkout_gate.web_busy = busy;
+    }
+
+    /// Mode word written at `+0x969` by the last approved press.
+    pub(crate) fn payment_mode(&self) -> Option<CheckoutMode> {
+        self.payment_mode
+    }
+
+    /// Notice posted by the last checkout press, if any.
+    pub(crate) fn checkout_notice(&self) -> Option<CheckoutNotice> {
+        self.checkout_notice
+    }
+
+    /// Run the exe's validation ladder. Returns `true` only when the
+    /// mode word was written and the caller must queue 5015.
+    pub(crate) fn approve_checkout(&mut self, mode: CheckoutMode, wallet: &WalletState) -> bool {
+        let cart: Vec<ShopGood> = self
+            .shop_cart
+            .iter()
+            .filter_map(|item_id| {
+                self.shop_goods
+                    .iter()
+                    .find(|good| good.item_id == *item_id)
+                    .cloned()
+            })
+            .collect();
+        let decision = shop_checkout_decision(&cart, wallet, &self.checkout_gate, mode);
+        match decision {
+            CheckoutDecision::Approved(approved) => {
+                self.payment_mode = Some(approved);
+                self.checkout_notice = None;
+                true
+            }
+            CheckoutDecision::Notice(notice) => {
+                self.checkout_notice = Some(notice);
+                false
+            }
+            CheckoutDecision::Silent | CheckoutDecision::Unpinned => false,
+        }
     }
 
     /// Summed `ITEMWON` prices over the checked cart (saturating;

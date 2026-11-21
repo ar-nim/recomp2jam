@@ -156,7 +156,7 @@ use o2jam_net::shop::{
     EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag, SellItemResponse,
     SyncItemPurchase, SyncItemPurchaseReply, SyncMusicPurchase,
 };
-use o2jam_net::wallet::{SyncCashPoint, SyncCashPointResponse};
+use o2jam_net::wallet::{StartPayment, SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
     AcquireMusic, AcquireMusicRequest, ChannelLogin, ChannelLoginResponse, ChannelLoginResult,
@@ -2613,6 +2613,18 @@ impl OnlineSession {
         }
     }
 
+    /// Send one queued payment leg (5015 empty body). The static
+    /// BUYITEM/GIFTITEM arm owns the send; the qualified live tap is
+    /// still OPEN, so a failed send only warns and drops the queue.
+    fn flush_start_payment(&mut self) {
+        if self.game.take_start_payment().is_none() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(StartPayment::COMMAND, &[]) {
+            tracing::warn!(%source, "payment start send failed");
+        }
+    }
+
     /// Drain the wallet answer that follows BACK (5028 → 5029),
     /// and any other 5029 snapshot from the gateway. The body is two
     /// words: gem and cash point, the same slots the 5001 prefix and
@@ -4023,6 +4035,7 @@ impl OnlineSession {
         self.flush_channel_logout();
         self.flush_exit_shop();
         self.flush_refresh_bag();
+        self.flush_start_payment();
         self.poll_attempts();
         self.poll_sell_response();
         self.poll_wallet_answer();
@@ -5515,6 +5528,84 @@ pub(super) mod session_tests {
         server.join().unwrap();
         let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(opcodes, vec![5038], "one press sends one empty 5038");
+    }
+
+    #[test]
+    fn a_valid_cart_sends_one_empty_5015_after_the_buy_ladder() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+        //   click_shop(ITEMBUY/BUYITEM) -> ShopState::approve_checkout ->
+        //   PendingOutbox.pending_start_payment ->
+        //   OnlineSession::poll_wire -> flush_start_payment -> 5015.
+        // STATIC pin only; the qualified tap wire sweep is OPEN.
+        use o2jam_net::CharacterInfo;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BUYITEM_CODE, SHOP_ITEMBUY_FIRST_CODE};
+        use std::collections::HashMap;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "PaymentGood".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let area = |code, x, y, w, h| ScenePlacement {
+            id: format!("PAY_{code:X}"),
+            code,
+            sprite: None,
+            rect: o2jam_render::Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(SHOP_ITEMBUY_FIRST_CODE, 220, 187, 81, 17),
+                area(SHOP_BUYITEM_CODE, 17, 563, 49, 23),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        game.ingest_snapshot(&InputSnapshot::click_at(238, 193));
+        game.stage_item_gem_price(1, 25);
+        game.stage_checkout_bag_capacity(150);
+        let hero = CharacterInfo {
+            gem: 500,
+            o2_cash: 500,
+            music_cash: 500,
+            item_cash: 500,
+            ..CharacterInfo::default()
+        };
+        game.set_myroom_character(hero);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        paint_frame(&mut session);
+        paint_frame(&mut session);
+        assert!(session.game.take_start_payment().is_none());
+        drop(session);
+        server.join().unwrap();
+        let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(opcodes, vec![5015], "one approved press sends one 5015");
     }
 
     #[test]

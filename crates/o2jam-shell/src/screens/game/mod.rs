@@ -108,7 +108,7 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{
     EquipItem, RefreshBag, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse,
 };
-use o2jam_net::wallet::SyncCashPointResponse;
+use o2jam_net::wallet::{StartPayment, SyncCashPointResponse};
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
     GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
@@ -6716,7 +6716,13 @@ impl ScreenGame {
                     self.visit_side(SideScreen::Payment);
                 }
             }
-            ShopAction::GiftRow(_) | ShopAction::GiftCart => self.record_shop_gift_noop(action),
+            ShopAction::GiftRow(_) => self.record_shop_gift_noop(action),
+            ShopAction::GiftCart => {
+                // The web-only gift record stays; the static arm also
+                // sets mode 2 and sends 5015 when its ladder passes.
+                self.record_shop_gift_noop(action);
+                self.run_checkout(super::side::CheckoutMode::Gift, owned_len);
+            }
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
                 // avatar-pane figure (restage) and the comment preview.
@@ -6741,10 +6747,12 @@ impl ScreenGame {
             ShopAction::CartBuy => {
                 // W-a: the local SHOPPING BAG confirmation face is
                 // already staged by the row pick; BUYITEM opens the
-                // web purchase surface and sends no game opcode.
+                // web purchase surface. The static ladder below also
+                // queues 5015 when every staged gate passes.
                 if self.shop.apply_action(action, owned_len) {
                     self.shop_purchase_web_open = true;
                 }
+                self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
             }
             ShopAction::SortBag => {
                 // Static arm `0x142000b7` (file `0x9bfa8`): the sort
@@ -6757,6 +6765,16 @@ impl ScreenGame {
             _ => {
                 self.shop.apply_action(action, owned_len);
             }
+        }
+    }
+
+    /// Run the BUYITEM/GIFTITEM ladder and queue its static 5015
+    /// send when every staged gate passes. The web surface and the
+    /// gift no-op record stay as the live-observed arms.
+    fn run_checkout(&mut self, mode: super::side::CheckoutMode, owned_len: usize) {
+        self.shop.stage_checkout_bag_used(owned_len);
+        if self.shop.approve_checkout(mode, &self.wallet) {
+            self.outbox.pending_start_payment = Some(StartPayment);
         }
     }
 
@@ -6799,6 +6817,40 @@ impl ScreenGame {
     /// Stage the exe's occupied-worn-slot word (object `+0x8ad`).
     pub fn stage_occupied_worn_slot(&mut self, occupied: bool) {
         self.shop.stage_occupied_worn_slot(occupied);
+    }
+
+    /// Stage the EXE's staged gem-price word for one good.
+    pub fn stage_item_gem_price(&mut self, item_id: u32, price: u32) {
+        self.shop.stage_item_gem_price(item_id, price);
+    }
+
+    /// Stage the owned-bag capacity gate for BUYITEM.
+    pub fn stage_checkout_bag_capacity(&mut self, slots: usize) {
+        self.shop.stage_checkout_bag_capacity(slots);
+    }
+
+    /// Stage the web-busy gate (`FUN_00556680(0)`).
+    pub fn stage_payment_web_busy(&mut self, busy: bool) {
+        self.shop.stage_payment_web_busy(busy);
+    }
+
+    /// Payment mode word (`+0x969`) written by the last approved
+    /// BUYITEM/GIFTITEM press.
+    #[must_use]
+    pub fn shop_payment_mode(&self) -> Option<super::side::CheckoutMode> {
+        self.shop.payment_mode()
+    }
+
+    /// Notice posted by the last BUYITEM/GIFTITEM press.
+    #[must_use]
+    pub fn shop_checkout_notice(&self) -> Option<super::side::CheckoutNotice> {
+        self.shop.checkout_notice()
+    }
+
+    /// Queued 5015 StartPayment for the session bridge, if any.
+    #[must_use]
+    pub fn take_start_payment(&mut self) -> Option<StartPayment> {
+        self.outbox.take_start_payment()
     }
 
     /// Notice posted by the last ITEMPRE press, if any. The dialog
@@ -8533,6 +8585,12 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     }
     if game.outbox.pending_refresh_bag.is_some() {
         hash_u64(&mut hash, 5_038);
+    }
+    if game.outbox.pending_start_payment.is_some() {
+        hash_u64(&mut hash, 5_015);
+    }
+    if let Some(mode) = game.shop.payment_mode() {
+        hash_u64(&mut hash, u64::from(mode.word()));
     }
     if let Some(category) = game.shop.category() {
         hash_u64(&mut hash, u64::try_from(category).unwrap_or(u64::MAX));
@@ -23461,6 +23519,141 @@ mod game_tests {
         // The synthetic archive stacks, so the pane holds the
         // preview figure on the fly.
         assert!(game.shop_avatar_staged());
+    }
+
+    #[test]
+    fn a_valid_cart_sets_the_buy_mode_and_queues_the_5015_send() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_shop(ITEMBUY,
+        //   BUYITEM) -> ShopState::checkout_ladder -> PendingOutbox ->
+        //   OnlineSession::poll_wire -> 5015 StartPayment.
+        // Static arm `0x14200070` (ev_f3ad15be…) checks the web gate,
+        // cart, bag space, three cash wallets and gem, then writes mode
+        // word `+0x969 = 1` and virtually sends `0x1397`.
+        // CONTRADICTION: qualified live taps emitted no opcode, so the
+        // send sits behind gates we stage here; one wire tap through a
+        // valid cart is OPEN.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 25);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 500;
+        game.wallet.apply_character_cash(&hero);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_GIFTITEM".to_owned(),
+            code: super::super::side::SHOP_GIFTITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Buy)
+        );
+        assert_eq!(
+            game.take_start_payment(),
+            Some(o2jam_net::wallet::StartPayment),
+            "the passing ladder queues the empty 5015"
+        );
+        assert_eq!(game.take_start_payment(), None, "one press sends once");
+        assert!(game.shop_purchase_web_open());
+    }
+
+    #[test]
+    fn giftitem_with_a_valid_cart_writes_mode_two_and_sends_the_5015() {
+        // Same live chain as the buy guard, with the GIFTITEM arm
+        // `0x14200071`: mode word `+0x969 = 2` and virtual `0x1397`.
+        // Gift's web-only no-op record stays alongside the static
+        // pin; the live tap wire sweep is still OPEN.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 25);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 500;
+        game.wallet.apply_character_cash(&hero);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_GIFTITEM".to_owned(),
+            code: super::super::side::SHOP_GIFTITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(
+            game.shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Gift)
+        );
+        assert_eq!(game.take_start_payment(), Some(StartPayment));
+        assert_eq!(
+            game.shop_gift_noop().map(|noop| noop.id),
+            Some(super::super::side::SHOP_GIFTITEM_ID)
+        );
+    }
+
+    #[test]
+    fn an_empty_cart_blocks_the_static_payment_leg() {
+        // The first ladder gate (`FUN_0053c1d0`, string VA `0x648cc8`)
+        // stops BUYITEM before the mode word and 5015 write. The
+        // qualified live tap was empty, so this arm keeps the
+        // recorded no-op leg.
+        let mut game = open_shop_board(2);
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(super::super::side::CheckoutNotice::EmptyCart)
+        );
+        assert_eq!(game.shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
+    }
+
+    #[test]
+    fn a_gem_shortfall_blocks_the_static_payment_leg() {
+        // The gem comparison (`0x768b44` vs the entry `+0x18` getter,
+        // string VA `0x648b14`) stops the ladder before the 5015.
+        let mut game = open_shop_board(2);
+        game.click_shop(221, 188);
+        game.stage_item_gem_price(1, 500);
+        game.stage_checkout_bag_capacity(150);
+        let mut hero = myroom_test_character(vec![1]);
+        hero.o2_cash = 500;
+        hero.music_cash = 500;
+        hero.item_cash = 500;
+        hero.gem = 10;
+        game.wallet.apply_character_cash(&hero);
+
+        game.click_shop(18, 564);
+
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(super::super::side::CheckoutNotice::InsufficientGem)
+        );
+        assert_eq!(game.shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
     }
 
     #[test]

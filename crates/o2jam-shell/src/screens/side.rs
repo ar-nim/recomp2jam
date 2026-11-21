@@ -788,6 +788,143 @@ pub fn shop_try_on_decision(
     TryOnDecision::Stage
 }
 
+/// Payment mode word at exe object `+0x969`: BUYITEM writes 1,
+/// GIFTITEM writes 2 before the virtual `0x1397` send
+/// (`ev_f3ad15be…`, file `0x99fe9`/`0x9a705`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutMode {
+    /// BUYITEM mode 1.
+    Buy = 1,
+    /// GIFTITEM mode 2.
+    Gift = 2,
+}
+
+impl CheckoutMode {
+    /// Word the exe writes at `+0x969`.
+    #[must_use]
+    pub const fn word(self) -> u32 {
+        self as u32
+    }
+}
+
+/// Notice the checkout ladder posts. VAs are the exact 7.55 strings;
+/// the dialog that mounts them stays OPEN until a press frame names
+/// it (the live tap emitted no opcode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutNotice {
+    /// Empty cart (string VA `0x648cc8`).
+    EmptyCart,
+    /// Cart list blocked (string VA `0x648c48`).
+    CartBlocked,
+    /// No bag space at all (string VA `0x648c24`).
+    BagFull,
+    /// Too little bag space (string VA `0x648c00`).
+    BagSpaceShort,
+    /// Maximum bag with special item `0x5bc` (string VA `0x648b88`).
+    SpecialItemAtMaximum,
+    /// O2CASH shortfall (string VA `0x648b38`).
+    InsufficientCash,
+    /// Gem shortfall; the exe clears the cart (string VA `0x648b14`).
+    InsufficientGem,
+}
+
+/// Staged inputs the exe reads before its 5015 send: web-busy gate
+/// `FUN_00556680(0)`, bag capacity `0x77cce4`, and the cart.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CheckoutGate {
+    /// A busy web gate makes the press silent (`0x14200070/71`).
+    pub web_busy: bool,
+    /// Total owned-bag slots, `None` until a pinned source stages it.
+    pub bag_slots: Option<usize>,
+    /// Owned-bag rows already used.
+    pub bag_used: usize,
+}
+
+/// Outcome of one BUYITEM/GIFTITEM press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutDecision {
+    /// Write the mode word and virtually send 5015.
+    Approved(CheckoutMode),
+    /// A gate blocked the press with no notice.
+    Silent,
+    /// A gate blocked the press with the pinned notice.
+    Notice(CheckoutNotice),
+    /// A source is missing; no exe claim is made.
+    Unpinned,
+}
+
+/// Apply the exe's BUYITEM/GIFTITEM ladder to staged state. The
+/// capacity checks belong to BUYITEM only; both arms share the cash
+/// and gem comparisons and the empty send (`ev_f3ad15be…`).
+#[must_use]
+pub fn shop_checkout_decision(
+    cart: &[ShopGood],
+    wallet: &WalletState,
+    gate: &CheckoutGate,
+    mode: CheckoutMode,
+) -> CheckoutDecision {
+    if gate.web_busy {
+        return CheckoutDecision::Silent;
+    }
+    if cart.is_empty() {
+        return CheckoutDecision::Notice(CheckoutNotice::EmptyCart);
+    }
+    if mode == CheckoutMode::Buy {
+        let Some(slots) = gate.bag_slots else {
+            return CheckoutDecision::Unpinned;
+        };
+        let free = slots.saturating_sub(gate.bag_used);
+        if free == 0 {
+            return CheckoutDecision::Notice(CheckoutNotice::BagFull);
+        }
+        if free < cart.len() {
+            return CheckoutDecision::Notice(CheckoutNotice::BagSpaceShort);
+        }
+        if cart.len() == 0xB4 && cart.iter().any(|good| good.item_id == 0x5BC) {
+            return CheckoutDecision::Notice(CheckoutNotice::SpecialItemAtMaximum);
+        }
+    }
+    if !wallets_allow(cart, wallet) {
+        return CheckoutDecision::Notice(CheckoutNotice::InsufficientCash);
+    }
+    if !gem_allows(cart, wallet) {
+        return CheckoutDecision::Notice(CheckoutNotice::InsufficientGem);
+    }
+    CheckoutDecision::Approved(mode)
+}
+
+/// Three cash wallets against the summed cart price. The exe posts
+/// only when the price exceeds both compared wallets.
+fn wallets_allow(cart: &[ShopGood], wallet: &WalletState) -> bool {
+    let (Some(o2_cash), Some(music_cash), Some(item_cash)) =
+        (wallet.o2_cash, wallet.music_cash, wallet.item_cash)
+    else {
+        return false;
+    };
+    let total = i64::from(
+        cart.iter()
+            .fold(0u32, |sum, good| sum.saturating_add(good.price)),
+    );
+    let o2 = i64::from(o2_cash);
+    !(total > o2 && total > i64::from(music_cash)) && !(total > o2 && total > i64::from(item_cash))
+}
+
+/// Gem wallet against the summed staged gem prices. An unstaged gem
+/// word is a missing source, never an invented price.
+fn gem_allows(cart: &[ShopGood], wallet: &WalletState) -> bool {
+    let Some(gem) = wallet.gem else {
+        return false;
+    };
+    let mut total = 0u32;
+    for good in cart {
+        let Some(price) = good.gem_price else {
+            return false;
+        };
+        total = total.saturating_add(price);
+    }
+    i64::from(total) <= i64::from(gem)
+}
+
 /// Staged shop goods in table order; empty without catalog data.
 #[must_use]
 pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {

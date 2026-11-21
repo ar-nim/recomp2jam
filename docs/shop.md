@@ -346,6 +346,21 @@ behavior also live in spec #178's enrichment rows.
   `a_mismatched_worn_slot_posts_the_exe_gender_notice`. The notice
   dialog mount stays OPEN: one qualified ITEMPRE press frame on a
   blocked slot, plus the before/after figure pixel pair.
+- BUYITEM `0x14200070` / GIFTITEM `0x14200071` share the web gate
+  `FUN_00556680(0)`, empty-cart (`0x648cc8`) and cash/gem checks
+  (`0x768b4c/50/54`, `0x768b44`; notices `0x648b38`/`0x648b14`).
+  BUYITEM alone checks bag room (`0x648c24`/`0x648c00`) and rejects
+  item `0x5bc` at a 180-entry bag (`0x648b88`). The passing arm writes
+  mode word `+0x969` = 1/2 and virtually sends `0x1397` = 5015 empty
+  (`ev_f3ad15be…`). CONTRADICTION: the qualified live taps emitted no
+  5000-family opcode, so our web surface and gift no-op record stay;
+  the 5015 send is staged behind the gates above. Next step: one wire
+  tap through a valid cart beside the painted notice. Guards:
+  `a_valid_cart_sets_the_buy_mode_and_queues_the_5015_send`,
+  `giftitem_with_a_valid_cart_writes_mode_two_and_sends_the_5015`,
+  `an_empty_cart_blocks_the_static_payment_leg`,
+  `a_gem_shortfall_blocks_the_static_payment_leg`,
+  `a_valid_cart_sends_one_empty_5015_after_the_buy_ladder`.
 
 ## OPEN
 
