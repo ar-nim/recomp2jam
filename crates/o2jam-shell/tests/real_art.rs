@@ -1224,7 +1224,14 @@ fn sound_slider_step_repaints_the_real_bar_fill_without_moving_the_record() {
         .expect("sound sheet stages with real bytes");
     let mut game = ScreenGame::new();
     game.load_planet_option_tab(PlanetOptionTab::Sound, art.placements, art.figures);
-    game.load_options(&install_root());
+    // Hermetic settings: the real install-root option.ini is MUTABLE (an
+    // owner playtest saves slider positions there), so a known value
+    // needs a temp profile - never the live file (flake: 143 != 255
+    // after an attended session saved its sliders, 2026-11-21).
+    let temp_root = std::env::temp_dir().join(format!("recomp2jam-slider-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_root).expect("temp profile root");
+    std::fs::write(temp_root.join("option.ini"), "[Sound]\nBGMusic=255\n").expect("temp ini");
+    game.load_options(&temp_root);
     game.menu_key(MenuKey::Back, true);
     game.click_planet(729, 580);
     assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
