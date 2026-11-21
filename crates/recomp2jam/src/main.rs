@@ -16,6 +16,8 @@ mod live_art;
 mod live_boot_gate;
 #[cfg(test)]
 mod live_guard;
+#[cfg(test)]
+mod live_input_legs;
 mod live_stats;
 mod loading;
 mod menu_trace_replay;
