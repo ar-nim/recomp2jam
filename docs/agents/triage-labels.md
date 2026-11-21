@@ -114,8 +114,11 @@ state or one cross-cutting domain. Rules:
 
 ## Gate tiers (owner 2026-11-20)
 
-`scripts/gate-check.sh` is tiered so the expensive suite runs where it
-catches things, not everywhere:
+`scripts/gate-check.sh` is the single check script: CI calls `--arm quick`
+and `--arm hidden`; the merge gate calls `--arm full` (the default). It
+owns fmt, clippy, both test arms, build, and push policy; no caller repeats
+its command list (issue #741). The expensive suite runs where it catches
+things, not everywhere:
 
 - **Per ticket (lanes):** `gate-check.sh --no-push --quick [-- <crates>]` —
   fmt + clippy + the affected crates' tests. Seconds, run after every commit.

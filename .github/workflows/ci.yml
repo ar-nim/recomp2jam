@@ -7,13 +7,16 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # CI only runs the no-push arms; the merge script owns push policy.
+      GATE_CHECK_NO_PUSH: 1
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace
+      # One check script owns the command list (issue #741): CI has no
+      # archives, so quick + hidden are its only meaningful arms.
+      - run: bash scripts/gate-check.sh --arm quick
+      - run: bash scripts/gate-check.sh --arm hidden
