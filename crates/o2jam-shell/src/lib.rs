@@ -6,6 +6,7 @@
 //! hardware.
 
 pub mod avatar;
+pub mod avatar_source;
 pub mod input_latency;
 pub mod music_download;
 pub mod music_install;
@@ -20,6 +21,7 @@ mod window;
 pub use avatar::{
     load_archive_sprite, load_worn_figure, pick_wear_sprites, AvatarFigure, FigureLayer,
 };
+pub use avatar_source::{decode_item_table, read_installed_avatar, AvatarSource};
 pub use music_download::{MusicDownload, MusicDownloadRequest};
 pub use playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};

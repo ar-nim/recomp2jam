@@ -703,6 +703,17 @@ pub fn stack_worn_figure(
     ))
 }
 
+/// Stack from a source decoded once by [`o2jam_shell::read_installed_avatar`].
+/// A repeated identity landing pays no second item-table parse.
+#[must_use]
+pub fn stack_from_decoded_source(
+    source: &o2jam_shell::AvatarSource,
+    equipment: &[i32],
+    male: bool,
+) -> o2jam_shell::AvatarFigure {
+    o2jam_shell::load_worn_figure(source.archive(), source.table(), equipment, male)
+}
+
 /// Read an `avatar.opa` image plus its parsed item table: the source
 /// [`o2jam_shell::ScreenGame::set_avatar_source`] stacks per-seat
 /// waiting figures through on every join.
@@ -723,15 +734,7 @@ pub fn read_avatar_source(opa_path: &str) -> Result<(Vec<u8>, o2jam_file::Avatar
 /// The bytes are not an `.opa` archive, or its item table is missing
 /// or corrupt.
 fn avatar_item_table(archive: &[u8]) -> Result<o2jam_file::AvatarItemTable> {
-    let entries = o2jam_file::parse_opi(archive)?;
-    let table_entry = entries
-        .iter()
-        .find(|entry| entry.name == "Itemdata_Korea.dat")
-        .with_context(|| "avatar.opa lacks Itemdata_Korea.dat")?;
-    let table_bytes = archive
-        .get(table_entry.data_offset..table_entry.data_offset + table_entry.size as usize)
-        .with_context(|| "item table out of archive bounds")?;
-    Ok(o2jam_file::parse_avatar_item_table(table_bytes)?)
+    o2jam_shell::decode_item_table(archive)
 }
 /// Stack the worn figure for fetched character info from an in-memory
 /// archive image (equipment and `Male` parity come from the hero).
