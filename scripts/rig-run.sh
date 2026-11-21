@@ -43,7 +43,8 @@ RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # shellcheck source=lib/rig-preflight.sh
 . "$RIG_LIB"
 # Native Rust boots clear inherited Wayland/Wine state (#719); a Wine boot
-# keeps its prefix. The display pin itself lives in play-local.sh.
+# keeps its prefix. The one run-class query lives here; the display pin lives
+# in play-local.sh. #745: run and identity consumers share that same query.
 # shellcheck source=lib/rig-client-display.sh
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-display.sh"
 # The audio lane (monitor tap, probe, verifier) lives in one module and is
@@ -221,8 +222,13 @@ cmd_run() {
   refuse_leaked_wayland
   validate_display "$display"
   sanitize_env
-  # #719: a native peer must not inherit the Wine master's prefix claim.
-  rig_clear_inherited_wine_prefix "$1"
+  # #719/#745: one class query decides the inherited-prefix policy. A Wine
+  # boot owns its prefix; a native peer must not inherit the Wine master's
+  # claim (exit 15). Caller chain: rig-run.sh cmd_run -> rig_run_class ->
+  # rig-client-display.sh rig_clear_inherited_wine_prefix -> rig_check_prefix.
+  local run_class
+  run_class="$(rig_run_class "$1")"
+  rig_clear_inherited_wine_prefix "$1" "$run_class"
   mkdir -p "$out_dir"
   [ -f "$out_dir/claims" ] || : > "$out_dir/claims"
   export RIG_CLAIMS_FILE="$out_dir/claims"
@@ -481,6 +487,19 @@ cmd_status() {
 # --- selftest ---------------------------------------------------------------
 cmd_selftest() {
   local tmp; tmp="$(mktemp -d)"
+  local class_lib="$(dirname "$RIG_LIB")/rig-run-class.sh"
+  local wine_class native_class
+  wine_class="$(env -u RIG_RUN -u WAYLAND_DISPLAY -u RIG_WINEPREFIX \
+    RIG_CLIENT_KIND=wine WINEPREFIX=/tmp/wine-leg DISPLAY=:181 \
+    bash "$class_lib" classify scripts/rig-wine.sh)"
+  [ "$wine_class" = "$RIG_RUN_CLASS_WINE" ] ||
+    die "selftest: run-class-prefix-policy FAILED: wine boot is $wine_class"
+  native_class="$(env -u RIG_RUN -u WAYLAND_DISPLAY -u WINEPREFIX \
+    RIG_CLIENT_KIND=native RIG_WINEPREFIX=/tmp/wine-leg DISPLAY=:182 \
+    bash "$class_lib" classify /usr/bin/recomp2jam)"
+  [ "$native_class" = "$RIG_RUN_CLASS_X11" ] ||
+    die "selftest: run-class-prefix-policy FAILED: native peer is $native_class"
+  echo "selftest: leg run-class-prefix-policy PASS"
   # clean-env invocations: this helper refuses a leaked Wayland session, so
   # each sub-call below must present the sanitized env it wants to test.
   local clean=(env -u WAYLAND_DISPLAY -u DISPLAY XDG_SESSION_TYPE=)
@@ -649,9 +668,10 @@ PYEOF
   stop_quiet "$tmp/o-pfx-b"
   assert_reject "prefix-claim" 15 "already claimed" "$tmp/err-pfx-b"
 
-  # #719: the Wine master's prefix is claimed first; a native peer inheriting
-  # it must still boot. Caller chain: rig-run.sh run -> cmd_run ->
-  # rig_clear_inherited_wine_prefix -> preflight_run_checks -> rig_check_prefix.
+  # #719/#745: the Wine master's prefix is claimed first; a native peer
+  # inheriting it must still boot. Caller chain: rig-run.sh run -> cmd_run ->
+  # rig_run_class -> rig_clear_inherited_wine_prefix -> preflight_run_checks ->
+  # rig_check_prefix.
   attempt "$tmp/err-pfx-native-a" "${senv[@]}" RIG_WINEPREFIX="$tmp/p-native" \
     bash "$0" run :181 "$tmp/o-pfx-native-a" -- sleep 30
   [ "$ATTEMPT_EXIT" -eq 0 ] ||

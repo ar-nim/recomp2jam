@@ -12,9 +12,13 @@
 # only to give rig boots one distinct *logged* identity per uid.
 #
 # Caller chain: play-local.sh --user-id N -> rig_export_client_identity N ->
+# rig_run_class (owner-session keeps the exe id; rig boots may derive one) ->
 # O2JAM_CLIENT_ID -> recomp2jam online -> setup_online -> connect_and_login ->
 # authorize -> AuthorizeRequest::encode_body (1000 frame).
 set -euo pipefail
+
+# shellcheck source=rig-run-class.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rig-run-class.sh"
 
 RIG_CLIENT_ID_BASE="${RIG_CLIENT_ID_BASE:-726PNA-B1YW-28ZG9M-I5SC-Q0OPM6}"
 RIG_CLIENT_ID_ENV=O2JAM_CLIENT_ID
@@ -32,20 +36,22 @@ rig_client_id_for_uid() {
 # Export the 1000 client id. Owner boots keep the exe literal by default;
 # an explicit caller value wins; the multi-client mode derives from --user-id.
 rig_export_client_identity() {
-  local uid="${1:-}" derived
+  local uid="${1:-}" derived run_class
   if [ -n "${O2JAM_CLIENT_ID:-}" ]; then
     export O2JAM_CLIENT_ID
     echo "rig-client-identity: explicit $RIG_CLIENT_ID_ENV=$O2JAM_CLIENT_ID"
     return 0
   fi
-  if [ "${RIG_DISTINCT_CLIENT_IDS:-0}" = "1" ]; then
+  run_class="$(rig_run_class)"
+  if [ "$run_class" != "$RIG_RUN_CLASS_OWNER" ] &&
+     [ "${RIG_DISTINCT_CLIENT_IDS:-0}" = "1" ]; then
     derived="$(rig_client_id_for_uid "$uid")" || return "$?"
     export O2JAM_CLIENT_ID="$derived"
     echo "rig-client-identity: uid $uid -> $RIG_CLIENT_ID_ENV=$O2JAM_CLIENT_ID"
     return 0
   fi
   unset O2JAM_CLIENT_ID
-  echo "rig-client-identity: default 7.55 client id ($RIG_CLIENT_ID_ENV unset)"
+  echo "rig-client-identity: default 7.55 client id ($RIG_CLIENT_ID_ENV unset, $run_class)"
 }
 
 # --- hermetic scenario checks ------------------------------------------------
@@ -54,15 +60,30 @@ rig_export_client_identity() {
 # env-to-wire leg end to end.
 selftest_owner_run_keeps_exe_client_id() {
   local output
-  output="$(env -u O2JAM_CLIENT_ID RIG_DISTINCT_CLIENT_IDS=0 bash "$0" probe 2 2>&1)"
+  output="$(env -u RIG_RUN -u RIG_DISPLAY -u WINEPREFIX -u RIG_WINEPREFIX \
+    -u RIG_CLIENT_KIND -u O2JAM_CLIENT_ID DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 \
+    RIG_DISTINCT_CLIENT_IDS=0 bash "$0" probe 2 2>&1)"
   grep -qF 'O2JAM_CLIENT_ID=<unset>' <<<"$output" || { echo "$output"; return 1; }
   echo "rig-client-identity: PASS owner-run-keeps-exe-client-id"
 }
 
+selftest_owner_flag_keeps_exe_client_id() {
+  local output
+  output="$(env -u RIG_RUN -u RIG_DISPLAY -u WINEPREFIX -u RIG_WINEPREFIX \
+    -u RIG_CLIENT_KIND -u O2JAM_CLIENT_ID DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 \
+    RIG_DISTINCT_CLIENT_IDS=1 bash "$0" probe 2 2>&1)"
+  grep -qF 'O2JAM_CLIENT_ID=<unset>' <<<"$output" || { echo "$output"; return 1; }
+  echo "rig-client-identity: PASS owner-flag-keeps-exe-client-id"
+}
+
 selftest_two_uids_get_distinct_client_ids() {
   local first second
-  first="$(env -u O2JAM_CLIENT_ID RIG_DISTINCT_CLIENT_IDS=1 bash "$0" probe 1 2>&1)"
-  second="$(env -u O2JAM_CLIENT_ID RIG_DISTINCT_CLIENT_IDS=1 bash "$0" probe 2 2>&1)"
+  first="$(env -u RIG_DISPLAY -u WINEPREFIX -u RIG_WINEPREFIX -u RIG_CLIENT_KIND \
+    -u O2JAM_CLIENT_ID DISPLAY=:163 RIG_RUN=1 RIG_DISTINCT_CLIENT_IDS=1 \
+    bash "$0" probe 1 2>&1)"
+  second="$(env -u RIG_DISPLAY -u WINEPREFIX -u RIG_WINEPREFIX -u RIG_CLIENT_KIND \
+    -u O2JAM_CLIENT_ID DISPLAY=:163 RIG_RUN=1 RIG_DISTINCT_CLIENT_IDS=1 \
+    bash "$0" probe 2 2>&1)"
   grep -qF 'O2JAM_CLIENT_ID=726PNA-B1YW-28ZG9M-I5SC-Q0OPM6-UID1' <<<"$first" || {
     echo "$first"; return 1;
   }
@@ -75,7 +96,7 @@ selftest_two_uids_get_distinct_client_ids() {
 
 selftest_explicit_client_id_wins_over_derivation() {
   local output
-  output="$(O2JAM_CLIENT_ID=rig-explicit RIG_DISTINCT_CLIENT_IDS=1 \
+  output="$(O2JAM_CLIENT_ID=rig-explicit RIG_RUN=1 RIG_DISTINCT_CLIENT_IDS=1 \
     bash "$0" probe 2 2>&1)"
   grep -qF 'O2JAM_CLIENT_ID=rig-explicit' <<<"$output" || { echo "$output"; return 1; }
   echo "rig-client-identity: PASS explicit-client-id-wins"
@@ -84,7 +105,9 @@ selftest_explicit_client_id_wins_over_derivation() {
 selftest_rejects_non_numeric_uid() {
   local output status
   set +e
-  output="$(env -u O2JAM_CLIENT_ID RIG_DISTINCT_CLIENT_IDS=1 bash "$0" probe tester 2>&1)"
+  output="$(env -u RIG_DISPLAY -u WINEPREFIX -u RIG_WINEPREFIX -u RIG_CLIENT_KIND \
+    -u O2JAM_CLIENT_ID DISPLAY=:163 RIG_RUN=1 RIG_DISTINCT_CLIENT_IDS=1 \
+    bash "$0" probe tester 2>&1)"
   status=$?
   set -e
   [ "$status" -eq 2 ] || { echo "$output"; return 1; }
@@ -102,6 +125,7 @@ main() {
     probe) shift; probe "$@" ;;
     selftest)
       selftest_owner_run_keeps_exe_client_id
+      selftest_owner_flag_keeps_exe_client_id
       selftest_two_uids_get_distinct_client_ids
       selftest_explicit_client_id_wins_over_derivation
       selftest_rejects_non_numeric_uid

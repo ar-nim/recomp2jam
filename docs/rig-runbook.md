@@ -33,20 +33,27 @@ log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 
 ### Owner-session clients take no flock (owner 2026-11-21)
 
-`play-local.sh` scopes the live-lane flock to RIG runs only (same predicate
-as the display pin): owner-session multi-client testing - two attended
-clients on the owner display, the #726 distinct identities - takes no
-flock. Corollary for rig operators: the flock no longer detects an owner
-session; ask before a rig wave if the owner may be testing live.
+`play-local.sh` scopes the live-lane flock with the one run-class query in
+`scripts/lib/rig-run-class.sh`: an `owner-session` boot (Wayland + `:0`, no
+`--rig`, no `RIG_DISPLAY`) takes no flock; `rig-x11` and `rig-wine` boots
+take it. That covers owner multi-client testing - two attended clients on
+the owner display, the #726 distinct identities. Corollary for rig operators:
+the flock no longer detects an owner session; ask before a rig wave if the
+owner may be testing live. Guard: `bash scripts/tests/test-rig-run-class.sh`
+(red-proves the old unconditional flock would serialize both owner clients).
 
 ### Rust-client display pin (#719)
 
 `scripts/play-local.sh` boots only our Rust client. Before build, token lookup,
-or spawn, it applies `scripts/lib/rig-client-display.sh` when the run IS a rig
-run: `--rig` passed, `RIG_DISPLAY` preset, or `DISPLAY` already `:NNN` (owner
-fix 2026-11-20: interactive owner-session runs on Wayland + `:0` skip the pin -
-the unconditional refusal was a regression). The caller chain is
-`play-local.sh -> rig_pin_rust_client_display -> rig_validated_client_display`.
+or spawn, it applies `scripts/lib/rig-client-display.sh` when the one class
+query from `scripts/lib/rig-run-class.sh` says `rig-x11` or `rig-wine`:
+`--rig` passed, `RIG_DISPLAY` preset, `DISPLAY` already `:NNN`, or a Wine
+prefix on a non-owner boot. An `owner-session` run (Wayland + `:0`, no rig
+flag) skips the pin - the unconditional refusal was a regression - but a rig
+script on `:0` with `--rig` still gets the exit-10 refusal. `--rig` is exported
+as `RIG_RUN=1` so sourced libs see the same class. The caller chain is
+`play-local.sh -> rig_run_class -> rig_pin_rust_client_display ->
+rig_validated_client_display`.
 A rig boot must name a rig Xvfb display as `:NNN` in `RIG_DISPLAY` (preferred)
 or `DISPLAY`; the owner's `:0`, short display names, and dead displays are
 refused with exit 10. The pin exports `DISPLAY` and `RIG_DISPLAY`, clears
@@ -197,8 +204,10 @@ a fourth auth with uid 1's token and a **different** client id returned
 `-2` and left the older session alive. See
 `~/scratch/distinct-clientids/probe-after-adjust.log`.
 
-Our Rust client keeps that exe literal by default. Rig boots that want
-one distinct *logged* identity per uid set `RIG_DISTINCT_CLIENT_IDS=1`:
+Our Rust client keeps that exe literal by default; the run-class query in
+`rig-client-identity.sh` holds that line for `owner-session` even when the
+flag is set. Rig boots that want one distinct *logged* identity per uid set
+`RIG_DISTINCT_CLIENT_IDS=1`:
 `play-local.sh --user-id N` then exports
 `O2JAM_CLIENT_ID=726PNA-B1YW-28ZG9M-I5SC-Q0OPM6-UIDN`, which
 `connect::authorize` puts in the 1000 frame. An explicit
