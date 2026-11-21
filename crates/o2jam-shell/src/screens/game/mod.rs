@@ -21342,6 +21342,50 @@ mod game_tests {
     }
 
     #[test]
+    fn shop_cart_total_uses_staged_prices_after_the_pinned_5001_wallet_fold() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_avatar_source (staged Itemdata rows) ->
+        //   click_shop(ITEMBUY) -> ShopState::toggle_row ->
+        //   session::OnlineSession::drain_shop_buy (pinned 5001 words)
+        //   -> ScreenGame::apply_shop_purchase_prefix /
+        //   apply_shop_purchase_wallets -> shop_cart_money_total.
+        // Ticket #515: the live 152-byte 5001 body (`96bb62ce…25009b`)
+        // carries wallet words only (gem 626 here), no cart total field.
+        // CHECKGEM stays `--` (no gem-price pin); the money total must
+        // keep summing the staged `ITEMWON` prices, never the wallet.
+        use o2jam_net::shop::{SyncItemPurchasePrefix, SyncItemPurchaseWallets};
+
+        let mut game = open_shop_board(10);
+        game.click_shop(221, 188);
+        assert_eq!(game.shop_cart_money_total(), 100);
+
+        game.apply_shop_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 626,
+            point: 0,
+            o2_cash: 0,
+            cash_point: 0,
+        });
+        game.apply_shop_purchase_wallets(&SyncItemPurchaseWallets {
+            music_cash: 0,
+            item_cash: 0,
+        });
+        assert_eq!(game.wallet().gem, Some(626), "5001 folds the wallet");
+        assert_eq!(
+            game.shop_cart_money_total(),
+            100,
+            "pinned wallet words are not the cart total"
+        );
+
+        game.click_shop(362, 188);
+        assert_eq!(
+            game.shop_cart_money_total(),
+            300,
+            "the total still sums staged row prices"
+        );
+    }
+
+    #[test]
     fn shop_cart_money_total_follows_checked_rows() {
         // Live caller chain: the try-on chain's board half —
         // click_shop(ITEMBUY) -> ShopState::toggle_row; the total
