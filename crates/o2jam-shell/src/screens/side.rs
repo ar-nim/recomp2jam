@@ -597,8 +597,10 @@ pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
 /// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
-/// Owned-panel tab anchors and selection frame (rects only, no art;
-/// `MYBAGSELECT` uses the archive frame body like MyRoom's frame).
+/// Owned-panel tab anchors and selection frame (`MYBAGSELECT` uses
+/// the archive frame body like MyRoom's frame). The static arms at
+/// file `0xa5a75` / `0xa5b63` clear / set the cart flag `+0x8cd`,
+/// gating the MYCART pager (`ev_f3ad15be…`).
 pub const SHOP_MYBACK_POS_CODE: u32 = 0x1460_006D;
 pub const SHOP_MYCART_POS_CODE: u32 = 0x1460_006E;
 pub const SHOP_MYBAGSELECT_CODE: u32 = 0x1450_0052;
@@ -804,6 +806,10 @@ pub enum ShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// MYBACK face: clears the cart flag (exe object `+0x8cd`).
+    ShowMyBag,
+    /// MYCART face: sets the cart flag (exe object `+0x8cd`).
+    ShowShoppingBag,
     /// Item Shop charge plate: opens the Cash Charge web view
     /// (b8 input log, plate at `(92,355)`).
     OpenCashCharge,
@@ -882,6 +888,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
         SHOP_CART_RIGHT_CODE => Some(ShopAction::CartNext),
+        SHOP_MYBACK_POS_CODE => Some(ShopAction::ShowMyBag),
+        SHOP_MYCART_POS_CODE => Some(ShopAction::ShowShoppingBag),
         SHOP_BAG_LEFT_CODE => Some(ShopAction::BagPrev),
         SHOP_BAG_RIGHT_CODE => Some(ShopAction::BagNext),
         SHOP_BAGSORT_CODE => Some(ShopAction::SortBag),

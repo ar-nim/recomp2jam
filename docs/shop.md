@@ -308,6 +308,14 @@ behavior also live in spec #178's enrichment rows.
   tap (a NULL tap retires the static claim rather than inventing a
   handler). Guard: `bagsort_queues_the_exe_refresh_bag_send` and
   `bagsort_press_sends_one_empty_5038_on_the_game_socket`.
+- MYCART_LEFT/RIGHT `0x14200072/73` step page `+0x8ce` modulo count
+  `+0x8cf` only when the cart flag `+0x8cd` is set; RIGHT holds at the
+  last page, LEFT holds at the first. MYBACK_POS `0x1460006d` clears
+  the flag, MYCART_POS `0x1460006e` sets it, and a row check sets it
+  (same evidence `ev_f3ad15be…`). The panel face carries that flag in
+  our model; guard
+  `cart_pager_steps_only_while_the_cart_face_flag_is_set` uses a
+  six-good, five-row cart fixture. Live multi-page press frames OPEN.
 
 ## OPEN
 

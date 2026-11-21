@@ -72,6 +72,13 @@ impl ShopState {
         self.shop_cart_page
     }
 
+    /// Cart flag (exe object `+0x8cd`): only the SHOPPING BAG face
+    /// answers MYCART_LEFT/RIGHT. MYBACK clears it, MYCART_POS sets
+    /// it, and a row check enters the face (`ev_f3ad15be…`).
+    pub(crate) fn cart_face_open(&self) -> bool {
+        self.panel == ShopPanel::ShoppingBag
+    }
+
     /// Selected category tab (`None` until a FASHION-class press).
     pub(crate) fn category(&self) -> Option<usize> {
         self.shop_category
@@ -283,18 +290,33 @@ impl ShopState {
                 false
             }
             ShopAction::CartPrev => {
-                self.shop_cart_page = self.shop_cart_page.saturating_sub(1);
+                // Exe `0x14200072`: `(page - 1 + count) % count`, only
+                // while page and the cart flag are both non-zero. The
+                // guard makes the modulo equal to `page - 1`.
+                if self.cart_face_open() && self.shop_cart_page != 0 {
+                    self.shop_cart_page = (self.shop_cart_page - 1) % self.cart_pages();
+                }
                 false
             }
             ShopAction::CartNext => {
-                if self
-                    .shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(SHOP_CART_ROWS)
-                    < self.shop_cart.len()
+                // Exe `0x14200073`: hold at the last page, never wrap.
+                if self.cart_face_open()
+                    && self
+                        .shop_cart_page
+                        .saturating_add(1)
+                        .saturating_mul(SHOP_CART_ROWS)
+                        < self.shop_cart.len()
                 {
-                    self.shop_cart_page = self.shop_cart_page.saturating_add(1);
+                    self.shop_cart_page = (self.shop_cart_page + 1) % self.cart_pages();
                 }
+                false
+            }
+            ShopAction::ShowMyBag => {
+                self.panel = ShopPanel::MyBag;
+                false
+            }
+            ShopAction::ShowShoppingBag => {
+                self.panel = ShopPanel::ShoppingBag;
                 false
             }
             ShopAction::BagPrev => {

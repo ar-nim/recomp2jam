@@ -23043,6 +23043,53 @@ mod game_tests {
     }
 
     #[test]
+    fn cart_pager_steps_only_while_the_cart_face_flag_is_set() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(ITEMBUY/MYBACK_POS/MYCART_POS/MYCART_RIGHT/LEFT)
+        //   -> ShopState::apply_action -> paint cart page readout.
+        // Static arms `0x14200072/73` (ev_f3ad15be…) step page `0x8ce`
+        // modulo count `0x8cf` only when flag `0x8cd` is set; MYBACK_POS
+        // clears it and MYCART_POS sets it (files `0xa5a75`/`0xa5b63`).
+        // Multi-page cart fixture: six checked goods over five rows.
+        let mut game = open_shop_board(12);
+        for slot in 0..6i32 {
+            game.click_shop(221 + (slot % 4) * 141, 188 + (slot / 4) * 153);
+        }
+        assert_eq!(game.shop_cart().len(), 6);
+        assert_eq!(game.shop_cart_pages(), 2);
+        for (code, x) in [
+            (super::super::side::SHOP_MYBACK_POS_CODE, 510),
+            (super::super::side::SHOP_MYCART_POS_CODE, 560),
+        ] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: format!("CART_FACE_{code:X}"),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 40,
+                    h: 20,
+                },
+            });
+        }
+
+        game.click_shop(515, 40);
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 0, "cleared face flag blocks RIGHT");
+
+        game.click_shop(565, 40);
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 1, "set face flag allows RIGHT");
+        game.click_shop(320, 570);
+        assert_eq!(game.shop_cart_page(), 1, "RIGHT holds at the last page");
+        game.click_shop(220, 570);
+        assert_eq!(game.shop_cart_page(), 0, "LEFT returns to the first page");
+    }
+
+    #[test]
     fn bagsort_queues_the_exe_refresh_bag_send() {
         // Live caller chain:
         //   main.rs::run_play -> ScreenGame::ingest_snapshot ->
