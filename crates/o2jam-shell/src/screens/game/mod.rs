@@ -6456,6 +6456,34 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Gender byte `+0x18` staged by the last GIRL/BOY press.
+    #[must_use]
+    pub fn shop_gender(&self) -> Option<super::side::ShopGender> {
+        self.shop.gender()
+    }
+
+    /// Button hidden by the last gender press.
+    #[must_use]
+    pub fn shop_hidden_gender_button(&self) -> Option<u32> {
+        self.shop.hidden_gender_button()
+    }
+
+    /// Context refresher call made by the last gender press.
+    #[must_use]
+    pub fn shop_gender_refresh(&self) -> Option<super::side::ShopRefresh> {
+        self.shop.gender_refresh()
+    }
+
+    /// Stage the object context that selects the press refresher.
+    pub fn stage_shop_refresh_context(&mut self, context: super::side::ShopRefreshContext) {
+        self.shop.stage_refresh_context(context);
+    }
+
+    /// Stage the "lucky" word passed to the press refresher.
+    pub fn stage_shop_lucky_view(&mut self, lucky_view: bool) {
+        self.shop.stage_lucky_view(lucky_view);
+    }
+
     /// Lower-left panel face: MY BAG at entry, SHOPPING BAG after
     /// a row pick (audit D4).
     #[must_use]
@@ -8622,31 +8650,31 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MyRoomLowerTab, MyRoomPanel, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
-        LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE,
-        LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
-        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
-        MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
-        MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE,
-        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE,
-        MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE,
-        MSHOP_MSALL_RIGHT_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
-        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE,
-        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE,
-        ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
-        SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
-        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
-        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
-        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
-        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
-        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-        SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE,
-        SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE,
-        SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
-        SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
+        MyRoomLowerTab, MyRoomPanel, ShopGender, ShopRefresh, ShopRefreshContext,
+        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
+        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
+        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
+        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE,
+        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE,
+        MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+        MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
+        MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
+        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
+        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
+        MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
+        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE,
+        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
+        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
+        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
+        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
+        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
+        SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
+        SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
+        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
         SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
@@ -23873,6 +23901,89 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_gender_press_writes_the_byte_and_hides_the_other_button() {
+        // Live caller chain (once a gender control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GIRL/BOY 0x14202006/07) ->
+        //   ShopState::apply_action(SelectGender). Static arm
+        //   `ev_f3ad15be…` writes `+0x18` (GIRL 1, BOY 0) and hides the
+        //   other button. The live dump stages neither; OPEN (next
+        //   step): before/after frames in shop and myroom contexts.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        for (code, x) in [(SHOP_GIRL_CODE, 500), (SHOP_BOY_CODE, 540)] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 30,
+                    h: 20,
+                },
+            });
+        }
+
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_gender(), Some(ShopGender::Girl));
+        assert_eq!(game.shop_hidden_gender_button(), Some(SHOP_BOY_CODE));
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_gender(), Some(ShopGender::Boy));
+        assert_eq!(game.shop_hidden_gender_button(), Some(SHOP_GIRL_CODE));
+    }
+
+    #[test]
+    fn shop_gender_press_calls_the_context_refresher_for_the_staged_role() {
+        // Same static arm: the three refreshers are selected by two
+        // object words; the argument is 1 at planet 12. OPEN (next
+        // step): frames naming which of our screens maps to each word.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GIRL_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049ead0",
+                argument: 0,
+            })
+        );
+        game.stage_shop_refresh_context(ShopRefreshContext::FigurePane);
+        game.stage_shop_lucky_view(true);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049e2d0",
+                argument: 1,
+            })
+        );
+        game.stage_shop_refresh_context(ShopRefreshContext::SideRole);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049f0c0",
+                argument: 1,
+            })
+        );
     }
 
     #[test]

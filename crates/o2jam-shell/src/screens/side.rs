@@ -555,11 +555,85 @@ pub const SHOP_CART_CHECKMONEY_CODE: u32 = 0x1440_0075;
 /// staged figure, ticket #196): the equipped (or preview) worn
 /// figure paints here on the paint clock, like the room slot.
 pub const SHOP_AVATAR_CODE: u32 = 0x1470_0034;
-/// Gender filter buttons (`IDC_BUTTON_SSHOP_GIRL/BOY`): ControlList
-/// names only — neither stages in the live dump, so both land
-/// nowhere (labeled no-op; next step: SendInput sweep if they stage).
+/// Gender buttons (`IDC_BUTTON_SSHOP_GIRL/BOY`). The static dispatcher
+/// `FUN_00499760` (`ev_f3ad15be…`) writes gender byte `+0x18` (GIRL 1,
+/// BOY 0), cues slot `0x1b`, hides the other button, and calls one of
+/// three context refreshers. The live dump stages neither button
+/// (absence, ticket #195), so the arms only answer a staged control.
 pub const SHOP_GIRL_CODE: u32 = 0x1420_2006;
 pub const SHOP_BOY_CODE: u32 = 0x1420_2007;
+/// UI-effect slot the two gender arms cue (`FUN_00551870(0x1b,0)`).
+pub const SHOP_GENDER_SOUND_SLOT: u8 = 0x1b;
+
+/// Gender byte written at object `+0x18` by the GIRL/BOY arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopGender {
+    /// `0x14202006`: byte 1, latest fashions.
+    Girl,
+    /// `0x14202007`: byte 0, latest fashions.
+    Boy,
+}
+
+impl ShopGender {
+    /// Value written to the exe's gender byte at `+0x18`.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Girl => 1,
+            Self::Boy => 0,
+        }
+    }
+
+    /// The button the press hides (the "other" button).
+    #[must_use]
+    pub const fn hidden_button(self) -> u32 {
+        match self {
+            Self::Girl => SHOP_BOY_CODE,
+            Self::Boy => SHOP_GIRL_CODE,
+        }
+    }
+}
+
+/// Which of the three context refreshers a gender or planet press calls.
+/// The exe selects by two object words (`+0x5a`, `+0x51`); mapping our
+/// screens to those words needs the before/after frame pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShopRefreshContext {
+    /// Both words zero: `FUN_0049ead0`.
+    #[default]
+    Plain,
+    /// First word zero, second nonzero: `FUN_0049e2d0`.
+    FigurePane,
+    /// First word nonzero: `FUN_0049f0c0`.
+    SideRole,
+}
+
+/// One context-refresh call the exe makes after a gender or planet
+/// press. The helper name is a static pin; the argument is the exe's
+/// "lucky" word (1 at planet 12, else 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopRefresh {
+    /// Refresher the object state selects.
+    pub helper: &'static str,
+    /// Value passed to the refresher.
+    pub argument: u8,
+}
+
+impl ShopRefreshContext {
+    /// Resolve the refresher and its argument for one press.
+    #[must_use]
+    pub const fn resolve(self, lucky_view: bool) -> ShopRefresh {
+        let helper = match self {
+            Self::Plain => "FUN_0049ead0",
+            Self::FigurePane => "FUN_0049e2d0",
+            Self::SideRole => "FUN_0049f0c0",
+        };
+        ShopRefresh {
+            helper,
+            argument: if lucky_view { 1 } else { 0 },
+        }
+    }
+}
 /// Category buttons (`IDC_BUTTON_SSHOP_SET/FASHION/ACCESSORY/BEAUTY/
 /// INSTRUMENT`): five contiguous codes, none staged live (labeled
 /// no-op, same next step).
@@ -1031,6 +1105,9 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Gender button pressed (`+0x18` byte, other button hidden,
+    /// context refresher called).
+    SelectGender(ShopGender),
     /// Category tab selected (0-based in the five-button row). The
     /// FASHION press frame pins the highlight, not a filter rule.
     SelectCategory(usize),
@@ -1139,12 +1216,22 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
+            .or_else(|| shop_gender_action(code))
             .or_else(|| shop_category_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
                     .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
             })
             .or_else(|| shop_tryon_slot(code)),
+    }
+}
+
+/// Gender arm behind one of the two staged GIRL/BOY codes.
+fn shop_gender_action(code: u32) -> Option<ShopAction> {
+    match code {
+        SHOP_GIRL_CODE => Some(ShopAction::SelectGender(ShopGender::Girl)),
+        SHOP_BOY_CODE => Some(ShopAction::SelectGender(ShopGender::Boy)),
+        _ => None,
     }
 }
 

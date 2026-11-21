@@ -3,9 +3,9 @@
 
 use super::super::side::{
     lanking_page_window, shop_checkout_decision, shop_goods, shop_page_count, shop_try_on_decision,
-    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGood, ShopPanel,
-    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_ITEM_ROWS,
+    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGender, ShopGood,
+    ShopPanel, ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
+    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -66,6 +66,16 @@ pub(crate) struct ShopState {
     /// Cart-list page (five rows per page, the staged `CART_EX`
     /// slots).
     pub(crate) shop_cart_page: usize,
+    /// Gender byte `+0x18` written by the GIRL/BOY arms (`None`
+    /// before the first press — the entry byte is unpinned).
+    gender: Option<ShopGender>,
+    /// Which context refresher the object state selects.
+    refresh_context: ShopRefreshContext,
+    /// The exe's "lucky" word (1 at planet 12), staged by the
+    /// planet arm; passed to every context refresher.
+    lucky_view: bool,
+    /// Last refresher call from a gender press (test affordance).
+    last_gender_refresh: Option<ShopRefresh>,
     /// Selected category tab (`None` on entry). The FASHION press
     /// frame `d4074ce7…` moves only the tab highlight; no wire frame
     /// and no catalogue filter rule is pinned yet.
@@ -125,6 +135,32 @@ impl ShopState {
     /// it, and a row check enters the face (`ev_f3ad15be…`).
     pub(crate) fn cart_face_open(&self) -> bool {
         self.panel == ShopPanel::ShoppingBag
+    }
+
+    /// Gender byte `+0x18` staged by the last GIRL/BOY press.
+    pub(crate) fn gender(&self) -> Option<ShopGender> {
+        self.gender
+    }
+
+    /// Button the last gender press hides (the "other" button).
+    pub(crate) fn hidden_gender_button(&self) -> Option<u32> {
+        self.gender.map(ShopGender::hidden_button)
+    }
+
+    /// Refresher call made by the last gender press.
+    pub(crate) fn gender_refresh(&self) -> Option<ShopRefresh> {
+        self.last_gender_refresh
+    }
+
+    /// Stage which object context selects the press refresher. The
+    /// screen→object-word mapping stays OPEN (frame pair).
+    pub(crate) fn stage_refresh_context(&mut self, context: ShopRefreshContext) {
+        self.refresh_context = context;
+    }
+
+    /// Stage the "lucky" word (planet index 12 sets it).
+    pub(crate) fn stage_lucky_view(&mut self, lucky_view: bool) {
+        self.lucky_view = lucky_view;
     }
 
     /// Selected category tab (`None` until a FASHION-class press).
@@ -419,6 +455,15 @@ impl ShopState {
             }
             ShopAction::RevertTryOn => {
                 self.clear_try_on();
+                false
+            }
+            ShopAction::SelectGender(gender) => {
+                // Static arm `0x14202006/07` (`ev_f3ad15be…`): write
+                // byte `+0x18`, hide the other button (derived from the
+                // byte), and call the context refresher the object
+                // state selects. The sound slot is not modeled here.
+                self.gender = Some(gender);
+                self.last_gender_refresh = Some(self.refresh_context.resolve(self.lucky_view));
                 false
             }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,

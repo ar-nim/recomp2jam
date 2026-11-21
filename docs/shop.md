@@ -376,6 +376,23 @@ sound slots are not pinned, so no UI effect is invented. Guards:
 hidden-arm safe). **OPEN (next step):** one tapped GO MYROOM frame with a
 wire tap to name the destination and confirm opcode absence.
 
+## #178 enrichment — gender switch (#776)
+
+`FUN_00499760` (`ev_f3ad15be…`) answers GIRL `0x14202006` and BOY
+`0x14202007`: the GIRL arm writes byte `+0x18 = 1`, hides BOY; the BOY
+arm writes `0` and hides GIRL. Both cue slot `0x1b` and call one of
+three refreshers by two object words (both zero → `FUN_0049ead0`, first
+zero/second nonzero → `FUN_0049e2d0`, first nonzero → `FUN_0049f0c0`),
+passing 1 when planet index `0x17` is 12. Our board now stages the
+byte, the hidden button code, and a resolved refresher call; the staged
+context and lucky word are seams for the still-unmapped object words.
+The sound slot is recorded here, not invented in the UI-effect layer.
+Guards: `shop_gender_press_writes_the_byte_and_hides_the_other_button`
+and `shop_gender_press_calls_the_context_refresher_for_the_staged_role`
+(synthetic placements, hidden-arm safe). The live dump stages neither
+button (absence, #195); **OPEN (next step):** before/after exe frame
+pair for each press, in shop and myroom contexts.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
@@ -397,3 +414,5 @@ wire tap to name the destination and confirm opcode absence.
    inventory (L/R readout pairing ASSUMED); planet pager and
    filters display-only — the filter buttons never stage live
    (absence, ticket #195).
+5. Gender buttons — PARTIAL: byte/hidden-button/refresher staged;
+   the screen→object-word mapping and before/after frames stay OPEN.
