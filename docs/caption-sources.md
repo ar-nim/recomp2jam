@@ -64,7 +64,15 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   `0x50f520` (file `0xbe1d5`; font setup `0x50f6a0` file `0xbe1c9`).
   Mismatch default `-0-` (file `0x24a1d0`) through `0x50f520` (file
   `0xbe1e4`).
-- **SKILLCOUNT — PINNED** (inventory word). Three button handlers
+- **SKILLCOUNT — PINNED** (inventory word). The slot-1 handler
+  `FUN_004bb760` (VA `0x4bb760`, evidence
+  `ev_826be8349ca6a899ad81a9c9c0825f83c0b58c0d5167e1e90b0a511a8a7af56a`)
+  pins the wrap: LEFT from selection 0 goes to `len-1`, RIGHT from
+  `len-1` goes to 0, with no wire field written by the handler.
+  Since #767 the shell stages owned items per slot and repaints the
+  selected id plus its width-3 count together; an empty list keeps
+  the older `JoinedRoom.skills`/`skill_counts` sources.
+  Three button handlers
   cycle dialog selection words (`1SKILLLEFT/RIGHT` `0x16200050/51`
   adjust `+0x35c`; `2SKILL` `0x16200052/53` adjust `+0x360`; `3SKILL`
   `0x16200054/55` adjust `+0x364`; files `0xbb7ac` / `0xbbb7c` /

@@ -62,8 +62,9 @@ use super::paint::{
     scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
     CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
     ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSong, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots,
+    WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -759,6 +760,9 @@ pub struct ScreenGame {
     /// `SKILLCOUNT` source; `JoinedRoom.skills` carries the ring ids
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
+    /// Locally staged owned-skill lists behind the three selectors.
+    /// Empty until a source names them; no wire fill is pinned (#767).
+    skill_slots: WaitingSkillSlots,
     /// 4018 member records by seat (exe offsets pinned in
     /// `ResultMemberRecord`). `None` while no admitted row named the
     /// seat; the row painter falls back to local score only there.
@@ -1163,6 +1167,7 @@ impl ScreenGame {
             catalog_chart_files: HashMap::new(),
             song_cover: None,
             skill_counts: [0, 0, 0],
+            skill_slots: WaitingSkillSlots::default(),
             result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
@@ -3977,10 +3982,15 @@ impl ScreenGame {
     /// gate, staged BACK leaves for rooms. Art-less clicks land
     /// nowhere — no pinned fallback geometry names these buttons.
     fn click_waiting_button(&mut self, x: i32, y: i32) {
-        let Some(art) = self.scene_art(Screen::Waiting) else {
+        // Clone the staged placements: the click arms below mutate the
+        // room/outbox while later arms still hit-test the same rects.
+        let Some(placements) = self
+            .scene_art(Screen::Waiting)
+            .map(|art| art.placements.clone())
+        else {
             return;
         };
-        let placements = &art.placements;
+        let placements = &placements;
         // Team buttons first: the toggle-group map (`FUN_0048c810`,
         // `waiting_team_for_code`) lights the pressed team and queues
         // the 4004+4008 send pair through `select_team`.
@@ -4002,6 +4012,15 @@ impl ScreenGame {
         if let Some(step) = map_step.filter(|_| self.is_room_master()) {
             self.cycle_waiting_map(step);
             return;
+        }
+        // Skill selectors: the six `0x16200050..55` handlers cycle a
+        // dialog selection word and repaint its id/count from the owned
+        // item vector (`FUN_004bb760` family). With no staged items the
+        // arm stays inert; no selection wire field is pinned (OPEN).
+        if let Some((slot, step)) = self.skill_step_at(x, y) {
+            if self.skill_slots.cycle(slot, step) {
+                return;
+            }
         }
         // Song-select open trigger: the room master's MUSELECT button
         // (`IDC_BUTTON_SWAIT_MUSELECT`, file `0xb2622`) stages the
@@ -4046,6 +4065,22 @@ impl ScreenGame {
         } else if confirm {
             self.confirm_waiting();
         }
+    }
+
+    /// One staged `1/2/3SKILLLEFT/RIGHT` rect and its slot/step.
+    fn skill_step_at(&self, x: i32, y: i32) -> Option<(usize, WaitingSkillStep)> {
+        const BUTTONS: [(&str, usize, WaitingSkillStep); 6] = [
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0, WaitingSkillStep::Next),
+            ("IDC_BUTTON_SWAIT_2SKILLLEFT", 1, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_2SKILLRIGHT", 1, WaitingSkillStep::Next),
+            ("IDC_BUTTON_SWAIT_3SKILLLEFT", 2, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_3SKILLRIGHT", 2, WaitingSkillStep::Next),
+        ];
+        let placements = &self.scene_art(Screen::Waiting)?.placements;
+        BUTTONS.iter().find_map(|(id, slot, step)| {
+            staged_rect_hit(placements, id, x, y).then_some((*slot, *step))
+        })
     }
 
     /// Frame count of the staged map image (`0x1650001A`): one sprite
@@ -4544,6 +4579,21 @@ impl ScreenGame {
     #[must_use]
     pub fn skill_counts(&self) -> [u32; 3] {
         self.skill_counts
+    }
+
+    /// Stage one slot's owned items behind a Waiting selector. Slot
+    /// 0 is `1SKILL`, 1 is `2SKILL`, 2 is `3SKILL`; a new list starts
+    /// selected at its first item. The wire fill is still OPEN
+    /// (`docs/caption-sources.md` OPEN 4), so callers must name the
+    /// source explicitly; no packet invents items here.
+    pub fn set_skill_slot_items(&mut self, slot: usize, items: Vec<WaitingSkillItem>) -> bool {
+        self.skill_slots.set_slot(slot, items)
+    }
+
+    /// Currently staged selectors and their selected items.
+    #[must_use]
+    pub fn skill_slots(&self) -> &WaitingSkillSlots {
+        &self.skill_slots
     }
 
     /// Stage battle totals (`RoomTeams` mirrors the server-side 4014/4016
@@ -7070,6 +7120,7 @@ impl ScreenGame {
             song: self.waiting_song(),
             song_bpm: self.waiting_song_bpm(),
             skill_counts: self.skill_counts,
+            skill_slots: Some(&self.skill_slots),
             level: self.waiting_level(),
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
@@ -11387,6 +11438,71 @@ mod game_tests {
         assert!(
             game.has_pending_arena_send(),
             "the arrow queues SetRoomArena 4002"
+        );
+    }
+
+    #[test]
+    fn skill_selector_clicks_cycle_owned_items_with_the_exe_wrap() {
+        // Ticket #767, `FUN_004bb760` (evidence `ev_826be834…`):
+        // LEFT decrements `+0x35c` and wraps to the last owned item,
+        // RIGHT increments and wraps to zero. Live chain:
+        // `set_joined_room` -> `walk_to_waiting` -> staged
+        // `1SKILLLEFT/RIGHT` rects -> `ingest_snapshot` ->
+        // `click_waiting` -> `click_waiting_button` ->
+        // `WaitingSkillSlots::cycle`. The owned-item wire fill and the
+        // selection-change wire field stay OPEN; this leg stages the
+        // items explicitly and pins only the local cycle.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let slots = [
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0x1620_0050, 662, 204),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0x1620_0051, 736, 204),
+        ];
+        let placements: Vec<ScenePlacement> = slots
+            .iter()
+            .map(|(id, code, x, y)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: *code,
+                sprite: None,
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    w: 34,
+                    h: 38,
+                },
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, placements, HashMap::new());
+        assert!(game.set_skill_slot_items(
+            0,
+            vec![
+                WaitingSkillItem { id: 11, count: 7 },
+                WaitingSkillItem { id: 22, count: 42 },
+            ]
+        ));
+        assert_eq!(game.skill_slots().selected(0).map(|item| item.id), Some(11));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(750, 220));
+        assert_eq!(
+            game.skill_slots().selected(0),
+            Some(&WaitingSkillItem { id: 22, count: 42 }),
+            "RIGHT selects the next owned item"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(750, 220));
+        assert_eq!(
+            game.skill_slots().selected(0).map(|item| item.id),
+            Some(11),
+            "RIGHT wraps to the first item"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(675, 220));
+        assert_eq!(
+            game.skill_slots().selected(0).map(|item| item.id),
+            Some(22),
+            "LEFT wraps to the last item"
         );
     }
 

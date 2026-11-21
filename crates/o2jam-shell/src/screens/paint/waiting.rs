@@ -204,6 +204,10 @@ pub struct WaitingCaptions<'a> {
     pub song_bpm: Option<f32>,
     /// Staged inventory counts, one per skill slot.
     pub skill_counts: [u32; 3],
+    /// Locally staged owned-item selectors, when a source named them.
+    /// `None` keeps the ring ids from `JoinedRoom.skills` and the
+    /// counts from `skill_counts` (OPEN 4: no wire fill is pinned).
+    pub skill_slots: Option<&'a WaitingSkillSlots>,
     /// Difficulty and speed behind the `LEVEL` badge, from the same
     /// pick-or-room source as `song`.
     pub level: Option<WaitingLevel>,
@@ -1120,8 +1124,13 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed(frame, speed, placements);
-    paint_waiting_skills(frame, room, placements);
-    paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
+    paint_waiting_skills(frame, room, captions.skill_slots, placements);
+    paint_waiting_skillcounts(
+        frame,
+        &captions.skill_counts,
+        captions.skill_slots,
+        placements,
+    );
     paint_waiting_mapname(frame, room, placements);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
     paint_waiting_music(frame, placements, captions.song);
@@ -1371,18 +1380,112 @@ pub(crate) fn paint_waiting_speed(frame: &mut Frame<'_>, speed: u8, placements: 
     );
 }
 
+/// One owned skill in a Waiting selector: id at owned-vector `+4`,
+/// count at `+8` (stride `0xc`, handler `FUN_004bb760`, evidence
+/// `ev_826be8349ca6a899ad81a9c9c0825f83c0b58c0d5167e1e90b0a511a8a7af56a`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingSkillItem {
+    /// Owned-item id the exe turns into the ring art.
+    pub id: i32,
+    /// Owned-item count the exe prints at the `SKILLCOUNT` rect.
+    pub count: u32,
+}
+
+/// Direction of one `1/2/3SKILLLEFT/RIGHT` press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingSkillStep {
+    /// LEFT: decrement with wrap to the last owned item.
+    Previous,
+    /// RIGHT: increment with wrap to the first owned item.
+    Next,
+}
+
+/// Locally staged owned-skill selectors, one list per Waiting slot.
+/// The server fill of the three owned-item vectors stays OPEN
+/// (`docs/caption-sources.md` OPEN 4), so an empty list leaves the
+/// existing caption sources untouched instead of inventing items.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WaitingSkillSlots {
+    items: [Vec<WaitingSkillItem>; 3],
+    selected: [usize; 3],
+}
+
+impl WaitingSkillSlots {
+    /// Stage the owned items of one slot (0..3). A new list starts
+    /// from the first item, as the exe's dialog ctor does for `+0x35c`.
+    pub fn set_slot(&mut self, slot: usize, items: Vec<WaitingSkillItem>) -> bool {
+        let Some(staged) = self.items.get_mut(slot) else {
+            return false;
+        };
+        *staged = items;
+        if let Some(selected) = self.selected.get_mut(slot) {
+            *selected = 0;
+        }
+        true
+    }
+
+    /// Selected owned item of one slot, when a list names one.
+    #[must_use]
+    pub fn selected(&self, slot: usize) -> Option<&WaitingSkillItem> {
+        let items = self.items.get(slot)?;
+        let index = *self.selected.get(slot)?;
+        items.get(index)
+    }
+
+    /// Cycle one slot's selection with the exe's wrap rule. Returns
+    /// false when no owned item exists (no invented selection).
+    pub fn cycle(&mut self, slot: usize, step: WaitingSkillStep) -> bool {
+        let Some(items) = self.items.get(slot) else {
+            return false;
+        };
+        if items.is_empty() {
+            return false;
+        }
+        let Some(selected) = self.selected.get_mut(slot) else {
+            return false;
+        };
+        *selected = match step {
+            WaitingSkillStep::Previous => {
+                if *selected == 0 {
+                    items.len() - 1
+                } else {
+                    *selected - 1
+                }
+            }
+            WaitingSkillStep::Next => {
+                if *selected + 1 >= items.len() {
+                    0
+                } else {
+                    *selected + 1
+                }
+            }
+        };
+        true
+    }
+}
+
 /// Skill-ring ids at the `1/2/3SKILL` rects (rects 87..89, the X
 /// boxes): empty slots stay untouched so the staged X art shows.
 /// The counts paint beside them at the `SKILLCOUNT` rects from the
-/// staged inventory ([`paint_waiting_skillcounts`]).
+/// staged inventory ([`paint_waiting_skillcounts`]). With staged
+/// owned-item lists, the selected id and count replace those two
+/// sources together.
 pub(crate) fn paint_waiting_skills(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
+    slots: Option<&WaitingSkillSlots>,
     placements: &[ScenePlacement],
 ) {
-    for (slot, skill_id) in WAITING_SKILL_IDS.iter().zip(room.skills.iter()) {
-        if let Some((x, y)) = waiting_bnd_origin(placements, slot, frame) {
-            paint_room_detail_line(frame, x, y, &skill_id.to_string(), art_title_ink());
+    for (slot, slot_id) in WAITING_SKILL_IDS.iter().enumerate() {
+        let text = slots
+            .and_then(|slots| slots.selected(slot))
+            .map(|item| item.id.to_string())
+            .or_else(|| room.skills.get(slot).map(i32::to_string));
+        let Some(text) = text else {
+            continue;
+        };
+        if let Some((x, y)) = waiting_bnd_origin(placements, slot_id, frame) {
+            paint_room_detail_line(frame, x, y, &text, art_title_ink());
         }
     }
 }
@@ -1536,15 +1639,19 @@ pub fn waiting_skillcount_text(count: u32, cap_at_999: bool) -> String {
 pub(crate) fn paint_waiting_skillcounts(
     frame: &mut Frame<'_>,
     counts: &[u32; 3],
+    slots: Option<&WaitingSkillSlots>,
     placements: &[ScenePlacement],
 ) {
     for (slot, (id, count)) in WAITING_SKILLCOUNT_IDS.iter().zip(counts.iter()).enumerate() {
+        let count = slots
+            .and_then(|slots| slots.selected(slot))
+            .map_or(*count, |item| item.count);
         if let Some((x, y)) = waiting_bnd_origin(placements, id, frame) {
             paint_room_detail_line(
                 frame,
                 x,
                 y,
-                &waiting_skillcount_text(*count, slot > 0),
+                &waiting_skillcount_text(count, slot > 0),
                 art_title_ink(),
             );
         }

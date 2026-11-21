@@ -363,3 +363,26 @@ Waiting art, no game data), `map_arrow_cycle_skips_the_pinned_stages_and_leaves_
 before the click arm the room word stayed at 7. The random wrap arm
 (`FUN_004bb2c0`) stays OPEN with a live arrow-click capture at a cycle
 boundary as the next evidence step.
+
+## #767 skill selectors and counters (2026-11-21)
+
+Static pin: `FUN_004bb760` (VA `0x4bb760`, evidence `ev_826be834…`)
+decrements slot 1's selection word with wrap to `len-1` on LEFT,
+increments with wrap to 0 on RIGHT, then stages the owned-item art
+(id at vector `+4`) and prints its count (vector `+8`, width 3, slots
+2–3 capped at 999). Slots 2/3 use the same handler shape at
+`0x4bbb30`/`0x4bbf20`. The handler writes no wire field, and the
+server fill of the three owned-item vectors is still OPEN
+(`docs/caption-sources.md` OPEN 4).
+
+The shell stages three local owned-item lists; empty lists keep the
+existing ring-id/count sources, so no packet invents items. A staged
+`1/2/3SKILLLEFT/RIGHT` click cycles the selection and the count and
+id repaint from the selected item. Guards:
+`skill_selector_clicks_cycle_owned_items_with_the_exe_wrap` (boot walk
+-> staged rect -> `click_waiting` -> `WaitingSkillSlots::cycle`) and
+`cycled_skill_slot_repaints_its_selected_id_and_count` (paint seam,
+synthetic probes, no game data). RED proof: before the click arm the
+selection stayed at the first item. The wire fill and
+selection-change field stay OPEN with a gateway tap and a two-client
+frame pair as the next evidence step.
