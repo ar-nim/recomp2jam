@@ -5236,7 +5236,7 @@ mod paint_tests {
             state_code: 1,
             member: Some(guest),
         };
-        let seats = staged_seats(&room, None);
+        let seats = staged_seats(&room, None, &[None; 8]);
         assert_eq!(seats[0].name, "host", "slot 0 stays on the left");
         assert!(seats[0].master, "the slot-0 master keeps its star");
         assert!(seats[0].ready, "the slot-0 READY plate stays left");
@@ -5254,7 +5254,7 @@ mod paint_tests {
         // the guest's own cover is slot 1, not cover 0.
         let mut room = waiting_room();
         room.member_id = 1;
-        let seats = staged_seats(&room, Some("tester"));
+        let seats = staged_seats(&room, Some("tester"), &[None; 8]);
         assert_eq!(seats[0].name, "host", "master keeps cover 0");
         assert_eq!(seats[1].name, "tester", "self uses cover member_id");
         assert!(seats[1].present, "the self cover is occupied");
@@ -11105,7 +11105,7 @@ mod paint_tests {
             master: true,
             playing: false,
             has_song: true,
-            downloading: false,
+            download_badge_armed: false,
             no_gem: false,
             pc_room: false,
         };
@@ -11125,7 +11125,7 @@ mod paint_tests {
             master: false,
             playing: false,
             has_song: false,
-            downloading: false,
+            download_badge_armed: false,
             no_gem: false,
             pc_room: false,
         };
@@ -13970,7 +13970,7 @@ mod paint_tests {
             fold_pin_word(&mut hash, u64::try_from(x).unwrap_or(u64::MAX));
             fold_pin_word(&mut hash, u64::try_from(y).unwrap_or(u64::MAX));
         }
-        let staged_seats = staged_seats(&champion, None);
+        let staged_seats = staged_seats(&champion, None, &[None; 8]);
         for seat in &staged_seats {
             let role = staged_role(champion.champion.is_some(), seat);
             fold_pin_text(&mut hash, &staged_seat_text(seat, role));
@@ -14136,14 +14136,19 @@ mod paint_tests {
         );
     }
 
-    /// Ticket #559: the exe's `music-state=4` frame (`matched-ab-339`,
-    /// `4026`/`4037 (0004)`) shows a DOWNLOADING badge on that seat.
-    /// Live chain: `OnlineSession::apply_member_music_state` ->
-    /// `ScreenGame::set_member_music_state` -> `paint_at` ->
-    /// `paint_waiting_scene` -> `staged_seats` -> `paint_waiting_seat_marks`.
-    /// Rect origins are the parsed Waiting seat-template `.bnd` records
-    /// (EXTEND1 `(48,127)` / EXTEND2 `(190,127)`, bar y163), not painter
-    /// literals; the figures are synthetic so CI runs without art.
+    /// Ticket #559, 16c2b9a guard updated after the p559-badge-ab4
+    /// refutation: the exe seat stays badge-free on `4037 0004` alone;
+    /// the `4039` progress arm lights the DOWNLOADING badge and bar.
+    /// The full A/B pixel pair runs through `paint_at` in
+    /// `game_tests::download_badge_stays_dark_on_4037_state_without_4039_progress`
+    /// and `game_tests::download_badge_lights_when_4039_progress_follows_4037_state`.
+    /// Live chain: `OnlineSession::apply_member_music_state` /
+    /// `apply_download_progress` -> `ScreenGame` seat mirror -> `paint_at`
+    /// -> `paint_waiting_scene` -> `staged_seats` ->
+    /// `paint_waiting_seat_marks`. Rect origins are the parsed Waiting
+    /// seat-template `.bnd` records (EXTEND1 `(48,127)` / EXTEND2
+    /// `(190,127)`, bar y163), not painter literals; the figures are
+    /// synthetic so CI runs without art.
     #[test]
     fn downloading_member_paints_only_its_own_bnd_badge_and_bar() {
         let mut room = waiting_room();
@@ -14158,8 +14163,18 @@ mod paint_tests {
             state_code: 1,
             member: Some(peer),
         });
-        let seats = staged_seats(&room, None);
-        assert!(seats[1].downloading, "the wire state stages the seat badge");
+        let mut progress = [None; 8];
+        progress[1] = Some(42);
+        let seats = staged_seats(&room, None, &progress);
+        assert!(
+            seats[1].download_badge_armed,
+            "4037 state plus 4039 progress stages the seat badge"
+        );
+        let unarmed = staged_seats(&room, None, &[None; 8]);
+        assert!(
+            !unarmed[1].download_badge_armed,
+            "4037 state alone leaves the seat badge dark"
+        );
 
         let placements = [
             (

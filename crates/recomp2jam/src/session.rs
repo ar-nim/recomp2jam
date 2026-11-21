@@ -12034,12 +12034,15 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Room);
     }
 
-    /// Ticket #559: the matched-ab-339 member-downloading leg. Live
-    /// chain: `OnlineSession::paint` -> `poll_waiting_chat` ->
-    /// `drain_waiting_chat` -> `apply_member_music_state` (4037) /
-    /// `apply_download_progress` (4039) -> `ScreenGame` seat mirror ->
-    /// `start_gate_verdict` (-4, no START frame). The percentage's bar
-    /// fill stays OPEN; the pinned wire byte must not be dropped.
+    /// Ticket #559: the member-downloading leg, updated after the
+    /// p559-badge-ab4 refutation. Live chain: `OnlineSession::paint` ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` ->
+    /// `apply_member_music_state` (4037) / `apply_download_progress`
+    /// (4039) -> `ScreenGame` seat mirror -> `start_gate_verdict` (-4,
+    /// no START frame) and the Waiting painter. 4037 supplies the state
+    /// half and 4039 arms the badge; the refuted 4037-only arm paints
+    /// nothing. The percentage's bar fill stays OPEN; the pinned wire
+    /// byte must not be dropped.
     #[test]
     fn downloading_state_and_progress_from_the_gateway_stage_the_seat() {
         use o2jam_net::SyncMemberMusicStateEvent;
@@ -12065,12 +12068,12 @@ pub(super) mod session_tests {
         assert_eq!(
             session.game.member_music_state(1),
             Some(MusicState::Downloading.code()),
-            "4037 arms the seat's download badge"
+            "4037 stages the seat's music state"
         );
         assert_eq!(
             session.game.member_download_progress(1),
             Some(42),
-            "4039 stages the percentage instead of dropping it"
+            "4039 stages the percentage and arms the badge instead of dropping it"
         );
         assert_eq!(
             session.game.start_gate_verdict(),

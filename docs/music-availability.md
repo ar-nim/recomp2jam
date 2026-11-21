@@ -105,6 +105,21 @@ Consequence: a song in `OJNList.dat` with no `o2ma<id>.ojn` on disk is
   `(0x12, 0xfc3, member, state)`); `4039 DownloadProgressChanged`
   handler VA `0x559a10` (two 1-byte reads, forward `(0x12, 0xfc7, pct,
   member)`). Seat reset parks `0` at `+0x217c` (VA `0x53fcc1`).
+- **#559 refutation — badge arm needs both wire halves (capture-pinned).**
+  The matched `p559-badge-ab4` pair (exe OTwo.exe sha256 `83a04541…72c823b`,
+  Wine 11.22; manifests `~/scratch/p559-badge-ab4/{exe,rust3}/manifest.json`)
+  sends `4026 000004` + `4037 0004` and **no 4039**. The exe screenshot
+  `exe/artifacts/screenshots/member-downloading.png` (sha256
+  `731c4685…d92f0895`) shows no DOWNLOADING badge or bar; our Rust
+  screenshot `rust3/states/member-downloading.png` (sha256
+  `77d74909…e463a9449`) paints both. Wire logs: `exe/wire/room-stage.log`
+  sha256 `f853a28b…3f1f7b7a`, `rust3/wire/room-stage.log` sha256
+  `ed682ad2…8ab8a6bbf616a0b`. The earlier matched-ab-339 read (state alone
+  ⇒ badge) is contradicted; the exe wins. Our painter now arms
+  `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` only when a 4037 state
+  **and** a 4039 percentage stand. Next evidence step stays on #559: add
+  host 4038 progress, wait for 4039, recapture both; if the exe seat is
+  still badge-free, make 4037/4039 wire-only and remove our paint.
 
 ## 3. Notice pin — the select dialog says "not downloaded" (PINNED)
 
