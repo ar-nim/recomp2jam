@@ -26,7 +26,19 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
 
 ## Verdicts
 
-- **MAPNAME — PINNED** (name table plus room word). Map-cycle path:
+- **MAPNAME — PINNED** (name table plus room word). The master's
+  arrow cycle is `FUN_004bb570` (VA `0x4bb570`, evidence
+  `ev_c9d69d8472c39643a5b3f030978707add16ef0d4682e3a17b965114d71ea3282`,
+  called from `FUN_004b81e0` with -1/+1, evidence
+  `ev_d729fea260f89b201499112a6f203184ec25834663c326d03686788e73592563`):
+  normal rooms step the word by one, skip the four stage words at rdata
+  `0x649ac4` (`140,170,180,240`, bytes evidence
+  `ev_df240aa2d3d7f8da4d9632a68c2362d71b8d3961170694925efa7976a84b4d1e`),
+  and send `0xfa2` (4002, `SetRoomArena`). The wrap arm calls
+  `FUN_004bb2c0`, which ORs in a random flag (evidence
+  `ev_86c97094081d83f52aaf43e37f3c8ef43b623ff446aafb42cab2e77df1177dc9`);
+  since #766 the shell leaves that arm OPEN instead of inventing a
+  stage. Map-cycle path:
   lookup through `0x48bcf0` (file `0xb3e02`), store through `0x50f520`
   (file `0xb4067`). The string is the centered entry of the rdata
   table at file `0x249990` (`None`, `한가한대전장의오후`,
@@ -42,6 +54,7 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   `0x4b9ab0`, table-3 slot 9 of the handler tables pinned under
   `ev_aba36a3a…` per `channel-fill.md`; file `0xb9b72`, `0x50f6f0`
   color `0x191919`).
+
 - **BPM — PINNED** (catalog column). `FUN_004bdfa0` (VA `0x4bdfa0`,
   file `0x4bdfa0`, evidence
   `ev_d8682673c3e62ae8b60a8238f8cd4d8cef6cb4deefe69af769235d1dfac683b8`)
@@ -62,6 +75,26 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   and `a_song_id_absent_from_the_catalog_paints_the_bpm_mismatch_default`;
   the separate pick-echo timing row stays as above.
 - **SKILLCOUNT — PINNED** (inventory word). Three button handlers
+- **BPM — PINNED** (catalog column). Lookup through `0x48bcf0` (file
+  `0xbdfd9`). No song stores the empty string through `0x50f520`
+  (file `0xbe000`). Otherwise the song-record vector (base `0x779528`,
+  stride `0x1b4`, files `0xbe0b6`–`0xbe0e4`) is scanned for the record
+  whose id matches global `0x7789d8`, and the float at record `+0x10`
+  (the `OJNList.dat` row `+20` BPM column per `file-formats/ojn.md`)
+  formats with `%0.f` (rdata file `0x24a1d4`) and stores through
+  `0x50f520` (file `0xbe1d5`; font setup `0x50f6a0` file `0xbe1c9`).
+  Mismatch default `-0-` (file `0x24a1d0`) through `0x50f520` (file
+  `0xbe1e4`).
+- **SKILLCOUNT — PINNED** (inventory word). The slot-1 handler
+  `FUN_004bb760` (VA `0x4bb760`, evidence
+  `ev_826be8349ca6a899ad81a9c9c0825f83c0b58c0d5167e1e90b0a511a8a7af56a`)
+  pins the wrap: LEFT from selection 0 goes to `len-1`, RIGHT from
+  `len-1` goes to 0, with no wire field written by the handler.
+  Since #767 the shell stages owned items per slot and repaints the
+  selected id plus its width-3 count together; an empty list keeps
+  the older `JoinedRoom.skills`/`skill_counts` sources.
+  Three button handlers
+
   cycle dialog selection words (`1SKILLLEFT/RIGHT` `0x16200050/51`
   adjust `+0x35c`; `2SKILL` `0x16200052/53` adjust `+0x360`; `3SKILL`
   `0x16200054/55` adjust `+0x364`; files `0xbb7ac` / `0xbbb7c` /

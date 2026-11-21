@@ -3425,8 +3425,9 @@ pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
 pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
-    waiting_confirm_control_id, waiting_map_name, waiting_skillcount_text, WaitingCaptions,
-    WaitingConfirmState, WaitingLevel, WaitingSong,
+    waiting_confirm_control_id, waiting_map_cycle, waiting_map_name, waiting_skillcount_text,
+    WaitingCaptions, WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, WAITING_MAP_DEFAULT_FRAMES,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
@@ -10443,6 +10444,7 @@ mod paint_tests {
                 h: 600,
             },
             &champion_room(),
+            None,
             &placements,
         );
         assert_eq!(buf[206 * 800 + 697], scrim_color());
@@ -11271,6 +11273,49 @@ mod paint_tests {
             "IDC_IMAGE_SWAIT_ALBUMMODE",
             false
         ));
+        // #765: the rest of the pinned role set. Master arms map arrows
+        // and all six skill buttons; guests show the three skill covers.
+        for id in [
+            "IDC_BUTTON_SWAIT_MAPLEFT",
+            "IDC_BUTTON_SWAIT_MAPRIGHT",
+            "IDC_BUTTON_SWAIT_1SKILLLEFT",
+            "IDC_BUTTON_SWAIT_1SKILLRIGHT",
+            "IDC_BUTTON_SWAIT_2SKILLLEFT",
+            "IDC_BUTTON_SWAIT_2SKILLRIGHT",
+            "IDC_BUTTON_SWAIT_3SKILLLEFT",
+            "IDC_BUTTON_SWAIT_3SKILLRIGHT",
+        ] {
+            assert!(waiting_control_armed_for_role(id, true), "{id} master");
+            assert!(!waiting_control_armed_for_role(id, false), "{id} guest");
+        }
+        for id in [
+            "IDC_IMAGE_SWAIT_COVERSKILLLEFT",
+            "IDC_IMAGE_SWAIT_COVERSKILLRIGHT",
+            "IDC_IMAGE_SWAIT_COVERSKILLSEL",
+        ] {
+            assert!(!waiting_control_armed_for_role(id, true), "{id} master");
+            assert!(waiting_control_armed_for_role(id, false), "{id} guest");
+        }
+    }
+
+    #[test]
+    fn map_arrow_cycle_skips_the_pinned_stages_and_leaves_random_wrap_open() {
+        // Seam pin for the pure cycle: the live click path is guarded
+        // in `screens::game::game_tests`, and this table leg needs no
+        // staged art or game data. Exe `FUN_004bb570` (evidence
+        // `ev_c9d69d84…`); skip words at rdata `0x649ac4`.
+        use super::WaitingMapStep::{Next, Previous};
+        assert_eq!(waiting_map_cycle(7, Next, 14), Some(8));
+        assert_eq!(waiting_map_cycle(7, Previous, 14), Some(6));
+        assert_eq!(waiting_map_cycle(139, Next, 14), Some(141));
+        assert_eq!(waiting_map_cycle(141, Previous, 14), Some(139));
+        assert_eq!(waiting_map_cycle(14, Next, 14), None, "random wrap OPEN");
+        assert_eq!(waiting_map_cycle(1, Previous, 14), None, "random wrap OPEN");
+        assert_eq!(
+            waiting_map_cycle(i32::MIN + 5, Next, 14),
+            Some(1),
+            "random room word takes the pinned low branch"
+        );
     }
 
     #[test]
@@ -12701,6 +12746,73 @@ mod paint_tests {
     }
 
     #[test]
+    fn cycled_skill_slot_repaints_its_selected_id_and_count() {
+        // #767 paint leg: after a RIGHT cycle the staged selector owns
+        // item 22 with count 42, so both the ring id and the width-3
+        // count ink the exact glyphs the exe's handler would store
+        // through `0x50f520`. Seam pin (synthetic probes); the live
+        // click chain is guarded in `screens::game::game_tests`.
+        let mut slots = WaitingSkillSlots::default();
+        assert!(slots.set_slot(
+            0,
+            vec![
+                WaitingSkillItem { id: 11, count: 7 },
+                WaitingSkillItem { id: 22, count: 42 },
+            ]
+        ));
+        assert!(slots.cycle(0, WaitingSkillStep::Next));
+        let placements = vec![
+            waiting_probe("IDC_IMAGE_SWAIT_1SKILL", None, (701, 208, 731, 238)),
+            waiting_probe("IDC_TEXT_SWAIT_1SKILLCOUNT", None, (740, 208, 780, 238)),
+        ];
+        let mut actual = vec![0u32; 800 * 600];
+        paint_waiting_skills(
+            &mut Frame {
+                buf: &mut actual,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            Some(&slots),
+            &placements,
+        );
+        paint_waiting_skillcounts(
+            &mut Frame {
+                buf: &mut actual,
+                w: 800,
+                h: 600,
+            },
+            &[0, 0, 0],
+            Some(&slots),
+            &placements,
+        );
+        let mut expected = vec![0u32; 800 * 600];
+        paint_room_detail_line(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            701,
+            208,
+            "22",
+            art_title_ink(),
+        );
+        paint_room_detail_line(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            740,
+            208,
+            " 42",
+            art_title_ink(),
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn waiting_skillcounts_paint_at_their_staged_rects() {
         // Count probes below the ring rects: `[7, 42, 1500]` inks
         // all three, the late slots through the 999 cap.
@@ -12717,6 +12829,7 @@ mod paint_tests {
                 h: 600,
             },
             &[7, 42, 1500],
+            None,
             &placements,
         );
         assert_eq!(buf[206 * 800 + 736], scrim_color());

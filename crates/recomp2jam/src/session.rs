@@ -1998,6 +1998,28 @@ impl OnlineSession {
     /// them in that order on the next wire poll. A failed 4004 keeps the
     /// pair staged for the next poll; a failed 4008 leaves readiness to
     /// the guest's next Confirm, which owns the toggle retry.
+    /// Drain one queued map-arrow press (ticket #766): the shell's
+    /// MAPLEFT/MAPRIGHT rects stage a `SetRoomArena` 4002 body with the
+    /// next room word. No 4003 echo is awaited here — the exe's arrow
+    /// arm sends the word and repaints the caption from the local
+    /// global (`FUN_004bb570`, evidence `ev_c9d69d84…`). A failed send
+    /// requeues the same body for the next wire poll.
+    fn flush_arena_send(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            return;
+        }
+        let Some(arena) = self.game.take_arena_send() else {
+            return;
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::SetRoomArena.id(), &arena.encode_body())
+        {
+            tracing::warn!(%source, "map send failed; the stage word is requeued");
+            self.game.queue_arena_send(arena.arena);
+        }
+    }
+
     fn flush_team_send(&mut self) {
         if self.game.screen() != Screen::Waiting {
             return;
@@ -3984,6 +4006,7 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
         self.flush_waiting_exit();
+        self.flush_arena_send();
         self.flush_team_send();
         self.flush_channel_logout();
         self.flush_exit_shop();
@@ -4356,6 +4379,69 @@ pub(super) mod session_tests {
         stage_armed_loading(&mut game);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
+    }
+
+    #[test]
+    fn map_arrow_click_sends_4002_from_the_live_boot_path() {
+        // Ticket #766 live caller chain: `waiting_session` walks boot
+        // into Waiting, then the staged MAPRIGHT rect takes a canvas
+        // click through `GameLoop::ingest_snapshot` -> `ScreenGame` ->
+        // `OnlineSession::paint` -> `flush_arena_send` -> 4002. The
+        // fake gateway reads the frame; no install-root data is needed.
+        use o2jam_net::SetRoomArena;
+        use o2jam_render::{Frame, Rect};
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+
+        let (written, reports) = mpsc::channel();
+        let (mut session, server) = waiting_session(move |mut stream| {
+            let frame = read_frame(&mut stream);
+            written.send(frame).unwrap();
+        });
+        let mut room = joined_snapshot();
+        room.arena = 7;
+        session.game_mut().set_joined_room(room);
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_MAPRIGHT".to_owned(),
+                code: 0x1620_000D,
+                sprite: None,
+                rect: Rect {
+                    x: 667,
+                    y: 539,
+                    w: 33,
+                    h: 20,
+                },
+            }],
+            Default::default(),
+        );
+        session
+            .game
+            .ingest_snapshot(&InputSnapshot::click_at(680, 548));
+        assert!(
+            session.game.has_pending_arena_send(),
+            "the arrow queues the stage word"
+        );
+        let mut buffer = vec![0u32; 800 * 600];
+        session.paint(&mut Frame {
+            buf: &mut buffer,
+            w: 800,
+            h: 600,
+        });
+        let frame = reports
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a 4002 reaches the gateway");
+        assert_eq!(frame.id, Request::SetRoomArena.id());
+        assert_eq!(
+            SetRoomArena::decode_body(&frame.payload),
+            Ok(SetRoomArena::new(8))
+        );
+        assert!(
+            !session.game.has_pending_arena_send(),
+            "one take sends once"
+        );
+        server.join().unwrap();
     }
 
     /// Game walked Avi → Channel, paired with a live fake gateway; the

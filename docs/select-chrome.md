@@ -22,15 +22,25 @@ back; #285 makes them paint-gated families instead of absent art.
   state through `0x409bf0` (VA `0x44faca`/`0x44fac5` and neighbours).
   Only one panel is live.
 - **Help sheets** — `LABELQUESTION 0x27200053` and `SEARCHQUESTION
-  0x27200055` (VA `0x441a06`/`0x441a0f`). Each shows its own guide
-  body (`0x27500054` / `0x27500056`) through helper VA `0x44f800`
-  and hides the shared `LISTGUIDIMG 0x27500057`. The common
-  hide-all arm is VA `0x441aa0`. The help ? buttons share rects with
-  static art (#272 placement half): `Dialog_SelectMusic.ojs` bakes the
-  dark plates at `(198,93)` and `(755,50)`, so `SelectMusic_LabelQuestion.ojs`
-  and `SelectMusic_SearchQuestion.ojs` stage hidden — their grey faces
-  would cover the exe's plates. Their rects still take clicks. Whether
-  the grey faces paint on hover or help-active stays OPEN.
+  0x27200055` (VA `0x441a06`/`0x441a0f`, evidence
+  `ev_2b66555bd8248ee3d24c6d5c385ab778c08af0af795a95b9b3c187b1349a1a47`).
+  Each shows its own guide body (`0x27500054` / `0x27500056`) through
+  helper VA `0x44f800` and hides the shared `LISTGUIDIMG 0x27500057`.
+  The common hide-all arm is VA `0x441aa0`. The help ? buttons share
+  rects with static art (#272 placement half): `Dialog_SelectMusic.ojs`
+  bakes the dark plates at `(198,93)` and `(755,50)`; the rects still
+  take clicks. Since #764 the authored `?` bodies stage as figures and
+  paint only while their own sheet is active, so the plates stay
+  visible at open. Both frames of each shipped `?` body are
+  byte-identical, so no distinct hover face is claimed; that capture
+  step stays OPEN.
+- **CANCEL** — `0x27200003` (VA `0x43ea8c`, evidence
+  `ev_62ffe70bf819443c4c9202d6b4ceaef33926d2128a4cb0b723b151bb322d7d66`).
+  The arm plays SFX 2, emits relay event 100, calls the UI-close helper
+  with `(-1, 1)`, then passes `0` to the shared sheet-close helper.
+  OK's arm passes `1` after committing the staged row. Since #764 the
+  shell's CANCEL closes the sheet and discards any queued 4000; OK
+  still keeps it.
 - **Button frames** — sprite-55 records of one button body are states,
   not stacked layers. The exe swaps a frame per control state; the
   dialog paints frame 0 for inactive bodies and the last frame for the
@@ -97,7 +107,7 @@ back; #285 makes them paint-gated families instead of absent art.
 | `IDC_DIALOG_SELECTMUSIC` | `0x27000000` | sheet root — display-only |
 | `IDC_BACK_DSMUSIC_1` | `0x27100001` | backdrop — display-only |
 | `IDC_BUTTON_DSMUSIC_OK` | `0x27200002` | OK confirms staged pick and closes (#232) |
-| `IDC_BUTTON_DSMUSIC_CANCEL` | `0x27200003` | CANCEL closes dialog (interactive; exact arm OPEN) |
+| `IDC_BUTTON_DSMUSIC_CANCEL` | `0x27200003` | CANCEL closes dialog without the OK commit (wired #764) |
 | `IDC_BUTTON_DSMUSIC_EXTEND1` | `0x27017004` | result row hit band — interactive (#15) |
 | `IDC_BUTTON_DSMUSIC_EXTEND2` | `0x27017005` | result row hit band — interactive (#15) |
 | `IDC_BUTTON_DSMUSIC_EXTEND3` | `0x27017006` | result row hit band — interactive (#15) |
@@ -276,11 +286,15 @@ CI skips cleanly when `install-root` has no `Interface1.opi`.
 Overlaps that the shipped art authors are not defects: BG plates under
 their buttons, the random panel over the level column, the guide sheets
 over the sheet, and the two dark `?` plates baked into
-`Dialog_SelectMusic.ojs`. The grey `?` button bodies stay unpainted at
+`Dialog_SelectMusic.ojs`. The authored `?` bodies stay unpainted at
 open so those plates remain visible;
 `song_dialog_question_buttons_leave_the_baked_backdrop_plate_visible`
-pins that half. The exe's hover/help-active face for those buttons is
-still OPEN. This note pins geometry, not a qualified exe frame.
+pins that half. #764 adds the help-active half:
+`a_help_button_click_reveals_its_authored_question_face` (synthetic
+figure, no game data) and the shell's help-sheet gate. The exe's
+hover face and any distinct help-active frame remain OPEN: both
+shipped frames have identical pixels. This note pins geometry, not a
+qualified exe frame.
 
 ## OPEN after this leg
 

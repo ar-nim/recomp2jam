@@ -59,11 +59,12 @@ use super::paint::{
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots,
+    WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -97,7 +98,7 @@ use o2jam_file::{
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
-use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
+use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -794,6 +795,9 @@ pub struct ScreenGame {
     /// `SKILLCOUNT` source; `JoinedRoom.skills` carries the ring ids
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
+    /// Locally staged owned-skill lists behind the three selectors.
+    /// Empty until a source names them; no wire fill is pinned (#767).
+    skill_slots: WaitingSkillSlots,
     /// 4018 member records by seat (exe offsets pinned in
     /// `ResultMemberRecord`). `None` while no admitted row named the
     /// seat; the row painter falls back to local score only there.
@@ -1207,6 +1211,7 @@ impl ScreenGame {
             catalog_chart_files: HashMap::new(),
             song_cover: None,
             skill_counts: [0, 0, 0],
+            skill_slots: WaitingSkillSlots::default(),
             result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
@@ -2217,6 +2222,20 @@ impl ScreenGame {
     #[must_use]
     pub fn has_pending_music_send(&self) -> bool {
         self.outbox.has_pending_music_send()
+    }
+
+    /// Queued map-arrow stage word for the session bridge (4002).
+    pub fn take_arena_send(&mut self) -> Option<SetRoomArena> {
+        self.outbox.take_arena_send()
+    }
+    /// Whether a map-arrow stage word waits for the 4002 send.
+    #[must_use]
+    pub fn has_pending_arena_send(&self) -> bool {
+        self.outbox.has_pending_arena_send()
+    }
+    /// Requeue a map stage word after a failed 4002 send.
+    pub fn queue_arena_send(&mut self, arena: i32) {
+        self.outbox.queue_arena_send(arena);
     }
 
     /// Whether the song-select dialog overlay is currently staged
@@ -4041,6 +4060,16 @@ impl ScreenGame {
                 self.select_music_notice = None;
                 return true;
             }
+            // CANCEL (`0x27200003`) closes the sheet without the OK
+            // commit (exe `FUN_0043e9b0`, file `0x43ea8c`): the shared
+            // close helper gets 0 instead of OK's 1. A staged pick must
+            // not reach the session bridge after this exit.
+            if staged_rect_hit(&art.placements, "IDC_BUTTON_DSMUSIC_CANCEL", x, y) {
+                self.select_music_art = None;
+                self.select_music_notice = None;
+                self.outbox.discard_music_send();
+                return true;
+            }
         }
         if self.click_select_chrome(x, y) {
             return true;
@@ -4235,10 +4264,15 @@ impl ScreenGame {
     /// gate, staged BACK leaves for rooms. Art-less clicks land
     /// nowhere — no pinned fallback geometry names these buttons.
     fn click_waiting_button(&mut self, x: i32, y: i32) {
-        let Some(art) = self.scene_art(Screen::Waiting) else {
+        // Clone the staged placements: the click arms below mutate the
+        // room/outbox while later arms still hit-test the same rects.
+        let Some(placements) = self
+            .scene_art(Screen::Waiting)
+            .map(|art| art.placements.clone())
+        else {
             return;
         };
-        let placements = &art.placements;
+        let placements = &placements;
         // Team buttons first: the toggle-group map (`FUN_0048c810`,
         // `waiting_team_for_code`) lights the pressed team and queues
         // the 4004+4008 send pair through `select_team`.
@@ -4246,6 +4280,7 @@ impl ScreenGame {
             self.select_team(team);
             return;
         }
+
         // Speed selector: the two staged `SWAIT_SPEED` buttons step
         // and mirror the speed without sending 4000 (#756,
         // `FUN_004b7c60`). Both captions and the LEVEL badge read the
@@ -4261,6 +4296,32 @@ impl ScreenGame {
             self.step_waiting_speed(delta);
             return;
         }
+
+        // Map arrows: the master-only cycle arm (exe dispatch file
+        // `0x4b832d`/`0x4b8384` calls `FUN_004bb570` with -1/+1 after
+        // the same master gate the role setup uses). The random wrap
+        // arm stays OPEN, so `None` consumes no invented stage.
+        let map_step = if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MAPLEFT", x, y) {
+            Some(WaitingMapStep::Previous)
+        } else if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MAPRIGHT", x, y) {
+            Some(WaitingMapStep::Next)
+        } else {
+            None
+        };
+        if let Some(step) = map_step.filter(|_| self.is_room_master()) {
+            self.cycle_waiting_map(step);
+            return;
+        }
+        // Skill selectors: the six `0x16200050..55` handlers cycle a
+        // dialog selection word and repaint its id/count from the owned
+        // item vector (`FUN_004bb760` family). With no staged items the
+        // arm stays inert; no selection wire field is pinned (OPEN).
+        if let Some((slot, step)) = self.skill_step_at(x, y) {
+            if self.skill_slots.cycle(slot, step) {
+                return;
+            }
+        }
+
         // Song-select open trigger: the room master's MUSELECT button
         // (`IDC_BUTTON_SWAIT_MUSELECT`, file `0xb2622`) stages the
         // dialog. Non-master clicks are dropped by the exe, so they
@@ -4304,6 +4365,48 @@ impl ScreenGame {
         } else if confirm {
             self.confirm_waiting();
         }
+    }
+
+    /// One staged `1/2/3SKILLLEFT/RIGHT` rect and its slot/step.
+    fn skill_step_at(&self, x: i32, y: i32) -> Option<(usize, WaitingSkillStep)> {
+        const BUTTONS: [(&str, usize, WaitingSkillStep); 6] = [
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0, WaitingSkillStep::Next),
+            ("IDC_BUTTON_SWAIT_2SKILLLEFT", 1, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_2SKILLRIGHT", 1, WaitingSkillStep::Next),
+            ("IDC_BUTTON_SWAIT_3SKILLLEFT", 2, WaitingSkillStep::Previous),
+            ("IDC_BUTTON_SWAIT_3SKILLRIGHT", 2, WaitingSkillStep::Next),
+        ];
+        let placements = &self.scene_art(Screen::Waiting)?.placements;
+        BUTTONS.iter().find_map(|(id, slot, step)| {
+            staged_rect_hit(placements, id, x, y).then_some((*slot, *step))
+        })
+    }
+
+    /// Frame count of the staged map image (`0x1650001A`): one sprite
+    /// record per frame, or the exe's no-control default. Read from
+    /// staged art, never a literal stage table.
+    fn waiting_map_frame_count(&self) -> i32 {
+        const MAP_SPRITE: &str = "Wait_Map.ojs";
+        self.scene_art(Screen::Waiting)
+            .and_then(|art| art.figures.get(MAP_SPRITE))
+            .map_or(WAITING_MAP_DEFAULT_FRAMES, |figure| {
+                i32::try_from(figure.len()).unwrap_or(WAITING_MAP_DEFAULT_FRAMES)
+            })
+    }
+
+    /// Apply one pinned map cycle step to the joined room word and
+    /// queue its `SetRoomArena` 4002 body for the session bridge.
+    fn cycle_waiting_map(&mut self, step: WaitingMapStep) {
+        let frame_count = self.waiting_map_frame_count();
+        let Some(room) = self.waiting.as_mut() else {
+            return;
+        };
+        let Some(next) = waiting_map_cycle(room.arena, step, frame_count) else {
+            return;
+        };
+        room.arena = next;
+        self.outbox.queue_arena_send(next);
     }
 
     /// Hit one result button: the staged `.bnd` rect verbatim where
@@ -4794,6 +4897,21 @@ impl ScreenGame {
     #[must_use]
     pub fn skill_counts(&self) -> [u32; 3] {
         self.skill_counts
+    }
+
+    /// Stage one slot's owned items behind a Waiting selector. Slot
+    /// 0 is `1SKILL`, 1 is `2SKILL`, 2 is `3SKILL`; a new list starts
+    /// selected at its first item. The wire fill is still OPEN
+    /// (`docs/caption-sources.md` OPEN 4), so callers must name the
+    /// source explicitly; no packet invents items here.
+    pub fn set_skill_slot_items(&mut self, slot: usize, items: Vec<WaitingSkillItem>) -> bool {
+        self.skill_slots.set_slot(slot, items)
+    }
+
+    /// Currently staged selectors and their selected items.
+    #[must_use]
+    pub fn skill_slots(&self) -> &WaitingSkillSlots {
+        &self.skill_slots
     }
 
     /// Stage battle totals (`RoomTeams` mirrors the server-side 4014/4016
@@ -7320,6 +7438,7 @@ impl ScreenGame {
             song: self.waiting_song(),
             song_bpm: self.waiting_song_bpm(),
             skill_counts: self.skill_counts,
+            skill_slots: Some(&self.skill_slots),
             level: self.waiting_level(),
             random: self.waiting_random_song(),
             notice: self.waiting_notice,
@@ -7438,6 +7557,16 @@ impl ScreenGame {
         let Some(sprite) = placement.sprite.as_deref() else {
             return true;
         };
+        // The two `?` bodies are backstage plates at open (#272). #764
+        // paints the authored body only while its own guide sheet is
+        // active; both frames are byte-identical in the shipped art, so
+        // no separate hover face is claimed (still OPEN).
+        if sprite == "SelectMusic_LabelQuestion.ojs" {
+            return self.select_help == SelectHelpSheet::Label;
+        }
+        if sprite == "SelectMusic_SearchQuestion.ojs" {
+            return self.select_help == SelectHelpSheet::Search;
+        }
         if crate::staging::SELECT_MUSIC_RANDOM_SPRITES.contains(&sprite) {
             return self.select_mode == SelectMusicMode::Random;
         }
@@ -8946,6 +9075,104 @@ mod game_tests {
             "OK with no pick leaves the dialog open"
         );
         assert!(!game.has_pending_music_send(), "no pick is queued");
+    }
+
+    #[test]
+    fn cancel_button_closes_the_sheet_and_discards_the_staged_pick() {
+        // Ticket #764, exe `FUN_0043e9b0` case `0x27200003` (evidence
+        // `ev_62ffe70b…`): CANCEL calls the shared sheet-close helper
+        // with 0, unlike OK's 1, so no pick is committed. Live chain:
+        // `ingest_snapshot` -> `click_waiting` -> `click_select_music`
+        // -> CANCEL staged `.bnd` rect -> `discard_music_send`.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let cancel = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_CANCEL".to_owned(),
+            code: 0x2720_0003,
+            sprite: None,
+            rect: Rect {
+                x: 702,
+                y: 0,
+                w: 48,
+                h: 38,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(vec![cancel], HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages the pick");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 20));
+        assert!(
+            !game.select_music_dialog_open(),
+            "CANCEL closes the song sheet"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "CANCEL commits no song pick"
+        );
+    }
+
+    #[test]
+    fn a_help_button_click_reveals_its_authored_question_face() {
+        // Ticket #764: the two `?` bodies are staged hidden at open
+        // (#272 placement pin) and their two sprite frames are
+        // byte-identical, so the only pinned visual state is showing the
+        // authored body while its guide sheet is active. The distinct
+        // hover face stays OPEN (no exe capture pins one). Live chain:
+        // `ingest_snapshot` -> `click_select_music` ->
+        // `click_select_chrome` -> `select_help` -> `paint_waiting` ->
+        // `paint_select_music_art` -> `select_sprite_visible`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let sprite = "SelectMusic_LabelQuestion.ojs";
+        for placement in &mut placements {
+            if placement.id == "IDC_BUTTON_DSMUSIC_LABELQUESTION" {
+                placement.sprite = Some(sprite.to_owned());
+            }
+        }
+        let mut figures = HashMap::new();
+        figures.insert(sprite.to_owned(), solid_test_figure([0x00, 0xF8]));
+        game.load_select_music_scene(placements, figures);
+
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &before,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        click_chrome(&mut game, 2);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Label);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        click_chrome(&mut game, 3);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
     }
 
     /// Waiting game with a pick staged through the real MUSELECT row
@@ -11434,6 +11661,177 @@ mod game_tests {
         (505, 478),
         (505, 547),
     ];
+
+    #[test]
+    fn master_paints_map_and_skill_buttons_that_a_guest_hides() {
+        // Ticket #765, exe role arms `FUN_004b4a00` (master enable) and
+        // `FUN_004b4d30` (guest disable), evidence `ev_c5b7cdce…` /
+        // `ev_1365b919…`. Live chain: `set_joined_room` ->
+        // `walk_to_waiting` (boot -> Planet -> Channel -> Room ->
+        // Waiting) -> `load_scene` -> `paint_at` -> `paint_waiting` ->
+        // `paint_waiting_scene_with_confirm` ->
+        // `waiting_control_armed_for_role`. Synthetic rects/figures keep
+        // the guard independent of game data. The song-rect rule stays
+        // an owner decision (#278); here only the statically pinned
+        // enable/disable family is claimed.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        const CONTROLS: [(&str, u32, i32, i32); 8] = [
+            ("IDC_BUTTON_SWAIT_MAPLEFT", 0x1620_000C, 60, 40),
+            ("IDC_BUTTON_SWAIT_MAPRIGHT", 0x1620_000D, 100, 40),
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0x1620_0050, 140, 40),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0x1620_0051, 180, 40),
+            ("IDC_BUTTON_SWAIT_2SKILLLEFT", 0x1620_0052, 220, 40),
+            ("IDC_BUTTON_SWAIT_2SKILLRIGHT", 0x1620_0053, 260, 40),
+            ("IDC_BUTTON_SWAIT_3SKILLLEFT", 0x1620_0054, 300, 40),
+            ("IDC_BUTTON_SWAIT_3SKILLRIGHT", 0x1620_0055, 340, 40),
+        ];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (index, (id, code, x, y)) in CONTROLS.iter().enumerate() {
+            let sprite = format!("role_gate_test_{index}.ojs");
+            figures.insert(sprite.clone(), solid_test_figure([0x00, 0xF8]));
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: *code,
+                sprite: Some(sprite),
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    w: 12,
+                    h: 12,
+                },
+            });
+        }
+
+        for (member_id, master) in [(0, true), (5, false)] {
+            let mut room = waiting_room();
+            room.member_id = member_id;
+            let mut game = ScreenGame::new();
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            game.load_scene(Screen::Waiting, placements.clone(), figures.clone());
+            let frame = paint_waiting_frame(&mut game, 800, 600);
+            for (_, _, x, y) in CONTROLS {
+                let at = (y as usize) * 800 + (x as usize);
+                assert_eq!(
+                    frame[at] == pack_xrgb(0xF7, 0x00, 0x00),
+                    master,
+                    "map/skill body at ({x},{y}) follows the master role"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn master_map_arrow_click_cycles_the_room_word_and_queues_4002() {
+        // Ticket #766, exe `FUN_004bb570` (evidence `ev_c9d69d84…`) with
+        // call site `FUN_004b81e0` (step -1 for MAPLEFT, +1 for
+        // MAPRIGHT, master-gated). Live chain: `set_joined_room` ->
+        // `walk_to_waiting` -> staged Waiting rect -> `ingest_snapshot`
+        // -> `click_waiting` -> `click_waiting_button` ->
+        // `waiting_map_cycle` -> room arena -> `paint_waiting` ->
+        // `paint_waiting_mapname`. Synthetic rects keep the guard
+        // independent of game data. The random wrap arm stays OPEN, so
+        // this leg pins only the interior cycle.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let mut room = waiting_room();
+        room.arena = 7;
+        let right = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SWAIT_MAPRIGHT".to_owned(),
+            code: 0x1620_000D,
+            sprite: None,
+            rect: Rect {
+                x: 667,
+                y: 539,
+                w: 33,
+                h: 20,
+            },
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, vec![right], HashMap::new());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(680, 548));
+        assert_eq!(
+            game.waiting.as_ref().map(|room| room.arena),
+            Some(8),
+            "MAPRIGHT advances the room word by one"
+        );
+        assert!(
+            game.has_pending_arena_send(),
+            "the arrow queues SetRoomArena 4002"
+        );
+    }
+
+    #[test]
+    fn skill_selector_clicks_cycle_owned_items_with_the_exe_wrap() {
+        // Ticket #767, `FUN_004bb760` (evidence `ev_826be834…`):
+        // LEFT decrements `+0x35c` and wraps to the last owned item,
+        // RIGHT increments and wraps to zero. Live chain:
+        // `set_joined_room` -> `walk_to_waiting` -> staged
+        // `1SKILLLEFT/RIGHT` rects -> `ingest_snapshot` ->
+        // `click_waiting` -> `click_waiting_button` ->
+        // `WaitingSkillSlots::cycle`. The owned-item wire fill and the
+        // selection-change wire field stay OPEN; this leg stages the
+        // items explicitly and pins only the local cycle.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let slots = [
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0x1620_0050, 662, 204),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0x1620_0051, 736, 204),
+        ];
+        let placements: Vec<ScenePlacement> = slots
+            .iter()
+            .map(|(id, code, x, y)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: *code,
+                sprite: None,
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    w: 34,
+                    h: 38,
+                },
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, placements, HashMap::new());
+        assert!(game.set_skill_slot_items(
+            0,
+            vec![
+                WaitingSkillItem { id: 11, count: 7 },
+                WaitingSkillItem { id: 22, count: 42 },
+            ]
+        ));
+        assert_eq!(game.skill_slots().selected(0).map(|item| item.id), Some(11));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(750, 220));
+        assert_eq!(
+            game.skill_slots().selected(0),
+            Some(&WaitingSkillItem { id: 22, count: 42 }),
+            "RIGHT selects the next owned item"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(750, 220));
+        assert_eq!(
+            game.skill_slots().selected(0).map(|item| item.id),
+            Some(11),
+            "RIGHT wraps to the first item"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(675, 220));
+        assert_eq!(
+            game.skill_slots().selected(0).map(|item| item.id),
+            Some(22),
+            "LEFT wraps to the last item"
+        );
+    }
 
     #[test]
     fn waiting_chrome_sweep_arms_no_hover_state() {
@@ -19482,7 +19880,7 @@ mod game_tests {
     /// ids and hit tests are the real ones; the fixture rects keep the
     /// guards independent of installed game data (CI arm).
     fn select_chrome_placements() -> Vec<ScenePlacement> {
-        const IDS: [&str; 11] = [
+        const IDS: [&str; 12] = [
             "IDC_BUTTON_DSMUSIC_MUISCSELECT",
             "IDC_BUTTON_DSMUSIC_RANDOMSELECT",
             "IDC_BUTTON_DSMUSIC_LABELQUESTION",
@@ -19494,6 +19892,7 @@ mod game_tests {
             "IDC_BUTTON_DSMUSIC_SEARCH_TITLE",
             "IDC_BUTTON_DSMUSIC_SEARCH_ARTIST",
             "IDC_BUTTON_DSMUSIC_SERACH",
+            "IDC_BUTTON_DSMUSIC_CANCEL",
         ];
         IDS.iter()
             .enumerate()

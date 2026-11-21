@@ -295,7 +295,13 @@ itself lives in `waiting_control_armed_for_role`
 START/MASTER_SKILLSEL, a guest keeps READY/SKILLSEL plus both
 inactive-dress overlays and the song-rect art ("The waiting song
 rect" below); `waiting_confirm_control_id` names the role's confirm id
-for the two hit paths. Waiting Confirm advances
+for the two hit paths. #765 extends this single home to the full set
+pinned by `FUN_004b4a00` (`ev_c5b7cdce…`) and `FUN_004b4d30`
+(`ev_1365b919…`): map arrows `0x1620000C/0D` and the six skill
+LEFT/RIGHT buttons `0x16200050..55` arm for the master only, while
+the three skill-cover images `0x1650005B..5D` arm for guests only.
+The guest's per-slot cover frame and owned-item fill stay OPEN
+(`docs/caption-sources.md` OPEN 4). Waiting Confirm advances
 to Loading only with no joined room (offline walk) or
 `can_start_game`; a non-master or unready Confirm stays in Waiting.
 

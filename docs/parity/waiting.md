@@ -320,6 +320,7 @@ do not carry equal 07E8 slices in a verdict window. Until that pair
 exists, no pixel-equality claim is made and the #291 story row stays
 unchecked.
 
+
 ## #291 enrichment — key-mode auto-pick (#757)
 
 `FUN_004b42d0` (VA `0x4b42d0`, file `0xb42d0`, EV
@@ -374,3 +375,62 @@ song as 4000; an equal key mode is a no-op.
 in `apply_waiting_frame`. Guards:
 `key_mode_change_clears_stale_rows_and_resends_the_room_song` and
 `key_mode_change_requeues_the_room_song_after_clearing_rows`.
+## #765 role-gated chrome beyond the song rect (2026-11-21)
+Static pins: `FUN_004b4a00` VA `0x4b4a00` (evidence `ev_c5b7cdce…`)
+arms START, MAPLEFT/RIGHT, MUSELECT, the six `1/2/3SKILLLEFT/RIGHT`
+buttons and MASTER_SKILLSEL for the master, and clears the song and
+skill covers; `FUN_004b4d30` VA `0x4b4d30` (evidence `ev_1365b919…`)
+disables those controls for guests, frames READY and shows the covers
+with a per-slot skill frame. The song-rect display rule stays the
+owner decision recorded above, and the guest's owned-item vector fill
+stays OPEN (`docs/caption-sources.md` OPEN 4).
+`waiting_control_armed_for_role` now owns the whole pinned set. The
+live-path guard `master_paints_map_and_skill_buttons_that_a_guest_hides`
+stages synthetic bodies from boot (`walk_to_waiting` → `load_scene` →
+`paint_at` → `paint_waiting` → `paint_waiting_scene_with_confirm`) and
+checks that the master paints all eight bodies where the guest paints
+none. RED proof: without the role arms the guest painted all eight.
+The seam table pin lists the three skill-cover ids as guest-only. No
+qualified exe frame pair exists yet for the guest cover frame family;
+that capture step stays OPEN.
+## #766 map arrows and MAPNAME (2026-11-21)
+Static pins: `IDC_BUTTON_SWAIT_MAPLEFT/RIGHT 0x1620000C/0D` are
+master-armed by `FUN_004b4a00` (evidence `ev_c5b7cdce…`) and guest-disabled
+by `FUN_004b4d30` (evidence `ev_1365b919…`). The press dispatcher calls
+`FUN_004bb570` with -1/+1 (evidence `ev_c9d69d84…`, call site
+`ev_d729fea2…`); the normal branch steps the room word, skips four rdata
+stage words (`ev_df240aa2…`), and sends 0xfa2. `MAPNAME` still resolves
+through the low room word to the pinned cycle table (OPEN 3 about the
+separate `0x4ad350` applier is unchanged).
+The shell stages both arrow rects with the role gate from #765. A
+master press updates the joined room word from the staged `Wait_Map.ojs`
+frame count (exe default 14 when no body stages), queues `SetRoomArena`
+4002, and the next caption paint resolves the new word. Guards:
+`master_map_arrow_click_cycles_the_room_word_and_queues_4002` (synthetic
+Waiting art, no game data), `map_arrow_cycle_skips_the_pinned_stages_and_leaves_random_wrap_open`
+(pure cycle table), and `map_arrow_click_sends_4002_from_the_live_boot_path`
+(fake gateway, boot path through `OnlineSession::paint`). RED proof:
+before the click arm the room word stayed at 7. The random wrap arm
+(`FUN_004bb2c0`) stays OPEN with a live arrow-click capture at a cycle
+boundary as the next evidence step.
+## #767 skill selectors and counters (2026-11-21)
+Static pin: `FUN_004bb760` (VA `0x4bb760`, evidence `ev_826be834…`)
+decrements slot 1's selection word with wrap to `len-1` on LEFT,
+increments with wrap to 0 on RIGHT, then stages the owned-item art
+(id at vector `+4`) and prints its count (vector `+8`, width 3, slots
+2–3 capped at 999). Slots 2/3 use the same handler shape at
+`0x4bbb30`/`0x4bbf20`. The handler writes no wire field, and the
+server fill of the three owned-item vectors is still OPEN
+(`docs/caption-sources.md` OPEN 4).
+The shell stages three local owned-item lists; empty lists keep the
+existing ring-id/count sources, so no packet invents items. A staged
+`1/2/3SKILLLEFT/RIGHT` click cycles the selection and the count and
+id repaint from the selected item. Guards:
+`skill_selector_clicks_cycle_owned_items_with_the_exe_wrap` (boot walk
+-> staged rect -> `click_waiting` -> `WaitingSkillSlots::cycle`) and
+`cycled_skill_slot_repaints_its_selected_id_and_count` (paint seam,
+synthetic probes, no game data). RED proof: before the click arm the
+selection stayed at the first item. The wire fill and
+selection-change field stay OPEN with a gateway tap and a two-client
+frame pair as the next evidence step.
+

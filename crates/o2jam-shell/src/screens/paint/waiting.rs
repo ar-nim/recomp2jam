@@ -204,6 +204,10 @@ pub struct WaitingCaptions<'a> {
     pub song_bpm: Option<f32>,
     /// Staged inventory counts, one per skill slot.
     pub skill_counts: [u32; 3],
+    /// Locally staged owned-item selectors, when a source named them.
+    /// `None` keeps the ring ids from `JoinedRoom.skills` and the
+    /// counts from `skill_counts` (OPEN 4: no wire fill is pinned).
+    pub skill_slots: Option<&'a WaitingSkillSlots>,
     /// Difficulty and speed behind the `LEVEL` badge, from the same
     /// pick-or-room source as `song`.
     pub level: Option<WaitingLevel>,
@@ -520,16 +524,39 @@ pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
 /// an album-mode room arms it is OPEN. Click routing is untouched: the
 /// host still opens the song dialog from this rect (dispatch case file
 /// `0xb2622`), which is exe behavior, not a shell gap.
+///
+/// #765 extends the gate with the rest of the statically pinned set
+/// (`FUN_004b4a00` evidence `ev_c5b7cdce…`, `FUN_004b4d30` evidence
+/// `ev_1365b919…`): master arms MAPLEFT/RIGHT `0x1620000C/0D` and the
+/// six `1/2/3SKILLLEFT/RIGHT 0x16200050..55`, and clears the three
+/// skill-cover images `0x1650005B..5D`; guests disable those buttons
+/// and show the covers. The guest's per-slot cover frame and owned-item
+/// fill stay OPEN (caption-sources OPEN 4), as does the exact display
+/// rule for the song rect above. The disabled/hidden distinction stays
+/// a shell rule: the exe writes an arm word and a frame, this painter
+/// omits the body.
 #[must_use]
 pub(crate) fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
     match id {
-        "IDC_BUTTON_SWAIT_START" | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL" => is_room_master,
+        "IDC_BUTTON_SWAIT_START"
+        | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL"
+        | "IDC_BUTTON_SWAIT_MAPLEFT"
+        | "IDC_BUTTON_SWAIT_MAPRIGHT"
+        | "IDC_BUTTON_SWAIT_1SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_1SKILLRIGHT"
+        | "IDC_BUTTON_SWAIT_2SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_2SKILLRIGHT"
+        | "IDC_BUTTON_SWAIT_3SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_3SKILLRIGHT" => is_room_master,
         "IDC_BUTTON_SWAIT_READY"
         | "IDC_BUTTON_SWAIT_SKILLSEL"
         | "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE"
-        | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE" => !is_room_master,
+        | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE"
+        | "IDC_IMAGE_SWAIT_COVERMUSIC"
+        | "IDC_IMAGE_SWAIT_COVERSKILLLEFT"
+        | "IDC_IMAGE_SWAIT_COVERSKILLRIGHT"
+        | "IDC_IMAGE_SWAIT_COVERSKILLSEL" => !is_room_master,
         "IDC_BUTTON_SWAIT_MUSELECT" => is_room_master,
-        "IDC_IMAGE_SWAIT_COVERMUSIC" => !is_room_master,
         "IDC_IMAGE_SWAIT_ALBUMMODE" => false,
         _ => true,
     }
@@ -1126,8 +1153,13 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed(frame, speed, placements);
-    paint_waiting_skills(frame, room, placements);
-    paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
+    paint_waiting_skills(frame, room, captions.skill_slots, placements);
+    paint_waiting_skillcounts(
+        frame,
+        &captions.skill_counts,
+        captions.skill_slots,
+        placements,
+    );
     paint_waiting_mapname(frame, room, placements);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
     paint_waiting_music(frame, placements, captions.song, captions.random);
@@ -1405,20 +1437,168 @@ pub(crate) fn paint_waiting_speed(frame: &mut Frame<'_>, speed: u8, placements: 
     );
 }
 
+/// One owned skill in a Waiting selector: id at owned-vector `+4`,
+/// count at `+8` (stride `0xc`, handler `FUN_004bb760`, evidence
+/// `ev_826be8349ca6a899ad81a9c9c0825f83c0b58c0d5167e1e90b0a511a8a7af56a`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingSkillItem {
+    /// Owned-item id the exe turns into the ring art.
+    pub id: i32,
+    /// Owned-item count the exe prints at the `SKILLCOUNT` rect.
+    pub count: u32,
+}
+
+/// Direction of one `1/2/3SKILLLEFT/RIGHT` press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingSkillStep {
+    /// LEFT: decrement with wrap to the last owned item.
+    Previous,
+    /// RIGHT: increment with wrap to the first owned item.
+    Next,
+}
+
+/// Locally staged owned-skill selectors, one list per Waiting slot.
+/// The server fill of the three owned-item vectors stays OPEN
+/// (`docs/caption-sources.md` OPEN 4), so an empty list leaves the
+/// existing caption sources untouched instead of inventing items.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WaitingSkillSlots {
+    items: [Vec<WaitingSkillItem>; 3],
+    selected: [usize; 3],
+}
+
+impl WaitingSkillSlots {
+    /// Stage the owned items of one slot (0..3). A new list starts
+    /// from the first item, as the exe's dialog ctor does for `+0x35c`.
+    pub fn set_slot(&mut self, slot: usize, items: Vec<WaitingSkillItem>) -> bool {
+        let Some(staged) = self.items.get_mut(slot) else {
+            return false;
+        };
+        *staged = items;
+        if let Some(selected) = self.selected.get_mut(slot) {
+            *selected = 0;
+        }
+        true
+    }
+
+    /// Selected owned item of one slot, when a list names one.
+    #[must_use]
+    pub fn selected(&self, slot: usize) -> Option<&WaitingSkillItem> {
+        let items = self.items.get(slot)?;
+        let index = *self.selected.get(slot)?;
+        items.get(index)
+    }
+
+    /// Cycle one slot's selection with the exe's wrap rule. Returns
+    /// false when no owned item exists (no invented selection).
+    pub fn cycle(&mut self, slot: usize, step: WaitingSkillStep) -> bool {
+        let Some(items) = self.items.get(slot) else {
+            return false;
+        };
+        if items.is_empty() {
+            return false;
+        }
+        let Some(selected) = self.selected.get_mut(slot) else {
+            return false;
+        };
+        *selected = match step {
+            WaitingSkillStep::Previous => {
+                if *selected == 0 {
+                    items.len() - 1
+                } else {
+                    *selected - 1
+                }
+            }
+            WaitingSkillStep::Next => {
+                if *selected + 1 >= items.len() {
+                    0
+                } else {
+                    *selected + 1
+                }
+            }
+        };
+        true
+    }
+}
+
 /// Skill-ring ids at the `1/2/3SKILL` rects (rects 87..89, the X
 /// boxes): empty slots stay untouched so the staged X art shows.
 /// The counts paint beside them at the `SKILLCOUNT` rects from the
-/// staged inventory ([`paint_waiting_skillcounts`]).
+/// staged inventory ([`paint_waiting_skillcounts`]). With staged
+/// owned-item lists, the selected id and count replace those two
+/// sources together.
 pub(crate) fn paint_waiting_skills(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
+    slots: Option<&WaitingSkillSlots>,
     placements: &[ScenePlacement],
 ) {
-    for (slot, skill_id) in WAITING_SKILL_IDS.iter().zip(room.skills.iter()) {
-        if let Some((x, y)) = waiting_bnd_origin(placements, slot, frame) {
-            paint_room_detail_line(frame, x, y, &skill_id.to_string(), art_title_ink());
+    for (slot, slot_id) in WAITING_SKILL_IDS.iter().enumerate() {
+        let text = slots
+            .and_then(|slots| slots.selected(slot))
+            .map(|item| item.id.to_string())
+            .or_else(|| room.skills.get(slot).map(i32::to_string));
+        let Some(text) = text else {
+            continue;
+        };
+        if let Some((x, y)) = waiting_bnd_origin(placements, slot_id, frame) {
+            paint_room_detail_line(frame, x, y, &text, art_title_ink());
         }
     }
+}
+
+/// Direction of one master map-arrow press (`FUN_004bb570`, VA
+/// `0x4bb570`, evidence `ev_c9d69d8472c39643a5b3f030978707add16ef0d4682e3a17b965114d71ea3282`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingMapStep {
+    /// `MAPLEFT 0x1620000C`: step -1 (file `0x4b832d`).
+    Previous,
+    /// `MAPRIGHT 0x1620000D`: step +1 (file `0x4b8384`).
+    Next,
+}
+
+/// Stage words the exe skips in the normal map cycle (rdata
+/// `0x649ac4`, bytes evidence
+/// `ev_df240aa2d3d7f8da4d9632a68c2362d71b8d3961170694925efa7976a84b4d1e`).
+const WAITING_MAP_SKIP_STAGES: [i32; 4] = [140, 170, 180, 240];
+
+/// Frame count the exe uses when `IDC_IMAGE_SWAIT_MAP 0x1650001A` has
+/// no staged image (file `0x4bb575`). Staged Waiting art supplies the
+/// real count from `Wait_Map.ojs` instead.
+pub const WAITING_MAP_DEFAULT_FRAMES: i32 = 14;
+
+/// Next room word for one map-arrow press.
+///
+/// Normal branch: add the step, skip the four pinned stage words, and
+/// send the result through 0xfa2. `None` is the exe's random-wrap arm
+/// (current word at frame 1 with PREVIOUS, or at the frame count with
+/// NEXT): it calls `FUN_004bb2c0` to OR in a random flag, whose seed and
+/// live wire echo are still OPEN. The high-word branch is pinned and
+/// deterministic: PREVIOUS restores the frame count, NEXT restores 1.
+#[must_use]
+pub fn waiting_map_cycle(arena: i32, step: WaitingMapStep, frame_count: i32) -> Option<i32> {
+    if arena & !0xFFFF != 0 {
+        return Some(match step {
+            WaitingMapStep::Previous => frame_count,
+            WaitingMapStep::Next => 1,
+        });
+    }
+    let delta = match step {
+        WaitingMapStep::Previous => -1,
+        WaitingMapStep::Next => 1,
+    };
+    if (step == WaitingMapStep::Previous && arena == 1)
+        || (step == WaitingMapStep::Next && arena == frame_count)
+    {
+        return None;
+    }
+    let mut next = arena.checked_add(delta)?;
+    for skipped in WAITING_MAP_SKIP_STAGES {
+        if next == skipped {
+            next = next.checked_add(delta)?;
+        }
+    }
+    Some(next)
 }
 
 /// Map-cycle names behind the `MAPNAME` caption, in room-word order
@@ -1516,15 +1696,19 @@ pub fn waiting_skillcount_text(count: u32, cap_at_999: bool) -> String {
 pub(crate) fn paint_waiting_skillcounts(
     frame: &mut Frame<'_>,
     counts: &[u32; 3],
+    slots: Option<&WaitingSkillSlots>,
     placements: &[ScenePlacement],
 ) {
     for (slot, (id, count)) in WAITING_SKILLCOUNT_IDS.iter().zip(counts.iter()).enumerate() {
+        let count = slots
+            .and_then(|slots| slots.selected(slot))
+            .map_or(*count, |item| item.count);
         if let Some((x, y)) = waiting_bnd_origin(placements, id, frame) {
             paint_room_detail_line(
                 frame,
                 x,
                 y,
-                &waiting_skillcount_text(*count, slot > 0),
+                &waiting_skillcount_text(count, slot > 0),
                 art_title_ink(),
             );
         }
