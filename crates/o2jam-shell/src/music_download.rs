@@ -158,6 +158,13 @@ impl MusicDownload {
     pub fn finish(&mut self, song_id: u16) {
         self.requests.retain(|request| request.song_id != song_id);
     }
+
+    /// Drop every queued fetch after a confirmed shop DOWN_CANCEL.
+    /// Only the staged queue changes: no thread handle, file, or
+    /// failure notify is claimed by this seam (#831).
+    pub fn clear(&mut self) {
+        self.requests.clear();
+    }
 }
 
 /// Read one chart from the fetch source. A missing file means the

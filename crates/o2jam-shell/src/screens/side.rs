@@ -624,10 +624,13 @@ pub const SHOP_TOOLTIP_CODES: [u32; 2] = [0x1450_0084, 0x1450_00B1];
 /// qualified press frame changes only the pointer and web-banner
 /// caption; no ranking content is inferred from the button.
 pub const MSHOP_TOP100_CODE: u32 = 0x1A20_007D;
-/// Last control in the TOP100 board chrome arm (`SELECTALL`,
-/// `0x1A200084`). Codes `0x7D..0x84` pair with eight `State_MShop.bnd`
-/// rects (button, 3KEY/7KEY, four sort headers, SELECTALL).
+/// Last rect in the TOP100 board chrome arm (`0x1A200084`).
+/// Codes `0x7D..0x84` pair with eight `State_MShop.bnd` rects.
 pub const MSHOP_TOP100_LAST_CODE: u32 = 0x1A20_0084;
+/// SELECTALL (`IDC_BUTTON_MSHOP_SELECTALL`): inside the eight-rect
+/// TOP100 arm, but its click walks the owned marks instead of
+/// choosing a rank table (FUN_004c7f70).
+pub const MSHOP_SELECT_ALL_CODE: u32 = 0x1A20_0084;
 /// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): opens the local web-purchase
 /// surface; no game-socket buy opcode follows (W-a NULL, #397).
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
@@ -1355,6 +1358,26 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
+/// Download progress bars (`0x1A500022/23`): the exe styles both
+/// with mode 2 while a transfer handle stands (#832).
+pub const MSHOP_CURRENT_PROGRESS_CODE: u32 = 0x1A50_0022;
+pub const MSHOP_TOTAL_PROGRESS_CODE: u32 = 0x1A50_0023;
+/// First download caption (`IDC_TEXT_MSHOP_DN_CURRENTMUSIC`, `0x1A40001B`).
+pub const MSHOP_DOWN_TEXT_CODE: u32 = 0x1A40_001B;
+/// Owned/download face tabs (`IDC_IMAGE_MSHOP_TABDOWN/TABDELETE`,
+/// `0x1A600076/77`): FUN_004c7d50 writes 0/1 to the face flag.
+pub const MSHOP_TAB_DOWN_CODE: u32 = 0x1A60_0076;
+pub const MSHOP_TAB_DELETE_CODE: u32 = 0x1A60_0077;
+/// Which face the two tab images select. The exe's two flag writes
+/// are pinned; naming the faces follows the tab control names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopFace {
+    /// Download face (tab `0x1A600076`).
+    #[default]
+    Download,
+    /// Cart/delete face (tab `0x1A600077`).
+    Cart,
+}
 /// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
 /// directions ASSUMED ascending (same named next step as lanking).
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
@@ -1363,6 +1386,42 @@ pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
 /// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
 pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
 pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
+/// Five-song cap notice at VA `0x64a7d8` (`FUN_004cdca0`).
+pub const MSHOP_FIVE_SONG_CAP_NOTICE: &str = "5개 이상 선택할수 없습니다.";
+/// MUSICDELETE confirmation at VA `0x64a5d4` (`FUN_004c7f70`).
+pub const MSHOP_MUSICDELETE_NOTICE: &str = "선택한 파일을 지우겠습니까?";
+/// MUSICDELETE button (`IDC_BUTTON_MSHOP_MUSICDELETE`, `0x1A20007A`).
+pub const MSHOP_MUSICDELETE_CODE: u32 = 0x1A20_007A;
+/// DOWN_CANCEL confirmation at VA `0x64a710` (`FUN_004c7f70`).
+pub const MSHOP_DOWN_CANCEL_NOTICE: &str = "다운로드를 취소하시겠습니까?";
+/// One music-shop notice, identified by its pinned CP949 text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicShopNotice {
+    /// A sixth owned row was picked while five were marked.
+    FiveSongCap,
+    /// MUSICDELETE asked before removing the selected files.
+    DeleteFiles,
+    /// DOWN_CANCEL asked before cancelling an active transfer.
+    CancelDownload,
+}
+
+impl MusicShopNotice {
+    /// Pinned CP949 notice text (own-words transcription).
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::FiveSongCap => MSHOP_FIVE_SONG_CAP_NOTICE,
+            Self::DeleteFiles => MSHOP_MUSICDELETE_NOTICE,
+            Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
+        }
+    }
+}
+
+/// First owned-row hit area (`IDC_BUTTON_MY_EX1`); twelve run
+/// contiguously through `+0x0B` (block walk + staged dump).
+pub const MSHOP_OWNED_FIRST_CODE: u32 = 0x1A01_9047;
+/// Visible owned rows (twelve `MY_EX` hit areas).
+pub const MSHOP_OWNED_ROWS: usize = 12;
 /// First cart-row hit area (`IDC_BUTTON_MSHOP_CART_EX1`); five run
 /// contiguously through `+4` (block walk + staged dump).
 pub const MSHOP_CART_TOGGLE_FIRST_CODE: u32 = 0x1A01_B060;
@@ -1418,6 +1477,10 @@ pub struct MusicShopRow {
     /// Won price from `OJNList.dat` table 3 (`param_a`); unknown
     /// words stay `None` and ink no cell.
     pub won_price: Option<u32>,
+    /// Local `o2ma<id>.ojn` chart presence (bit `0x8`, §1). The
+    /// server's 4031 row only annotates ownership; this bit names
+    /// what this client can actually play.
+    pub installed: bool,
 }
 
 /// One catalog price pair (`OJNList.dat` table 3, data-verified).
@@ -1437,6 +1500,7 @@ pub fn music_shop_rows(
     songs: &[LankingSong],
     answer: Option<&MusicListAnswer>,
     prices: &HashMap<u32, MusicShopPrice>,
+    installed: Option<&InstalledMusic>,
 ) -> Vec<MusicShopRow> {
     songs
         .iter()
@@ -1444,12 +1508,14 @@ pub fn music_shop_rows(
         .map(|song| {
             let (free, listed) = shop_flags_for(song.song_id, answer);
             let price = prices.get(&song.song_id).copied();
+            let installed = song_installed(song.song_id, installed);
             MusicShopRow {
                 song,
                 free,
                 listed,
                 gem_price: price.map(|entry| entry.gem),
                 won_price: price.map(|entry| entry.won),
+                installed,
             }
         })
         .collect()
@@ -1492,6 +1558,20 @@ pub enum MusicShopAction {
     MsPrev,
     /// Shop-list pager stepped forward.
     MsNext,
+    /// One of the two owned face tabs was pressed.
+    Face(MusicShopFace),
+    /// Owned `MY_EX` row picked (0-based on the owned list).
+    OwnedRow(usize),
+    /// SELECTALL toggled the owned marks.
+    SelectAll,
+    /// MUSICDELETE pressed (confirmation, then the marked-row clear).
+    MusicDelete,
+    /// DOWN_START pressed: queue the marked owned songs.
+    DownStart,
+    /// DOWN_CANCEL pressed: confirm, then drop the active queue.
+    DownCancel,
+    /// One music-cart row removed (0-based on the cart page).
+    CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1532,17 +1612,34 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
     }
+    if code == MSHOP_SELECT_ALL_CODE {
+        return Some(MusicShopAction::SelectAll);
+    }
+    if code == MSHOP_MUSICDELETE_CODE {
+        return Some(MusicShopAction::MusicDelete);
+    }
+    if code == MSHOP_DOWN_START_CODE {
+        return Some(MusicShopAction::DownStart);
+    }
+    if code == MSHOP_DOWN_CANCEL_CODE {
+        return Some(MusicShopAction::DownCancel);
+    }
+    if let Some(slot) = music_shop_cart_row(code) {
+        return Some(MusicShopAction::CartRemove(slot));
+    }
     if (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&code) {
         return Some(MusicShopAction::Top100Chrome { code });
     }
     match code {
+        MSHOP_TAB_DOWN_CODE => Some(MusicShopAction::Face(MusicShopFace::Download)),
+        MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
         MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),
-        _ => music_shop_row(code),
+        _ => music_shop_owned_row(code).or_else(|| music_shop_row(code)),
     }
 }
 
@@ -1555,6 +1652,20 @@ fn music_shop_sort_for_code(code: u32) -> Option<LankingSort> {
         MSHOP_BPM_SORT_CODE => Some(LankingSort::Bpm),
         _ => None,
     }
+}
+
+/// Removal slot behind one `CART_EX` hit-area code (`None` outside five).
+fn music_shop_cart_row(code: u32) -> Option<usize> {
+    let slot = code.checked_sub(MSHOP_CART_TOGGLE_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < MSHOP_CART_ROWS).then_some(slot)
+}
+
+/// Row pick behind one `MY_EX` owned-list code (`None` outside 12).
+fn music_shop_owned_row(code: u32) -> Option<MusicShopAction> {
+    let slot = code.checked_sub(MSHOP_OWNED_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < MSHOP_OWNED_ROWS).then_some(MusicShopAction::OwnedRow(slot))
 }
 
 /// Row pick behind one `MS_EX` hit-area code (`None` outside the five).
@@ -1653,6 +1764,24 @@ pub fn music_shop_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rec
         rect_union(cur_tens, cur_ones),
         rect_union(tot_tens, tot_ones),
     ))
+}
+
+/// Staged owned-row hit areas in code order (the twelve `MY_EX`
+/// rects, top to bottom). Empty when the block is unstaged.
+#[must_use]
+pub fn music_shop_owned_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut slots: Vec<(u32, Rect)> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(MSHOP_OWNED_FIRST_CODE)
+                .is_some_and(|slot| (slot as usize) < MSHOP_OWNED_ROWS)
+        })
+        .map(|placed| (placed.code, placed.rect))
+        .collect();
+    slots.sort_by_key(|(code, _)| *code);
+    slots.into_iter().map(|(_, rect)| rect).collect()
 }
 
 /// Staged music-cart row hit areas in top-to-bottom order (the five
@@ -6507,10 +6636,10 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned() {
-        // The bnd rects for START/CANCEL stage, but no shop-side
-        // 5012 send site is pinned (`docs/musicshop.md`), so a click
-        // on either control must dispatch nothing and queue no wire.
+    fn music_shop_download_controls_dispatch_their_pinned_arms() {
+        // START queues the marked songs through the staged worker
+        // (#830); CANCEL opens its confirmation (#831). Neither
+        // invents a 5012 or cancellation opcode.
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
             role: PlacementRole::Single,
             id: String::new(),
@@ -6522,10 +6651,22 @@ mod side_tests {
             area(MSHOP_DOWN_START_CODE, 699, 312, 82, 24),
             area(MSHOP_DOWN_CANCEL_CODE, 721, 529, 54, 22),
         ];
-        assert_eq!(music_shop_action_at(&placements, 740, 324), None);
-        assert_eq!(music_shop_action_at(&placements, 748, 540), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_START_CODE), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_CANCEL_CODE), None);
+        assert_eq!(
+            music_shop_action_at(&placements, 740, 324),
+            Some(MusicShopAction::DownStart)
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 748, 540),
+            Some(MusicShopAction::DownCancel)
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_DOWN_START_CODE),
+            Some(MusicShopAction::DownStart)
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_DOWN_CANCEL_CODE),
+            Some(MusicShopAction::DownCancel)
+        );
     }
 
     #[test]

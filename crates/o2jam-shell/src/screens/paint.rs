@@ -41,23 +41,27 @@ use super::super::avatar::{
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
+use super::game::OwnedRow;
 use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
-    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
-    music_shop_tiled_rect, planet_action_for_code, planet_band_rect, planet_caption_for_code,
-    planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots,
-    shop_cart_total_rects, wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow,
-    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow,
-    WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
-    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
-    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE,
-    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE,
+    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
+    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
+    planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
+    shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects, wallet_amount_caption,
+    wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
+    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState,
+    GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
+    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
+    MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE,
+    MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
     NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
-    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1534,6 +1538,166 @@ const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
 /// staged geometry only (ADR-0003).
 const MUSIC_SHOP_TOP100_TONE: u32 = pack_xrgb(0xE2, 0x8A, 0x3C);
 
+/// Own-by-design ink for the active owned-face tab: a band inside
+/// the tab's staged rect. The exe pins the tab codes and the flag
+/// writes, not the face pixel, so no control-visibility claim rides
+/// on this marker (#820).
+const MUSIC_SHOP_FACE_TONE: u32 = pack_xrgb(0xE2, 0xC8, 0x4A);
+
+/// Own-by-design ink for a row whose `o2ma<id>.ojn` exists: a small
+/// tick inside the row's staged hit rect. The exe's bit `0x8` is
+/// pinned; the tick's size and color are presentation (§1).
+const MUSIC_SHOP_INSTALLED_TONE: u32 = pack_xrgb(0x50, 0xE0, 0x70);
+
+/// Own-by-design inks for the two owned-row properties: the check
+/// mark and the download-status mark. The exe sets the two per-row
+/// properties (`FUN_004cbdd0`); their sprite faces are OPEN.
+const MUSIC_SHOP_OWNED_MARK_TONE: u32 = pack_xrgb(0x30, 0xC4, 0xF2);
+const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
+
+/// Own-by-design band behind a pinned Korean shop notice. The text
+/// and the host control code are pinned; the band is presentation.
+const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
+
+/// Download bar inks: the exe's mode-2 style is pinned; the
+/// numeric value and the notify behind it stay OPEN (#832), so the
+/// split here is own-by-design presentation over staged rects.
+const MUSIC_SHOP_PROGRESS_BASE_TONE: u32 = pack_xrgb(0x20, 0x60, 0x90);
+const MUSIC_SHOP_PROGRESS_FILL_TONE: u32 = pack_xrgb(0x40, 0xB0, 0xE0);
+
+/// Paint the download bars and row readout while a shop transfer
+/// owns the panel. The completed/total pair comes from the staged
+/// queue; unstaged rects or an idle panel paint nothing.
+pub fn paint_music_shop_progress(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    readout: Option<(usize, usize)>,
+) {
+    let Some((completed, total)) = readout else {
+        return;
+    };
+    // The exe styles both bars with mode 2; only the current bar
+    // carries the visible advance. The total bar keeps the base ink
+    // because its numeric meaning is still OPEN (#832).
+    for (code, filled) in [
+        (MSHOP_CURRENT_PROGRESS_CODE, completed),
+        (MSHOP_TOTAL_PROGRESS_CODE, 0),
+    ] {
+        let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        fill_rect(frame, &rect, MUSIC_SHOP_PROGRESS_BASE_TONE);
+        let filled_width = if total == 0 {
+            0
+        } else {
+            u64::from(rect.w)
+                .saturating_mul(u64::try_from(filled.min(total)).unwrap_or(u64::MAX))
+                .checked_div(u64::try_from(total).unwrap_or(u64::MAX))
+                .and_then(|width| u32::try_from(width).ok())
+                .unwrap_or(0)
+        };
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y: rect.y,
+                w: filled_width,
+                h: rect.h,
+            },
+            MUSIC_SHOP_PROGRESS_FILL_TONE,
+        );
+    }
+    if let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_DOWN_TEXT_CODE)
+    {
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        paint_text_into_rect(frame, rect, &format!("{completed}/{total}"), CP949_INK);
+    }
+}
+
+/// Ink a standing shop notice inside the staged rect of the control
+/// that posted it. An unstaged control paints nothing (ADR-0003).
+pub fn paint_music_shop_notice(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    notice: Option<(MusicShopNotice, u32)>,
+) {
+    let Some((notice, code)) = notice else {
+        return;
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    fill_rect(frame, &rect, MUSIC_SHOP_NOTICE_TONE);
+    paint_text_into_rect(frame, rect, notice.text(), CP949_INK);
+}
+
+/// Ink the twelve owned rows' check and installed-status marks in
+/// their staged `MY_EX` rects. The exe's -2/-4 corner offsets and
+/// the twelve codes are pinned; the small marks are presentation.
+pub fn paint_music_shop_owned_rows(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    rows: &[OwnedRow],
+) {
+    for (row, slot) in rows.iter().zip(music_shop_owned_slots(placements)) {
+        let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
+        paint_text_into_rect(frame, slot, &row.title, CP949_INK);
+        if row.marked {
+            let mark = Rect {
+                x: slot.x + i32::try_from(slot.w).unwrap_or(0) - 2,
+                y: slot.y + i32::try_from(slot.h).unwrap_or(0) - 4,
+                w: 2_u32.min(slot.w),
+                h: 2_u32.min(slot.h),
+            };
+            fill_rect(frame, &mark, MUSIC_SHOP_OWNED_MARK_TONE);
+        }
+        if row.installed {
+            let status = Rect {
+                x: slot.x + 6,
+                y: slot.y + 5,
+                w: 2_u32.min(slot.w),
+                h: 2_u32.min(slot.h),
+            };
+            fill_rect(frame, &status, MUSIC_SHOP_OWNED_STATUS_TONE);
+        }
+    }
+}
+
+/// Ink the selected owned-face tab inside its staged `.bnd` rect.
+/// An unstaged tab paints nothing (ADR-0003).
+pub fn paint_music_shop_face(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    face: MusicShopFace,
+) {
+    let code = match face {
+        MusicShopFace::Download => MSHOP_TAB_DOWN_CODE,
+        MusicShopFace::Cart => MSHOP_TAB_DELETE_CODE,
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    let band_height = 2_u32.min(rect.h);
+    if band_height == 0 {
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: rect.x,
+            y: rect.y + i32::try_from(rect.h - band_height).unwrap_or(0),
+            w: rect.w,
+            h: band_height,
+        },
+        MUSIC_SHOP_FACE_TONE,
+    );
+}
+
 /// Ink the pressed TOP100 board control (if any) at its staged rect.
 /// A missing rect or no press paints nothing.
 pub fn paint_music_shop_top100_chrome(
@@ -1758,6 +1922,19 @@ fn paint_music_shop_rows(
         return;
     }
     for (slot, row) in slots.iter().zip(rows.iter()) {
+        if row.installed {
+            let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
+            fill_rect(
+                frame,
+                &Rect {
+                    x: scaled.x + 2,
+                    y: scaled.y + 2,
+                    w: 3_u32.min(scaled.w),
+                    h: 3_u32.min(scaled.h),
+                },
+                MUSIC_SHOP_INSTALLED_TONE,
+            );
+        }
         let cells = [
             row.song.title.clone(),
             music_shop_buy_caption(row),
@@ -4158,6 +4335,7 @@ mod paint_tests {
             listed: false,
             gem_price: Some(3000),
             won_price: Some(0),
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(
@@ -4210,6 +4388,7 @@ mod paint_tests {
             listed: false,
             gem_price: Some(3000),
             won_price: Some(0),
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(
@@ -4290,6 +4469,7 @@ mod paint_tests {
             listed: false,
             gem_price: None,
             won_price: None,
+            installed: false,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_music_shop_board(

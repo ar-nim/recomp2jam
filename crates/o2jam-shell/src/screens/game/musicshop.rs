@@ -3,14 +3,49 @@
 
 use std::collections::HashMap;
 
-use o2jam_file::{OjnListEntry, OjnMidParamEntry};
+use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
-    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, sort_lanking_songs,
-    LankingSong, LankingSort, MusicShopAction, MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS,
-    MSHOP_SONG_ROWS,
+    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
+    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
+    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
+    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
+
+/// One result of a music-shop control press. The board owns the
+/// state change; the caller owns the side effects (the 5010 outbox
+/// and the staged download queue).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MusicShopEffect {
+    /// No caller-side effect.
+    None,
+    /// Queue the pinned 5010 music purchase.
+    Buy,
+    /// Hand these owned song ids to the staged download engine.
+    StartDownloads(Vec<u16>),
+    /// A confirmed DOWN_CANCEL dropped the queued fetches.
+    CancelDownloads,
+}
+
+/// One owned-list row: a 4031 song id, its catalog title, the local
+/// chart bit, and this page's check mark. The two per-row properties
+/// are pinned; their exact sprite faces stay OPEN (no mixed-state
+/// capture yet), so the shell names them by control role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedRow {
+    /// Song id from the fetched 4031 list.
+    pub song_id: u16,
+    /// Catalog title, or the bare id when no catalog row joined.
+    pub title: String,
+    /// Local `o2ma<id>.ojn` chart present (bit `0x8`, §1).
+    pub installed: bool,
+    /// This row's check mark on the visible owned page.
+    pub marked: bool,
+}
+
+/// Exe's five-song selection cap (`FUN_004cdca0`, VA `0x64a7d8`).
+const MAX_SELECTED_SONGS: usize = 5;
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
 /// the music-shop side screen (#139 cluster 4: the Data Clump of all
@@ -55,6 +90,32 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Owned face selected by the two tab images (`0x1A600076/77`).
+    /// The exe's two flag writes are pinned; the meaning of the flag
+    /// beyond the tab names stays OPEN (no visibility frame captured).
+    pub(crate) music_shop_face: MusicShopFace,
+    /// Local `Music\` scan (§1); `None` means no local knowledge, so
+    /// no installed mark is invented from the 4031 flag list.
+    pub(crate) music_shop_installed: Option<InstalledMusic>,
+    /// Check marks of the twelve owned rows on this page. The exe
+    /// keeps a twelve-column per-page mark table; presses toggle one
+    /// cell (`FUN_004cdca0`).
+    pub(crate) music_shop_owned_marks: [bool; MSHOP_OWNED_ROWS],
+    /// Standing notice and the staged control code whose rect hosts
+    /// it. The exe posts these strings through its notice helper;
+    /// the host rect is ours-by-design chrome over the bnd layout.
+    pub(crate) music_shop_notice: Option<(MusicShopNotice, u32)>,
+    /// Last SELECTALL toggle (`None` until the first press). The exe
+    /// flips a state word and walks both boards; which value is
+    /// "all" is OPEN, so the shell records the observed toggle.
+    pub(crate) music_shop_select_all: Option<bool>,
+    /// A shop-initiated transfer stands. The exe reads its handle at
+    /// `state+0x58` (`FUN_004f7a10`); the queue itself lives in the
+    /// session's staged engine, so this only marks ownership.
+    pub(crate) music_shop_download_active: bool,
+    /// Songs completed by that transfer. The worker advances the
+    /// visible index at `0x77a868+0x9c` once per finished song.
+    pub(crate) music_shop_download_index: usize,
 }
 
 impl MusicShopState {
@@ -68,6 +129,13 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+    }
+
+    /// Stage the local `Music\` scan (§1) behind the shop. The
+    /// server's 4031 flags never write this bit: only a chart file
+    /// the client can play does.
+    pub(crate) fn set_installed(&mut self, installed: Option<&InstalledMusic>) {
+        self.music_shop_installed = installed.cloned();
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -139,6 +207,69 @@ impl MusicShopState {
         self.music_shop_selected_row
     }
 
+    /// Completed-song index of the shop transfer (0 before the first
+    /// completion). Paired with the queue length by the caller.
+    pub(crate) fn download_index(&self) -> usize {
+        self.music_shop_download_index
+    }
+
+    /// Whether a shop-initiated transfer owns the download panel.
+    pub(crate) fn is_download_active(&self) -> bool {
+        self.music_shop_download_active
+    }
+
+    /// Advance the visible row readout once per finished transfer.
+    pub(crate) fn note_download_completion(&mut self, count: usize) {
+        if self.music_shop_download_active {
+            self.music_shop_download_index = self.music_shop_download_index.saturating_add(count);
+        }
+    }
+
+    /// Last SELECTALL toggle, if the control was pressed.
+    pub(crate) fn select_all(&self) -> Option<bool> {
+        self.music_shop_select_all
+    }
+
+    /// Standing shop notice, if any, with its staging code.
+    pub(crate) fn notice(&self) -> Option<(MusicShopNotice, u32)> {
+        self.music_shop_notice
+    }
+
+    /// Post one notice against a staged control rect. A later notice
+    /// replaces the standing one; the next board press dismisses it.
+    pub(crate) fn post_notice(&mut self, notice: MusicShopNotice, code: u32) {
+        self.music_shop_notice = Some((notice, code));
+    }
+
+    /// Owned rows from the fetched 4031 ids joined to the catalog
+    /// titles and the local chart scan, twelve at most.
+    pub(crate) fn owned_rows(&self) -> Vec<OwnedRow> {
+        let Some(board) = self.music_shop_board.as_ref() else {
+            return Vec::new();
+        };
+        board
+            .entries
+            .iter()
+            .take(MSHOP_OWNED_ROWS)
+            .enumerate()
+            .map(|(slot, entry)| OwnedRow {
+                song_id: entry.id,
+                title: self
+                    .music_shop_songs
+                    .iter()
+                    .find(|song| song.song_id == u32::from(entry.id))
+                    .map_or_else(|| entry.id.to_string(), |song| song.title.clone()),
+                installed: song_installed(u32::from(entry.id), self.music_shop_installed.as_ref()),
+                marked: self.music_shop_owned_marks[slot],
+            })
+            .collect()
+    }
+
+    /// Owned face selected by the two tab images.
+    pub(crate) fn face(&self) -> MusicShopFace {
+        self.music_shop_face
+    }
+
     /// Last pressed TOP100 board-chrome control code, if any.
     pub(crate) fn top100_pressed(&self) -> Option<u32> {
         self.music_shop_top100_pressed
@@ -202,16 +333,21 @@ impl MusicShopState {
             &songs[start..end],
             self.music_shop_board.as_ref(),
             &self.music_shop_prices,
+            self.music_shop_installed.as_ref(),
         )
     }
 
     /// Board action through the control-code dispatch: row picks
     /// stage the cart, sorts resort and reset the page, and the
-    /// pagers step and hold at the ends. Reports whether the action
-    /// queues the pinned 5010 send (a row buy on a visible row, or
-    /// the cart `BUYITEM`): the caller queues it on the outbox, so
-    /// this board state never touches the wire.
-    pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> bool {
+    /// pagers step and wrap. Reports the caller-side effect — a
+    /// pinned 5010 buy or the marked song ids for the staged worker
+    /// — so this board state never touches the wire or the queue.
+    pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> MusicShopEffect {
+        // A notice owns only the next board press: any control that
+        // follows dismisses it, and the arm may post a fresh one or
+        // consume an armed confirmation.
+        let armed_notice = self.music_shop_notice;
+        self.music_shop_notice = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
                 self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
@@ -221,25 +357,98 @@ impl MusicShopState {
                         self.music_shop_cart.push(song_id);
                     }
                 }
-                false
+                MusicShopEffect::None
             }
-            MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
+            MusicShopAction::BuyRow { slot, gem: _ } => {
+                if self.visible_rows().get(slot).is_some() {
+                    MusicShopEffect::Buy
+                } else {
+                    MusicShopEffect::None
+                }
+            }
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
-                false
+                MusicShopEffect::None
+            }
+            MusicShopAction::Face(face) => {
+                self.music_shop_face = face;
+                MusicShopEffect::None
+            }
+            MusicShopAction::DownCancel => {
+                let confirmation = Some((MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE));
+                if armed_notice == confirmation {
+                    self.music_shop_download_active = false;
+                    MusicShopEffect::CancelDownloads
+                } else {
+                    self.post_notice(MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE);
+                    MusicShopEffect::None
+                }
+            }
+            MusicShopAction::DownStart => {
+                let song_ids: Vec<u16> = self
+                    .owned_rows()
+                    .iter()
+                    .filter(|row| row.marked)
+                    .map(|row| row.song_id)
+                    .collect();
+                if song_ids.is_empty() {
+                    MusicShopEffect::None
+                } else {
+                    self.music_shop_download_active = true;
+                    self.music_shop_download_index = 0;
+                    MusicShopEffect::StartDownloads(song_ids)
+                }
+            }
+            MusicShopAction::MusicDelete => {
+                let confirmation = Some((MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE));
+                if armed_notice == confirmation {
+                    // No file removal is claimed: the confirmed arm
+                    // clears the marked rows, and the delete write
+                    // stays OPEN until a synthetic-song capture (#824).
+                    self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                } else if self.owned_rows().iter().any(|row| row.marked) {
+                    self.post_notice(MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE);
+                }
+                MusicShopEffect::None
+            }
+            MusicShopAction::SelectAll => {
+                let select_all = !self.music_shop_select_all.unwrap_or(false);
+                self.music_shop_select_all = Some(select_all);
+                self.music_shop_owned_marks = [select_all; MSHOP_OWNED_ROWS];
+                MusicShopEffect::None
+            }
+            MusicShopAction::OwnedRow(slot) => {
+                if slot < self.music_shop_owned_marks.len() && self.owned_rows().get(slot).is_some()
+                {
+                    let already_marked = self.music_shop_owned_marks[slot];
+                    let mark_count = self
+                        .music_shop_owned_marks
+                        .iter()
+                        .filter(|cell| **cell)
+                        .count();
+                    if !already_marked && mark_count >= MAX_SELECTED_SONGS {
+                        self.post_notice(
+                            MusicShopNotice::FiveSongCap,
+                            MSHOP_OWNED_FIRST_CODE + u32::try_from(slot).unwrap_or(0),
+                        );
+                    } else {
+                        self.music_shop_owned_marks[slot] = !already_marked;
+                    }
+                }
+                MusicShopEffect::None
             }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
                 self.music_shop_page = 0;
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::MsPrev => {
                 self.music_shop_page = self.music_shop_page.saturating_sub(1);
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::MsNext => {
                 if self
@@ -252,27 +461,38 @@ impl MusicShopState {
                     self.music_shop_selected_row = None;
                     self.music_shop_top100_pressed = None;
                 }
-                false
+                MusicShopEffect::None
             }
-            MusicShopAction::CartBuy => true,
+            MusicShopAction::CartBuy => MusicShopEffect::Buy,
+            MusicShopAction::CartRemove(slot) => {
+                if let Some(song) = self.visible_cart().get(slot) {
+                    let song_id = song.song_id;
+                    self.music_shop_cart.retain(|id| *id != song_id);
+                    let last_page = self.cart_pages().saturating_sub(1);
+                    if self.music_shop_cart_page > last_page {
+                        self.music_shop_cart_page = last_page;
+                    }
+                }
+                MusicShopEffect::None
+            }
             MusicShopAction::CartPrev => {
-                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
-                false
+                // Exe state +0x13B wraps modulo +0x13C at the first
+                // page; the empty cart still parks the index at zero.
+                let pages = self.cart_pages();
+                if pages > 0 {
+                    self.music_shop_cart_page = (self.music_shop_cart_page + pages - 1) % pages;
+                }
+                MusicShopEffect::None
             }
             MusicShopAction::CartNext => {
-                if self
-                    .music_shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_CART_ROWS)
-                    < self.music_shop_cart.len()
-                {
+                if self.music_shop_cart_page.saturating_add(1) < self.cart_pages() {
                     self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
                 }
-                false
+                MusicShopEffect::None
             }
             // BACK is a side leave: `click_music_shop` owns the
             // transition, so the board state never changes here.
-            MusicShopAction::BackToLobby => false,
+            MusicShopAction::BackToLobby => MusicShopEffect::None,
         }
     }
 }
