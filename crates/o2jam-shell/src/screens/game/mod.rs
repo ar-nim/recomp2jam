@@ -46,20 +46,21 @@ use super::paint::{
     information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_cash_charge_frame,
     paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene, paint_information_message,
     paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
-    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_lobby_backdrop, paint_music_purchase_failure_notice, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
+    paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
+    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -837,6 +838,11 @@ pub struct ScreenGame {
     /// a BACK-timed reply and no `C2S 5000` exists, so this surface
     /// owns the buy leg and the game socket stays quiet.
     shop_purchase_web_open: bool,
+    /// Native failed-purchase notice over the MusicShop board (#405).
+    /// SCRIPTED-GATEWAY verdicts post it; no server failure body or
+    /// 7.55 notice pixel is pinned (`E-W-5011`). Cleared on dismissal,
+    /// fresh buy, and side exit. No wire state lives here.
+    music_purchase_failure_notice: bool,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1182,6 +1188,7 @@ impl ScreenGame {
             tutorial_art: None,
             cash_charge_art: None,
             shop_purchase_web_open: false,
+            music_purchase_failure_notice: false,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -4906,7 +4913,13 @@ impl ScreenGame {
             return true;
         }
         if self.side == Some(SideScreen::MusicShop) {
-            self.click_music_shop(x, y);
+            if self.music_purchase_failure_notice_open() {
+                // The native notice owns the next press; no game
+                // opcode is invented for a dismissal (#397 stands).
+                self.dismiss_music_purchase_failure_notice();
+            } else {
+                self.click_music_shop(x, y);
+            }
             return true;
         }
         if self.side.is_some() {
@@ -5814,6 +5827,7 @@ impl ScreenGame {
         }
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
+        self.music_purchase_failure_notice = false;
         self.mount_staged_side_art(side);
         self.apply_bgm_cue(side.bgm_cue());
         if side == SideScreen::Tutorial {
@@ -5894,6 +5908,7 @@ impl ScreenGame {
         if side == SideScreen::Tutorial {
             self.tutorial_key_lights.clear();
         }
+        self.music_purchase_failure_notice = false;
         self.messenger_liveness_open = false;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
@@ -6505,6 +6520,26 @@ impl ScreenGame {
         self.outbox.take_music_buy()
     }
 
+    /// Post the native notice for a refused 5011 (#405). The session
+    /// calls this only for the SCRIPTED-GATEWAY four-byte body; the
+    /// copy is the archived older-version stand-in, not an exe pin.
+    pub fn post_music_purchase_failure_notice(&mut self) {
+        self.music_purchase_failure_notice = true;
+    }
+
+    /// Whether the refused-purchase notice is over the shop board.
+    #[must_use]
+    pub const fn music_purchase_failure_notice_open(&self) -> bool {
+        self.music_purchase_failure_notice
+    }
+
+    /// Dismiss the native notice with no game send. The next press
+    /// returns to the shop board; #397's web-surface re-scope stays
+    /// untouched.
+    pub fn dismiss_music_purchase_failure_notice(&mut self) {
+        self.music_purchase_failure_notice = false;
+    }
+
     /// Song-shop click through the control-code dispatch
     /// ([`music_shop_action_at`]): row picks stage the cart, row
     /// buy buttons and the cart `BUYITEM` queue the pinned 5010
@@ -6527,6 +6562,7 @@ impl ScreenGame {
             return;
         }
         if self.music_shop.apply_action(action) {
+            self.music_purchase_failure_notice = false;
             self.outbox.pending_music_buy = Some(SyncMusicPurchase);
         }
     }
@@ -6764,6 +6800,9 @@ impl ScreenGame {
                 self.music_shop_cart_pages(),
             );
             paint_music_shop_wallet(frame, &self.side_placements, &self.wallet);
+            if self.music_purchase_failure_notice_open() {
+                paint_music_purchase_failure_notice(frame);
+            }
         }
         if self.side == Some(SideScreen::MyRoom) {
             paint_myroom_figure(
@@ -21598,6 +21637,62 @@ mod game_tests {
         game.click_music_shop(424, 529);
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn refused_music_purchase_notice_owns_the_next_click_without_a_wire() {
+        // seam: the notice contract is native by design (Spec #750);
+        // the Tier 2 scripted-gateway guard in session.rs proves the
+        // 5011 failure arrival and the painted band from the live path.
+        let mut game = open_music_shop_board(7);
+        game.click_music_shop(19, 105);
+        game.click_music_shop(424, 529);
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+
+        game.post_music_purchase_failure_notice();
+        let band = super::super::paint::MUSIC_PURCHASE_NOTICE_RECT;
+        let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
+        let paint_notice_frame = |game: &mut ScreenGame| {
+            let mut buf = vec![0_u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let painted = paint_notice_frame(&mut game);
+        assert_eq!(painted[band_pixel], pack_xrgb(0x67, 0xBA, 0xF0));
+
+        // The first CP949 line inks black glyphs centered in the band.
+        let band_right = band.x + i32::try_from(band.w).unwrap_or(0);
+        let ink_xs: Vec<i32> = (band.y + 44..band.y + 68)
+            .flat_map(|y| (band.x..band_right).map(move |x| (x, y)))
+            .filter(|(x, y)| painted[*y as usize * 800 + *x as usize] == pack_xrgb(0, 0, 0))
+            .map(|(x, _)| x)
+            .collect();
+        assert!(
+            !ink_xs.is_empty(),
+            "the CP949 copy must ink inside the band"
+        );
+        let ink_center = (ink_xs[0] + *ink_xs.last().unwrap()) / 2;
+        assert!(
+            ink_center.abs_diff(band.x + (band_right - band.x) / 2) <= 16,
+            "the copy is centered, not left-anchored"
+        );
+
+        game.click_side_screen(19, 105);
+        assert!(!game.music_purchase_failure_notice_open());
+        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.take_shop_buy(), None);
+        assert_eq!(game.take_exit_shop(), None);
+        assert_ne!(
+            paint_notice_frame(&mut game)[band_pixel],
+            pack_xrgb(0x67, 0xBA, 0xF0)
+        );
     }
 
     #[test]

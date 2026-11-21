@@ -1820,6 +1820,122 @@ pub fn paint_music_shop_row_selection(
     }
 }
 
+/// Native verdict band for a refused music purchase (#405). The
+/// geometry and flat `#67BAF0` blue are ours-by-design from the
+/// archived `mcash_error_CashType.asp` tone (ASSUMED older-version
+/// reference, NOT 7.55-oracle): no 7.55 notice pixel or banner art
+/// survives, so no exe parity is claimed. 626x290 is the archived
+/// table size, centered in the 800x600 native canvas.
+pub const MUSIC_PURCHASE_NOTICE_RECT: Rect = Rect {
+    x: 87,
+    y: 155,
+    w: 626,
+    h: 290,
+};
+
+/// Flat body blue of the archived error page (`bgcolor="#67BAF0"`).
+const MUSIC_PURCHASE_NOTICE_TONE: u32 = pack_xrgb(0x67, 0xBA, 0xF0);
+/// Black 9pt-like ink of the archived notice (rasterizer presentation,
+/// owner decision `e8d01`).
+const MUSIC_PURCHASE_NOTICE_INK: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
+/// Top inset and pitch of the centered copy inside the band. The
+/// source page leaves a 50 px header for its unarchived banner art;
+/// the native stand-in keeps the space instead of inventing art.
+const MUSIC_PURCHASE_NOTICE_TEXT_TOP: i32 = 44;
+const MUSIC_PURCHASE_NOTICE_LINE_PITCH: i32 = 42;
+const MUSIC_PURCHASE_NOTICE_LINE_HEIGHT: u32 = 24;
+
+/// CP949 lines of the archived failed-purchase notice, in source
+/// order, decoded from the Wayback body at
+/// `~/scratch/o2jam-research/html/20090228054122_*_mcash_error_CashType_asp.html`.
+/// Graded ASSUMED-from-older-version; the 7.55 notice copy remains
+/// OPEN (`E-W-5011`) with a scripted-gateway tapped capture as the
+/// next evidence step.
+pub const MUSIC_PURCHASE_NOTICE_LINES_CP949: &[&[u8]] = &[
+    &[
+        0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0x20, 0xB0, 0xE1, 0xC1, 0xA6,
+        0x20, 0xBF, 0xC0, 0xB7, 0xF9, 0x20, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2,
+        0xC3,
+    ],
+    &[
+        0xBB, 0xF3, 0xC7, 0xB0, 0x20, 0xC1, 0xA4, 0xBA, 0xB8, 0xB0, 0xA1, 0x20, 0xBF, 0xC3, 0xB9,
+        0xD9, 0xB8, 0xA3, 0xC1, 0xF6, 0x20, 0xBE, 0xCA, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+    ],
+    &[
+        0xC0, 0xE1, 0xBD, 0xC3, 0xC8, 0xC4, 0x20, 0xB4, 0xD9, 0xBD, 0xC3, 0x20, 0xB0, 0xE1, 0xC1,
+        0xA6, 0xB8, 0xA6, 0x20, 0xC7, 0xCF, 0xBF, 0xA9, 0x20, 0xC1, 0xD6, 0xBD, 0xCA, 0xBD, 0xC3,
+        0xBF, 0xC0, 0x2E,
+    ],
+    &[
+        0xB1, 0xD7, 0xB7, 0xA1, 0xB5, 0xB5, 0x20, 0xB0, 0xE1, 0xC1, 0xA6, 0xB0, 0xA1, 0x20, 0xB5,
+        0xC7, 0xC1, 0xF6, 0x20, 0xBE, 0xCA, 0xC0, 0xBB, 0xBD, 0xC3, 0xBF, 0xA1, 0xB4, 0xC2,
+    ],
+    &[
+        0xBF, 0xC0, 0xC5, 0xF5, 0xC0, 0xEB, 0x20, 0xC8, 0xA8, 0xC6, 0xE4, 0xC0, 0xCC, 0xC1, 0xF6,
+        0xB3, 0xBB, 0x20, 0xB9, 0xAE, 0xC0, 0xC7, 0xC7, 0xCF, 0xB1, 0xE2, 0xB8, 0xA6, 0x20, 0xC0,
+        0xCC, 0xBF, 0xEB, 0xC7, 0xCF, 0xBD, 0xC3, 0xB1, 0xE2, 0x20, 0xB9, 0xD9, 0xB6, 0xF8, 0xB4,
+        0xCF, 0xB4, 0xD9, 0x2E,
+    ],
+];
+
+/// Advance width of `text` at `scale`, with the same font-absent
+/// stand-in the caption fitter uses, so centering survives a system
+/// with no Korean face installed.
+fn cp949_text_width_at_scale(text: &str, scale: f32) -> f32 {
+    match o2jam_text::system_font() {
+        Some(font) => o2jam_text::measure_text(font, text, scale),
+        None => o2jam_text::font::measure_text_stand_in(text, scale),
+    }
+}
+
+/// One centered line of the native notice inside its frame-scaled
+/// slice of the band. The line fits the band width; the x origin is
+/// the leftover half-width, never a hand-tuned literal.
+fn paint_centered_music_notice_line(frame: &mut Frame<'_>, line_rect: Rect, cp949_bytes: &[u8]) {
+    let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
+    let scale = cp949_fit_scale(&text, line_rect.w as f32, line_rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let text_width = cp949_text_width_at_scale(&text, scale);
+    let left = (line_rect.w as f32 - text_width).max(0.0) / 2.0;
+    let mut image = o2jam_text::Image::blank(line_rect.w, line_rect.h);
+    o2jam_text::draw_text(
+        &mut image,
+        o2jam_text::system_font(),
+        left as i32,
+        0,
+        &text,
+        MUSIC_PURCHASE_NOTICE_INK,
+        scale,
+    );
+    composite_text_image(frame, &line_rect, &image);
+}
+
+/// Paint the native failed-purchase notice over the music-shop board:
+/// flat blue band with the archived copy centered line by line. No
+/// staged `.bnd` rect is involved — this is the owner-approved native
+/// stand-in for the dead billing page (Spec #750), not exe geometry.
+pub fn paint_music_purchase_failure_notice(frame: &mut Frame<'_>) {
+    let band = scale_rect_to_frame(&MUSIC_PURCHASE_NOTICE_RECT, frame.w, frame.h);
+    fill_rect(frame, &band, MUSIC_PURCHASE_NOTICE_TONE);
+    for (index, cp949_bytes) in MUSIC_PURCHASE_NOTICE_LINES_CP949.iter().enumerate() {
+        let native_line = Rect {
+            x: MUSIC_PURCHASE_NOTICE_RECT.x,
+            y: MUSIC_PURCHASE_NOTICE_RECT.y
+                + MUSIC_PURCHASE_NOTICE_TEXT_TOP
+                + i32::try_from(index).unwrap_or(0) * MUSIC_PURCHASE_NOTICE_LINE_PITCH,
+            w: MUSIC_PURCHASE_NOTICE_RECT.w,
+            h: MUSIC_PURCHASE_NOTICE_LINE_HEIGHT,
+        };
+        paint_centered_music_notice_line(
+            frame,
+            scale_rect_to_frame(&native_line, frame.w, frame.h),
+            cp949_bytes,
+        );
+    }
+}
+
 /// Song-shop board overlay over the staged side art: the visible
 /// rows' catalog cells into the staged row-local `MMS` templates
 /// riding the staged `MS_EX` slot origins (title, bought flag,

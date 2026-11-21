@@ -153,8 +153,8 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, ExitShop, SellItemResponse, SyncItemPurchase,
-    SyncItemPurchaseReply, SyncMusicPurchase, SyncMusicPurchaseResponse,
+    EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, SellItemResponse, SyncItemPurchase,
+    SyncItemPurchaseReply, SyncMusicPurchase,
 };
 use o2jam_net::wallet::{SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
@@ -2725,10 +2725,19 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == 5011 => {
-                    if let Ok(response) = SyncMusicPurchaseResponse::decode_body(&frame.payload) {
-                        self.game.apply_music_purchase_response(&response);
-                    } else {
-                        tracing::debug!(id = frame.id, "dropping undecodable music buy reply");
+                    match MusicPurchaseReply::decode_body(&frame.payload) {
+                        Ok(MusicPurchaseReply::Completed(response)) => {
+                            self.game.apply_music_purchase_response(&response);
+                        }
+                        Ok(MusicPurchaseReply::Failure) => {
+                            // SCRIPTED-GATEWAY body only. No server
+                            // verdict word or failure body shape is
+                            // pinned (`E-W-5011`); the word is opaque.
+                            self.game.post_music_purchase_failure_notice();
+                        }
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable music buy reply");
+                        }
                     }
                     return None;
                 }
@@ -5338,6 +5347,10 @@ pub(super) mod session_tests {
         server.join().unwrap();
 
         assert!(session.game.music_shop_cart().is_empty());
+        assert!(
+            !session.game.music_purchase_failure_notice_open(),
+            "a completed 5011 is a state sync, not a failure notice"
+        );
         assert_eq!(session.game.shop_gem_caption(), "GEM 1000");
         // The bought song joins the owned board (its shop row paints
         // OWNED) and stays in the song-select catalog.
@@ -5440,6 +5453,91 @@ pub(super) mod session_tests {
             .select_songs()
             .iter()
             .any(|song| song.song_id == 757));
+    }
+
+    #[test]
+    fn scripted_music_buy_failure_opens_the_native_notice_and_invents_no_wire() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop, the windowed frame entry
+        //   main.rs::run_play drives) -> flush_music_buy (empty 5010) ->
+        //   poll_music_buy -> drain_music_buy -> MusicPurchaseReply::Failure
+        //   -> ScreenGame::post_music_purchase_failure_notice ->
+        //   paint_side -> paint_music_purchase_failure_notice.
+        // Tier 2 scripted gateway; SCRIPTED-GATEWAY class, not a server
+        // failure body (E-W-5011 stays OPEN). Synthetic catalog only.
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5010);
+            assert!(frame.payload.is_empty());
+            stream
+                .write_all(&o2jam_net::frame::encode_frame(
+                    5011,
+                    &[0x01, 0x00, 0x00, 0x00],
+                ))
+                .unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_song_catalog(&o2jam_file::parse_ojn_list(&select_catalog_blob()).unwrap());
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+                area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(19, 105);
+        game.click_music_shop(424, 529);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| {
+            s.game.music_purchase_failure_notice_open()
+        });
+        server.join().unwrap();
+
+        let band = o2jam_shell::screens::paint::MUSIC_PURCHASE_NOTICE_RECT;
+        let outside_text = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
+        assert_eq!(
+            painted_game_frame(&mut session)[outside_text],
+            o2jam_render::pack_xrgb(0x67, 0xBA, 0xF0),
+            "the notice paints the pinned flat-blue band"
+        );
+        assert_eq!(
+            session.game.music_shop_cart(),
+            vec![757],
+            "the failed buy keeps the cart for the retry the notice asks for"
+        );
+        assert!(
+            session
+                .game
+                .music_shop_visible_rows()
+                .iter()
+                .all(|row| !row.listed),
+            "a refused buy must not mark the song owned"
+        );
+        session.game.dismiss_music_purchase_failure_notice();
+        assert!(!session.game.music_purchase_failure_notice_open());
+        assert!(session.game.take_music_buy().is_none());
+        assert!(session.game.take_shop_buy().is_none());
+        assert!(session.game.take_exit_shop().is_none());
     }
 
     #[test]
