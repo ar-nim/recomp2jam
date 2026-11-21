@@ -170,7 +170,8 @@ pub const MYROOM_PCROOMMARK_CODE: u32 = 0x1550_006A;
 pub const MYROOM_WEBAVATAR_CODE: u32 = 0x1520_0058;
 /// Conference button (`IDC_BUTTON_SMYROOM_CONFERENCE`): P0, queues nothing.
 pub const MYROOM_CONFERENCE_CODE: u32 = 0x1520_006B;
-/// Bag-sort button (`IDC_BUTTON_SMYROOM_BAGSORT`): P0, queues nothing.
+/// Bag-sort button (`IDC_BUTTON_SMYROOM_BAGSORT`): exe case
+/// `0x1520006c` queues the empty 5038 RefershBag request (#798).
 pub const MYROOM_BAGSORT_CODE: u32 = 0x1520_006C;
 /// Messenger button (`IDC_BUTTON_SMYROOM_MESSENGER`): P0, queues nothing.
 pub const MYROOM_MESSENGER_CODE: u32 = 0x1520_006D;
@@ -291,6 +292,8 @@ pub enum MyRoomAction {
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,
+    /// BAGSORT pressed: queue the empty 5038 RefershBag request.
+    BagSort,
     /// MESSENGER pressed: open the exe-pinned one-OK liveness sheet.
     /// This is a UI response to the absent backend, not a Messenger
     /// main sheet or a wire send.
@@ -331,6 +334,7 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_BACK_CODE => Some(MyRoomAction::BackToLobby),
         MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
+        MYROOM_BAGSORT_CODE => Some(MyRoomAction::BagSort),
         MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
         _ => None,
     }
@@ -740,9 +744,6 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
         ),
         MYROOM_CONFERENCE_CODE => {
             Some("CONFERENCE P0: no wire send; backend never wired - visibly inert")
-        }
-        MYROOM_BAGSORT_CODE => {
-            Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
         }
         MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
             Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")

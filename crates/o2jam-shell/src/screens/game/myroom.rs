@@ -34,6 +34,11 @@ pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯�
 /// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
 const MYROOM_COUNT_CAP: u32 = 999;
 
+/// BAGSORT failure notice, exact cp949 string decoded from the
+/// oracle at file `0x248f40` (VA `0x648f40`).
+pub(super) const BAG_SORT_FAILURE_NOTICE: &str =
+    "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요.";
+
 /// Vacate notice at file `0x2491c0` (VA `0x6491c0`).
 pub(super) const VACATE_NO_SELECTION_NOTICE: &str = "선택된 아이템이 없습니다.";
 /// Vacate notice at file `0x248acc` (VA `0x648acc`).
@@ -177,6 +182,7 @@ impl ScreenGame {
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+            MyRoomAction::BagSort => self.apply_myroom_bag_sort(),
             MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
@@ -240,6 +246,14 @@ impl ScreenGame {
             }
         }
         self.myroom.pick_bag_cell(None);
+    }
+
+    /// BAGSORT press: queue the empty 5038 RefershBag frame. The
+    /// exe's send builder writes only the opcode and length word for
+    /// this case (`0x4a540f`, file `0xa540f`); the 5039 reply repaints
+    /// the bag and the failure string is filed at `0x248f40`.
+    fn apply_myroom_bag_sort(&mut self) {
+        self.outbox.queue_myroom_send(5038, Vec::new());
     }
 
     /// Equip the selected bag cell: the slot derives from the item

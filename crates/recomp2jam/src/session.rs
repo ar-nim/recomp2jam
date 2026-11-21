@@ -448,6 +448,30 @@ struct EquipAttempt {
     deadline: Instant,
 }
 
+/// Exe's even/odd request-reply pairing for the short MyRoom legs.
+/// Only opcodes whose shell send queue is wired appear here.
+fn myroom_reply_for_request(command: u16) -> Option<u16> {
+    match command {
+        5002 => Some(5003),
+        5030 => Some(5031),
+        5034 => Some(5035),
+        5036 => Some(5037),
+        5038 => Some(5039),
+        _ => None,
+    }
+}
+
+/// Pending short MyRoom request reply (BAGSORT 5038/5039 first):
+/// the request opcode is already on the wire, so only the expected
+/// answer id and the silent-server deadline ride here.
+#[derive(Debug, Clone, Copy)]
+struct MyRoomReplyAttempt {
+    /// Reply opcode the exe pairs with the request.
+    expected: u16,
+    /// When a silent server stops holding the frame loop.
+    deadline: Instant,
+}
+
 /// Pending gift-list fetch (ticket #201): the 5017 send plus the 5018
 /// answer resolve on the per-frame poll. The 5018 body is exe-ignored
 /// (`docs/gifts.md`); the drain only clears the attempt. A timeout
@@ -620,6 +644,9 @@ pub struct OnlineSession {
     /// Live equip apply (`None` while no 5004 apply is in flight; the
     /// per-frame [`Self::poll_equip`] owns it).
     equip_attempt: Option<EquipAttempt>,
+    /// Short MyRoom request/reply legs (`poll_myroom_replies` owns
+    /// them; one attempt per queued frame).
+    myroom_reply_attempts: Vec<MyRoomReplyAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -709,6 +736,7 @@ impl OnlineSession {
             gift_list_attempt: None,
             gift_claim_attempt: None,
             equip_attempt: None,
+            myroom_reply_attempts: Vec::new(),
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -2884,6 +2912,70 @@ impl OnlineSession {
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-equip frame in equip drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    /// Send the MyRoom request frames the shell queued (5038
+    /// RefershBag today, the confirm-item opcodes later). A failed
+    /// send requeues the exact body and posts the exe's failure copy
+    /// for the commands that carry one; the next paint retries.
+    fn flush_myroom_sends(&mut self) {
+        let sends = self.game.take_myroom_sends();
+        for send in sends {
+            if let Err(source) = self.gateway.send_frame(send.command, &send.body) {
+                tracing::warn!(%source, command = send.command, "myroom send failed");
+                self.game.post_myroom_send_failure_notice(send.command);
+                self.game.queue_myroom_send(send.command, send.body);
+                continue;
+            }
+            if let Some(expected) = myroom_reply_for_request(send.command) {
+                self.myroom_reply_attempts.push(MyRoomReplyAttempt {
+                    expected,
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
+            }
+        }
+    }
+
+    /// Move every short MyRoom reply leg under the shared drain
+    /// window. Leaving the side drops late answers: they cannot fold
+    /// into another scene's staged rows.
+    fn poll_myroom_replies(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom) {
+            self.myroom_reply_attempts.clear();
+            return;
+        }
+        let attempts = std::mem::take(&mut self.myroom_reply_attempts);
+        for attempt in attempts {
+            if Instant::now() > attempt.deadline {
+                tracing::warn!(reply = attempt.expected, "myroom reply timed out");
+                continue;
+            }
+            self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "myroom reply", |session| {
+                if let Some(kept) = session.drain_myroom_reply(attempt) {
+                    session.myroom_reply_attempts.push(kept);
+                }
+            });
+        }
+    }
+
+    /// Drain one short MyRoom reply: the shell owns the local repaint
+    /// the exe performs at the matching receive case. Every other
+    /// frame stays for the later lobby drains.
+    fn drain_myroom_reply(&mut self, attempt: MyRoomReplyAttempt) -> Option<MyRoomReplyAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == attempt.expected => {
+                    self.game.apply_myroom_reply(frame.id);
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping frame in myroom reply drain");
                 }
                 Err(_) => break,
             }
@@ -6160,6 +6252,107 @@ pub(super) mod session_tests {
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
+    }
+
+    #[test]
+    fn myroom_bagsort_sends_5038_and_5039_reply_through_scripted_gateway() {
+        // Live caller chain: WindowHandler::ingest_snapshot ->
+        // ScreenGame::click_myroom_side -> BagSort -> outbox 5038 ->
+        // OnlineSession::paint -> flush_myroom_sends -> poll_myroom_replies
+        // -> apply_myroom_reply(5039). Tier 2 scripted gateway; body
+        // widths pinned by the exe send builder file `0xa540f`.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            use o2jam_net::gift::GetGiftMessageListResponse;
+            // The MyRoom send flush runs before the gift-list flush,
+            // so answer whichever request arrives first.
+            let mut saw_sort = false;
+            let mut saw_list = false;
+            while !saw_sort || !saw_list {
+                let frame = read_frame(&mut stream);
+                match frame.id {
+                    5017 => {
+                        let empty = GetGiftMessageListResponse {
+                            invalid: false,
+                            messages: Vec::new(),
+                        };
+                        stream
+                            .write_all(&encode_frame(5018, &empty.encode_body()))
+                            .unwrap();
+                        saw_list = true;
+                    }
+                    5038 => {
+                        assert!(frame.payload.is_empty(), "RefershBag has no fields");
+                        stream.write_all(&encode_frame(5039, &[])).unwrap();
+                        saw_sort = true;
+                    }
+                    other => panic!("unexpected frame {other}"),
+                }
+            }
+        });
+
+        let area = |code: u32, x: i32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![1],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        game.load_side_scene(
+            vec![
+                area(o2jam_shell::screens::side::MYROOM_BAG_FIRST_CODE, 10),
+                area(o2jam_shell::screens::side::MYROOM_BAGSORT_CODE, 100),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.click_myroom_side(11, 11);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        let _ = game.take_equip_send(); // the pick's own leg, not BAGSORT
+        game.click_myroom_side(101, 11);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| {
+            !s.game.has_pending_myroom_sends() && s.myroom_reply_attempts.is_empty()
+        });
+        let _ = server.join();
+        assert_eq!(
+            session.game.myroom().bag_cell(),
+            None,
+            "the 5039 reply repaints the bag"
+        );
     }
 
     #[test]

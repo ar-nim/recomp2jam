@@ -27,7 +27,7 @@ pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
-use self::myroom::{MyRoomConfirm, MyRoomConfirmAction};
+use self::myroom::{MyRoomConfirm, MyRoomConfirmAction, BAG_SORT_FAILURE_NOTICE};
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
@@ -35,6 +35,7 @@ pub use self::room_fuse::FuseClock;
 use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
+pub use self::waiting::MyRoomWireSend;
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
@@ -1902,6 +1903,45 @@ impl ScreenGame {
     /// also calls this through [`Self::click_dispatch`].
     pub fn dismiss_myroom_notice(&mut self) {
         self.myroom_notice = None;
+    }
+
+    /// Drain the MyRoom request queue for the session bridge.
+    pub fn take_myroom_sends(&mut self) -> Vec<MyRoomWireSend> {
+        self.outbox.take_myroom_sends()
+    }
+
+    /// Put a failed MyRoom send back so the next paint retries it.
+    pub fn queue_myroom_send(&mut self, command: u16, body: Vec<u8>) {
+        self.outbox.queue_myroom_send(command, body);
+    }
+
+    /// Post the exe's failure copy for a failed MyRoom request. Only
+    /// BAGSORT's string is pinned today; other commands stay quiet.
+    pub fn post_myroom_send_failure_notice(&mut self, command: u16) {
+        if command == 5038 {
+            self.post_bag_sort_failure_notice();
+        }
+    }
+
+    /// Whether a MyRoom request is still unsent (session retry seam).
+    #[must_use]
+    pub fn has_pending_myroom_sends(&self) -> bool {
+        self.outbox.has_pending_myroom_sends()
+    }
+
+    /// Apply one MyRoom reply opcode: 5039 repaints the bag from the
+    /// staged server rows and drops the cell cursor (#798). Unknown
+    /// reply ids stay untouched — never invent a local effect.
+    pub fn apply_myroom_reply(&mut self, reply_command: u16) {
+        if reply_command == 5039 {
+            self.myroom.pick_bag_cell(None);
+        }
+    }
+
+    /// Post the exe's BAGSORT failure notice (file `0x248f40`).
+    pub fn post_bag_sort_failure_notice(&mut self) {
+        self.myroom_notice = Some(BAG_SORT_FAILURE_NOTICE.to_owned());
+        self.myroom_confirm = None;
     }
 
     /// Per-slot MyRoom counts from server-confirmed equip replies.
@@ -15630,6 +15670,46 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_bagsort_press_queues_5038_and_5039_reply_repaints() {
+        // Live caller chain: boot -> MyRoom side -> staged BAGSORT ->
+        // click_myroom_side -> outbox 5038 -> session send -> 5039
+        // reply -> apply_myroom_reply. Static pins: send builder case
+        // `0x4a540f` (empty body), reply case `0x13af` (repaint), and
+        // failure text at file `0x248f40`.
+        use super::super::side::{MYROOM_BAGSORT_CODE, MYROOM_BAG_FIRST_CODE};
+        let mut game = myroom_open_overlay();
+        let _ = game.take_equip_send(); // entry pick, not this press
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_BAGSORT_CODE, 600, 10),
+            ],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        let _ = game.take_equip_send(); // the cell's equip leg
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        let sends = game.take_myroom_sends();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].command, 5038);
+        assert!(sends[0].body.is_empty(), "RefershBag carries no fields");
+        assert!(!game.has_pending_myroom_sends());
+
+        game.apply_myroom_reply(5039);
+        assert_eq!(game.myroom().bag_cell(), None, "5039 repaints the bag");
+        game.post_bag_sort_failure_notice();
+        assert_eq!(
+            game.myroom_notice(),
+            Some(
+                "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요."
+            ),
+            "exe file 0x248f40 copy"
+        );
+    }
+
+    #[test]
     fn myroom_worn_well_press_requeues_5004_with_the_worn_bag_index() {
         // Live caller chain: boot -> Waiting -> MyRoom side -> staged
         // well `0x15600013` -> click_myroom_side -> session flush
@@ -16355,16 +16435,19 @@ mod game_tests {
         //   seam stays empty.
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
-            myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
-            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_NOTICEBOARD_CODE,
-            MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE, MYROOM_VACATE_CODE,
-            MYROOM_WEBAVATAR_CODE,
+            myroom_action_for_code, myroom_p0_verdict, MyRoomAction, MYROOM_ALARM_CODE,
+            MYROOM_ALARM_POPUP_CODE, MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE,
+            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
+            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
         };
-        for code in [
-            MYROOM_WEBAVATAR_CODE,
-            MYROOM_CONFERENCE_CODE,
-            MYROOM_BAGSORT_CODE,
-        ] {
+        // #798 re-pin: BAGSORT is no longer a P0 no-op; the exe's
+        // 5038 send is wired and the verdict is retired.
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAGSORT_CODE),
+            Some(MyRoomAction::BagSort)
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_BAGSORT_CODE), None);
+        for code in [MYROOM_WEBAVATAR_CODE, MYROOM_CONFERENCE_CODE] {
             assert_eq!(
                 myroom_action_for_code(code),
                 None,
