@@ -332,6 +332,20 @@ behavior also live in spec #178's enrichment rows.
   (wallet/inventory) stays server-authoritative, not minted locally.
   Guard: `itemback_restores_the_full_equipped_block_not_one_slot`.
   Live before/after figure frames OPEN.
+- ITEMPRE `0x14200064..6b` gates on category byte `+4` inside
+  `0x18..0x1b` and worn slot `(word +6 >> 7) & 0xf` equal to global
+  `0x77cd28` or slot 2. An occupied word at object `+0x8ad` blocks
+  categories other than `0x0b`/`0x16` and posts the CP949 string at
+  VA `0x648878` (`ev_0a8d91c7…`, `[ 정보 ] … '소품'`); a slot
+  mismatch posts the string at VA `0x6488e4` (`ev_9b1586a2…`,
+  `성별이 다른 아이템은 입을 수 없습니다.`). A good passes to
+  FUN_0049fba0 (`ev_82741b08…`) and repaints only then. The
+  file→record join for the gate words is not pinned, so callers stage
+  them explicitly. Guards: `occupied_worn_slot_posts_the_exe_notice_and_blocks_the_try_on`,
+  `a_wrong_category_preview_press_stages_nothing_and_posts_no_notice`,
+  `a_mismatched_worn_slot_posts_the_exe_gender_notice`. The notice
+  dialog mount stays OPEN: one qualified ITEMPRE press frame on a
+  blocked slot, plus the before/after figure pixel pair.
 
 ## OPEN
 

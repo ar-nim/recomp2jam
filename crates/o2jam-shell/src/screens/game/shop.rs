@@ -2,10 +2,12 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_goods, shop_page_count, ShopAction, ShopGood, ShopPanel,
-    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    lanking_page_window, shop_goods, shop_page_count, shop_try_on_decision, ShopAction, ShopGood,
+    ShopPanel, TryOnDecision, TryOnGate, TryOnNotice, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    SHOP_ITEM_ROWS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
+use std::collections::HashMap;
 
 /// Equipped block the ITEMBACK arm restores. The exe takes `0x2190`
 /// bytes from global `0x77cd00` and writes them over the local copy at
@@ -70,6 +72,18 @@ pub(crate) struct ShopState {
     /// Previewed item id (`ITEMPRE` pick, `ITEMBACK` clears; `None`
     /// until picked). Ids stay stable across pages (unlike slots).
     pub(crate) preview: Option<u32>,
+    /// Try-on gate words staged per item id (`+4`/`+6` of the exe
+    /// record). The file→record join is not pinned, so an ungated
+    /// good never stages a figure.
+    try_on_gates: HashMap<u32, TryOnGate>,
+    /// Active worn slot (exe global `0x77cd28`) and its occupancy
+    /// word (object `+0x8ad`); slot 2 bypasses both slot checks.
+    active_worn_slot: Option<u8>,
+    occupied_worn_slot: bool,
+    /// Last notice the ITEMPRE gate posted (`None` on a clean try-on
+    /// or ITEMBACK). The notice sheet that mounts these bytes stays
+    /// OPEN.
+    last_try_on_notice: Option<TryOnNotice>,
     /// Owned-panel page (ten `MYBAGITEM` icons per page, the staged
     /// `BAGLEFT`/`BAGRIGHT` pager).
     pub(crate) bag_page: usize,
@@ -116,6 +130,29 @@ impl ShopState {
         self.shop_cart.clone()
     }
 
+    /// Stage the exe's try-on gate words for one catalog good.
+    pub(crate) fn stage_try_on_gate(&mut self, item_id: u32, category: u8, worn_slot: u8) {
+        if self.shop_goods.iter().any(|good| good.item_id == item_id) {
+            self.try_on_gates.insert(
+                item_id,
+                TryOnGate {
+                    category,
+                    worn_slot,
+                },
+            );
+        }
+    }
+
+    /// Stage the occupied-slot word (exe object `+0x8ad`).
+    pub(crate) fn stage_occupied_worn_slot(&mut self, occupied: bool) {
+        self.occupied_worn_slot = occupied;
+    }
+
+    /// Notice posted by the last try-on press, if any.
+    pub(crate) fn try_on_notice(&self) -> Option<TryOnNotice> {
+        self.last_try_on_notice
+    }
+
     /// Summed `ITEMWON` prices over the checked cart (saturating;
     /// unknown ids drop out like the cart rows do).
     pub(crate) fn cart_total(&self) -> u32 {
@@ -131,22 +168,39 @@ impl ShopState {
         self.shop_try_on
     }
 
-    /// Preview the visible row's good (`ITEMPRE` try-on): stages the
-    /// id and reports whether a row good was staged. Never touches
-    /// the cart or the wire.
+    /// Preview the visible row's good (`ITEMPRE` try-on): applies the
+    /// pinned category/slot/occupancy gate, stages the id only when
+    /// the exe would repaint, and records a notice otherwise. Never
+    /// touches the cart or the wire.
     pub(crate) fn preview_slot(&mut self, slot: usize) -> bool {
-        match self.visible_goods().get(slot).map(|good| good.item_id) {
-            Some(item_id) => {
-                self.shop_try_on = Some(item_id);
+        let Some(good) = self.visible_goods().get(slot).cloned() else {
+            return false;
+        };
+        let gate = self.try_on_gates.get(&good.item_id).copied();
+        match shop_try_on_decision(gate, self.active_worn_slot, self.occupied_worn_slot) {
+            TryOnDecision::Stage => {
+                self.shop_try_on = Some(good.item_id);
+                if let Some(gate) = gate {
+                    self.active_worn_slot = Some(gate.worn_slot);
+                }
+                self.last_try_on_notice = None;
                 true
             }
-            None => false,
+            TryOnDecision::WrongCategory => {
+                self.last_try_on_notice = None;
+                false
+            }
+            TryOnDecision::Notice(notice) => {
+                self.last_try_on_notice = Some(notice);
+                false
+            }
         }
     }
 
     /// Revert the preview to the equipped avatar (`ITEMBACK`).
     pub(crate) fn clear_try_on(&mut self) {
         self.shop_try_on = None;
+        self.last_try_on_notice = None;
     }
 
     /// Check one catalog good into the cart (id must exist; the

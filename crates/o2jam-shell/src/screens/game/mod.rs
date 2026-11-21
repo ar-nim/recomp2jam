@@ -6791,6 +6791,23 @@ impl ScreenGame {
         self.shop.try_on()
     }
 
+    /// Stage the exe's ITEMPRE gate words for one catalog good.
+    pub fn stage_shop_try_on_gate(&mut self, item_id: u32, category: u8, worn_slot: u8) {
+        self.shop.stage_try_on_gate(item_id, category, worn_slot);
+    }
+
+    /// Stage the exe's occupied-worn-slot word (object `+0x8ad`).
+    pub fn stage_occupied_worn_slot(&mut self, occupied: bool) {
+        self.shop.stage_occupied_worn_slot(occupied);
+    }
+
+    /// Notice posted by the last ITEMPRE press, if any. The dialog
+    /// sheet that mounts the pinned CP949 bytes stays OPEN.
+    #[must_use]
+    pub fn shop_try_on_notice(&self) -> Option<super::side::TryOnNotice> {
+        self.shop.try_on_notice()
+    }
+
     /// Whether the avatar pane holds a staged figure (equipped or
     /// preview; `None` paints the staged art alone).
     #[must_use]
@@ -23369,6 +23386,11 @@ mod game_tests {
         walk_to_waiting(&mut game);
         let table = shop_preview_table();
         game.set_shop_catalog(&table);
+        // The exe gate's category/slot words are staged explicitly:
+        // no parsed file→record join is pinned. Slot 2 is always
+        // try-on-able, so both synthetic goods can stack.
+        game.stage_shop_try_on_gate(1, 0x18, 2);
+        game.stage_shop_try_on_gate(2, 0x18, 2);
         game.set_myroom_character(shop_preview_hero());
         game.set_avatar_source(shop_preview_archive(), table);
         let mut placements = shop_side_placements();
@@ -23439,6 +23461,67 @@ mod game_tests {
         // The synthetic archive stacks, so the pane holds the
         // preview figure on the fly.
         assert!(game.shop_avatar_staged());
+    }
+
+    #[test]
+    fn occupied_worn_slot_posts_the_exe_notice_and_blocks_the_try_on() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_online_identity ->
+        //   visit_side(Shop) -> click_shop(ITEMPRE2) ->
+        //   ShopState::preview_slot -> shop_try_on_notice (no figure).
+        // Static pin: arm `0x14200065` checks category `+4` inside
+        // `0x18..0x1b`, worn slot `+6 >> 7 & 0xf` equal to global
+        // `0x77cd28` or 2, then blocks on object `+0x8ad` and posts
+        // the string at VA `0x648878` (`ev_f3ad15be…`). The visible
+        // notice dialog stays OPEN: one qualified ITEMPRE press frame
+        // on an occupied slot must name the mounted sheet.
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x18, 2);
+        game.stage_occupied_worn_slot(true);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None, "no figure stages");
+        assert_eq!(
+            game.shop_try_on_notice(),
+            Some(super::super::side::TryOnNotice::CostumeSlotOccupied)
+        );
+        assert_eq!(
+            game.shop_preview_equipment(),
+            None,
+            "the equipped set is untouched"
+        );
+    }
+
+    #[test]
+    fn a_wrong_category_preview_press_stages_nothing_and_posts_no_notice() {
+        // Same live chain as the occupied-slot guard. Category `0x17`
+        // is outside the exe's `0x18..0x1b` range, where the arm falls
+        // through without a notice (`ev_f3ad15be…`).
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x17, 2);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(game.shop_try_on_notice(), None);
+    }
+
+    #[test]
+    fn a_mismatched_worn_slot_posts_the_exe_gender_notice() {
+        // Same live chain. Slot 1 differs from global `0x77cd28`
+        // (unset here) and from the always-allowed slot 2, so the
+        // notice string at VA `0x6488e4` is the only outcome.
+        let mut game = open_shop_preview_board();
+        game.stage_shop_try_on_gate(2, 0x18, 1);
+
+        game.click_shop(362, 208);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(
+            game.shop_try_on_notice(),
+            Some(super::super::side::TryOnNotice::WrongWornSlot)
+        );
     }
 
     #[test]

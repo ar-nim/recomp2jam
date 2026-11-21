@@ -511,7 +511,12 @@ pub const SHOP_BAG_PAGE_CUR_ONES_CODE: u32 = 0x1450_004F;
 pub const SHOP_BAG_PAGE_TOT_TENS_CODE: u32 = 0x1450_0050;
 pub const SHOP_BAG_PAGE_TOT_ONES_CODE: u32 = 0x1450_0051;
 /// First per-row preview button (`IDC_BUTTON_SSHOP_ITEMPRE1`); eight
-/// run contiguously through `+7` (block walk + staged dump).
+/// run contiguously through `+7` (block walk + staged dump). The exe
+/// gate reads category `0x18..0x1b` (byte `+4`) and worn slot
+/// `(word +6 >> 7) & 0xf`; slot 2 is always try-on-able, another slot
+/// only when it equals the active slot at global `0x77cd28`. An
+/// occupied slot (`+0x8ad`) outside categories `0x0b`/`0x16` posts
+/// the string at VA `0x648878` (`ev_f3ad15be…`).
 pub const SHOP_ITEMPRE_FIRST_CODE: u32 = 0x1420_0064;
 /// Preview clear (`IDC_BUTTON_SSHOP_ITEMBACK`).
 pub const SHOP_ITEMBACK_CODE: u32 = 0x1420_006C;
@@ -701,6 +706,86 @@ pub struct ShopGood {
     /// beside won `4500`, so no table→entry map is pinned yet. Only
     /// an explicitly staged pinned word may set this (#395 partial).
     pub gem_price: Option<u32>,
+}
+
+/// Try-on gate fields the exe reads from a staged item record:
+/// category byte `+4` and worn slot `(word +6 >> 7) & 0xf`
+/// (`ev_f3ad15be…`, arm `0x14200064..6b`). The file→record join is
+/// not pinned, so callers stage these words explicitly; an ungated
+/// good never gets a try-on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TryOnGate {
+    pub category: u8,
+    pub worn_slot: u8,
+}
+
+/// Notice the exe posts from the ITEMPRE gate. The bytes are read
+/// from the 7.55 image (VA in each variant); the notice sheet that
+/// mounts them stays OPEN — the next step is one qualified ITEMPRE
+/// press frame on the blocked slot naming the dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryOnNotice {
+    /// Object `+0x8ad` set: string at VA `0x648878`,
+    /// `[ 정보 ]\n\n코스튬 아바타를 착용하고 있을 경우\n'소품'`.
+    CostumeSlotOccupied,
+    /// Worn slot differs from global `0x77cd28` and from slot 2:
+    /// string at VA `0x6488e4`,
+    /// `성별이 다른 아이템은 입을 수 없습니다.`.
+    WrongWornSlot,
+}
+
+impl TryOnNotice {
+    /// Exact CP949 bytes pinned at the notice string VA.
+    #[must_use]
+    pub const fn cp949_bytes(self) -> &'static [u8] {
+        match self {
+            Self::CostumeSlotOccupied => &[
+                0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x5B,
+                0x20, 0xC1, 0xA4, 0xBA, 0xB8, 0x20, 0x5D, 0x0A, 0x0A, 0xC4, 0xDA, 0xBD, 0xBA, 0xC6,
+                0xAC, 0x20, 0xBE, 0xC6, 0xB9, 0xD9, 0xC5, 0xB8, 0xB8, 0xA6, 0x20, 0xC2, 0xF8, 0xBF,
+                0xEB, 0xC7, 0xCF, 0xB0, 0xED, 0x20, 0xC0, 0xD6, 0xC0, 0xBB, 0x20, 0xB0, 0xE6, 0xBF,
+                0xEC, 0x0A,
+            ],
+            Self::WrongWornSlot => &[
+                0xBC, 0xBA, 0xBA, 0xB0, 0xC0, 0xCC, 0x20, 0xB4, 0xD9, 0xB8, 0xA5, 0x20, 0xBE, 0xC6,
+                0xC0, 0xCC, 0xC5, 0xDB, 0xC0, 0xBA, 0x20, 0xC0, 0xD4, 0xC0, 0xBB, 0x20, 0xBC, 0xF6,
+                0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+            ],
+        }
+    }
+}
+
+/// Outcome of one ITEMPRE press after the exe's gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryOnDecision {
+    /// Stage the row good and repaint the figure.
+    Stage,
+    /// Category outside `0x18..0x1b`: the exe falls through silently.
+    WrongCategory,
+    /// Worn slot mismatch (`0x77cd28` or 2) posts a notice.
+    Notice(TryOnNotice),
+}
+
+/// Apply the pinned ITEMPRE gate to one staged good.
+#[must_use]
+pub fn shop_try_on_decision(
+    gate: Option<TryOnGate>,
+    active_slot: Option<u8>,
+    occupied: bool,
+) -> TryOnDecision {
+    let Some(gate) = gate else {
+        return TryOnDecision::WrongCategory;
+    };
+    if !(0x18..=0x1B).contains(&gate.category) {
+        return TryOnDecision::WrongCategory;
+    }
+    if gate.worn_slot != 2 && Some(gate.worn_slot) != active_slot {
+        return TryOnDecision::Notice(TryOnNotice::WrongWornSlot);
+    }
+    if occupied && gate.category != 0x0B && gate.category != 0x16 {
+        return TryOnDecision::Notice(TryOnNotice::CostumeSlotOccupied);
+    }
+    TryOnDecision::Stage
 }
 
 /// Staged shop goods in table order; empty without catalog data.
