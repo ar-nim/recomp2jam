@@ -62,8 +62,8 @@ use super::paint::{
     scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
     ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
     SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -769,6 +769,9 @@ pub struct ScreenGame {
     /// role packet feeds this word on the live boot yet, so the default
     /// keeps the plain eight-card backdrop and hides the select overlay.
     waiting_member_role: MemberRole,
+    /// Effect layer selected by the two staged Waiting toggles (exe
+    /// global `0x7789e0`; default BOTTOM per `FUN_00495110`).
+    waiting_effect: WaitingEffect,
     /// Announced room master from a 3007 leave event (`docs/relay.md`
     /// section 10: the sibling handler compares the local member id to
     /// the announced master id for its `+0x30` flag). `None` keeps the
@@ -1166,6 +1169,7 @@ impl ScreenGame {
             result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
+            waiting_effect: WaitingEffect::default(),
             announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
@@ -3101,6 +3105,20 @@ impl ScreenGame {
         self
     }
 
+    /// Effect layer selected in Waiting (exe global `0x7789e0`).
+    #[must_use]
+    pub const fn waiting_effect(&self) -> WaitingEffect {
+        self.waiting_effect
+    }
+
+    /// Commit one staged effect toggle. Only the two authored codes
+    /// `0x16201020/21` reach the flag; every other code is ignored.
+    fn press_waiting_effect(&mut self, code: u32) {
+        if let Some(effect) = WaitingEffect::from_code(code) {
+            self.waiting_effect = effect;
+        }
+    }
+
     /// Stage the room song the 4001 event names (the exe's staged room
     /// song `0x7789d8`, handler VA `0x55f2d0`): the 4025 announcement
     /// and the waiting captions follow it.
@@ -3957,6 +3975,18 @@ impl ScreenGame {
             return;
         };
         let placements = &art.placements;
+        // The two effect plates are an exclusive pair: the exe writes
+        // flag 0/1 and lights the pressed frame (`FUN_004b7c60` files
+        // `0xb7e2e`-`0xb7e5a`, `FUN_0048c810`). Only staged rects answer.
+        for code in [
+            super::paint::WAIT_TOP_EFFECT_CODE,
+            super::paint::WAIT_BOTTOM_EFFECT_CODE,
+        ] {
+            if staged_code_hit(placements, code, x, y) {
+                self.press_waiting_effect(code);
+                return;
+            }
+        }
         // Team buttons first: the toggle-group map (`FUN_0048c810`,
         // `waiting_team_for_code`) lights the pressed team and queues
         // the 4004+4008 send pair through `select_team`.
@@ -7009,6 +7039,7 @@ impl ScreenGame {
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
+            effect: self.waiting_effect,
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -11333,6 +11364,115 @@ mod game_tests {
         }
         assert!(!game.has_pending_team_send());
         assert!(!game.has_pending_music_send());
+    }
+
+    fn waiting_effect_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let rects = [
+            (
+                "IDC_BUTTON_SWAIT_TOPEFFECT",
+                0x1620_1020,
+                Rect {
+                    x: 719,
+                    y: 450,
+                    w: 60,
+                    h: 48,
+                },
+            ),
+            (
+                "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+                0x1620_1021,
+                Rect {
+                    x: 719,
+                    y: 507,
+                    w: 60,
+                    h: 48,
+                },
+            ),
+        ];
+        let mut placements: Vec<ScenePlacement> = rects
+            .into_iter()
+            .map(|(id, code, rect)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_Effect.ojs".to_owned()),
+                rect,
+            })
+            .collect();
+        // One staged cover selects the file-traced paint path; without
+        // it the scene falls back to the flat invented seat grid.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x1650_003D,
+            sprite: None,
+            rect: Rect {
+                x: 28,
+                y: 53,
+                w: 141,
+                h: 175,
+            },
+        });
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Effect.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn effect_toggle_clicks_flip_the_flag_and_light_the_pressed_record() {
+        // Live chain: boot -> Planet -> Channel -> Room -> Waiting ->
+        // staged effect rect -> InputSnapshot click -> paint. The exe's
+        // toggle group (`FUN_0048c810` via `FUN_004b7c60` file `0xb7e2e`)
+        // lights exactly the pressed control and writes flag 0 for TOP,
+        // 1 for BOTTOM (files `0xb7e4e`/`0xb7e5a`); the default is 1
+        // (init `FUN_00495110` file `0x914b`).
+        let mut game = waiting_effect_game();
+        assert_eq!(game.waiting_effect(), WaitingEffect::Bottom);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let rest_pixel = pack_xrgb(0, 0, 255);
+        let active_pixel = pack_xrgb(255, 0, 0);
+        assert_eq!(buf[450 * 800 + 719], rest_pixel);
+        assert_eq!(buf[507 * 800 + 719], active_pixel);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 460));
+        assert_eq!(game.waiting_effect(), WaitingEffect::Top);
+        buf.fill(0);
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[450 * 800 + 719], active_pixel);
+        assert_eq!(buf[507 * 800 + 719], rest_pixel);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 517));
+        assert_eq!(game.waiting_effect(), WaitingEffect::Bottom);
     }
 
     #[test]

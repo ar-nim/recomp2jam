@@ -217,10 +217,71 @@ pub struct WaitingCaptions<'a> {
     /// Room number behind the three `RMNUM` digit wells: the number
     /// from the accepted 3002 join request, staged on join.
     pub room_number: Option<i32>,
+    /// Selected decorative effect layer (exe global `0x7789e0`).
+    pub effect: WaitingEffect,
     /// Local nickname from 2001, used on the self cover when the 3003
     /// slot list does not carry the guest's own member.
     pub local_name: Option<&'a str>,
 }
+
+/// Which decorative effect layer the exe's Waiting toggle selects.
+/// The 7.55 init sets global `0x7789e0` to 1 (`FUN_00495110`, file
+/// `0x914b`), so BOTTOM is the default. The two staged buttons
+/// `WAIT_TOP_EFFECT_CODE`/`WAIT_BOTTOM_EFFECT_CODE` write 0/1
+/// (`FUN_004b7c60`, files `0xb7e4e`/`0xb7e5a`) and the toggle mapper
+/// lights exactly the pressed control (`FUN_0048c810`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitingEffect {
+    /// `IDC_BUTTON_SWAIT_TOPEFFECT`: flag 0, Playing layer 1.
+    Top,
+    /// `IDC_BUTTON_SWAIT_BOTTOMEFFECT`: flag 1, Playing layer 2.
+    #[default]
+    Bottom,
+}
+
+impl WaitingEffect {
+    /// Effect selected by a staged Waiting button code (`None` for
+    /// every other control). Mirrors the exe's two-code comparison.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            WAIT_TOP_EFFECT_CODE => Some(Self::Top),
+            WAIT_BOTTOM_EFFECT_CODE => Some(Self::Bottom),
+            _ => None,
+        }
+    }
+
+    /// Staged control code of this effect.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::Top => WAIT_TOP_EFFECT_CODE,
+            Self::Bottom => WAIT_BOTTOM_EFFECT_CODE,
+        }
+    }
+
+    /// Note-effect layer in the Playing renderers (`flag + 1`, files
+    /// `0x4e792b`/`0x4ee6db`/`0x4f2a9b`). The layer is a pure pin; no
+    /// Playing pixel path consumes it yet.
+    #[must_use]
+    pub const fn note_layer(self) -> u8 {
+        match self {
+            Self::Top => 1,
+            Self::Bottom => 2,
+        }
+    }
+}
+
+/// Top/bottom effect button codes from `STATE_WAITING` (`ControlList`
+/// names `Wait_Btn_EffectTop/Bottom`).
+pub const WAIT_TOP_EFFECT_CODE: u32 = 0x1620_1020;
+pub const WAIT_BOTTOM_EFFECT_CODE: u32 = 0x1620_1021;
+
+/// Staged control ids of the two effect toggles.
+const WAIT_EFFECT_IDS: [&str; 2] = [
+    "IDC_BUTTON_SWAIT_TOPEFFECT",
+    "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+];
 
 /// Difficulty and speed behind the `LEVEL` badge: the two bytes the
 /// exe's frame formula reads (`0x7789e7` difficulty, `0x7789e9`
@@ -391,6 +452,7 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || id == waiting_confirm_control_id(false)
         || WAITING_CHANNEL_NUMBER_IDS.contains(&id)
         || WAITING_ROOM_NUMBER_IDS.contains(&id)
+        || WAIT_EFFECT_IDS.contains(&id)
 }
 
 /// Header class chips have no staged wire source. The p343 matched exe
@@ -1094,6 +1156,7 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_level_badge(frame, captions.level, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
+    paint_waiting_effect_toggle(frame, art, captions.effect);
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed(frame, speed, placements);
@@ -1312,6 +1375,27 @@ pub(crate) fn paint_waiting_team_highlight(
         if let Some((x, y)) = waiting_bnd_origin(placements, button, frame) {
             paint_cursor(frame, x + 6, y);
         }
+    }
+}
+
+/// Paint the two effect toggles as an exclusive pair: record 1 on the
+/// selected control, record 0 on the other. The exe's toggle mapper
+/// (`FUN_0048c810`) walks the two control codes and calls its frame
+/// setter with 1 for the pressed one and 0 for the other; the Waiting
+/// setup repeats the same selection from global `0x7789e0`
+/// (`FUN_004ba6c0`, files `0x4ba929`-`0x4ba94b`).
+fn paint_waiting_effect_toggle(frame: &mut Frame<'_>, art: &SceneArt, effect: WaitingEffect) {
+    let shared = shared_sprite_names(&art.placements);
+    for id in WAIT_EFFECT_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        let record = usize::from(placed.code == effect.code());
+        paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
     }
 }
 
