@@ -6,6 +6,52 @@ use o2jam_net::play::{SetRoomArena, SetRoomMusic};
 use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::{CreateRoom, ExitPlaying, ExitWaiting, JoinRoom, Ready, SetRoomTeam, StartGame};
 
+/// UI message posted by a staged Waiting ambient control. The exe
+/// builds the word as `kind << 16 | (code & 0xfff)` and posts it through
+/// `FUN_00478c90` -> `FUN_0047edf0` (dossier `ev_63d154f...`). Neither
+/// sheet is staged in this tree, so the press is recorded, never
+/// rendered as an invented dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingAmbientRequest {
+    /// Change-title: master-only case `0x16200047`, message `4<<16|8`.
+    ChangeTitle,
+    /// Emotion help: case `0x16200048`, message `0xb<<16|0x48`.
+    Emotion,
+}
+
+impl WaitingAmbientRequest {
+    /// Request behind one staged control code and local role. The exe's
+    /// Waiting dispatcher gates CHANGE_TITLE on the master byte
+    /// (`FUN_004b2540` file `0xb26ac`); EMOTION answers for every seat
+    /// (`FUN_004b81e0` case `0x16200048`).
+    #[must_use]
+    pub fn from_code_for_role(code: u32, is_master: bool) -> Option<Self> {
+        match code {
+            0x1620_0047 => is_master.then_some(Self::ChangeTitle),
+            0x1620_0048 => Some(Self::Emotion),
+            _ => None,
+        }
+    }
+
+    /// Control code the exe dispatches for this request.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::ChangeTitle => 0x1620_0047,
+            Self::Emotion => 0x1620_0048,
+        }
+    }
+
+    /// UI message word the exe posts (`kind << 16 | low control word`).
+    #[must_use]
+    pub const fn message_word(self) -> u32 {
+        match self {
+            Self::ChangeTitle => 0x0004_0008,
+            Self::Emotion => 0x000B_0048,
+        }
+    }
+}
+
 /// Qualified boot-3 Result/RETRY manifest (#418). The checked #294
 /// story claimed Waiting re-entry; these frames show the personal-room
 /// backdrop instead. Pins live here beside the queued 4010 they name.

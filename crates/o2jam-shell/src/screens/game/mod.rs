@@ -23,7 +23,7 @@ use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::ChatState;
-pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
+pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
@@ -35,6 +35,7 @@ use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
+pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
     AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
@@ -62,9 +63,9 @@ use super::paint::{
     scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
     CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
     ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots,
-    WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -372,6 +373,10 @@ const ROOM_ACTIVE_CHROME_CODES: [u32; 1] = [0x1320_100E];
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
 const MAX_CHAT_INPUT_CHARS: usize = 50;
+
+/// Waiting updater period for the WAITING stamp reset (exe timer
+/// `FUN_004b9dc0` calls its delay helper with 5000 ms, file `0xba60e`).
+const WAITING_STAMP_PERIOD_MS: u64 = 5_000;
 
 /// Planet-board modal dialog open over the bare board (the power
 /// quit-confirm or the gear options dialog). The board stays the
@@ -808,6 +813,18 @@ pub struct ScreenGame {
     /// role packet feeds this word on the live boot yet, so the default
     /// keeps the plain eight-card backdrop and hides the select overlay.
     waiting_member_role: MemberRole,
+    /// Effect layer selected by the two staged Waiting toggles (exe
+    /// global `0x7789e0`; default BOTTOM per `FUN_00495110`).
+    waiting_effect: WaitingEffect,
+    /// Exe's WAITING stamp arm: another seat's playing-state 1 at room
+    /// stage (`FUN_004ba6c0` files `0xba7b7`-`0xba89f`).
+    waiting_stamp_armed: bool,
+    /// Paint clock of the first armed frame; the 5 s updater clears the
+    /// stamp relative to this instant (`FUN_004b9dc0`).
+    waiting_stamp_started_at: Option<u64>,
+    /// Last ambient Waiting press that posts a UI message, recorded
+    /// because neither exe sheet is staged here.
+    last_waiting_ambient_request: Option<WaitingAmbientRequest>,
     /// Announced room master from a 3007 leave event (`docs/relay.md`
     /// section 10: the sibling handler compares the local member id to
     /// the announced master id for its `+0x30` flag). `None` keeps the
@@ -1012,6 +1029,16 @@ fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> 
         waiting_team_for_code(placed.code).filter(|_| rect_hit(&placed.rect, x, y))
     })
 }
+
+/// Control code of the first staged rect covering native pixel (`x`,
+/// `y`). Used only by toggle groups whose codes form a contiguous run.
+#[must_use]
+fn staged_code_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u32> {
+    placements
+        .iter()
+        .find(|placed| rect_hit(&placed.rect, x, y))
+        .map(|placed| placed.code)
+}
 /// Stage word behind one room arena value (the Playing applier's
 /// seeding rule, exe `0x4e78db`, `docs/stage-bga.md`): the low 16
 /// bits when a high word is set, the full value otherwise. `None`
@@ -1215,6 +1242,10 @@ impl ScreenGame {
             result_member_records: [None; 8],
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
+            waiting_effect: WaitingEffect::default(),
+            waiting_stamp_armed: false,
+            waiting_stamp_started_at: None,
+            last_waiting_ambient_request: None,
             announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
@@ -2014,6 +2045,15 @@ impl ScreenGame {
     /// clears the chat history and draft: rows come from that room's
     /// 3012/3013 packets only, never carried across rooms.
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
+        self.waiting_stamp_armed = room.slots.iter().any(|slot| {
+            slot.index != room.member_id
+                && slot
+                    .member
+                    .as_ref()
+                    .is_some_and(|member| member.playing_state == 1)
+        });
+        self.waiting_stamp_started_at = None;
+        self.last_waiting_ambient_request = None;
         if let Some(stage) = arena_stage_word(room.arena) {
             self.arena_stage = stage;
         }
@@ -3166,6 +3206,64 @@ impl ScreenGame {
         self
     }
 
+    /// Effect layer selected in Waiting (exe global `0x7789e0`).
+    #[must_use]
+    pub const fn waiting_effect(&self) -> WaitingEffect {
+        self.waiting_effect
+    }
+
+    /// Waiting chat tab selected by the four staged `CHAT_*` buttons.
+    #[must_use]
+    pub const fn waiting_chat_channel(&self) -> WaitingChatChannel {
+        self.chat.waiting_channel()
+    }
+
+    /// True while the two messenger lamps show their 800 ms alert.
+    #[must_use]
+    pub fn messenger_lamp_lit_at(&self, now_ms: u64) -> bool {
+        self.chat.messenger_lamp_lit_at(now_ms)
+    }
+
+    /// Start the messenger lamp alert (named seam: the exe's alert
+    /// source lives in messenger dialogs, which the shell has no
+    /// backend for). Only the reset is wired to a staged press.
+    pub fn pulse_messenger_lamp(&mut self, now_ms: u64) -> &mut Self {
+        self.chat.pulse_messenger_lamp(now_ms);
+        self
+    }
+
+    /// Last ambient Waiting press that posts an exe UI message.
+    #[must_use]
+    pub const fn last_waiting_ambient_request(&self) -> Option<WaitingAmbientRequest> {
+        self.last_waiting_ambient_request
+    }
+
+    /// Whether the 5-second WAITING stamp window still stands.
+    #[must_use]
+    pub fn waiting_stamp_lit_at(&self, now_ms: u64) -> bool {
+        self.waiting_stamp_started_at.is_some_and(|start| {
+            now_ms >= start && now_ms.saturating_sub(start) < WAITING_STAMP_PERIOD_MS
+        })
+    }
+
+    /// Commit one staged ambient control press. Only the two authored
+    /// codes reach a message; CHANGE_TITLE is master-owned in the exe.
+    fn press_waiting_ambient(&mut self, code: u32) {
+        let request = match WaitingAmbientRequest::from_code_for_role(code, self.is_room_master()) {
+            Some(request) => request,
+            None => return,
+        };
+        self.last_waiting_ambient_request = Some(request);
+    }
+
+    /// Commit one staged effect toggle. Only the two authored codes
+    /// `0x16201020/21` reach the flag; every other code is ignored.
+    fn press_waiting_effect(&mut self, code: u32) {
+        if let Some(effect) = WaitingEffect::from_code(code) {
+            self.waiting_effect = effect;
+        }
+    }
+
     /// Stage the room song the 4001 event names (the exe's staged room
     /// song `0x7789d8`, handler VA `0x55f2d0`): the 4025 announcement
     /// and the waiting captions follow it.
@@ -4272,7 +4370,50 @@ impl ScreenGame {
         else {
             return;
         };
+
         let placements = &placements;
+
+        // Change-title (master only) and emotion post UI messages.
+        // Neither sheet is staged, so the press records the pinned
+        // request instead of inventing a dialog.
+        for code in [
+            WaitingAmbientRequest::ChangeTitle.code(),
+            WaitingAmbientRequest::Emotion.code(),
+        ] {
+            if staged_code_hit(placements, code, x, y) {
+                self.press_waiting_ambient(code);
+                return;
+            }
+        }
+        // The MESSENGER press resets both lamps before it opens its
+        // sheet (`FUN_004b81e0` case `0x1620006a` calls
+        // `FUN_004c0690(0)`); the shell has no messenger sheet to open.
+        if staged_code_hit(placements, 0x1620_006A, x, y) {
+            self.chat.clear_messenger_lamp();
+            return;
+        }
+        // The four chat tabs are the exe's four-control toggle group:
+        // one active frame, history-word clear, and a draft clear on
+        // the whisper arm (`FUN_004b7c60` files `0xb7d5d`-`0xb7e29`).
+        if let Some(code) = staged_code_at(placements, x, y)
+            .filter(|code| WaitingChatChannel::from_code(*code).is_some())
+        {
+            self.chat.select_waiting_channel(code);
+            return;
+        }
+        // The two effect plates are an exclusive pair: the exe writes
+        // flag 0/1 and lights the pressed frame (`FUN_004b7c60` files
+        // `0xb7e2e`-`0xb7e5a`, `FUN_0048c810`). Only staged rects answer.
+        for code in [
+            super::paint::WAIT_TOP_EFFECT_CODE,
+            super::paint::WAIT_BOTTOM_EFFECT_CODE,
+        ] {
+            if staged_code_hit(placements, code, x, y) {
+                self.press_waiting_effect(code);
+                return;
+            }
+        }
+
         // Team buttons first: the toggle-group map (`FUN_0048c810`,
         // `waiting_team_for_code`) lights the pressed team and queues
         // the 4004+4008 send pair through `select_team`.
@@ -7433,7 +7574,10 @@ impl ScreenGame {
     /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
     /// `paint_waiting_staged` never paints those rects (see the
     /// `paint_waiting_music` docs and the chat/cards absence tests).
-    fn paint_waiting(&self, frame: &mut Frame<'_>, now_ms: u64) {
+    fn paint_waiting(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        if self.waiting_stamp_armed && self.waiting_stamp_started_at.is_none() {
+            self.waiting_stamp_started_at = Some(now_ms);
+        }
         let captions = WaitingCaptions {
             song: self.waiting_song(),
             song_bpm: self.waiting_song_bpm(),
@@ -7444,6 +7588,10 @@ impl ScreenGame {
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
+            effect: self.waiting_effect,
+            chat_channel: self.waiting_chat_channel(),
+            messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
+            wait_stamp_lit: self.waiting_stamp_lit_at(now_ms),
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -8350,6 +8498,7 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
 
 #[cfg(test)]
 mod game_tests {
+    use super::super::paint::WaitingOpenCaption;
     use super::super::paint::{
         background_of, channel_chat_row_text, paint_myroom_data, rank_notice_board_text,
         seat_origin, RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET,
@@ -12055,6 +12204,477 @@ mod game_tests {
         }
         assert!(!game.has_pending_team_send());
         assert!(!game.has_pending_music_send());
+    }
+
+    fn waiting_effect_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let rects = [
+            (
+                "IDC_BUTTON_SWAIT_TOPEFFECT",
+                0x1620_1020,
+                Rect {
+                    x: 719,
+                    y: 450,
+                    w: 60,
+                    h: 48,
+                },
+            ),
+            (
+                "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+                0x1620_1021,
+                Rect {
+                    x: 719,
+                    y: 507,
+                    w: 60,
+                    h: 48,
+                },
+            ),
+        ];
+        let mut placements: Vec<ScenePlacement> = rects
+            .into_iter()
+            .map(|(id, code, rect)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_Effect.ojs".to_owned()),
+                rect,
+            })
+            .collect();
+        // One staged cover selects the file-traced paint path; without
+        // it the scene falls back to the flat invented seat grid.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x1650_003D,
+            sprite: None,
+            rect: Rect {
+                x: 28,
+                y: 53,
+                w: 141,
+                h: 175,
+            },
+        });
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Effect.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn effect_toggle_clicks_flip_the_flag_and_light_the_pressed_record() {
+        // Live chain: boot -> Planet -> Channel -> Room -> Waiting ->
+        // staged effect rect -> InputSnapshot click -> paint. The exe's
+        // toggle group (`FUN_0048c810` via `FUN_004b7c60` file `0xb7e2e`)
+        // lights exactly the pressed control and writes flag 0 for TOP,
+        // 1 for BOTTOM (files `0xb7e4e`/`0xb7e5a`); the default is 1
+        // (init `FUN_00495110` file `0x914b`).
+        let mut game = waiting_effect_game();
+        assert_eq!(game.waiting_effect(), WaitingEffect::Bottom);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let rest_pixel = pack_xrgb(0, 0, 255);
+        let active_pixel = pack_xrgb(255, 0, 0);
+        assert_eq!(buf[450 * 800 + 719], rest_pixel);
+        assert_eq!(buf[507 * 800 + 719], active_pixel);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 460));
+        assert_eq!(game.waiting_effect(), WaitingEffect::Top);
+        buf.fill(0);
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[450 * 800 + 719], active_pixel);
+        assert_eq!(buf[507 * 800 + 719], rest_pixel);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 517));
+        assert_eq!(game.waiting_effect(), WaitingEffect::Bottom);
+    }
+
+    fn waiting_chat_chrome_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let controls = [
+            ("IDC_BUTTON_SWAIT_CHAT_ALL", 0x1620_100E, (415, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_FRIEND", 0x1620_100F, (441, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_GUILD", 0x1620_1010, (467, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_WHISPER", 0x1620_1011, (493, 562)),
+            ("IDC_BUTTON_SWAIT_MESSENGER", 0x1620_006A, (668, 569)),
+            ("IDC_IMAGE_SWAIT_MESSENGER_ALRAM", 0x1650_006B, (700, 560)),
+            ("IDC_IMAGE_SWAIT_MESSENGER_ALRAM1", 0x1650_006C, (730, 560)),
+        ];
+        let mut placements: Vec<ScenePlacement> = controls
+            .into_iter()
+            .map(|(id, code, (x, y))| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_ChatChrome.ojs".to_owned()),
+                rect: Rect { x, y, w: 8, h: 8 },
+            })
+            .collect();
+        // One staged cover selects the file-traced paint path.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x1650_003D,
+            sprite: None,
+            rect: Rect {
+                x: 28,
+                y: 53,
+                w: 141,
+                h: 175,
+            },
+        });
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_ChatChrome.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn chat_tab_clicks_switch_the_waiting_feed_and_clear_its_buffers() {
+        // Live chain: boot -> Waiting -> staged tab rect -> click ->
+        // ChatState -> paint. `FUN_004b7c60` handles the four tab codes
+        // `0x1620100E..11` through `FUN_0048c810(base, 4)`, lighting
+        // exactly the pressed control, and writes zero to dialog `+0x298`
+        // on every tab; the whisper arm also zeroes the 0x100-byte input
+        // buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+        let mut game = waiting_chat_chrome_game();
+        game.push_waiting_user_message(&chat_user("peer", "hello"));
+        game.set_chat_input("draft");
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
+        assert_eq!(game.waiting_chat().len(), 1);
+        assert_eq!(game.chat_input(), "draft");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(442, 563));
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Friend);
+        assert!(game.waiting_chat().is_empty());
+        assert_eq!(game.chat_input(), "draft");
+
+        game.set_chat_input("whisper me");
+        game.ingest_snapshot(&InputSnapshot::click_at(494, 563));
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Whisper);
+        assert_eq!(game.chat_input(), "");
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[562 * 800 + 415], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[562 * 800 + 493], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn messenger_lamp_alert_fades_and_the_messenger_button_resets_it() {
+        // `FUN_004c0690` stores its argument at dialog `+0x50c` and
+        // starts an 800 ms lamp animation on both `0x1650006B/6C` when
+        // it is non-zero and the lamp is idle (files `0xc06a0`-`0xc071a`,
+        // evidence `ev_21ff56de...`). The MESSENGER press calls it with 0
+        // (file `0xb81e0` case `0x1620006a`). No shell messenger alert
+        // backend exists, so the on-edge rides the named seam; the
+        // reset rides the live staged-button click.
+        let mut game = waiting_chat_chrome_game();
+        assert!(!game.messenger_lamp_lit_at(0));
+        game.pulse_messenger_lamp(1_000);
+        assert!(game.messenger_lamp_lit_at(1_000));
+        assert!(game.messenger_lamp_lit_at(1_799));
+        assert!(!game.messenger_lamp_lit_at(1_800));
+
+        game.set_chat_input("payload");
+        game.pulse_messenger_lamp(2_000);
+        game.ingest_snapshot(&InputSnapshot::click_at(670, 571));
+        assert!(!game.messenger_lamp_lit_at(2_001));
+        assert_eq!(game.chat_input(), "payload");
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
+    }
+
+    fn waiting_seat_icon_game() -> ScreenGame {
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        peer.music_state = o2jam_net::MusicState::NoAccess.code();
+        peer.free_pass = 1;
+        peer.playing_state = 1;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let icons = [
+            ("Wait_NoGemImage.ojs", 0x1650_0033, 10, 10),
+            ("Wait_PCRoomMark.ojs", 0x1650_0034, 30, 10),
+            ("Wait_Playing.ojs", 0x1650_0037, 50, 10),
+        ];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (sprite, code, x, y) in icons {
+            for (parent, parent_x) in [
+                ("IDC_BUTTON_SWAIT_EXTEND1", 48),
+                ("IDC_BUTTON_SWAIT_EXTEND2", 190),
+            ] {
+                placements.push(ScenePlacement {
+                    role: PlacementRole::Clone,
+                    id: parent.to_owned(),
+                    code,
+                    sprite: Some(sprite.to_owned()),
+                    rect: Rect {
+                        x: parent_x + x,
+                        y: 127 + y,
+                        w: 8,
+                        h: 8,
+                    },
+                });
+            }
+            let mut figure = AvatarFigure::default();
+            for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+                figure.push_layer(FigureLayer {
+                    image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                    dx: 0,
+                    dy: 0,
+                    colorkey: 0xFFFF,
+                });
+            }
+            figures.insert(sprite.to_owned(), figure);
+        }
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn seat_state_icons_light_only_the_seat_whose_wire_bytes_arm_them() {
+        // Live chain: 3003 `set_joined_room` -> `walk_to_waiting` ->
+        // `paint_at` -> `paint_waiting_scene` -> `staged_seats` ->
+        // `paint_waiting_seat_marks`. `FUN_004b2e30` maps the seat's
+        // `+0x217c` music-state 2 to NoGem, `+0x212c` free-pass word
+        // to the PC badge, and `+0x2130` playing-state 1 to PLAYING
+        // (`FUN_0052a2b0` slots 7/8/11, dossier `ev_ee564ef6...`).
+        let mut game = waiting_seat_icon_game();
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for (offset, label) in [(10, "NoGem"), (30, "PC"), (50, "PLAYING")] {
+            let own = (137 * 800 + (48 + offset)) as usize;
+            let peer = (137 * 800 + (190 + offset)) as usize;
+            assert_eq!(buf[own], 0, "{label} must stay dark on the own seat");
+            assert_eq!(
+                buf[peer],
+                pack_xrgb(0, 0, 255),
+                "{label} must light on the armed peer seat"
+            );
+        }
+    }
+
+    fn waiting_ambient_game(member_id: u8, peer_playing: bool) -> ScreenGame {
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        peer.playing_state = u8::from(peer_playing);
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        room.member_id = member_id;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let controls = [
+            ("IDC_IMAGE_SWAIT_WAITTEXTIMG", 0x1650_0067, 100, 100),
+            ("IDC_IMAGE_SWAIT_WAITIMG_ANI", 0x1650_0068, 120, 100),
+            ("IDC_BUTTON_SWAIT_CHANGE_TITLE", 0x1620_0047, 478, 13),
+            ("IDC_BUTTON_SWAIT_EMOTION", 0x1620_0048, 533, 562),
+        ];
+        let placements = controls
+            .into_iter()
+            .map(|(id, code, x, y)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_Ambient.ojs".to_owned()),
+                rect: Rect { x, y, w: 8, h: 8 },
+            })
+            .collect();
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Ambient.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn waiting_stamp_arms_on_a_playing_peer_and_clears_after_five_seconds() {
+        // Live chain: 3003 `set_joined_room` (other seat playing-state 1
+        // — exe setup `FUN_004ba6c0` files `0xba7b7`-`0xba89f`) ->
+        // boot/Waiting -> `paint_at` -> `paint_waiting_stamp`. The exe's
+        // 5-second updater (`FUN_004b9dc0`, files `0xba60e`-`0xba68a`,
+        // dossier `ev_87cb91...`) resets the wait text and stops the
+        // animation after 5000 ms.
+        let mut game = waiting_ambient_game(0, true);
+        let paint = |game: &mut ScreenGame, now_ms| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            (buf[100 * 800 + 100], buf[100 * 800 + 120])
+        };
+        assert_eq!(
+            paint(&mut game, 1_000),
+            (pack_xrgb(0, 0, 255), pack_xrgb(0, 0, 255))
+        );
+        assert_eq!(
+            paint(&mut game, 5_099),
+            (pack_xrgb(0, 0, 255), pack_xrgb(0, 0, 255))
+        );
+        assert_eq!(paint(&mut game, 6_000), (0, 0));
+
+        let mut idle = waiting_ambient_game(0, false);
+        assert_eq!(paint(&mut idle, 1_000), (0, 0));
+    }
+
+    #[test]
+    fn change_title_and_emotion_presses_record_pinned_dialog_messages() {
+        // `FUN_004b2540` case `0x16200047` posts `(4<<16)|8` when the
+        // local player is master; `FUN_004b81e0` case `0x16200048`
+        // posts `(0xb<<16)|0x48` for any seat. Both go through
+        // `FUN_00478c90` -> `FUN_0047edf0` (dossier
+        // `ev_63d154f...`); no ChangeTitle/Emotion sheet is staged yet.
+        assert_eq!(
+            WaitingAmbientRequest::ChangeTitle.message_word(),
+            0x0004_0008
+        );
+        assert_eq!(WaitingAmbientRequest::Emotion.message_word(), 0x000B_0048);
+        let mut game = waiting_ambient_game(0, false);
+        game.ingest_snapshot(&InputSnapshot::click_at(480, 15));
+        assert_eq!(
+            game.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::ChangeTitle),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(535, 564));
+        assert_eq!(
+            game.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::Emotion),
+        );
+
+        let mut guest = waiting_ambient_game(1, false);
+        guest.ingest_snapshot(&InputSnapshot::click_at(480, 15));
+        assert_eq!(guest.last_waiting_ambient_request(), None);
+        guest.ingest_snapshot(&InputSnapshot::click_at(535, 564));
+        assert_eq!(
+            guest.last_waiting_ambient_request(),
+            Some(WaitingAmbientRequest::Emotion),
+        );
+    }
+
+    #[test]
+    fn instname_and_notice_stay_silent_while_their_open_sources_are_unpinned() {
+        // Ticket #768 (grade OPEN): `INSTNAME 0x16400019` has zero code
+        // immediates and NOTICE's `+0x46c` content call is untraced
+        // (`docs/caption-sources.md` OPEN 1/2). The honest shell state
+        // is silence at those staged rects, with the two evidence steps
+        // pinned in code so nobody invents a caption.
+        let instrument = WaitingOpenCaption::InstrumentName;
+        let notice = WaitingOpenCaption::Notice;
+        assert_eq!(instrument.code(), 0x1640_0019);
+        assert_eq!(notice.code(), 0x1650_0062);
+        assert!(instrument.next_evidence_step().contains("0x16400019"));
+        assert!(notice.next_evidence_step().contains("0xbca0f"));
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let placements = [
+            ("IDC_TEXT_SWAIT_INSTNAME", 0x1640_0019, 480, 40),
+            ("IDC_IMAGE_SWAIT_NOTICE_TEXT", 0x1650_0062, 100, 455),
+            ("IDC_IMAGE_SWAIT_NOTICEBOARD", 0x1650_0063, 100, 480),
+        ]
+        .into_iter()
+        .map(|(id, code, x, y)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 40, h: 10 },
+        })
+        .collect();
+        game.load_scene(Screen::Waiting, placements, HashMap::new());
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for (x, y) in [(482, 42), (102, 457), (102, 482)] {
+            assert_eq!(buf[y * 800 + x], 0, "no invented caption at ({x},{y})");
+        }
     }
 
     #[test]

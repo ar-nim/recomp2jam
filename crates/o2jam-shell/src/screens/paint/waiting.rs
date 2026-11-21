@@ -225,6 +225,14 @@ pub struct WaitingCaptions<'a> {
     /// Room number behind the three `RMNUM` digit wells: the number
     /// from the accepted 3002 join request, staged on join.
     pub room_number: Option<i32>,
+    /// Selected decorative effect layer (exe global `0x7789e0`).
+    pub effect: WaitingEffect,
+    /// Selected Waiting chat tab (exe toggle group `0x1620100E..11`).
+    pub chat_channel: WaitingChatChannel,
+    /// Whether either authored messenger lamp shows its alert frame.
+    pub messenger_lamp_lit: bool,
+    /// Whether the two WAITING stamp controls show their armed frame.
+    pub wait_stamp_lit: bool,
     /// Local nickname from 2001, used on the self cover when the 3003
     /// slot list does not carry the guest's own member.
     pub local_name: Option<&'a str>,
@@ -234,6 +242,154 @@ pub struct WaitingCaptions<'a> {
 /// the two bytes the exe's frame formula reads (`0x7789e7` difficulty,
 /// `0x7789e9` speed, struct `0x7789d8`) plus the catalog word its MX
 /// branch tests (record `+0x14`, `FUN_004b2e30`).
+
+/// Captions whose exe source is still OPEN (7.55 sha256
+/// `83a04541…72c823b`, `docs/caption-sources.md` OPEN 1/2). Keeping
+/// the codes and next evidence steps next to the painter records the
+/// negative: no shell value reaches these rects, so they stay silent
+/// instead of growing an invented caption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingOpenCaption {
+    /// `IDC_TEXT_SWAIT_INSTNAME`, no code immediate in the whole image.
+    InstrumentName,
+    /// `IDC_IMAGE_SWAIT_NOTICE_TEXT`, imageless; its content comes from
+    /// the untraced dialog `+0x46c` fill.
+    Notice,
+}
+
+impl WaitingOpenCaption {
+    /// Control code the caption would need a source for.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::InstrumentName => 0x1640_0019,
+            Self::Notice => 0x1650_0062,
+        }
+    }
+
+    /// Next evidence step that can lift this caption out of OPEN.
+    #[must_use]
+    pub const fn next_evidence_step(self) -> &'static str {
+        match self {
+            Self::InstrumentName => concat!(
+                "full-image scan finds zero immediates for 0x16400019; trace the cached ",
+                "pointer/array reader or record the negative, then pin 4006 SetInstrument"
+            ),
+            Self::Notice => concat!(
+                "read the content behind the 0x50b320 call on dialog +0x46c, file 0xbca0f, ",
+                "and pin the writer that fills it"
+            ),
+        }
+    }
+}
+
+/// Which decorative effect layer the exe's Waiting toggle selects.
+/// The 7.55 init sets global `0x7789e0` to 1 (`FUN_00495110`, file
+/// `0x914b`), so BOTTOM is the default. The two staged buttons
+/// `WAIT_TOP_EFFECT_CODE`/`WAIT_BOTTOM_EFFECT_CODE` write 0/1
+/// (`FUN_004b7c60`, files `0xb7e4e`/`0xb7e5a`) and the toggle mapper
+/// lights exactly the pressed control (`FUN_0048c810`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitingEffect {
+    /// `IDC_BUTTON_SWAIT_TOPEFFECT`: flag 0, Playing layer 1.
+    Top,
+    /// `IDC_BUTTON_SWAIT_BOTTOMEFFECT`: flag 1, Playing layer 2.
+    #[default]
+    Bottom,
+}
+
+impl WaitingEffect {
+    /// Effect selected by a staged Waiting button code (`None` for
+    /// every other control). Mirrors the exe's two-code comparison.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            WAIT_TOP_EFFECT_CODE => Some(Self::Top),
+            WAIT_BOTTOM_EFFECT_CODE => Some(Self::Bottom),
+            _ => None,
+        }
+    }
+
+    /// Staged control code of this effect.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::Top => WAIT_TOP_EFFECT_CODE,
+            Self::Bottom => WAIT_BOTTOM_EFFECT_CODE,
+        }
+    }
+
+    /// Note-effect layer in the Playing renderers (`flag + 1`, files
+    /// `0x4e792b`/`0x4ee6db`/`0x4f2a9b`). The layer is a pure pin; no
+    /// Playing pixel path consumes it yet.
+    #[must_use]
+    pub const fn note_layer(self) -> u8 {
+        match self {
+            Self::Top => 1,
+            Self::Bottom => 2,
+        }
+    }
+}
+
+/// Top/bottom effect button codes from `STATE_WAITING` (`ControlList`
+/// names `Wait_Btn_EffectTop/Bottom`).
+pub const WAIT_TOP_EFFECT_CODE: u32 = 0x1620_1020;
+pub const WAIT_BOTTOM_EFFECT_CODE: u32 = 0x1620_1021;
+
+/// Staged control ids of the two effect toggles.
+const WAIT_EFFECT_IDS: [&str; 2] = [
+    "IDC_BUTTON_SWAIT_TOPEFFECT",
+    "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+];
+
+/// Waiting chat tab selected by the four `STATE_WAITING` buttons
+/// `IDC_BUTTON_SWAIT_CHAT_ALL/FRIEND/GUILD/WHISPER` (`0x1620100E..11`).
+/// `FUN_004b7c60` arms them as one four-control toggle group
+/// (`FUN_0048c810` with base `0x1620100e`, count 4) and writes zero to
+/// the dialog's `+0x298` word on every tab; the WHISPER arm also zeroes
+/// the 256-byte draft buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitingChatChannel {
+    /// Room chat (`0x1620100E`), also the Waiting setup default.
+    #[default]
+    All,
+    /// Friend chat (`0x1620100F`).
+    Friend,
+    /// Guild chat (`0x16201010`).
+    Guild,
+    /// Whisper chat (`0x16201011`); additionally clears the draft.
+    Whisper,
+}
+
+impl WaitingChatChannel {
+    /// Tab selected by one staged control code (`None` for other codes).
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0x1620_100E => Some(Self::All),
+            0x1620_100F => Some(Self::Friend),
+            0x1620_1010 => Some(Self::Guild),
+            0x1620_1011 => Some(Self::Whisper),
+            _ => None,
+        }
+    }
+
+    /// Staged control code of this tab.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::All => 0x1620_100E,
+            Self::Friend => 0x1620_100F,
+            Self::Guild => 0x1620_1010,
+            Self::Whisper => 0x1620_1011,
+        }
+    }
+}
+
+/// Difficulty and speed behind the `LEVEL` badge: the two bytes the
+/// exe's frame formula reads (`0x7789e7` difficulty, `0x7789e9`
+/// speed, struct `0x7789d8`).
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitingLevel {
     /// Difficulty code (`Difficulty::from_code`).
@@ -389,6 +545,7 @@ pub fn paint_waiting_scene_with_confirm(
     // the backdrop pass before it selected its own record.
     paint_waiting_confirm_face(frame, art, is_room_master, confirm.armed);
     paint_waiting_seat_marks(frame, &seats, art);
+    paint_waiting_stamp(frame, art, captions.wait_stamp_lit);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, art, captions);
     } else {
@@ -412,6 +569,10 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || id == waiting_confirm_control_id(false)
         || WAITING_CHANNEL_NUMBER_IDS.contains(&id)
         || WAITING_ROOM_NUMBER_IDS.contains(&id)
+        || WAIT_EFFECT_IDS.contains(&id)
+        || WAIT_CHAT_TAB_IDS.contains(&id)
+        || WAIT_MESSENGER_LAMP_IDS.contains(&id)
+        || WAIT_STAMP_IDS.contains(&id)
 }
 
 /// Header class chips have no staged wire source. The p343 matched exe
@@ -746,6 +907,12 @@ pub(crate) struct StagedSeat {
     pub(crate) has_song: bool,
     /// This member's `4035`/`4037` music-state byte says a download runs.
     pub(crate) downloading: bool,
+    /// Music-state 2 (`NoAccess`) arms the seat's NoGem plate
+    /// (exe seat `+0x217c`, refresh slot 7).
+    pub(crate) no_gem: bool,
+    /// A nonzero free-pass word arms the PC-room badge
+    /// (exe seat `+0x212c`, refresh slot 8).
+    pub(crate) pc_room: bool,
 }
 
 /// Seat parents of the `SET 0x0C 0x00015000` seat template, in seat
@@ -778,6 +945,10 @@ enum SeatIndicator {
     ReadyPlate,
     /// `Wait_NoMusicImage.ojs`: the room names no song yet.
     NoSong,
+    /// `Wait_NoGemImage.ojs`: music-state 2, the song needs a gem.
+    NoGem,
+    /// `Wait_PCRoomMark.ojs`: a nonzero free-pass word.
+    PCRoom,
     /// `Wait_Playing.ojs`: the member is playing.
     Playing,
     /// `Wait_Downloding.ojs`: the member is downloading the room song.
@@ -794,6 +965,8 @@ impl SeatIndicator {
             SeatIndicator::MasterStar => "Wait_BossMark.ojs",
             SeatIndicator::ReadyPlate => "Wait_ReadyText.ojs",
             SeatIndicator::NoSong => "Wait_NoMusicImage.ojs",
+            SeatIndicator::NoGem => "Wait_NoGemImage.ojs",
+            SeatIndicator::PCRoom => "Wait_PCRoomMark.ojs",
             SeatIndicator::Playing => "Wait_Playing.ojs",
             SeatIndicator::DownloadingBadge => "Wait_Downloding.ojs",
             SeatIndicator::DownloadingBar => "Wait_Downloding_Bar.ojs",
@@ -811,6 +984,8 @@ impl SeatIndicator {
             SeatIndicator::MasterStar => seat.master.then_some(1),
             SeatIndicator::ReadyPlate => seat.ready.then_some(1),
             SeatIndicator::NoSong => (!seat.has_song).then_some(1),
+            SeatIndicator::NoGem => seat.no_gem.then_some(1),
+            SeatIndicator::PCRoom => seat.pc_room.then_some(1),
             SeatIndicator::Playing => seat.playing.then_some(1),
             SeatIndicator::DownloadingBadge | SeatIndicator::DownloadingBar => {
                 seat.downloading.then_some(1)
@@ -819,23 +994,27 @@ impl SeatIndicator {
     }
 }
 
-/// Indicator body behind one seat-template sprite name. Bodies with no
-/// pinned flag return `None` and stay dark:
+/// Indicator body behind one seat-template sprite name. The exe's
+/// seat refresh (`FUN_004b2e30` -> `FUN_0052a2b0`, dossier
+/// `ev_ee564ef6...`) stages the twelve authored children by index; the
+/// child vector includes the two text/avatar children, so slots 7/8/11
+/// are `Wait_NoGemImage.ojs`, `Wait_PCRoomMark.ojs` and
+/// `Wait_Playing.ojs`. Slot 7 arms on `music_state == 2` (NoAccess),
+/// slot 8 on a nonzero free-pass word, slot 11 on playing-state 1.
+/// Bodies with no pinned flag return `None` and stay dark:
 ///
-/// - `Wait_PCRoomMark.ojs` — PC-room badge; the wire carries no
-///   matching field (OPEN: find the flag the exe reads).
-/// - `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` — the member's
-///   `music-state=4` download badge and bar, pinned by matched-ab-339.
 /// - `Waiting_P2P_Image.ojs` — P2P versus banner; needs the room's
 ///   venue class (OPEN).
-/// - `Wait_NoGemImage.ojs` — gem-less marker; `RoomMember.gem` exists,
-///   but which value arms the plate is untraced (OPEN).
+/// - `Wait_ReadyWindow.ojs` team frames come from the authored team
+///   plate (already staged by the cover painter), not this flag pass.
 fn seat_indicator(sprite: &str) -> Option<SeatIndicator> {
     [
         SeatIndicator::TeamPlate,
         SeatIndicator::MasterStar,
         SeatIndicator::ReadyPlate,
         SeatIndicator::NoSong,
+        SeatIndicator::NoGem,
+        SeatIndicator::PCRoom,
         SeatIndicator::Playing,
         SeatIndicator::DownloadingBadge,
         SeatIndicator::DownloadingBar,
@@ -920,6 +1099,12 @@ fn is_downloading(member: &o2jam_net::RoomMember) -> bool {
     member.music_state == o2jam_net::MusicState::Downloading.code()
 }
 
+/// Wire `music-state=2` is the exe's NoGem marker (`FUN_004b2e30`
+/// refresh slot 7, seat `+0x217c`).
+fn is_no_gem(member: &o2jam_net::RoomMember) -> bool {
+    member.music_state == o2jam_net::MusicState::NoAccess.code()
+}
+
 /// Staged seats in cover order: wire slot `i` owns cover `i`, and our
 /// own seat owns cover `member_id` when the 3003 snapshot does not
 /// list it. The p343 matched capture pins both: the slot-0 master
@@ -955,6 +1140,8 @@ pub(crate) fn staged_seats(room: &JoinedRoom, local_name: Option<&str>) -> Vec<S
             playing: own_slot.is_some_and(|member| member.playing_state != 0),
             has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
             downloading: own_slot.is_some_and(is_downloading),
+            no_gem: own_slot.is_some_and(is_no_gem),
+            pc_room: own_slot.is_some_and(|member| member.free_pass != 0),
         };
     }
     seats
@@ -975,6 +1162,8 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
             downloading: is_downloading(member),
+            no_gem: is_no_gem(member),
+            pc_room: member.free_pass != 0,
         },
         None if slot.state_code == RoomSlotState::Locked as i32 => StagedSeat {
             name: String::new(),
@@ -988,6 +1177,8 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             playing: false,
             has_song: false,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         },
         None => empty_staged_seat(),
     }
@@ -1007,6 +1198,8 @@ fn empty_staged_seat() -> StagedSeat {
         playing: false,
         has_song: false,
         downloading: false,
+        no_gem: false,
+        pc_room: false,
     }
 }
 
@@ -1150,6 +1343,9 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
+    paint_waiting_effect_toggle(frame, art, captions.effect);
+    paint_waiting_chat_tabs(frame, art, captions.chat_channel);
+    paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed(frame, speed, placements);
@@ -1401,6 +1597,92 @@ pub(crate) fn paint_waiting_team_highlight(
         if let Some((x, y)) = waiting_bnd_origin(placements, button, frame) {
             paint_cursor(frame, x + 6, y);
         }
+    }
+}
+
+/// Paint the two effect toggles as an exclusive pair: record 1 on the
+/// selected control, record 0 on the other. The exe's toggle mapper
+/// (`FUN_0048c810`) walks the two control codes and calls its frame
+/// setter with 1 for the pressed one and 0 for the other; the Waiting
+/// setup repeats the same selection from global `0x7789e0`
+/// (`FUN_004ba6c0`, files `0x4ba929`-`0x4ba94b`).
+fn paint_waiting_effect_toggle(frame: &mut Frame<'_>, art: &SceneArt, effect: WaitingEffect) {
+    paint_waiting_toggle_group(frame, art, &WAIT_EFFECT_IDS, effect.code());
+}
+
+/// Chat-tab ids and messenger-lamp ids from the `STATE_WAITING` block
+/// (`ControlList` codes `0x1620100E..11` and `0x1650006B/6C`).
+const WAIT_CHAT_TAB_IDS: [&str; 4] = [
+    "IDC_BUTTON_SWAIT_CHAT_ALL",
+    "IDC_BUTTON_SWAIT_CHAT_FRIEND",
+    "IDC_BUTTON_SWAIT_CHAT_GUILD",
+    "IDC_BUTTON_SWAIT_CHAT_WHISPER",
+];
+const WAIT_MESSENGER_LAMP_IDS: [&str; 2] = [
+    "IDC_IMAGE_SWAIT_MESSENGER_ALRAM",
+    "IDC_IMAGE_SWAIT_MESSENGER_ALRAM1",
+];
+/// WAITING stamp bodies (`0x16500067/68`) from the `STATE_WAITING` block.
+const WAIT_STAMP_IDS: [&str; 2] = ["IDC_IMAGE_SWAIT_WAITTEXTIMG", "IDC_IMAGE_SWAIT_WAITIMG_ANI"];
+
+/// Paint one exclusive toggle group: record 1 on the selected code,
+/// record 0 on every sibling. Both the effect pair and the four chat
+/// tabs are staged through `FUN_0048c810`.
+fn paint_waiting_toggle_group(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    ids: &[&str],
+    active_code: u32,
+) {
+    let shared = shared_sprite_names(&art.placements);
+    for id in ids {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == *id) else {
+            continue;
+        };
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        let record = usize::from(placed.code == active_code);
+        paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
+    }
+}
+
+/// Paint the four chat tabs: the exe's toggle mapper lights only the
+/// selected tab (`FUN_0048c810` with base `0x1620100e`, count 4).
+fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, channel: WaitingChatChannel) {
+    paint_waiting_toggle_group(frame, art, &WAIT_CHAT_TAB_IDS, channel.code());
+}
+
+/// Paint the two messenger lamps from one alert word. The exe starts
+/// an 800 ms animation on both controls (`FUN_004c0690`, file
+/// `0xc06e5`); the shell pins the ON interval but not the individual
+/// animation frames (OPEN: one qualified messenger-alert capture).
+fn paint_waiting_messenger_lamps(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
+    let alert_code = if lit { 0x1650_006B } else { 0 };
+    paint_waiting_toggle_group(frame, art, &WAIT_MESSENGER_LAMP_IDS, alert_code);
+}
+
+/// Paint the armed WAITING stamp: the exe shows the wait-text image
+/// and its animation control when another seat is playing, then clears
+/// both through the 5-second updater (`FUN_004ba6c0` files
+/// `0xba7b7`-`0xba89f`, `FUN_004b9dc0` files `0xba60e`-`0xba68a`).
+/// Record 0 is a pinned stand-in for the animation's own frames; no
+/// new frame sequence is invented.
+fn paint_waiting_stamp(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
+    if !lit {
+        return;
+    }
+    let shared = shared_sprite_names(&art.placements);
+    for id in WAIT_STAMP_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
     }
 }
 

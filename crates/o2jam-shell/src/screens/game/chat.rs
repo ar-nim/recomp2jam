@@ -2,6 +2,7 @@
 //! (#139). The game seam keeps flow, dialog focus, and song-caption
 //! lookup; this module owns chat words and their pure decisions.
 
+pub use super::super::paint::WaitingChatChannel;
 use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
 use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
 use crate::screen::Screen;
@@ -98,6 +99,36 @@ fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
         ),
         "h" | "help" => SlashCommand::Help,
         _ => SlashCommand::Chat(draft.to_owned()),
+    }
+}
+
+/// The two waiting messenger lamps (`0x1650006B/6C`) share one alert
+/// pulse: `FUN_004c0690` starts an 800 ms animation when its argument
+/// is non-zero and the lamp is idle, and resets both lamps to their
+/// rest frame when it is zero (files `0xc06a0`-`0xc071a`). The pulse
+/// source is a messenger notification; the shell has no backend for it,
+/// so the on-edge is a named seam and only the off-edge is wired to the
+/// staged MESSENGER press (dispatcher file `0xb81e0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct MessengerLamp {
+    alert_until_ms: Option<u64>,
+}
+
+impl MessengerLamp {
+    /// Start (or restart) the 800 ms alert pulse.
+    fn pulse(&mut self, now_ms: u64) {
+        self.alert_until_ms = Some(now_ms.saturating_add(800));
+    }
+
+    /// Reset to the rest frame.
+    fn clear(&mut self) {
+        self.alert_until_ms = None;
+    }
+
+    /// True while the alert animation stands at `now_ms`.
+    #[must_use]
+    fn lit_at(self, now_ms: u64) -> bool {
+        self.alert_until_ms.is_some_and(|end| now_ms < end)
     }
 }
 
@@ -219,6 +250,8 @@ pub(super) struct ChatState {
     room_panel: LobbyChatPanel,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
+    waiting_channel: WaitingChatChannel,
+    messenger_lamp: MessengerLamp,
     last_whisper_peer: Option<String>,
 }
 
@@ -262,6 +295,48 @@ impl ChatState {
     pub(super) fn clear_waiting(&mut self) {
         self.waiting_history.clear();
         self.waiting_draft.clear();
+        // The exe's Waiting setup arms CHAT_ALL and resets the lamps
+        // (files `0xba929`-`0xba94b`, `0xc06a0`).
+        self.waiting_channel = WaitingChatChannel::All;
+        self.messenger_lamp.clear();
+    }
+
+    /// Selected Waiting chat tab (exe `+0x298` toggle-group state).
+    #[must_use]
+    pub(super) const fn waiting_channel(&self) -> WaitingChatChannel {
+        self.waiting_channel
+    }
+
+    /// Commit one staged tab press: light the selected tab and clear
+    /// the exe's per-tab row word on every switch; WHISPER also clears
+    /// the 256-byte draft buffer. `false` leaves every word untouched.
+    pub(super) fn select_waiting_channel(&mut self, code: u32) -> bool {
+        let Some(channel) = WaitingChatChannel::from_code(code) else {
+            return false;
+        };
+        self.waiting_channel = channel;
+        self.waiting_history.clear();
+        if channel == WaitingChatChannel::Whisper {
+            self.waiting_draft.clear();
+        }
+        true
+    }
+
+    /// True while either messenger lamp shows its alert animation.
+    #[must_use]
+    pub(super) fn messenger_lamp_lit_at(&self, now_ms: u64) -> bool {
+        self.messenger_lamp.lit_at(now_ms)
+    }
+
+    /// Start the 800 ms messenger lamp alert (named seam: no shell
+    /// messenger notification backend feeds it yet).
+    pub(super) fn pulse_messenger_lamp(&mut self, now_ms: u64) {
+        self.messenger_lamp.pulse(now_ms);
+    }
+
+    /// Reset the messenger lamps (`FUN_004c0690(0)` on MESSENGER).
+    pub(super) fn clear_messenger_lamp(&mut self) {
+        self.messenger_lamp.clear();
     }
 
     /// Append one waiting 3012 row.

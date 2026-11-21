@@ -3426,8 +3426,9 @@ pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
     waiting_confirm_control_id, waiting_map_cycle, waiting_map_name, waiting_skillcount_text,
-    WaitingCaptions, WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSkillItem,
-    WaitingSkillSlots, WaitingSkillStep, WaitingSong, WAITING_MAP_DEFAULT_FRAMES,
+    WaitingCaptions, WaitingChatChannel, WaitingConfirmState, WaitingEffect, WaitingLevel,
+    WaitingMapStep, WaitingOpenCaption, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, WAITING_MAP_DEFAULT_FRAMES, WAIT_BOTTOM_EFFECT_CODE, WAIT_TOP_EFFECT_CODE,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
@@ -10577,6 +10578,8 @@ mod paint_tests {
             playing: false,
             has_song: true,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         };
         assert_eq!(
             staged_seat_text(&champion, Some("CHAMPION")),
@@ -10595,6 +10598,8 @@ mod paint_tests {
             playing: false,
             has_song: false,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         };
         assert_eq!(
             staged_seat_text(&challenger, Some("CHALLENGER")),
