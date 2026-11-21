@@ -154,7 +154,11 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
 `window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
 `ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
 `click_options_dialog` → `apply_scene_bgm` → `AudioBackend::set_scene_bgm`),
-`option_tabs_stage_all_three_sheets_when_archives_present`.
+`option_tabs_stage_all_three_sheets_when_archives_present`,
+`options_sheets_paint_rest_hover_and_active_frames` and
+`options_tab_press_holds_its_active_frame_until_release` (the three
+sheet frame states are a labeled stand-in; the census and next capture
+step live in `docs/dialog-frame-states.md`).
 
 ## Static wiring addendum (ticket #712, 7.55 sha256 `83a045…`)
 

@@ -26,6 +26,18 @@ hover or press frame yet.
 | `DIALOG_QUESTION2`, `DIALOG_WHISPER`, `DIALOG_EMOTION`, `DIALOG_CHANGETITLE`, `DIALOG_CHANGENICKNAME`, `DIALOG_MUSICINFO`, `DIALOG_SKILLIINFO`, `DIALOG_EVENT`, `DIALOG_CONFERENCE`, `DIALOG_GIFTVIEW`, `DIALOG_SHOPPINGBAG_ADD` | No — these parks have no live mount frame at all (ADR-0012 census) | First pin a live exe mount per sheet, then capture rest/hover/press in that host |
 | Six `DIALOG_MESSENGER_*` sheets | No — geometry-only parks (#622); census in `docs/messenger-frame-states.md` | Qualified mount capture, then the per-control A/B pair |
 
+### Options sheets (spec #314 story 20)
+
+The three option sheets inherit the same button language as the other
+dialogs, but B3/B4 carry rest frames only. Each sheet stays unpinned;
+no hover or press frame is claimed as exe-verified.
+
+| Sheet | States pinned by a pack? | Next evidence step |
+| --- | --- | --- |
+| `DIALOG_OPTION_KEY` | No — rest only | Hover/press `KEY1..7`, `3KEY_1..4`, `3KEY`/`7KEY`, `KEYTEST`, `KEYSET`/`SOUNDSET`/`GAMESET`, `DEFAULT`/`SAVE`/`EXIT` in one boot; name each record pair |
+| `DIALOG_OPTION_SOUND` | No — B3/B4 show only the four rest sliders and `DEFAULT`/`SAVE`/`EXIT` | Hover/press each Up/Down arm, the four knobs and the tab/footer buttons; name the record pair and confirm the down/up dispatch |
+| `DIALOG_OPTION_GAME` | No — rest only | Hover/press each NoteType/NoteTail/guide/EQ/Mode/Longnote/effect arm and the tab/footer buttons; name which settings draw frame 1 |
+
 ## Composition rules
 
 - The shared pointer snapshot is the hover source. It resolves through
@@ -36,6 +48,12 @@ hover or press frame yet.
   light a later sheet that reuses the same control code. The one-OK and
   quit sheets close on the click; their held face is not captured, so
   that timing stays OPEN rather than being modeled.
+- An open options sheet keeps its held record until release-inside;
+  the click then dispatches on the same staged control. This stand-in
+  keeps a tab switch from replacing the art under a held press. A
+  release outside the pressed control commits nothing; an unstaged
+  sheet has no held code and keeps its fallback button on release.
+  The down/up timing has no exe A/B pack yet (next step above).
 - Room/planet chrome hover is unchanged: the board resolver returns
   `None` while a modal owns it (`docs/hover.md`), and the dialog arm
   paints only the modal's staged controls on top.
@@ -51,3 +69,7 @@ hover or press frame yet.
   live power-disc → modal → pointer-snapshot → painter chain on a
   synthetic two-record OK body. It is a composition guard, not an exe
   pixel match; the pack row above stays OPEN until A/B capture exists.
+- `options_sheets_paint_rest_hover_and_active_frames` composes the same
+  chain on all three options sheets; `options_tab_press_holds_its_active_frame_until_release`
+  pins the held tab face through release. Both use synthetic two-record
+  bodies; all three sheet rows above stay OPEN.

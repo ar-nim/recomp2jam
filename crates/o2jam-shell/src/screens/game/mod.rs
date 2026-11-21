@@ -5026,6 +5026,12 @@ impl ScreenGame {
         if let Some((host, code)) = self.dialog_control_at(x, y) {
             self.dialog_frames.arm_press(host, code);
         }
+        if self.planet_modal() == Some(PlanetModal::Options) {
+            // The options sheets stay open while held, so their pressed
+            // record must survive until release. A tab switch on down
+            // would swap the staged art under the held face.
+            return;
+        }
         if self.bare_planet_board() {
             // Pinned press feedback (#111): the planet board arms the
             // press on down and fires the action on release-inside.
@@ -5044,12 +5050,30 @@ impl ScreenGame {
         self.click_dispatch(x, y);
     }
 
+    /// An options-sheet release commits the press only when it lands
+    /// back on the same staged control. An unstaged sheet holds no
+    /// control code, so its fallback button keeps the old down-anywhere
+    /// gesture and simply fires on release.
+    fn options_release_commits(
+        held: Option<(DialogHost, u32)>,
+        released_on: Option<(DialogHost, u32)>,
+    ) -> bool {
+        held.is_none_or(|control| Some(control) == released_on)
+    }
+
     /// Apply one release edge at native frame pixels: the shared
     /// helper behind the snapshot release edge (release-inside
     /// fires, pinned #111 arm 3).
     fn apply_pointer_up(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        let held = self.dialog_frames.held();
         self.dialog_frames.release();
+        if self.planet_modal() == Some(PlanetModal::Options) {
+            if Self::options_release_commits(held, self.dialog_control_at(x, y)) {
+                self.click_dispatch(x, y);
+            }
+            return;
+        }
         if self.bare_planet_board() {
             self.planet_pointer_up(x, y);
         }
@@ -17165,6 +17189,92 @@ mod game_tests {
         );
     }
 
+    #[test]
+    fn options_sheets_paint_rest_hover_and_active_frames() {
+        // Spec #314 story 20. Live chain: boot -> gear disc -> tab sheet
+        // -> pointer snapshot -> dialog hover/press ->
+        // `paint_dialog_frame_states`. Per-sheet hover/press packs are
+        // OPEN (`docs/dialog-frame-states.md`); the two-record figure is
+        // a synthetic stand-in for the exe's button language.
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+
+        let cover = pack_xrgb(0xFF, 0, 0);
+        let hover = pack_xrgb(0, 0, 0xFF);
+        let active = pack_xrgb(0, 0xFF, 0);
+
+        for (tab, code) in [
+            (PlanetOptionTab::Key, 0x2510_0001_u32),
+            (PlanetOptionTab::Sound, 0x2610_0001_u32),
+            (PlanetOptionTab::Game, 0x2F10_0001_u32),
+        ] {
+            stage_option_frame_button(&mut game, tab, code);
+            game.switch_option_tab(tab);
+
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), cover),
+                "{tab:?} rest"
+            );
+            game.ingest_snapshot(&InputSnapshot::motion_to(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), hover),
+                "{tab:?} hover"
+            );
+            game.ingest_snapshot(&InputSnapshot::press_at(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), active),
+                "{tab:?} active"
+            );
+            game.ingest_snapshot(&InputSnapshot::release_at(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), hover),
+                "{tab:?} release"
+            );
+            game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), cover),
+                "{tab:?} unhover"
+            );
+        }
+    }
+
+    #[test]
+    fn options_tab_press_holds_its_active_frame_until_release() {
+        // Spec #314 story 20. Same live chain as the per-sheet frame
+        // guard, with a tab-switch button: the held face must stay on
+        // the pressed tab until release, when the sheet flips. The
+        // down/up timing is a labeled stand-in (no exe A/B pack yet).
+        use super::super::side::{OPTION_KEY_SOUNDSET, OPTION_SOUND_GAMESET};
+        let mut game = ScreenGame::new();
+        stage_option_frame_button(&mut game, PlanetOptionTab::Key, OPTION_KEY_SOUNDSET);
+        stage_option_frame_button(&mut game, PlanetOptionTab::Sound, OPTION_SOUND_GAMESET);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Key);
+
+        game.ingest_snapshot(&InputSnapshot::motion_to(285, 150));
+        assert!(near_xrgb(
+            option_frame_pixel(&mut game),
+            pack_xrgb(0, 0, 0xFF)
+        ));
+
+        game.ingest_snapshot(&InputSnapshot::press_at(285, 150));
+        assert!(
+            near_xrgb(option_frame_pixel(&mut game), pack_xrgb(0, 0xFF, 0)),
+            "the held tab must paint its active record"
+        );
+        assert_eq!(
+            game.planet_option_tab(),
+            PlanetOptionTab::Key,
+            "the sheet flips on release, not under the held press"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::release_at(285, 150));
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+    }
+
     /// Synthetic sheet body: one blue block at the parsed backdrop
     /// anchor. Real `Dialog_*` bodies carry their frame origin as the
     /// record anchor (dumped from installed `Interface1.opi`), and the
@@ -17568,6 +17678,68 @@ mod game_tests {
             placements,
             HashMap::from([(backdrop.to_owned(), figure)]),
         );
+    }
+
+    /// Stage one options tab with a two-record button under a later-
+    /// painted cover, for rest/hover/active frame guards.
+    fn stage_option_frame_button(game: &mut ScreenGame, tab: PlanetOptionTab, code: u32) {
+        use crate::avatar::FigureLayer;
+        let cover_figure = |word: u16| {
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(
+                    &word.to_le_bytes().repeat(40 * 20),
+                    40,
+                    20,
+                )
+                .expect("cover test face"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let placement = |id: &str, code: u32, sprite: Option<&str>| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: sprite.map(str::to_owned),
+            rect: Rect {
+                x: 60,
+                y: 100,
+                w: 40,
+                h: 20,
+            },
+        };
+        game.load_planet_option_tab(
+            tab,
+            vec![
+                coded_dialog_backdrop(0xAAAA_0001, 217, 42),
+                placement("button", code, Some("option-button.ojs")),
+                placement("cover", 0, Some("option-cover.ojs")),
+            ],
+            HashMap::from([
+                (
+                    "option-button.ojs".to_owned(),
+                    chrome_two_layer_figure(40, 20),
+                ),
+                ("option-cover.ojs".to_owned(), cover_figure(0x7C00)),
+            ]),
+        );
+    }
+
+    /// Ink at the staged options button's sample pixel after one paint.
+    fn option_frame_pixel(game: &mut ScreenGame) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[150 * 800 + 285]
     }
 
     /// Open the options dialog on the planet board (gear disc
