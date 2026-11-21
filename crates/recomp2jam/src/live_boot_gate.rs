@@ -15,6 +15,7 @@
 mod live_boot_gate_tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -140,64 +141,113 @@ mod live_boot_gate_tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let mut order = Vec::new();
-
-            let authorize = read_frame(&mut stream);
-            order.push(authorize.id);
-            assert_eq!(authorize.id, Request::Authorize.id());
-            stream
-                .write_all(
-                    &AuthResponse {
-                        result_code: 0,
-                        tail: vec![],
-                    }
-                    .encode(),
-                )
-                .unwrap();
-            order.push(Response::Authorize.id());
-
-            let listed = read_frame(&mut stream);
-            order.push(listed.id);
-            assert_eq!(listed.id, Request::GetChannelList.id());
-            stream
-                .write_all(&ChannelList { channels }.encode())
-                .unwrap();
-            order.push(Response::GetChannelList.id());
-
-            let login = read_frame(&mut stream);
-            order.push(login.id);
-            assert_eq!(login.id, Request::ChannelLogin.id());
-            stream
-                .write_all(
-                    &ChannelLoginResponse {
-                        result_code: 0,
-                        restricted: Some(false),
-                    }
-                    .encode(),
-                )
-                .unwrap();
-            order.push(Response::ChannelLogin.id());
-
-            let rooms = read_frame(&mut stream);
-            order.push(rooms.id);
-            assert_eq!(rooms.id, Request::GetChannelInfo.id());
-            stream
-                .write_all(&RoomList { rooms: vec![] }.encode())
-                .unwrap();
-            order.push(Response::RoomList.id());
-
-            let fetched = read_frame(&mut stream);
-            order.push(fetched.id);
-            assert_eq!(fetched.id, Request::GetCharacterInfo.id());
-            let hero = CharacterInfo {
-                nickname: "gate".to_owned(),
-                ..Default::default()
-            };
-            stream.write_all(&hero.encode()).unwrap();
-            order.push(Response::GetCharacterInfo.id());
-            (hero, order)
+            serve_boot_frames(&mut stream, channels)
         });
         (port, server)
+    }
+
+    /// Gateway port, release handle and the joined answer clock.
+    type HeldBootGateway = (
+        u16,
+        mpsc::Sender<()>,
+        thread::JoinHandle<(CharacterInfo, Vec<u16>, Instant)>,
+    );
+
+    /// Same boot, but the socket stays open until the test releases it
+    /// after the OK click. The gateway records the instant of its 1003
+    /// answer and checks that no later frame arrives before release.
+    fn spawn_boot_gateway_channels_held(channels: Vec<ChannelState>) -> HeldBootGateway {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release, released) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let (hero, order) = serve_boot_frames(&mut stream, channels);
+            let answer_at = Instant::now();
+            assert!(
+                released.recv_timeout(Duration::from_secs(10)).is_ok(),
+                "the OK-click guard must release the gateway"
+            );
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut next = [0u8; 1];
+            match stream.peek(&mut next) {
+                Ok(0) | Err(_) => {}
+                Ok(_) => panic!("a gateway frame arrived after the 1003 answer"),
+            }
+            (hero, order, answer_at)
+        });
+        (port, release, server)
+    }
+
+    /// Serve one whole 1000/1001/1002/1003 exchange and return the
+    /// observed frame order plus the fetched character. Both gateway
+    /// spawns share this script so the quiet-window guard cannot drift
+    /// from the boot guard's wire order.
+    fn serve_boot_frames(
+        stream: &mut TcpStream,
+        channels: Vec<ChannelState>,
+    ) -> (CharacterInfo, Vec<u16>) {
+        let mut order = Vec::new();
+
+        let authorize = read_frame(stream);
+        order.push(authorize.id);
+        assert_eq!(authorize.id, Request::Authorize.id());
+        stream
+            .write_all(
+                &AuthResponse {
+                    result_code: 0,
+                    tail: vec![],
+                }
+                .encode(),
+            )
+            .unwrap();
+        order.push(Response::Authorize.id());
+
+        let listed = read_frame(stream);
+        order.push(listed.id);
+        assert_eq!(listed.id, Request::GetChannelList.id());
+        stream
+            .write_all(&ChannelList { channels }.encode())
+            .unwrap();
+        order.push(Response::GetChannelList.id());
+
+        let login = read_frame(stream);
+        order.push(login.id);
+        assert_eq!(login.id, Request::ChannelLogin.id());
+        stream
+            .write_all(
+                &ChannelLoginResponse {
+                    result_code: 0,
+                    restricted: Some(false),
+                }
+                .encode(),
+            )
+            .unwrap();
+        order.push(Response::ChannelLogin.id());
+
+        let rooms = read_frame(stream);
+        order.push(rooms.id);
+        assert_eq!(rooms.id, Request::GetChannelInfo.id());
+        stream
+            .write_all(&RoomList { rooms: vec![] }.encode())
+            .unwrap();
+        order.push(Response::RoomList.id());
+
+        let fetched = read_frame(stream);
+        order.push(fetched.id);
+        assert_eq!(fetched.id, Request::GetCharacterInfo.id());
+        let hero = CharacterInfo {
+            nickname: "gate".to_owned(),
+            ..Default::default()
+        };
+        stream.write_all(&hero.encode()).unwrap();
+        order.push(Response::GetCharacterInfo.id());
+        (hero, order)
     }
 
     /// Record the frame clock at every banner change in a window.
@@ -1736,6 +1786,71 @@ mod live_boot_gate_tests {
         game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
         assert_eq!(game.planet_modal(), None, "OK releases the held rows");
         assert_eq!(game.channel_rows(), [row]);
+    }
+
+    /// Ticket #696: the OK timing bracket of the relay notice.
+    /// Live caller chain: `main.rs::run_online` ->
+    /// `connect::connect_and_login_with_transport` (1000/1001/1002/1003
+    /// on the scripted gateway) -> `stage_channel_list_after_relay_gate`
+    /// -> `enter_screen(Channel)` -> `open_relay_down_dialog` -> OK at
+    /// the pinned (400,365) rect -> `dismiss_relay_down_dialog`.
+    /// Pin `64caf0c4…8ebd629bbec7208`: 1003 at 15:37:32, popup at :33,
+    /// no gateway frame in between. Here the gateway keeps the socket
+    /// open through the click and records the 1003 answer instant, so
+    /// the bracket is answer < sheet < OK with a quiet wire in the
+    /// whole window. No timeout is invented as an exe rule.
+    #[test]
+    fn relay_notice_ok_click_comes_after_the_1003_answer_with_no_wire_gap() {
+        let row = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        };
+        let (port, release, server) = spawn_boot_gateway_channels_held(vec![row]);
+        let (report, _gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::stage_channel_list_after_relay_gate(&mut game, report.channels.clone(), true);
+        assert!(
+            !game.relay_down_dialog_open(),
+            "boot keeps the notice pending"
+        );
+        assert!(game.enter_screen(Screen::Planet));
+        assert!(game.enter_screen(Screen::Channel));
+        let sheet_at = Instant::now();
+        assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
+        assert!(game.channel_rows().is_empty(), "rows wait behind the sheet");
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        let ok_at = Instant::now();
+        assert_eq!(game.planet_modal(), None, "OK dismisses the notice");
+        assert_eq!(game.channel_rows(), [row], "OK reveals the 1003 rows");
+
+        release.send(()).unwrap();
+        let (hero, order, answer_at) = server.join().unwrap();
+        stage_online_identity(&mut game, Some(&hero));
+
+        assert_eq!(
+            order,
+            [
+                Request::Authorize.id(),
+                Response::Authorize.id(),
+                Request::GetChannelList.id(),
+                Response::GetChannelList.id(),
+                Request::ChannelLogin.id(),
+                Response::ChannelLogin.id(),
+                Request::GetChannelInfo.id(),
+                Response::RoomList.id(),
+                Request::GetCharacterInfo.id(),
+                Response::GetCharacterInfo.id(),
+            ],
+            "no gateway frame between the 1003 answer and the OK click"
+        );
+        assert!(answer_at <= sheet_at, "the sheet follows 1003");
+        assert!(sheet_at <= ok_at, "OK follows the sheet");
     }
 
     /// Ticket #393: the blue "NORMAL mode only" sheet owns the

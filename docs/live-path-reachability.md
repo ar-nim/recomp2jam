@@ -79,6 +79,19 @@ button points come from the parsed `.bnd` placements; the two lobby
 faces keep their pinned e2e coordinates. Missing `install-root` skips
 the leg cleanly.
 
+## Relay notice wire bracket (ticket #696)
+
+`relay_notice_ok_click_comes_after_the_1003_answer_with_no_wire_gap`
+is a tier-2 scripted-gateway guard. Live chain:
+`main.rs::run_online` → `connect::connect_and_login_with_transport` →
+`stage_channel_list_after_relay_gate` → `enter_screen(Channel)` →
+`open_relay_down_dialog` → OK at (400,365) →
+`dismiss_relay_down_dialog`. The gateway holds the socket through the
+click, records the 1003 answer instant, and proves no later frame
+arrives between that answer and the OK click. It pins the bracket
+(answer < sheet < OK) from relay pin `64caf0c4…8ebd629bbec7208`
+without inventing an exe timeout.
+
 | Family | Guard |
 |---|---|
 | scene BACK/exits (`#734` class) | `live_click_waiting_back_sends_the_room_leave_from_boot` |
