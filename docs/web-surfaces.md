@@ -178,3 +178,111 @@ that path. The music shop is mixed: native rows plus a separate
   byte, and any order-id payload remain OPEN with steps 3–4 above.
 - `CWebDialogCtrl` instantiation is MFC-dispatched; its live caller chain
   stays OPEN with step 5.
+
+## EventBridge action-flag table (7.55, static)
+
+This section closes the statics leg of #753. It uses the same oracle and
+address convention as the version pin above: VA minus `0x400000` is the file
+offset. All behavior is described in our own words from Ghidra 12.2 facts;
+no original listing is reproduced.
+
+### Message-map arms
+
+A complete sweep of initialized `.text` finds two posts and two receiving
+arms per event message. The COM sink `FUN_00582280` posts `0x9095` at VA
+`0x5822a3` (file `0x1822a3`); the companion sink `FUN_00582220` posts `0x9096`
+at VA `0x582243` (file `0x182243`). The host window procedure arms are
+`FUN_0057f770`, which tests `0x9095` at VA `0x57f77c` (file `0x17f77c`), and
+`FUN_00580e40`, which tests `0x9096` at VA `0x580e4c` (file `0x180e4c`).
+Both arms call the same notify builder with type `0x12`, id `0x1bbe`, and a
+payload pointer; other messages go to `FUN_0057e240`. REA
+`ev_c348f01a3d8fb3501a35e936b01d55017f1ef76e2a1055a6c54de0609a5a4003`,
+`ev_3e3dd98327f2642114663eced592f7c20a3d5fb2ae8f5579e208e2b737f8d0be`,
+`ev_1ac5bc516ba76880a9d764222676c4a870b662b1dc9276a4400214d36931c0d3`,
+`ev_e1dffd5ae47638a82f9a1f463e7f651871b592330e3748ff0463abdb13effc55`.
+
+A two-byte sweep for `0x1bbe` found six byte matches and four code sites: the
+two producers in those arms (VA `0x57f79e` / `0x580e6e`, files `0x17f79e` /
+`0x180e6e`) and the two consumers below (VA `0x490a70` / `0x4cb3a8`, files
+`0x90a70` / `0xcb3a8`). The other two matches are instruction-interior call
+bytes in unrelated code, not comparisons. REA
+`ev_3241b811ea4b28234655f51964f1d36fbf6cdc3ce06be5d773d1d80d0e274afa`,
+`ev_d448ad1cd392b3fda0e1441102670f98b39cd181563319e8179ec9eb09ca46bc`,
+`ev_0980abc53160637e04a55f2540df3224240644782b8d752bbc811676afce02e4`,
+`ev_6820933d67b24fc268cfb90225e05c0f811257dea2581ee2764f6d831a399e1a`.
+
+### Payload forms
+
+- `FUN_00580600` reads the page property `SelectedUserNickName`, converts it
+  from wide characters to the process ANSI code page, and returns the byte
+  string used as the `0x1bbe` payload. REA
+  `ev_4a57c2b95816c5576c8e82660560d9d82c8c196359eeffb6b51d6c0ea00a90db`.
+- `FUN_005816e0` reads page properties `mid` and `mflag` (literals at VA
+  `0x64e080` and `0x64e084`, files `0x24e080` and `0x24e084`). It parses
+  `mid` as a decimal number, stores its low 16 bits as a short at payload
+  offset 0 and the first character of `mflag` as a byte at offset 2. REA
+  `ev_d96517d26f81f4032428a6ac24a5e7fdcfce7b4720c07240342671d8ccef34ee`,
+  `ev_624fd01a1cca41eee2acb5e38263fbd6c21d5a6651c442aca204fb4146ff98e9`.
+
+These are two distinct payload shapes on one notify id. The flag column below
+only applies to the second shape; the first shape carries a nickname string.
+
+### Table
+
+| Value | Action | Consumer | Evidence id |
+| --- | --- | --- | --- |
+| `0x9095`, ANSI nickname (no packed flag) | Opens the room chat sheet with the nickname staged as the whisper target; selects `IDC_BUTTON_SROOM_CHAT_WHISPER` (`0x13201011`, `docs/hover.md`) and stores chat mode 3 | `FUN_00490950` at VA `0x490950` tests `0x1bbe` at `0x490a70`; it calls `FUN_00490750` with the payload, then frees it | `ev_857fd8095877ebca7336ef51dc1afcfd5763ee018bee40534fa3c07fae37a541`, `ev_7a06eca890a7f0d39af3941187e2cfa097ffa81939e530baafc38ea6bc8314c9`, `ev_ee00e74f3f126989142a2f64a22b8a8aea792d858dc7304a89ee74fcc73df3b3`, `ev_e244069b9c04336246d110140ae461f26ee076e34ce4a1caefa2951ce7b770bc` |
+| `0x9096`, `mflag` byte `0x43` (`C`) | Adds the packed `mid` to a cash-priced shopping bag through the native cart helper; the helper reads the first price/balance slot and queues a native shopping-bag record | `FUN_004cb2b0` at `0x4cb2b0` tests `0x1bbe` at `0x4cb3a8`, unpacks `mid` and the flag, then calls `FUN_0053ad10(1, mid, flag)`; on success it posts control message `0x1a20005f` | `ev_9a633a77e42b02cc6f6aa13fe966bf325984c0f66e8fda27feef030c7210107e`, `ev_be7a0259222adb4dfd2b3687ae871a8fc224f0f44c95e544e217f98ebbb2bef3`, `ev_a90de7798b16094272a200cb802e667c1235cf078a8c1fe01391679e24df28ac` |
+| `0x9096`, `mflag` byte `0x47` (`G`) | Same cart helper, second price/balance slot; native call sites pair this byte with a Gem-balance notice at VA `0x64897c` (file `0x24897c`, CP949) | Same consumer and helper as the `C` row; the item-shop call sites choose `C`/`G` from two price fields and the user-shop site from a stored byte | `ev_9a633a77e42b02cc6f6aa13fe966bf325984c0f66e8fda27feef030c7210107e`, `ev_ef3791e29e587141788f35d8131d6e27b9d84bd669eda422a98a42e7be6ff7ea`, `ev_f7208fcdd19e4ed6646ec853f257bc86edd186ceaba60eabe447d15b6c1b213a` |
+| Any other `mflag` byte | No action: the helper's `C`/`G` branches are the only byte tests on this path, so it returns without staging a bag record | `FUN_0053ad10` byte tests; `FUN_004cb2b0` still posts the refresh control message | `ev_be7a0259222adb4dfd2b3687ae871a8fc224f0f44c95e544e217f98ebbb2bef3`, `ev_9a633a77e42b02cc6f6aa13fe966bf325984c0f66e8fda27feef030c7210107e` |
+
+The action helper takes a source selector as its first argument. Source 1 is
+the only value passed by the `0x1bbe` consumer; native item-shop and
+user-shop call sites pass sources 0 and 2 with the same two flag bytes, so the
+flag means price/currency choice, not a friend or invitation action. REA
+`ev_f7208fcdd19e4ed6646ec853f257bc86edd186ceaba60eabe447d15b6c1b213a`,
+`ev_ef3791e29e587141788f35d8131d6e27b9d84bd669eda422a98a42e7be6ff7ea`.
+
+### Nickname path and messenger cross-reference
+
+The `0x9095` nickname string reaches a native room-chat record: the consumer
+stages it into the record, calls the helper that activates one of the four
+chat buttons `0x1320100e`–`0x13201011`, and stores chat mode 3 through
+`FUN_00492940`. The whisper button is also handled by `FUN_00490870`, which
+selects the same button and stores the same mode on a press. REA
+`ev_7a06eca890a7f0d39af3941187e2cfa097ffa81939e530baafc38ea6bc8314c9`,
+`ev_e244069b9c04336246d110140ae461f26ee076e34ce4a1caefa2951ce7b770bc`.
+
+Where a whisper is actually sent, `docs/net-protocol.md` pins `2017 SendWhisper`
+C→S (recipient, then content), `2018` as its reply, and `2019 ReceiveWhisper`
+as the recipient's event. The exe has a `2017` opcode push (`0x7e1`) at VA
+`0x48fa02` (file `0x8fa02`) inside `FUN_0048f3a0`, whose `/w` branch copies the
+named recipient into a message buffer before queueing it. REA
+`ev_c0039591f203953c28676b5d54c3ddfc56ffe7daf53b24ceab878a7fad6478ce`,
+`ev_3442a87819ea2ac82715917b59a8e49ffcb0ec4f95a300f6d4dcaa02a8fb6a61`,
+`ev_c121aae87a7f3532a5859c606d85bd077815217cf1a954e6b56201f56b3a22af`.
+The static link from the staged room-chat record to that opcode remains OPEN
+(cell W1 below).
+
+### Named OPEN cells
+
+- **W1 — whisper send link.** The nickname is staged and the whisper button
+  selected; no resolved static call chain from that record to a `2017` send
+  builder was found. Next step: in the stopped-state rig, raise `0x9095` with
+  a known nickname, break on the `0x7e1` push at VA `0x48fa02`, and read the
+  recipient buffer plus the resulting wire body; compare with `2017` in
+  `docs/net-protocol.md`.
+- **F1 — page-side flag source.** `C`/`G` price-slot behavior is pinned, but
+  no live page was read to show which `mflag` string the page writes or which
+  wallet field each slot is named. Next step: use the local EventBridge stub
+  from "Named next evidence steps" item 2 to set `mid` and `mflag`, then
+  record the `0x1bbe` payload and the wallet delta.
+- **F2 — actions outside `C`/`G`.** No add-friend or room-invite value or
+  consumer exists at any of the four `0x1bbe` sites. Next step: inspect the
+  EventBridge type library or a live page's event properties for other
+  property values, then repeat the two-byte sweep on that build before
+  adding rows.
+- **F3 — currency naming.** The `G` branch's Korean notice names Gem; the
+  `C` branch's wallet/currency label is not named by a literal on this path.
+  Next step: pair a `C` fixture event with the `5028`/`5029` wallet snapshot
+  (`docs/shop-buy.md`) to identify the changed field.
