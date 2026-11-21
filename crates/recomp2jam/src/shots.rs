@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use o2jam_file::data_root::install_root;
 use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
@@ -309,11 +310,6 @@ const MUSICSELECT_FALLBACK_SONGS: [(u32, &str, &str); 4] = [
 /// blimps. Rides the room's arena word so the shot exercises the
 /// room-entry stage wiring end to end.
 const PLAYING_ARENA_STAGE: i32 = 2;
-
-/// Repository-local `install-root` (git-ignored game data).
-fn install_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
-}
 
 /// Side-screen stage data through the staging declaration: one
 /// full-canvas or bound State per side screen (`visit_side` +

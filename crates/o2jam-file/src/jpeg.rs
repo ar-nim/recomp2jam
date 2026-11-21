@@ -360,15 +360,14 @@ mod tests {
         assert_eq!(frame.buf[9 * 10 + 9], 0);
     }
 
-    /// Repository-local `install-root` (git-ignored game data).
+    /// Runtime install root's interface archive (git-ignored game data).
     fn interface_archive() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Interface1.opi")
+        crate::data_root::install_root().join("O2Jam/Image/Interface1.opi")
     }
 
-    /// Repository-local `Music` chart folder (git-ignored game data).
+    /// Runtime install root's `Music` chart folder.
     fn music_folder() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam/Music")
+        crate::data_root::install_root().join("O2Jam/Music")
     }
 
     /// Real OJN covers end to end: all 14 shipped 7.55 charts (old
