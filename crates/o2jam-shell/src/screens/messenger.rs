@@ -75,6 +75,18 @@ pub const MESSENGER_HOSTS: [MessengerHost; 5] = [
 
 /// `DIALOG_MESSENGER_MAIN` block: 77 parsed rects.
 pub const MESSENGER_MAIN_BLOCK: &str = "DIALOG_MESSENGER_MAIN";
+
+/// No qualified exe pack mounts the main sheet; its 77 rects are a
+/// geometry park only. This marker stays `None` until a capture names
+/// the host, frame and every tab (#656).
+pub const MESSENGER_MAIN_MOUNT_PIN: Option<&'static str> = None;
+
+/// Next evidence that could mount the main sheet. No list or tab state
+/// is invented from the parked art (spec #315 M10).
+pub const MESSENGER_MAIN_MOUNT_NEXT_STEP: &str = concat!(
+    "N-FRAMES plus N-BACKEND: one qualified exe frame with the main sheet ",
+    "mounted, naming the friend, note and four chat tabs at its 77 rects"
+);
 /// `DIALOG_MESSENGER_FRIENDADD` block: 6 parsed rects.
 pub const MESSENGER_FRIENDADD_BLOCK: &str = "DIALOG_MESSENGER_FRIENDADD";
 /// `DIALOG_MESSENGER_QUESTION` block: 7 parsed rects.

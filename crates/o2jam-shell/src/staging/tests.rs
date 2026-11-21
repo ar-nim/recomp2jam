@@ -1462,6 +1462,51 @@ fn messenger_sheet_rows_stage_the_pinned_rect_counts() {
     }
 }
 
+/// Spec #315 M10: the 77 parsed MAIN rects are an NA-CENSUS geometry park,
+/// not a live mount. The guard reads the same archive-backed staging chain
+/// as live boot and keeps the exe mount pin absent until a qualified frame
+/// names the host and every tab. Install data is local-only: CI skips.
+#[test]
+fn messenger_main_sheet_stays_a_seventy_seven_rect_park_without_a_mount() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes
+    // -> stage_interface_scenes -> stage_messenger_sheets ->
+    // staging::stage_messenger_sheet -> resolve_bound_row -> parse_bnd.
+    // The staged geometry is the whole claim; no host press mounts it.
+    // Archives absent -> skip cleanly (CI has no game data).
+    use crate::screens::messenger::{MESSENGER_MAIN_MOUNT_NEXT_STEP, MESSENGER_MAIN_MOUNT_PIN};
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let row = StageRow {
+        state: State::Planet,
+        block: Some(MESSENGER_MAIN_BLOCK),
+        archive: StagingArchive::Interface,
+        arm: PlacementArm::Bound,
+        extra_sprites: &[],
+    };
+    let mut report = StageReport::default();
+    let resolved = resolve_bound_row(&interface, &row, &mut report)
+        .unwrap_or_else(|| panic!("{MESSENGER_MAIN_BLOCK} did not resolve"));
+    assert_eq!(resolved.bind.rects.len(), 77, "MAIN parsed rect count");
+    let staged = stage_messenger_sheet(&interface, MessengerSheet::Main, StageContext::default());
+    let art = staged
+        .art
+        .unwrap_or_else(|| panic!("{MESSENGER_MAIN_BLOCK} staged nothing"));
+    assert!(art.placements.len() >= 77, "MAIN staged placements");
+    assert_eq!(
+        MESSENGER_MAIN_MOUNT_PIN, None,
+        "no exe frame mounts the 77-rect main sheet"
+    );
+    assert!(
+        MESSENGER_MAIN_MOUNT_NEXT_STEP.contains("N-FRAMES")
+            && MESSENGER_MAIN_MOUNT_NEXT_STEP.contains("N-BACKEND"),
+        "activation step names both missing evidence legs: {MESSENGER_MAIN_MOUNT_NEXT_STEP}"
+    );
+}
+
 /// Spec #315 story 13: each Messenger sheet's `BOUND` block authors
 /// children relative to its frame rect, so staging must add the parsed
 /// frame origin to every child without moving the frame itself.
