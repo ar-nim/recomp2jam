@@ -14,12 +14,30 @@ use o2jam_shell::{GameLoop, MenuKey, ScreenGame};
 
 const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 
+/// Second identity landing plus shop open must stay well under the
+/// measured 135 ms release baseline (debug baseline: 490 ms).
+const SECOND_LANDING_AND_OPEN_BUDGET: Duration = Duration::from_millis(75);
+
+fn bench_character() -> CharacterInfo {
+    CharacterInfo {
+        equipment: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ..CharacterInfo::default()
+    }
+}
+
 fn install_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
 }
 
 fn avatar_path() -> PathBuf {
     install_root().join(AVATAR_ARCHIVE)
+}
+
+/// Walk from the splash to the lobby that hosts the shop button.
+fn walk_to_channel(game: &mut ScreenGame) {
+    game.menu_key(MenuKey::Back, true);
+    game.click_planet(136, 88);
+    assert_eq!(game.screen(), o2jam_shell::Screen::Channel);
 }
 
 /// Stage the live boot's shop prerequisites from installed data:
@@ -29,14 +47,8 @@ fn staged_shop_game(archive: Vec<u8>, table: o2jam_file::AvatarItemTable) -> Scr
     time("stage_live_scenes", || {
         crate::live_art::stage_live_scenes(&mut game)
     });
-    // The splash-to-channel walk a player takes before the shop click.
-    game.menu_key(MenuKey::Back, true);
-    game.click_planet(136, 88);
-    assert_eq!(game.screen(), o2jam_shell::Screen::Channel);
-    game.set_myroom_character(CharacterInfo {
-        equipment: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        ..CharacterInfo::default()
-    });
+    walk_to_channel(&mut game);
+    game.set_myroom_character(bench_character());
     time("set_avatar_source", || {
         game.set_avatar_source(archive, table);
     });
@@ -84,10 +96,11 @@ fn shop_open_profile_records_stage_durations() {
         "boot staging (art + avatar source): {:?}",
         staging.elapsed()
     );
+    let hero = bench_character();
     let mut identity_game = ScreenGame::new();
     for attempt in 1..=2 {
         time(&format!("stage_online_identity {attempt}"), || {
-            crate::stage_online_identity(&mut identity_game, None);
+            crate::stage_online_identity(&mut identity_game, Some(&hero));
         });
     }
     for attempt in 1..=4 {
@@ -99,4 +112,36 @@ fn shop_open_profile_records_stage_durations() {
         });
         println!("cycle {attempt}: open {opened:?} + leave {left:?}");
     }
+}
+
+/// The shop board's cost is paid before the click: boot stages the
+/// avatar source, then each channel login stages it again before the
+/// player can open the shop. Both landings must reuse one decoded
+/// source; the open itself must not restart archive work.
+#[test]
+fn second_identity_landing_and_shop_open_stay_under_budget() {
+    // Live caller chain:
+    //   main.rs::run_play -> stage_online_identity (boot)
+    //   -> session.rs::resolve_channel_login -> stage_online_identity
+    //   -> ScreenGame::set_decoded_avatar_source -> visit_side(Shop)
+    //   -> ScreenGame::restage_shop_avatar.
+    if !avatar_path().is_file() {
+        println!("skip: missing install-root avatar.opa");
+        return;
+    }
+    let hero = bench_character();
+    let mut boot = ScreenGame::new();
+    crate::stage_online_identity(&mut boot, Some(&hero));
+
+    let mut game = ScreenGame::new();
+    let started = Instant::now();
+    crate::stage_online_identity(&mut game, Some(&hero));
+    walk_to_channel(&mut game);
+    assert!(game.visit_side(SideScreen::Shop));
+    let elapsed = started.elapsed();
+    println!("second landing + open: {elapsed:?} (budget {SECOND_LANDING_AND_OPEN_BUDGET:?})");
+    assert!(
+        elapsed <= SECOND_LANDING_AND_OPEN_BUDGET,
+        "repeated identity staging must reuse the decoded avatar source"
+    );
 }

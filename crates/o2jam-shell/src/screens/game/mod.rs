@@ -17,6 +17,7 @@ mod ui_effect;
 mod waiting;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
@@ -34,9 +35,10 @@ use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
-    avatar_item_by_id, load_shop_portraits, load_worn_figure, ojn_cover_figure, AvatarFigure,
-    ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
+    AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
+use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
@@ -893,7 +895,7 @@ pub struct ScreenGame {
     shop_avatar: Option<AvatarFigure>,
     /// Per-item goods portraits from the archive's slot-0 shop icon,
     /// keyed by item id so paged rows paint their own art (#363).
-    shop_item_portraits: HashMap<u32, AvatarFigure>,
+    shop_item_portraits: Arc<HashMap<u32, AvatarFigure>>,
     /// Last staged shop gift press ([`ShopGiftNoop`]); `None` until a
     /// gift button answers.
     shop_gift_noop: Option<ShopGiftNoop>,
@@ -918,14 +920,13 @@ pub struct ScreenGame {
     /// the Room panel paint, keyed by seat so each occupied slot
     /// paints its own member. `None` seats stay empty.
     waiting_figures: [Option<AvatarFigure>; 8],
-    /// Avatar archive plus item table backing the per-seat worn
-    /// figures (`None` until the launcher stages `--avatar-opa`):
-    /// every later `set_joined_room` restages the seats through it,
-    /// so peers wear their wire equipment as soon as the snapshot
-    /// lands. The self seat still needs the fetched character
-    /// (`set_myroom_character`) — without it only the peer seats
-    /// stage.
-    avatar_source: Option<(Vec<u8>, AvatarItemTable)>,
+    /// Decoded avatar archive backing the per-seat worn figures and
+    /// the shop catalog (`None` until the launcher or identity staging
+    /// lands one). Shared bytes let repeated landings stage without
+    /// re-reading or re-decoding the archive; every later
+    /// `set_joined_room` restages the seats through it. The self seat
+    /// still needs the fetched character (`set_myroom_character`).
+    avatar_source: Option<Arc<AvatarSource>>,
     /// Worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
     /// `avatar.opa` for the Result screen. `None` paints no figure.
@@ -1205,7 +1206,7 @@ impl ScreenGame {
             shop: ShopState::default(),
             wallet: WalletState::default(),
             shop_avatar: None,
-            shop_item_portraits: HashMap::new(),
+            shop_item_portraits: Arc::new(HashMap::new()),
             shop_gift_noop: None,
             music_shop: MusicShopState::default(),
             side_placements: Vec::new(),
@@ -5573,14 +5574,21 @@ impl ScreenGame {
     /// keeps every row blank live (ticket #199 diagnose leg — today
     /// only the shop catalog rode this landing, ticket #191).
     pub fn set_avatar_source(&mut self, archive: Vec<u8>, table: AvatarItemTable) -> &mut Self {
+        self.set_decoded_avatar_source(&Arc::new(AvatarSource::with_table(archive, table)))
+    }
+
+    /// Stage a source decoded once by [`crate::avatar_source`]. The
+    /// catalog, portraits, seats, and shop pane read the same shared
+    /// bytes; no landing decodes the archive again.
+    pub fn set_decoded_avatar_source(&mut self, source: &Arc<AvatarSource>) -> &mut Self {
         // The shop board rides the same `Itemdata_Korea.dat` table as
         // the avatar source (server-authoritative catalog join):
         // stage it here so the live board is never empty after the
         // avatar archive lands.
-        self.shop.set_catalog(&table);
-        self.shop_item_portraits = load_shop_portraits(&archive, &table);
-        self.myroom_items = Some(table.clone());
-        self.avatar_source = Some((archive, table));
+        self.shop.set_catalog(source.table());
+        self.shop_item_portraits = Arc::clone(source.shop_portraits());
+        self.myroom_items = Some(source.table().clone());
+        self.avatar_source = Some(Arc::clone(source));
         self.restage_waiting_figures();
         self.restage_shop_avatar();
         self
@@ -5590,14 +5598,14 @@ impl ScreenGame {
     /// (no-op without one): called when the source lands and on every
     /// later join.
     fn restage_waiting_figures(&mut self) {
-        let Some((archive, table)) = self.avatar_source.as_ref() else {
+        let Some(source) = self.avatar_source.as_deref() else {
             return;
         };
         stage_seat_figures(
             &self.waiting,
             &self.myroom_character,
-            archive,
-            table,
+            source.archive(),
+            source.table(),
             &mut self.waiting_figures,
         );
     }
@@ -5789,12 +5797,13 @@ impl ScreenGame {
     /// through it when a room is mounted. A missing source or an
     /// unstackable table keeps the old figures, never blanking them.
     fn restage_worn_figure(&mut self) {
-        if let (Some((archive, table)), Some(character)) =
-            (self.avatar_source.as_ref(), self.myroom_character.as_ref())
-        {
+        if let (Some(source), Some(character)) = (
+            self.avatar_source.as_deref(),
+            self.myroom_character.as_ref(),
+        ) {
             let figure = load_worn_figure(
-                archive,
-                table,
+                source.archive(),
+                source.table(),
                 &character.equipment,
                 character.gender == Gender::Male,
             );
@@ -6419,7 +6428,7 @@ impl ScreenGame {
     /// `None` without a preview, staged table, or character.
     #[must_use]
     pub fn shop_preview_equipment(&self) -> Option<[i32; EQUIPMENT_SLOTS]> {
-        let table = self.avatar_source.as_ref().map(|(_, table)| table)?;
+        let table = self.avatar_source.as_deref()?.table();
         let character = self.myroom_character.as_ref()?;
         let item_id = self.shop.try_on()?;
         let row = avatar_item_by_id(table, item_id)?;
@@ -6445,11 +6454,11 @@ impl ScreenGame {
     /// pane (never blanking it); without a pane the art stays alone.
     fn restage_shop_avatar(&mut self) {
         let staged = self.shop_preview_figure().or_else(|| {
-            let (archive, table) = self.avatar_source.as_ref()?;
+            let source = self.avatar_source.as_deref()?;
             let character = self.myroom_character.as_ref()?;
             let figure = load_worn_figure(
-                archive,
-                table,
+                source.archive(),
+                source.table(),
                 &character.equipment,
                 character.gender == Gender::Male,
             );
@@ -6464,10 +6473,15 @@ impl ScreenGame {
     /// when the preview is unresolvable or unstackable — the pane
     /// then keeps the equipped figure).
     fn shop_preview_figure(&self) -> Option<AvatarFigure> {
-        let (archive, table) = self.avatar_source.as_ref()?;
+        let source = self.avatar_source.as_deref()?;
         let character = self.myroom_character.as_ref()?;
         let equipment = self.shop_preview_equipment()?;
-        let figure = load_worn_figure(archive, table, &equipment, character.gender == Gender::Male);
+        let figure = load_worn_figure(
+            source.archive(),
+            source.table(),
+            &equipment,
+            character.gender == Gender::Male,
+        );
         (!figure.is_empty()).then_some(figure)
     }
 
@@ -14053,7 +14067,7 @@ mod game_tests {
         walk_to_lobby(&mut game, Screen::Room);
         game.set_myroom_items(myroom_test_table());
         game.set_myroom_character(character);
-        game.shop_item_portraits.insert(
+        Arc::make_mut(&mut game.shop_item_portraits).insert(
             u32::try_from(JACKET_ITEM_ID).unwrap_or(0),
             solid_test_figure([0x00, 0x7C]),
         );

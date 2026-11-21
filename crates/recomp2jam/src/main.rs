@@ -1496,8 +1496,10 @@ fn stage_online_rooms(game: &mut o2jam_shell::ScreenGame, rooms: Vec<o2jam_net::
 /// stacks from the installed `avatar.opa` with the hero's own equipment
 /// and gender (the same stack the shots walk stages), and the archive
 /// becomes the waiting-seat source so the self seat and every later
-/// peer join restage through it. The item-shop catalog rides the
-/// same `Itemdata_Korea.dat` table, so it stages on every boot that
+/// peer join restage through it. The decoded source is cached once per
+/// install root, so the boot and channel-login landings share it (#755).
+/// The item-shop catalog rides the same `Itemdata_Korea.dat` table, so
+/// it stages on every boot that
 /// lands the installed archive — including the list-only default
 /// (no channel, no fetch; ticket #191 reopen). The MyRoom data path
 /// rides the same two stagings (ticket #199 diagnose leg, named so a
@@ -1533,40 +1535,32 @@ fn stage_online_identity(
         }
     }
 
-    let Ok((archive, table)) = connect::read_avatar_source(
-        install_root()
-            .join(INSTALLED_AVATAR_OPA)
-            .to_string_lossy()
-            .as_ref(),
-    ) else {
+    let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) else {
         tracing::debug!(
             "avatar.opa missing or unparsable; identity readouts stage, figures stay empty"
         );
         return;
     };
     if let Some(hero) = character {
-        match connect::stack_worn_figure(
-            &archive,
+        let figure = connect::stack_from_decoded_source(
+            &source,
             &hero.equipment,
             hero.gender == o2jam_net::Gender::Male,
-        ) {
-            Ok(figure) if !figure.is_empty() => {
-                // The Room lobby slot and the Result banner show the same
-                // worn stack.
-                game.load_room_avatar(figure.clone());
-                game.load_avatar(figure);
-            }
-            Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
-            Err(source) => {
-                tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
-            }
+        );
+        if !figure.is_empty() {
+            // The Room lobby slot and the Result banner show the same
+            // worn stack.
+            game.load_room_avatar(figure.clone());
+            game.load_avatar(figure);
+        } else {
+            tracing::debug!("character equipment stacks empty; figure slots stay empty");
         }
     }
     // The shop board rides the same `Itemdata_Korea.dat` table as the
     // avatar source (server-authoritative catalog join): stage it here
     // so the live board is never empty after the avatar archive lands,
     // even on the default boot that fetches no character (no channel).
-    game.set_avatar_source(archive, table);
+    game.set_decoded_avatar_source(&source);
 }
 
 /// Song index under `install-root` (the 7.55 catalog the select-music
@@ -1692,10 +1686,6 @@ fn installed_music_state(music_id: u16) -> o2jam_net::MusicState {
         .is_some_and(|seat| seat.is_installed(music_id));
     o2jam_net::MusicState::for_installed(installed)
 }
-
-/// Installed `avatar.opa` image the online identity figure stacks
-/// from (read-only, like the other archives).
-const INSTALLED_AVATAR_OPA: &str = "O2Jam/Image/avatar.opa";
 
 /// Stack the worn avatar figure into a windowed game, if requested.
 fn setup_avatar(
@@ -2537,8 +2527,9 @@ mod cli_build_tests {
         // avatar.opa with the hero's equipment) makes the Room scene
         // paint the avatar slot; without the staging the same slot
         // stays empty. Skips when install-root is absent.
-        if !install_root().join(INSTALLED_AVATAR_OPA).exists() {
-            println!("skip: missing install-root {INSTALLED_AVATAR_OPA}");
+        let avatar_relative = o2jam_shell::avatar_source::AVATAR_ARCHIVE_RELATIVE;
+        if !install_root().join(avatar_relative).exists() {
+            println!("skip: missing install-root {avatar_relative}");
             return;
         }
         // The live tester2 row (`t_o2jam_item` USER_INDEX_ID=2,

@@ -7714,7 +7714,16 @@ pub(super) mod session_tests {
                     .encode(),
                 )
                 .unwrap();
-            assert_quiet(&mut stream);
+            // The 2001 replay enters Room and arms the documented 07DA
+            // poll. The old quiet check here only held when avatar
+            // staging outlasted its 150 ms window (#755).
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::GetUserList.id()
+            );
+            stream
+                .write_all(&encode_frame(o2jam_net::Response::GetUserList as u16, &[]))
+                .unwrap();
         });
         crate::stage_channel_list_after_relay_gate(&mut session.game, held.clone(), true);
         assert!(session.game.relay_down_notice_pending());
