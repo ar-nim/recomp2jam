@@ -25,7 +25,9 @@
 # binaries cannot borrow another worktree's archives; the hidden arm
 # probes that its named root and fallback are unreachable before testing.
 # The 515-chart sweeps stay in the repo but are skipped in the per-merge
-# suite (issue #737); the staleness arm below runs them once a week.
+# suite (issue #737); the staleness arm below runs them once a week. The
+# real-window X11 proof is a rig-lane run (issue #738):
+# scripts/rig-x11-click-proof.sh, not a merge-gate verdict.
 #
 # Usage: scripts/gate-check.sh [--no-push|--dry-run] [--quick [--] [crate...]] [--hidden]
 #   --no-push / --dry-run : skip the push + verify step (for local proof runs).
@@ -48,7 +50,8 @@ UNREACHABLE_ROOT="$REPO_ROOT/.install-root.gate-unreachable"
 SWEEP_STAMP="$REPO_ROOT/.gate-full-sweep-stamp"
 SWEEP_SAMPLE="$REPO_ROOT/fixtures/full-pack-sample.sha256"
 SUITE_SKIPS=(--skip real_ojn_covers_extract_and_decode
-             --skip shipped_charts_set_bit26_only_on_tutorial_bgm_records)
+             --skip shipped_charts_set_bit26_only_on_tutorial_bgm_records
+             --skip x11_arm_routes_click_through_real_game)
 
 no_push=0
 quick=0

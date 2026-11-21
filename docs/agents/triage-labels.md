@@ -125,7 +125,9 @@ catches things, not everywhere:
   mandatory before every push. The 515-chart sweeps are excluded from the
   suite; a hash-pinned dozen-chart sample is checked every merge, and the
   full pack sweep runs when `.gate-full-sweep-stamp` is absent or older
-  than seven days (issue #737; no scheduler).
+  than seven days (issue #737; no scheduler). The real-window X11 proof
+  is excluded too; run it from the rig lane with
+  `scripts/rig-x11-click-proof.sh` (issue #738).
 - **Hidden arm on demand:** `--hidden` when a diff touches data-dependent
   guards but the run is not a merge; the hidden arm also runs nightly.
 

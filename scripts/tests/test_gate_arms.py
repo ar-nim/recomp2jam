@@ -85,6 +85,29 @@ class GateArmTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("real_ojn_covers_extract_and_decode", self.log.read_text(encoding="utf-8"))
 
+    def test_unit_suite_excludes_the_real_window_click_proof(self) -> None:
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text(encoding="utf-8")
+        self.assertIn("--skip x11_arm_routes_click_through_real_game", calls)
+
+    def test_rig_lane_names_the_lock_and_the_real_window_proof(self) -> None:
+        script = SCRIPTS_DIR / "rig-x11-click-proof.sh"
+        result = subprocess.run(
+            ["bash", str(script), "--dry-run", "--timeout", "7"],
+            capture_output=True,
+            text=True,
+            env=dict(os.environ),
+            cwd=self.repo,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("owner=x11-click-proof timeout=7", result.stdout)
+        self.assertIn(
+            "cargo test -p input-drive x11_arm_routes_click_through_real_game -- --exact",
+            result.stdout,
+        )
+
     def test_hidden_arm_stops_when_the_probe_reports_reachable_data(self) -> None:
         # The probe itself is unit-tested; here we prove the gate CALLS it.
         probe_lib = self.repo / "scripts" / "lib" / "data-root.sh"
