@@ -19,7 +19,10 @@
 #
 # worktree-setup.sh links install-root into this worktree's own pool slot.
 # Step 4's mv renames that symlink inside this checkout only; the slot and
-# other worktrees are untouched. The EXIT trap restores the link.
+# other worktrees are untouched. The EXIT trap restores the link. Both
+# arms export O2JAM_INSTALL_ROOT (scripts/lib/data-root.sh) so stale test
+# binaries cannot borrow another worktree's archives; the hidden arm
+# probes that its named root and fallback are unreachable before testing.
 #
 # Usage: scripts/gate-check.sh [--no-push|--dry-run] [--quick [--] [crate...]] [--hidden]
 #   --no-push / --dry-run : skip the push + verify step (for local proof runs).
@@ -32,6 +35,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+source "$REPO_ROOT/scripts/lib/data-root.sh"
+
+PRESENT_ROOT="$REPO_ROOT/install-root"
+HIDDEN_ROOT="$REPO_ROOT/.install-root.gate-hidden"
 
 no_push=0
 quick=0
@@ -52,10 +59,22 @@ if [ "${GATE_CHECK_NO_PUSH:-0}" = "1" ]; then no_push=1; fi
 if [ "$quick" -eq 1 ]; then hidden_arm=0; fi
 
 HIDDEN_BACKUP=""
-trap 'if [ -n "${HIDDEN_BACKUP:-}" ] && [ -e "${HIDDEN_BACKUP:-}" ]; then mv "${HIDDEN_BACKUP}" "$REPO_ROOT/install-root"; fi' EXIT
+
+restore_hidden_root() {
+    if [ -n "$HIDDEN_BACKUP" ] && [ -e "$HIDDEN_BACKUP" ]; then
+        mv "$HIDDEN_BACKUP" "$PRESENT_ROOT"
+    fi
+}
+
+cleanup_gate() {
+    restore_hidden_root
+    restore_dangling_data_links
+}
+trap cleanup_gate EXIT
 
 present_root_existed=0
-if [ -e "$REPO_ROOT/install-root" ]; then present_root_existed=1; fi
+if [ -e "$PRESENT_ROOT" ]; then present_root_existed=1; fi
+hide_dangling_data_links "$REPO_ROOT"
 
 step() { printf '\n===== %s =====\n' "$1"; }
 
@@ -80,18 +99,23 @@ if [ "$quick" -eq 1 ]; then
 fi
 
 step "cargo test --workspace (install-root present)"
+export O2JAM_INSTALL_ROOT="$PRESENT_ROOT"
 cargo test --workspace
 
 if [ "$hidden_arm" -eq 1 ]; then
-    step "cargo test --workspace (install-root hidden)"
+    step "hidden-arm data probe (archives must be unreachable)"
     if [ "$present_root_existed" -eq 1 ]; then
         # Slot symlink: this rename stays inside $REPO_ROOT.
-        HIDDEN_BACKUP="$REPO_ROOT/.install-root.gate-hidden"
-        mv "$REPO_ROOT/install-root" "$HIDDEN_BACKUP"
+        HIDDEN_BACKUP="$HIDDEN_ROOT"
+        mv "$PRESENT_ROOT" "$HIDDEN_BACKUP"
     fi
+    export O2JAM_INSTALL_ROOT="$HIDDEN_ROOT"
+    assert_hidden_data_unreachable "$HIDDEN_ROOT" "$PRESENT_ROOT"
+
+    step "cargo test --workspace (install-root hidden)"
     cargo test --workspace
     if [ -n "$HIDDEN_BACKUP" ] && [ -e "$HIDDEN_BACKUP" ]; then
-        mv "$HIDDEN_BACKUP" "$REPO_ROOT/install-root"
+        mv "$HIDDEN_BACKUP" "$PRESENT_ROOT"
     fi
     HIDDEN_BACKUP=""
 fi
