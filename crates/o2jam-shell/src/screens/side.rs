@@ -2262,6 +2262,15 @@ pub enum SelectSearchField {
     Artist,
 }
 
+/// Text of the column a search or chosung key reads.
+#[must_use]
+pub fn select_row_column_text<'a>(row: SelectMusicRow<'a>, field: SelectSearchField) -> &'a str {
+    match field {
+        SelectSearchField::Title => row.song.title.as_str(),
+        SelectSearchField::Artist => row.song.artist.as_str(),
+    }
+}
+
 /// Direction of one pager or playlist-reorder press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectPagerStep {
@@ -2318,10 +2327,84 @@ const SELECT_SEARCH_BUTTONS: [(&str, SelectSearchField); 2] = [
 /// Count of chosung INDEX buttons (`0x27200058..=0x27200081`).
 pub const SELECT_SEARCH_INDEX_COUNT: u8 = 42;
 
+/// Key-name strings of the 42 INDEX buttons, in code order. The first
+/// 19 are compatibility jamo (`ㄱ..ㅎ` then the five doubled forms),
+/// then five Korean level/ALL words and the ASCII letters A..R. Read
+/// from the exe's key table at VA `0x6454d8` (file `0x254d8`), whose
+/// own strings sit at VAs `0x64541c..0x6454d0`.
+const SELECT_INDEX_KEYS: [&str; SELECT_SEARCH_INDEX_COUNT as usize] = [
+    "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "ㄲ", "ㄸ",
+    "ㅃ", "ㅆ", "ㅉ", "전체", "최고", "고급", "중급", "초급", "A", "B", "C", "D", "E", "F", "G",
+    "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+];
+
+/// Hangul syllable leading consonants in Unicode order: the key
+/// names of the first 19 INDEX buttons.
+const CHOSEONG: [&str; 19] = [
+    "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ",
+    "ㅌ", "ㅍ", "ㅎ",
+];
+
+const HANGUL_SYLLABLE_FIRST: u32 = 0xAC00;
+const HANGUL_SYLLABLE_LAST: u32 = 0xD7A3;
+const SYLLABLES_PER_INITIAL: u32 = 588;
+
 /// One INDEX button's staged placement id (ordinal `0x27200058 + n`).
 #[must_use]
 pub fn select_index_button_id(index: u8) -> String {
     format!("IDC_BUTTON_DSMUSIC_SERACH_INDEX{index}")
+}
+
+/// Key name of one INDEX button (`None` outside 0..=41).
+#[must_use]
+pub fn select_index_key(index: u8) -> Option<&'static str> {
+    SELECT_INDEX_KEYS.get(usize::from(index)).copied()
+}
+
+/// Leading consonant of a Hangul syllable, `None` for other letters.
+#[must_use]
+fn hangul_initial(character: char) -> Option<&'static str> {
+    let code = u32::from(character);
+    (HANGUL_SYLLABLE_FIRST..=HANGUL_SYLLABLE_LAST)
+        .contains(&code)
+        .then(|| {
+            let position = ((code - HANGUL_SYLLABLE_FIRST) / SYLLABLES_PER_INITIAL) as usize;
+            CHOSEONG.get(position).copied()
+        })
+        .flatten()
+}
+
+/// Whether one keyed row survives an INDEX press. The exe compares the
+/// first two CP949 bytes of the title/artist against the key name
+/// (`FUN_00444630`, file `0x44630`): a jamo key matches the song's
+/// leading Hangul consonant, the five words match a literal prefix,
+/// and the ASCII keys match the first letter. The doubled jamo also
+/// match keys 0/2/5/6/8 (VA `0x645498` and neighbours).
+#[must_use]
+pub fn select_index_matches(index: u8, text: &str) -> bool {
+    let Some(key) = select_index_key(index) else {
+        return false;
+    };
+    let Some(first) = text.chars().next() else {
+        return false;
+    };
+    let position = usize::from(index);
+    if position < 19 {
+        let Some(initial) = hangul_initial(first) else {
+            return false;
+        };
+        return initial == key
+            || matches!(
+                (position, initial),
+                (0, "ㄲ") | (2, "ㄸ") | (5, "ㅃ") | (6, "ㅆ") | (8, "ㅉ")
+            );
+    }
+    if position < 24 {
+        return key.starts_with(first);
+    }
+    key.chars()
+        .next()
+        .is_some_and(|letter| first.eq_ignore_ascii_case(&letter))
 }
 
 /// Chrome action under a staged-dialog click (`None` on a display-only
@@ -6601,6 +6684,28 @@ mod side_tests {
         assert_eq!(select_row_hit(400, 160, 0), None);
         assert_eq!(select_row_hit(400, 379, 30), Some(9));
         assert_eq!(select_row_hit(400, 380, 30), None);
+    }
+
+    #[test]
+    fn index_keys_match_korean_initials_and_doubled_forms() {
+        // `FUN_00444630` compares the key name's first two bytes with
+        // the title/artist's first two bytes; jamo keys name the
+        // leading consonant, and keys 0/2/5/6/8 also take the doubled
+        // form (VA `0x645498` and neighbours).
+        assert_eq!(select_index_key(0), Some("ㄱ"));
+        assert_eq!(select_index_key(18), Some("ㅉ"));
+        assert_eq!(select_index_key(41), Some("R"));
+        assert_eq!(select_index_key(42), None);
+        assert!(select_index_matches(0, "가나다"));
+        assert!(select_index_matches(0, "까다"));
+        assert!(select_index_matches(2, "따다"));
+        assert!(select_index_matches(6, "싸다"));
+        assert!(!select_index_matches(0, "나다"));
+        assert!(!select_index_matches(0, "Alpha"));
+        assert!(select_index_matches(19, "전체 노래"));
+        assert!(select_index_matches(24, "Alpha"));
+        assert!(select_index_matches(41, "rock"));
+        assert!(!select_index_matches(41, "Band"));
     }
 
     #[test]

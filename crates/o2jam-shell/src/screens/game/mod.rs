@@ -71,19 +71,19 @@ use super::side::{
     default_room_title, lanking_action_at, music_shop_action_at, myroom_equip_slot,
     myroom_panel_kept, myroom_record_slot, paint_side_scene, paint_side_scene_live,
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
-    select_filter_button_id, select_filter_choice_at, select_music_rows,
-    select_music_songs_with_labels, select_row_hit, shop_action_at, shop_panel_kept,
-    shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
-    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
-    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
-    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
-    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
-    TUTORIAL_EXIT_SPRITE,
+    select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
+    select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
+    shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
+    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
+    MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -797,6 +797,9 @@ pub struct ScreenGame {
     /// Applied search query: the field and text the last SERACH press
     /// submitted. `None` until then, so typing alone never narrows.
     select_search_query: Option<(SelectSearchField, String)>,
+    /// Chosung INDEX key held after a keyed rebuild (`FUN_00444630`,
+    /// file `0x44630`). `None` until an INDEX button is pressed.
+    select_search_index: Option<u8>,
     /// Local music seat from the install's `Music` folder scan
     /// (`docs/music-availability.md` §1): which catalog songs have a
     /// chart file on disk. `None` while no scan ran (no local
@@ -1175,6 +1178,7 @@ impl ScreenGame {
             select_search_field: SelectSearchField::Title,
             select_search_draft: String::new(),
             select_search_query: None,
+            select_search_index: None,
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
@@ -3788,11 +3792,16 @@ impl ScreenGame {
     }
 
     /// Search-result rows the dialog currently shows: the three
-    /// filter columns first (#273), then the submitted search query
-    /// (#285). Typing alone never narrows the table — the SERACH
-    /// button submits the draft, as in the exe's search arm.
+    /// filter columns first (#273), the chosung INDEX key (#762), then
+    /// the submitted search query (#285). Typing alone never narrows
+    /// the table — the SERACH button submits the draft, as in the
+    /// exe's search arm.
     fn select_rows(&self) -> Vec<SelectMusicRow<'_>> {
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let mut rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        if let Some(index) = self.select_search_index {
+            let field = self.select_search_field;
+            rows.retain(|row| select_index_matches(index, select_row_column_text(*row, field)));
+        }
         let Some((field, query)) = self.select_search_query.as_ref() else {
             return rows;
         };
@@ -3802,11 +3811,9 @@ impl ScreenGame {
         let needle = query.trim().to_lowercase();
         rows.into_iter()
             .filter(|row| {
-                let text = match field {
-                    SelectSearchField::Title => &row.song.title,
-                    SelectSearchField::Artist => &row.song.artist,
-                };
-                text.to_lowercase().contains(&needle)
+                select_row_column_text(*row, *field)
+                    .to_lowercase()
+                    .contains(&needle)
             })
             .collect()
     }
@@ -3851,12 +3858,12 @@ impl ScreenGame {
                     (!query.is_empty()).then_some((self.select_search_field, query));
                 self.select_page = 0;
             }
-            SelectChromeAction::SearchIndex(_index) => {
-                // Chosung key grid: the `+0x680` keyed filter rebuild
-                // (VA `0x444630`, key names at VA `0x6454d8`) is its own
-                // slice; the inventory pins every button in
-                // `docs/select-chrome.md`. No invented key here.
-                return false;
+            SelectChromeAction::SearchIndex(index) => {
+                // Keyed rebuild (`FUN_00444630`, file `0x44630`): the
+                // search column's keyed rows are rebuilt and the pager
+                // restarts at its first page.
+                self.select_search_index = Some(index);
+                self.select_page = 0;
             }
         }
         true
@@ -4388,6 +4395,7 @@ impl ScreenGame {
         self.select_search_field = SelectSearchField::Title;
         self.select_search_draft.clear();
         self.select_search_query = None;
+        self.select_search_index = None;
     }
 
     /// Staged select-music catalog songs (catalog order, dead slots
@@ -18809,6 +18817,75 @@ mod game_tests {
             figures.insert((*sprite).to_owned(), solid_test_figure(color));
         }
         (placements, figures)
+    }
+
+    #[test]
+    fn a_chosung_index_click_keeps_only_songs_with_that_korean_initial() {
+        // Live chain: main.rs::run_play -> stage_session_catalog ->
+        //   MUSELECT -> load_select_music_scene -> click_waiting ->
+        //   click_select_music -> click_select_chrome -> select_rows ->
+        //   paint_select_music_text -> select_pager_caption
+        // `FUN_00444630` (file `0x44630`) takes `code - 0x27200058`
+        // as a key index and keeps only keyed rows whose first two
+        // title bytes name that Korean initial. Index 0 is ㄱ.
+        let mut blob = super::super::side::select_chrome_catalog_blob();
+        let titles: [[u8; 6]; 3] = [
+            [0xB0, 0xA1, 0xB3, 0xAA, 0xB4, 0xD9], // 가나다 (ㄱ)
+            [0xBA, 0xF1, 0, 0, 0, 0],             // 비 (ㅂ)
+            [0xC7, 0xCF, 0xB3, 0xAA, 0, 0],       // 하나 (ㅎ)
+        ];
+        for (index, title) in titles.iter().enumerate() {
+            let start = 112 + index * 300;
+            blob[start..start + title.len()].copy_from_slice(title);
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.set_song_catalog(&entries);
+        let mut placements = select_chrome_placements();
+        placements.extend(select_sheet_placements());
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_DSMUSIC_SERACH_INDEX0".to_owned(),
+            code: 0x2720_0058,
+            sprite: None,
+            rect: Rect {
+                x: 200,
+                y: 20,
+                w: 30,
+                h: 20,
+            },
+        });
+        game.load_select_music_scene(placements, HashMap::new());
+        assert_eq!(game.select_rows().len(), 45);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(215, 30));
+
+        let ids: Vec<u32> = game
+            .select_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(ids, vec![200, 200, 200], "only the ㄱ song's rows survive");
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (669, 390),
+            (54, 13),
+            crate::screens::select_paint::select_ink()
+        ));
     }
 
     #[test]

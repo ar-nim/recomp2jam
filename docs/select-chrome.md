@@ -55,9 +55,19 @@ back; #285 makes them paint-gated families instead of absent art.
   call VA `0x5f3f0c`), decoded in `docs/xtd-table.md`.
 - **Chosung grid** — `SERACH_INDEX0..41 0x27200058..0x27200081`
   (42 buttons) and the two special buttons `0x2720B082`/`0x2720B083`
-  are filter inputs. The indexed keyed rebuild is VA `0x444630`:
-  `code - 0x27200058` selects a key-name arm, row stride `0x238`.
-  Wiring the grid is a separate slice; this leg inventories it only.
+  are filter inputs. `FUN_00444630` (VA `0x444630`, file `0x44630`,
+  evidence `ev_e2707958704b39082183d3a41ad02ce2f9c3a4c5ebb40a0caf84443f77b1620b`)
+  takes `code - 0x27200058` as a key index and keeps the keyed rows
+  (stride `0x238`) whose title or artist starts with that key. The
+  key-name strings read from VAs `0x64541c..0x6454d0` are 19 jamo
+  (ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎㄲㄸㅃㅆㅉ), then 전체/최고/고급/중급/초급,
+  then A..R; keys 0/2/5/6/8 also accept their doubled jamo (VA
+  `0x645498` and neighbours). #762 wires all 42 buttons into the
+  `select_rows` keyed filter: a press keeps only rows whose selected
+  search column (title by default) starts with the key and restarts
+  the pager. The two special buttons stay OPEN: a full-image byte
+  search found no code immediate for their control codes, so no
+  behavior is invented for them.
 - **Rows and filters** — `EXTEND1..10` are the ten visible row hit
   bands (ticket #15). `STEP1_*` bands, `STEP2_*` buckets and `STEP3_*`
   genres are the three wired filter columns (ticket #273). OK is
@@ -228,6 +238,9 @@ song-dialog tests and name the live chain from boot staging to
   LEFT/RIGHT clamp, pager caption ink.
 - `a_search_submit_narrows_the_table_by_title_or_artist` — edit-box
   typing, field radios, SERACH submit, status banner.
+- `a_chosung_index_click_keeps_only_songs_with_that_korean_initial` —
+  an INDEX rect click through `click_select_chrome` into the keyed
+  row rebuild and pager caption (#762).
 
 All four wired-family guards were red-proved by disabling the
 `click_select_chrome` call in `ScreenGame::click_select_music`. The
@@ -259,8 +272,8 @@ still OPEN. This note pins geometry, not a qualified exe frame.
 
 ## OPEN after this leg
 
-The chosung INDEX grid, its two special buttons, the result/playlist
-tab switch, the playlist sort/selection family and the UP/DOWN reorder
-(not offered on the result tab) are inventoried but not wired. The
-next evidence step is a static walk of the keyed rebuild at VA
-`0x444630` plus a rig sweep of the playlist tab.
+The 42-button chosung INDEX grid is wired (#762). The two special
+buttons, the result/playlist tab switch, the playlist sort/selection
+family and the UP/DOWN reorder (not offered on the result tab) stay
+OPEN. The next evidence step is a static walk of the special-button
+handler (no code immediate found) and a rig sweep of the playlist tab.
