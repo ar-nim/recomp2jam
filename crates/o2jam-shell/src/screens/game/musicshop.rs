@@ -1,6 +1,7 @@
 //! Song-shop songs, sorts, pages, and the fetched flag board
 //! behind the music-shop side screen (#139 cluster 4).
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
@@ -9,9 +10,9 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
     sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
-    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS,
-    MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
-    MSHOP_SONG_ROWS,
+    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
+    MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
+    MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -118,6 +119,10 @@ pub(crate) struct MusicShopState {
     /// `+0x25`). The MYALL pager wraps left, clamps right, and is
     /// gated while a download stands (#817).
     pub(crate) music_shop_owned_page: usize,
+    /// Active owned-list sort key and its per-key direction word
+    /// (exe `state+0x370 + index*4`, #816).
+    pub(crate) music_shop_owned_sort: Option<OwnedSort>,
+    pub(crate) music_shop_owned_sort_descending: [bool; 3],
     /// Standing notice and the staged control code whose rect hosts
     /// it. The exe posts these strings through its notice helper;
     /// the host rect is ours-by-design chrome over the bnd layout.
@@ -162,6 +167,8 @@ impl MusicShopState {
         self.music_shop_page = 0;
         self.music_shop_owned_page = 0;
         self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+        self.music_shop_owned_sort = None;
+        self.music_shop_owned_sort_descending = [false; 3];
     }
 
     /// Stage the per-song price words from `OJNList.dat` table 3.
@@ -272,28 +279,75 @@ impl MusicShopState {
         self.music_shop_owned_page
     }
 
+    /// Active owned-list sort key.
+    pub(crate) fn owned_sort(&self) -> Option<OwnedSort> {
+        self.music_shop_owned_sort
+    }
+
+    /// Direction of the active owned-list sort key.
+    pub(crate) fn owned_sort_descending(&self) -> bool {
+        self.music_shop_owned_sort
+            .is_some_and(|sort| self.music_shop_owned_sort_descending[sort.index()])
+    }
+
+    /// Catalog title of one owned song id, or the bare id.
+    fn owned_title(&self, song_id: u16) -> String {
+        self.music_shop_songs
+            .iter()
+            .find(|song| song.song_id == u32::from(song_id))
+            .map_or_else(|| song_id.to_string(), |song| song.title.clone())
+    }
+
+    /// Exe-backed compare for one owned header. Play time and
+    /// download date have no staged value source, so their local
+    /// fallback keys are id and installed bit respectively.
+    fn compare_owned_entries(
+        &self,
+        sort: OwnedSort,
+        first: &MusicListEntry,
+        second: &MusicListEntry,
+    ) -> Ordering {
+        let order = match sort {
+            OwnedSort::Title => self
+                .owned_title(first.id)
+                .to_lowercase()
+                .cmp(&self.owned_title(second.id).to_lowercase())
+                .then_with(|| first.id.cmp(&second.id)),
+            OwnedSort::PlayTime => first.id.cmp(&second.id),
+            OwnedSort::DownloadStatus => {
+                song_installed(u32::from(first.id), self.music_shop_installed.as_ref())
+                    .cmp(&song_installed(
+                        u32::from(second.id),
+                        self.music_shop_installed.as_ref(),
+                    ))
+                    .then_with(|| first.id.cmp(&second.id))
+            }
+        };
+        if self.music_shop_owned_sort_descending[sort.index()] {
+            order.reverse()
+        } else {
+            order
+        }
+    }
+
     /// Owned rows from the fetched 4031 ids joined to the catalog
     /// titles and the local chart scan, twelve at most on this page.
     pub(crate) fn owned_rows(&self) -> Vec<OwnedRow> {
         let Some(board) = self.music_shop_board.as_ref() else {
             return Vec::new();
         };
-        let (start, end) = lanking_page_window(
-            board.entries.len(),
-            MSHOP_OWNED_ROWS,
-            self.music_shop_owned_page,
-        );
-        board.entries[start..end]
+        let mut entries = board.entries.clone();
+        if let Some(sort) = self.music_shop_owned_sort {
+            entries.sort_by(|first, second| self.compare_owned_entries(sort, first, second));
+        }
+        let (start, end) =
+            lanking_page_window(entries.len(), MSHOP_OWNED_ROWS, self.music_shop_owned_page);
+        entries[start..end]
             .iter()
-            .take(MSHOP_OWNED_ROWS)
             .enumerate()
             .map(|(slot, entry)| OwnedRow {
                 song_id: entry.id,
-                title: self
-                    .music_shop_songs
-                    .iter()
-                    .find(|song| song.song_id == u32::from(entry.id))
-                    .map_or_else(|| entry.id.to_string(), |song| song.title.clone()),
+                title: self.owned_title(entry.id),
                 installed: song_installed(u32::from(entry.id), self.music_shop_installed.as_ref()),
                 marked: self.music_shop_owned_marks[slot],
             })
@@ -510,6 +564,18 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
+                MusicShopEffect::None
+            }
+            MusicShopAction::OwnedSort(sort) => {
+                let direction = sort.index();
+                if self.music_shop_owned_sort == Some(sort) {
+                    self.music_shop_owned_sort_descending[direction] =
+                        !self.music_shop_owned_sort_descending[direction];
+                } else {
+                    self.music_shop_owned_sort = Some(sort);
+                }
+                self.music_shop_owned_page = 0;
+                self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
                 MusicShopEffect::None
             }
             MusicShopAction::Genre(genre) => {

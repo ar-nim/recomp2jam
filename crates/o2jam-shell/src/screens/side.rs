@@ -1403,12 +1403,56 @@ impl MusicShopGenreFilter {
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
 /// ride (#179 story 17).
-/// Right-rank panel buttons (`0x1A200016..18`): the 곡명 press has
-/// one qualified frame with no reorder (the rank order was already
-/// active), and no pager press frame exists. They stay inert here;
-/// our song-board sort directions remain ASSUMED (`E-T`, #411).
+/// Owned-list header sorts (`IDC_BUTTON_MSHOP_MY_TITLE/PLAYTIME/
+/// DOWNSTATUS`, `0x1A200016..18`). `FUN_004d2660` VA `0x4d2660`
+/// routes each code to its own comparator and toggles one direction
+/// word at `state+0x370 + index*4` (evidence
+/// `ev_b0506437a4ea82d1321f6c55cfc20fdab8eef49734591c22d0bb50fe9710baa1`,
+/// comparators `ev_0b02af203b1f902309426f69cb8e8a169e07f6b24c2a492635804d464cd900f6`,
+/// `ev_4a1cc12bf001f4152c7964bfd8f188a284f841a1a5ed905a6acd907ad2f827d6`,
+/// `ev_01b810adfa5908e568df2920399c5c466ae6eb887590d07eb11a2932a317a3de`).
+/// The play-time and download-date fields have no shell source yet.
 pub const MSHOP_RANK_BUTTON_FIRST_CODE: u32 = 0x1A20_0016;
 pub const MSHOP_RANK_BUTTON_LAST_CODE: u32 = 0x1A20_0018;
+pub const MSHOP_OWNED_TITLE_SORT_CODE: u32 = 0x1A20_0016;
+pub const MSHOP_OWNED_PLAYTIME_SORT_CODE: u32 = 0x1A20_0017;
+pub const MSHOP_OWNED_DOWNSTATUS_SORT_CODE: u32 = 0x1A20_0018;
+
+/// One owned-list sort key, in the exe's header order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnedSort {
+    /// Title: the exe comparator uses the catalog title bytes and id.
+    Title,
+    /// Play time: the exe comparator reads ASCII digit fields the
+    /// shell does not stage; the local fallback keeps id order.
+    PlayTime,
+    /// Download status: the exe comparator reads three date-like
+    /// bytes; the local fallback uses the installed chart bit.
+    DownloadStatus,
+}
+
+impl OwnedSort {
+    /// Index into the exe's three direction words.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Title => 0,
+            Self::PlayTime => 1,
+            Self::DownloadStatus => 2,
+        }
+    }
+
+    /// Sort key behind one owned-header code.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            MSHOP_OWNED_TITLE_SORT_CODE => Some(Self::Title),
+            MSHOP_OWNED_PLAYTIME_SORT_CODE => Some(Self::PlayTime),
+            MSHOP_OWNED_DOWNSTATUS_SORT_CODE => Some(Self::DownloadStatus),
+            _ => None,
+        }
+    }
+}
 /// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
 /// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
 /// exe press frame names a result (matrix `E-T`), so they stay
@@ -1618,6 +1662,9 @@ pub enum MusicShopAction {
     /// A color filter answered; it resets the browsing page and
     /// stages one of the four box-line frames (#813).
     Genre(MusicShopGenreFilter),
+    /// An owned-list header sorted the owned rows and cleared their
+    /// marks (#816).
+    OwnedSort(OwnedSort),
     /// A TOP100 board-chrome control was pressed. Carries the staged
     /// control code (`0x1A20007D..0x84`); the exe press frame pins no
     /// ranking board, so this records a client-only press marker and
@@ -1684,6 +1731,9 @@ pub fn music_shop_action_at(
 fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     if let Some(genre) = MusicShopGenreFilter::from_code(code) {
         return Some(MusicShopAction::Genre(genre));
+    }
+    if let Some(sort) = OwnedSort::from_code(code) {
+        return Some(MusicShopAction::OwnedSort(sort));
     }
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
@@ -6688,18 +6738,23 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_rank_buttons_stay_inert_until_a_press_pairs_them() {
-        // The 곡명 press left the rank readout at `01/47` and the
-        // list unchanged, and no pager press was captured. No sort
-        // direction or rank-page pairing may be inferred from the
-        // bnd rects alone; the board's own sort buttons are separate.
-        for code in MSHOP_RANK_BUTTON_FIRST_CODE..=MSHOP_RANK_BUTTON_LAST_CODE {
-            assert_eq!(
-                music_shop_action_for_code(code),
-                None,
-                "rank code {code:#x} has no pinned press behavior"
-            );
-        }
+    fn music_shop_owned_header_codes_route_to_the_three_sort_keys() {
+        // FUN_004d2660 dispatches 0x1A200016..18 to the owned sort
+        // comparators, not to the TOP100 rank vectors. The static
+        // evidence names the routing and the direction toggle; the
+        // two unstaged value fields stay OPEN.
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_TITLE_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::Title))
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_PLAYTIME_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::PlayTime))
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_DOWNSTATUS_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::DownloadStatus))
+        );
     }
 
     #[test]

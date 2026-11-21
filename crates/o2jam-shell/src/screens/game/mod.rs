@@ -81,10 +81,10 @@ use super::side::{
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
     MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopNotice, MusicShopRow,
-    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet,
-    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
-    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
     TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
     INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
     SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
@@ -7032,6 +7032,18 @@ impl ScreenGame {
         self.music_shop.owned_page()
     }
 
+    /// Active owned-list sort header and its current direction.
+    #[must_use]
+    pub fn music_shop_owned_sort(&self) -> Option<OwnedSort> {
+        self.music_shop.owned_sort()
+    }
+
+    /// Whether the active owned sort runs high-to-low.
+    #[must_use]
+    pub fn music_shop_owned_sort_descending(&self) -> bool {
+        self.music_shop.owned_sort_descending()
+    }
+
     /// Owned/download face selected by the two tab images (#820).
     #[must_use]
     pub fn music_shop_face(&self) -> MusicShopFace {
@@ -8739,7 +8751,7 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MusicShopGenreFilter, MyRoomLowerTab, MyRoomPanel, LANKING_LPAGE_NEXT_CODE,
+        MusicShopGenreFilter, MyRoomLowerTab, MyRoomPanel, OwnedSort, LANKING_LPAGE_NEXT_CODE,
         LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE,
         LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE,
         LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE,
@@ -8751,7 +8763,8 @@ mod game_tests {
         MSHOP_GENRE_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
         MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
         MSHOP_MUSICDELETE_CODE, MSHOP_MYALL_LEFT_CODE, MSHOP_MYALL_RIGHT_CODE,
-        MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_OWNED_DOWNSTATUS_SORT_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_PLAYTIME_SORT_CODE,
+        MSHOP_OWNED_ROWS, MSHOP_OWNED_TITLE_SORT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
         MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
         MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE,
@@ -24349,22 +24362,26 @@ mod game_tests {
 
     /// Synthetic owned list with two pages and its MYALL pager.
     fn open_music_shop_owned_board(entry_count: usize) -> ScreenGame {
+        let titles: Vec<String> = (0..entry_count)
+            .map(|index| format!("Owned{index:03}"))
+            .collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        open_music_shop_owned_board_with_titles(&titles)
+    }
+
+    /// Same board with caller-named titles so a sort can be observed.
+    fn open_music_shop_owned_board_with_titles(titles: &[&str]) -> ScreenGame {
         let mut game = ScreenGame::new();
         walk_to_waiting(&mut game);
         let mut blob = Vec::new();
-        for index in 0..entry_count {
+        for (index, title) in titles.iter().enumerate() {
             let song_id = 757 + u32::try_from(index).unwrap_or(0);
-            blob.extend_from_slice(&lanking_record(
-                song_id,
-                120.0,
-                &format!("Owned{index:03}"),
-                "Band",
-            ));
+            blob.extend_from_slice(&lanking_record(song_id, 120.0, title, "Band"));
         }
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         game.set_song_catalog(&entries);
         game.stage_music_shop_board(MusicListAnswer {
-            entries: (0..entry_count)
+            entries: (0..titles.len())
                 .map(|index| MusicListEntry {
                     id: u16::try_from(757 + index).unwrap_or(757),
                     notes_ex: 3,
@@ -24409,6 +24426,80 @@ mod game_tests {
         game.load_side_scene(placements, HashMap::new());
         assert!(game.visit_side(SideScreen::MusicShop));
         game
+    }
+
+    /// Press one of the three owned-header sort codes through the
+    /// staged click seam.
+    fn press_owned_sort(game: &mut ScreenGame, code: u32) {
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 20,
+                w: 40,
+                h: 20,
+            },
+        });
+        game.click_music_shop(520, 30);
+    }
+
+    #[test]
+    fn music_shop_my_title_sort_orders_owned_rows_and_clears_marks() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(OwnedSort) -> owned_rows.
+        let mut game = open_music_shop_owned_board_with_titles(&["Zulu", "Alpha", "Mike"]);
+        game.click_music_shop(20, 30);
+        assert!(game.music_shop_owned_rows()[0].marked);
+        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
+        assert_eq!(game.music_shop_owned_sort(), Some(OwnedSort::Title));
+        let titles: Vec<String> = game
+            .music_shop_owned_rows()
+            .iter()
+            .map(|row| row.title.clone())
+            .collect();
+        assert_eq!(titles, vec!["Alpha", "Mike", "Zulu"]);
+        assert!(
+            game.music_shop_owned_rows().iter().all(|row| !row.marked),
+            "a sort clears stale row marks"
+        );
+    }
+
+    #[test]
+    fn music_shop_my_title_sort_toggles_direction_on_the_second_press() {
+        // The exe toggles one direction word per pressed header
+        // (`state+0x370 + index*4`, FUN_004d2660).
+        let mut game = open_music_shop_owned_board_with_titles(&["Zulu", "Alpha", "Mike"]);
+        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
+        assert!(!game.music_shop_owned_sort_descending());
+        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
+        assert!(game.music_shop_owned_sort_descending());
+        let titles: Vec<String> = game
+            .music_shop_owned_rows()
+            .iter()
+            .map(|row| row.title.clone())
+            .collect();
+        assert_eq!(titles, vec!["Zulu", "Mike", "Alpha"]);
+    }
+
+    #[test]
+    fn music_shop_my_playtime_sort_routes_to_its_owned_key() {
+        let mut game = open_music_shop_owned_board(3);
+        press_owned_sort(&mut game, MSHOP_OWNED_PLAYTIME_SORT_CODE);
+        assert_eq!(game.music_shop_owned_sort(), Some(OwnedSort::PlayTime));
+    }
+
+    #[test]
+    fn music_shop_my_downloadstatus_sort_routes_to_its_owned_key() {
+        let mut game = open_music_shop_owned_board(3);
+        press_owned_sort(&mut game, MSHOP_OWNED_DOWNSTATUS_SORT_CODE);
+        assert_eq!(
+            game.music_shop_owned_sort(),
+            Some(OwnedSort::DownloadStatus)
+        );
     }
 
     #[test]
