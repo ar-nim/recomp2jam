@@ -2,10 +2,12 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_checkout_decision, shop_goods, shop_page_count, shop_try_on_decision,
-    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGood, ShopPanel,
-    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_ITEM_ROWS,
+    lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
+    shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
+    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood, ShopPanel,
+    ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
+    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX,
+    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -66,6 +68,33 @@ pub(crate) struct ShopState {
     /// Cart-list page (five rows per page, the staged `CART_EX`
     /// slots).
     pub(crate) shop_cart_page: usize,
+    /// Planet index `0x17` (1..=12). Our board opens on planet 1;
+    /// the exe's entry word is unpinned.
+    planet_index: u8,
+    /// Number of staged nonzero cells in the exe's 12×3 grid.
+    planet_grid_nonzero: usize,
+    /// Whether the figure-read helper arms `FUN_0042f870`.
+    planet_caption_armed: bool,
+    /// Caption setter argument from the last planet turn.
+    planet_caption_arg: Option<u8>,
+    /// Cells hidden by the last planet turn's first grid pass.
+    planet_hidden_cells: usize,
+    /// `FUN_00411e60` calls on the last turn (two: `+0x8d2/+0x8d3`).
+    planet_reseeds: u32,
+    /// Three layout words reset after the seeds (`+0x8d4..6`).
+    planet_layout_flags: [u8; 3],
+    /// Refresher call made by the last planet press.
+    last_planet_refresh: Option<ShopRefresh>,
+    /// Gender byte `+0x18` written by the GIRL/BOY arms (`None`
+    /// before the first press — the entry byte is unpinned).
+    gender: Option<ShopGender>,
+    /// Which context refresher the object state selects.
+    refresh_context: ShopRefreshContext,
+    /// The exe's "lucky" word (1 at planet 12), staged by the
+    /// planet arm; passed to every context refresher.
+    lucky_view: bool,
+    /// Last refresher call from a gender press (test affordance).
+    last_gender_refresh: Option<ShopRefresh>,
     /// Selected category tab (`None` on entry). The FASHION press
     /// frame `d4074ce7…` moves only the tab highlight; no wire frame
     /// and no catalogue filter rule is pinned yet.
@@ -94,6 +123,36 @@ pub(crate) struct ShopState {
     /// Owned-panel page (ten `MYBAGITEM` icons per page, the staged
     /// `BAGLEFT`/`BAGRIGHT` pager).
     pub(crate) bag_page: usize,
+    /// Exe's selected row word `DAT_0077ccc0` (global owned index,
+    /// `None` is the exe's cleared `-1`).
+    bag_selection: Option<usize>,
+    /// Notice posted by the last bag-cell press.
+    bag_notice: Option<ShopBagNotice>,
+    /// Ext-menu state `0x5b` (true: filters shown).
+    ext_menu_open: bool,
+    /// Gate word `0x5f`. The exe writer is unpinned; a staged
+    /// EXTMENU control is our ready seam.
+    ext_menu_ready: bool,
+    /// Accepted toggle count (gate-closed presses do not toggle).
+    ext_menu_toggles: u32,
+    /// `FUN_00411e60` calls on ext-menu toggles (one per press).
+    ext_menu_reseeds: u32,
+    /// Word `0x5d`, cleared on every open.
+    ext_menu_secondary_word: u8,
+    /// Notice posted by ITEMVACATE or CONFERENCE.
+    chrome_notice: Option<ShopChromeNotice>,
+    /// Staged confirmation-pair result for the vacate ladder.
+    vacate_confirmed: bool,
+    /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
+    vacate_item_code: u32,
+    /// Staged item word inked into the type-2 vacate string.
+    vacate_item_word: u32,
+    /// Staged category bytes for owned items (`+4` of the exe entry).
+    bag_item_categories: HashMap<u32, u8>,
+    /// Staged worn-slot occupancy for owned items.
+    bag_item_worn: HashMap<u32, bool>,
+    /// Staged special-item pair that refuses a selection.
+    bag_item_locked: HashMap<u32, bool>,
 }
 
 impl ShopState {
@@ -108,6 +167,9 @@ impl ShopState {
         self.preview = None;
         self.bag_page = 0;
         self.shop_category = None;
+        self.bag_selection = None;
+        self.bag_notice = None;
+        self.chrome_notice = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -125,6 +187,72 @@ impl ShopState {
     /// it, and a row check enters the face (`ev_f3ad15be…`).
     pub(crate) fn cart_face_open(&self) -> bool {
         self.panel == ShopPanel::ShoppingBag
+    }
+
+    /// Current planet index (1..=12).
+    pub(crate) fn planet_index(&self) -> u8 {
+        self.planet_index.max(SHOP_PLANET_FIRST_INDEX)
+    }
+
+    /// Argument the last planet turn passed to `FUN_0042f870`.
+    pub(crate) fn planet_caption_arg(&self) -> Option<u8> {
+        self.planet_caption_arg
+    }
+
+    /// Grid cells hidden by the last planet turn.
+    pub(crate) fn planet_hidden_cells(&self) -> usize {
+        self.planet_hidden_cells
+    }
+
+    /// Reseed count from the last planet turn (two in the exe).
+    pub(crate) fn planet_reseeds(&self) -> u32 {
+        self.planet_reseeds
+    }
+
+    /// Three layout words after the last planet turn.
+    pub(crate) fn planet_layout_flags(&self) -> [u8; 3] {
+        self.planet_layout_flags
+    }
+
+    /// Refresher call made by the last planet press.
+    pub(crate) fn planet_refresh(&self) -> Option<ShopRefresh> {
+        self.last_planet_refresh
+    }
+
+    /// Stage how many 12×3 grid cells currently hold planet art.
+    pub(crate) fn stage_planet_grid_nonzero(&mut self, cells: usize) {
+        self.planet_grid_nonzero = cells.min(SHOP_PLANET_GRID_CELLS);
+    }
+
+    /// Stage whether the caption setter is armed by the figure read.
+    pub(crate) fn stage_planet_caption_armed(&mut self, armed: bool) {
+        self.planet_caption_armed = armed;
+    }
+
+    /// Gender byte `+0x18` staged by the last GIRL/BOY press.
+    pub(crate) fn gender(&self) -> Option<ShopGender> {
+        self.gender
+    }
+
+    /// Button the last gender press hides (the "other" button).
+    pub(crate) fn hidden_gender_button(&self) -> Option<u32> {
+        self.gender.map(ShopGender::hidden_button)
+    }
+
+    /// Refresher call made by the last gender press.
+    pub(crate) fn gender_refresh(&self) -> Option<ShopRefresh> {
+        self.last_gender_refresh
+    }
+
+    /// Stage which object context selects the press refresher. The
+    /// screen→object-word mapping stays OPEN (frame pair).
+    pub(crate) fn stage_refresh_context(&mut self, context: ShopRefreshContext) {
+        self.refresh_context = context;
+    }
+
+    /// Stage the "lucky" word (planet index 12 sets it).
+    pub(crate) fn stage_lucky_view(&mut self, lucky_view: bool) {
+        self.lucky_view = lucky_view;
     }
 
     /// Selected category tab (`None` until a FASHION-class press).
@@ -309,6 +437,84 @@ impl ShopState {
         self.preview = None;
     }
 
+    /// Whether the 12 ext-menu filters are currently shown.
+    pub(crate) fn ext_menu_open(&self) -> bool {
+        self.ext_menu_open
+    }
+
+    /// Accepted ext-menu toggle count.
+    pub(crate) fn ext_menu_toggles(&self) -> u32 {
+        self.ext_menu_toggles
+    }
+
+    /// Reseeds made by ext-menu toggles.
+    pub(crate) fn ext_menu_reseeds(&self) -> u32 {
+        self.ext_menu_reseeds
+    }
+
+    /// Word `0x5d` after the last toggle.
+    pub(crate) fn ext_menu_secondary_word(&self) -> u8 {
+        self.ext_menu_secondary_word
+    }
+
+    /// Stage the gate word `0x5f` that allows an ext-menu toggle.
+    pub(crate) fn stage_ext_menu_ready(&mut self, ready: bool) {
+        self.ext_menu_ready = ready;
+    }
+
+    /// Notice posted by the last ITEMVACATE/CONFERENCE press.
+    pub(crate) fn chrome_notice(&self) -> Option<ShopChromeNotice> {
+        self.chrome_notice
+    }
+
+    /// Stage the confirmation-pair result for the vacate ladder.
+    pub(crate) fn stage_vacate_confirmed(&mut self, confirmed: bool) {
+        self.vacate_confirmed = confirmed;
+    }
+
+    /// Stage the item code the vacate ladder branches on.
+    pub(crate) fn stage_vacate_item_code(&mut self, code: u32) {
+        self.vacate_item_code = code;
+    }
+
+    /// Stage the item word the type-2 vacate notice inks.
+    pub(crate) fn stage_vacate_item_word(&mut self, word: u32) {
+        self.vacate_item_word = word;
+    }
+
+    /// Selected owned row (global index across all bag pages).
+    pub(crate) fn bag_selection(&self) -> Option<usize> {
+        self.bag_selection
+    }
+
+    /// Notice posted by the last bag-cell press.
+    pub(crate) fn bag_notice(&self) -> Option<ShopBagNotice> {
+        self.bag_notice
+    }
+
+    /// Clear the exe's selected-row word (`DAT_0077ccc0 = -1`) and
+    /// the notice that selection posted.
+    fn clear_bag_selection(&mut self) {
+        self.bag_selection = None;
+        self.bag_notice = None;
+    }
+
+    /// Stage one owned item's category byte. The file→entry join is
+    /// not pinned, so callers stage it explicitly.
+    pub(crate) fn stage_bag_item_category(&mut self, item_id: u32, category: u8) {
+        self.bag_item_categories.insert(item_id, category);
+    }
+
+    /// Stage whether one owned item occupies a worn slot.
+    pub(crate) fn stage_bag_item_worn(&mut self, item_id: u32, worn: bool) {
+        self.bag_item_worn.insert(item_id, worn);
+    }
+
+    /// Stage the special-item pair that refuses a selection.
+    pub(crate) fn stage_bag_item_locked(&mut self, item_id: u32, locked: bool) {
+        self.bag_item_locked.insert(item_id, locked);
+    }
+
     /// Owned bag page (ten `MYBAGITEM` icons per page).
     pub(crate) fn bag_page(&self) -> usize {
         self.bag_page
@@ -404,9 +610,9 @@ impl ShopState {
     /// non-empty cart): the caller opens the local web purchase
     /// surface, so this board state never touches the wire.
     /// Preview and bag-pager arms report no commit.
-    /// `owned_len` is the staged owned-good count the bag pager
-    /// holds against (same empty-panel rule as the cart pager).
-    pub(crate) fn apply_action(&mut self, action: ShopAction, owned_len: usize) -> bool {
+    /// `owned` is the staged owned-good list the bag pager and the
+    /// cell selector read (same empty-panel rule as the cart pager).
+    pub(crate) fn apply_action(&mut self, action: ShopAction, owned: &[ShopGood]) -> bool {
         match action {
             ShopAction::ToggleRow(slot) => {
                 self.toggle_row(slot);
@@ -421,8 +627,102 @@ impl ShopState {
                 self.clear_try_on();
                 false
             }
+            ShopAction::ToggleExtMenu => {
+                // Static arm `0x14200099` (`ev_f3ad15be…`): the `0x5f`
+                // gate opens the press once, then `0x5b` flips and one
+                // seed is taken; open clears `0x5d` and hides the row
+                // groups, close restores them and hides the filters.
+                if !self.ext_menu_ready {
+                    return false;
+                }
+                self.ext_menu_ready = false;
+                self.ext_menu_open = !self.ext_menu_open;
+                self.ext_menu_toggles = self.ext_menu_toggles.saturating_add(1);
+                self.ext_menu_reseeds = self.ext_menu_reseeds.saturating_add(1);
+                if self.ext_menu_open {
+                    self.ext_menu_secondary_word = 0;
+                }
+                false
+            }
+            ShopAction::VacateItem => {
+                // Static arm `0x14200005` (`ev_f3ad15be…`): no arm at
+                // all while the cart face is open (`0x8cd` set);
+                // otherwise a confirmation pair, a special item code,
+                // or the item word selects the notice.
+                self.chrome_notice = if self.cart_face_open() {
+                    None
+                } else if self.vacate_confirmed {
+                    Some(ShopChromeNotice::VacateConfirmed)
+                } else if matches!(self.vacate_item_code, 0x23 | 0x24) {
+                    Some(ShopChromeNotice::VacateSpecialItem)
+                } else {
+                    Some(ShopChromeNotice::VacateItem(self.vacate_item_word))
+                };
+                false
+            }
+            ShopAction::Conference => {
+                // Static arm `0x142000b6`: type `0x14`, no text.
+                self.chrome_notice = Some(ShopChromeNotice::Conference);
+                false
+            }
+            ShopAction::SelectBagItem(slot) => {
+                // Static arm `0x1460003d..46`: index = cell + page*10,
+                // then sound 0x18 (not modeled here), the selection
+                // word, and a category or worn-slot notice.
+                let index = slot.saturating_add(self.bag_page.saturating_mul(SHOP_BAG_CELLS));
+                let Some(good) = owned.get(index) else {
+                    return false;
+                };
+                if self
+                    .bag_item_locked
+                    .get(&good.item_id)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                self.bag_selection = Some(index);
+                self.bag_notice = if self
+                    .bag_item_worn
+                    .get(&good.item_id)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    Some(ShopBagNotice::SlotOccupied)
+                } else {
+                    self.bag_item_categories
+                        .get(&good.item_id)
+                        .copied()
+                        .and_then(ShopBagNotice::for_category)
+                };
+                false
+            }
+            ShopAction::PlanetUp | ShopAction::PlanetDown => {
+                // Static arms `0x14200008/09` (`ev_f3ad15be…`):
+                // hide the 12×3 grid, step the index, ink the caption
+                // when armed, rerun the three-way context refresh with
+                // the index-12 word, then reseed twice and reset the
+                // three layout flags.
+                self.planet_hidden_cells = self.planet_grid_nonzero;
+                self.planet_index = shop_next_planet_index(self.planet_index(), action);
+                self.planet_caption_arg = self.planet_caption_armed.then_some(self.planet_index);
+                self.lucky_view = self.planet_index == SHOP_PLANET_LAST_INDEX;
+                self.last_planet_refresh = Some(self.refresh_context.resolve(self.lucky_view));
+                self.planet_reseeds = self.planet_reseeds.saturating_add(2);
+                self.planet_layout_flags = SHOP_PLANET_LAYOUT_FLAGS;
+                false
+            }
+            ShopAction::SelectGender(gender) => {
+                // Static arm `0x14202006/07` (`ev_f3ad15be…`): write
+                // byte `+0x18`, hide the other button (derived from the
+                // byte), and call the context refresher the object
+                // state selects. The sound slot is not modeled here.
+                self.gender = Some(gender);
+                self.last_gender_refresh = Some(self.refresh_context.resolve(self.lucky_view));
+                false
+            }
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
-            ShopAction::OpenCashCharge | ShopAction::BackToLobby => false,
+            ShopAction::OpenCashCharge | ShopAction::BackToLobby | ShopAction::GoMyRoom => false,
             ShopAction::SelectCategory(slot) => {
                 self.shop_category = Some(slot);
                 false
@@ -474,18 +774,29 @@ impl ShopState {
                 false
             }
             ShopAction::BagPrev => {
-                self.bag_page = self.bag_page.saturating_sub(1);
+                // Exe `0x1420004c`: `(page - 1 + count) % count`
+                // wraps at the first page; both pager arms then clear
+                // the selection word and refresh.
+                let count = shop_page_count(owned.len(), SHOP_BAG_CELLS);
+                if self.bag_page != 0 {
+                    self.bag_page = (self.bag_page - 1) % count;
+                } else if count > 1 {
+                    self.bag_page = count - 1;
+                }
+                self.clear_bag_selection();
                 false
             }
             ShopAction::BagNext => {
+                // Exe `0x1420004d`: hold at the last page, never wrap.
                 if self
                     .bag_page
                     .saturating_add(1)
                     .saturating_mul(SHOP_BAG_CELLS)
-                    < owned_len
+                    < owned.len()
                 {
                     self.bag_page = self.bag_page.saturating_add(1);
                 }
+                self.clear_bag_selection();
                 false
             }
             // Sorting changes no staged board state: the exe's sort

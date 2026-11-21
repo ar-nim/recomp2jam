@@ -70,6 +70,38 @@ pub const CASH_CHARGE_DIALOG_BLOCK: &str = "DIALOG_CHARGECASH";
 /// `State_ItemShop.bnd` rect 4 `(56,340)-(147,364)` covers the
 /// qualified b8 click at `(92,355)`.
 pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
+/// ITEMVACATE (`0x14200005`) and CONFERENCE (`0x142000b6`) chrome
+/// arms. The vacate arm only runs with the cart flag `0x8cd` clear,
+/// then chooses a notice from a confirmation pair and the item code;
+/// CONFERENCE posts notice type `0x14` with no text.
+pub const SHOP_ITEMVACATE_CODE: u32 = 0x1420_0005;
+pub const SHOP_CONFERENCE_CODE: u32 = 0x1420_00B6;
+
+/// Notice posted by one of the two shop chrome arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopChromeNotice {
+    /// Confirmed vacate: type 1, exe string at VA `0x648af0`.
+    VacateConfirmed,
+    /// Special item code `0x23`/`0x24`: type 1, string `0x648acc`.
+    VacateSpecialItem,
+    /// Ordinary vacate: type 2, formatted string `0x648a90`
+    /// carrying the staged item word.
+    VacateItem(u32),
+    /// CONFERENCE: type `0x14`, no text.
+    Conference,
+}
+
+impl ShopChromeNotice {
+    /// Exe notice type (`FUN_00478c90` first argument).
+    #[must_use]
+    pub const fn notice_type(self) -> u8 {
+        match self {
+            Self::VacateConfirmed | Self::VacateSpecialItem => 1,
+            Self::VacateItem(_) => 2,
+            Self::Conference => 0x14,
+        }
+    }
+}
 /// Web client control inside the Cash Charge dialog
 /// (`IDC_IMAGE_CHARGECASH_WEB`, 0x83500002); its parent-relative
 /// `.bnd` rect stages the exe-pinned client area.
@@ -418,6 +450,17 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 /// Code `0x1420_0001` follows the pinned `(code & 0xFFF) - 1` ordinal
 /// pairing from `docs/shop.md`; no separate `EXIT` id exists in-block.
 pub const SHOP_BACK_CODE: u32 = 0x1420_0001;
+/// Static BACK arm (`IDC_BUTTON_SSHOP_BACK`, `0x14200002`): the
+/// dispatcher `FUN_00499760` (`ev_f3ad15be…`) cues two UI sounds, changes
+/// screen, and virtually sends `0x138f` = 5007 ExitShop — the same exit
+/// the tapped full-bleed [`SHOP_BACK_CODE`] plate emits live (#386). The
+/// two sound slots are unpinned; no effect is invented.
+pub const SHOP_STATIC_BACK_CODE: u32 = 0x1420_0002;
+/// GO MYROOM arm (`IDC_BUTTON_SSHOP_GOMYROOM`, `0x14200003`): the same
+/// dispatcher changes screen with **no** virtual send (`ev_f3ad15be…`).
+/// OPEN (next step): one tapped GO MYROOM frame with a wire tap naming
+/// the destination and confirming opcode absence.
+pub const SHOP_GOMYROOM_CODE: u32 = 0x1420_0003;
 /// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
 /// contiguously through `+7` (block walk + staged dump).
 pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
@@ -544,11 +587,91 @@ pub const SHOP_CART_CHECKMONEY_CODE: u32 = 0x1440_0075;
 /// staged figure, ticket #196): the equipped (or preview) worn
 /// figure paints here on the paint clock, like the room slot.
 pub const SHOP_AVATAR_CODE: u32 = 0x1470_0034;
-/// Gender filter buttons (`IDC_BUTTON_SSHOP_GIRL/BOY`): ControlList
-/// names only — neither stages in the live dump, so both land
-/// nowhere (labeled no-op; next step: SendInput sweep if they stage).
+/// Gender buttons (`IDC_BUTTON_SSHOP_GIRL/BOY`). The static dispatcher
+/// `FUN_00499760` (`ev_f3ad15be…`) writes gender byte `+0x18` (GIRL 1,
+/// BOY 0), cues slot `0x1b`, hides the other button, and calls one of
+/// three context refreshers. The live dump stages neither button
+/// (absence, ticket #195), so the arms only answer a staged control.
 pub const SHOP_GIRL_CODE: u32 = 0x1420_2006;
 pub const SHOP_BOY_CODE: u32 = 0x1420_2007;
+/// UI-effect slot the two gender arms cue (`FUN_00551870(0x1b,0)`).
+pub const SHOP_GENDER_SOUND_SLOT: u8 = 0x1b;
+
+/// Gender byte written at object `+0x18` by the GIRL/BOY arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopGender {
+    /// `0x14202006`: byte 1, latest fashions.
+    Girl,
+    /// `0x14202007`: byte 0, latest fashions.
+    Boy,
+}
+
+impl ShopGender {
+    /// Value written to the exe's gender byte at `+0x18`.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Girl => 1,
+            Self::Boy => 0,
+        }
+    }
+
+    /// Row of the submenu caption table (`+0x58` stride `0x18`).
+    #[must_use]
+    pub const fn table_row(self) -> usize {
+        self.byte() as usize
+    }
+
+    /// The button the press hides (the "other" button).
+    #[must_use]
+    pub const fn hidden_button(self) -> u32 {
+        match self {
+            Self::Girl => SHOP_BOY_CODE,
+            Self::Boy => SHOP_GIRL_CODE,
+        }
+    }
+}
+
+/// Which of the three context refreshers a gender or planet press calls.
+/// The exe selects by two object words (`+0x5a`, `+0x51`); mapping our
+/// screens to those words needs the before/after frame pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShopRefreshContext {
+    /// Both words zero: `FUN_0049ead0`.
+    #[default]
+    Plain,
+    /// First word zero, second nonzero: `FUN_0049e2d0`.
+    FigurePane,
+    /// First word nonzero: `FUN_0049f0c0`.
+    SideRole,
+}
+
+/// One context-refresh call the exe makes after a gender or planet
+/// press. The helper name is a static pin; the argument is the exe's
+/// "lucky" word (1 at planet 12, else 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopRefresh {
+    /// Refresher the object state selects.
+    pub helper: &'static str,
+    /// Value passed to the refresher.
+    pub argument: u8,
+}
+
+impl ShopRefreshContext {
+    /// Resolve the refresher and its argument for one press.
+    #[must_use]
+    pub const fn resolve(self, lucky_view: bool) -> ShopRefresh {
+        let helper = match self {
+            Self::Plain => "FUN_0049ead0",
+            Self::FigurePane => "FUN_0049e2d0",
+            Self::SideRole => "FUN_0049f0c0",
+        };
+        ShopRefresh {
+            helper,
+            argument: if lucky_view { 1 } else { 0 },
+        }
+    }
+}
 /// Category buttons (`IDC_BUTTON_SSHOP_SET/FASHION/ACCESSORY/BEAUTY/
 /// INSTRUMENT`): five contiguous codes, none staged live (labeled
 /// no-op, same next step).
@@ -560,6 +683,35 @@ pub const SHOP_CATEGORY_BUTTONS: usize = 5;
 pub const SHOP_SUBMENU_FIRST_CODE: u32 = 0x1420_8012;
 /// Submenu buttons in the row (six `Shop_SubMenu` buttons).
 pub const SHOP_SUBMENU_BUTTONS: usize = 6;
+/// Six caption words per gender from `DAT_00648530` (VA `0x648530`,
+/// 4-byte words, read via REA `ev_37bbdf86…`). The layout helper
+/// `FUN_004a0660` (`ev_3e020a4a…`) indexes this table by submenu slot
+/// and gender byte `+0x58`; word `-1` hides the caption, any other
+/// word keeps the control's own text template. The word values are
+/// resource ids, not caption text; the strings themselves need one
+/// qualified frame in both gender states.
+pub const SHOP_SUBMENU_CAPTION_WORDS: [[i32; SHOP_SUBMENU_BUTTONS]; 2] = [
+    [0x1d, 0x1c, 0x1e, 0x14, 0x16, 0x18],
+    [0x13, 0x0d, 0x0a, 0x0e, -1, -1],
+];
+
+/// Whether one staged submenu caption paints for the staged gender.
+/// Non-submenu placements always paint; before a gender press the
+/// entry byte is unpinned, so no caption is hidden by guesswork.
+#[must_use]
+pub fn shop_submenu_caption_kept(code: u32, gender: Option<ShopGender>) -> bool {
+    let Some(slot) = code
+        .checked_sub(SHOP_SUBMENU_FIRST_CODE)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return true;
+    };
+    let Some(gender) = gender else {
+        return true;
+    };
+    slot >= SHOP_SUBMENU_BUTTONS || SHOP_SUBMENU_CAPTION_WORDS[gender.table_row()][slot] != -1
+}
+
 /// First per-row gift button (`IDC_BUTTON_SSHOP_ITEMGIFT1`); eight
 /// run contiguously through `+7` (gifting is out of scope: stories
 /// 20-21 need exe pins, so all eight land nowhere).
@@ -580,19 +732,102 @@ pub const SHOP_ITEMGIFT_IDS: [&str; 8] = [
 pub const SHOP_GIFTITEM_CODE: u32 = 0x1420_0071;
 /// Cart gift button id (the [`ShopGiftNoop`] record behind it).
 pub const SHOP_GIFTITEM_ID: &str = "IDC_BUTTON_SSHOP_GIFTITEM";
-/// Ext-menu opener (`IDC_BUTTON_SSHOP_EXTMENU_ON`): its twelve
-/// filter children stage nothing live, so the opener records
-/// nothing (labeled no-op).
+/// Ext-menu opener (`IDC_BUTTON_SSHOP_EXTMENU_ON`). Static arm
+/// `0x14200099` (`ev_f3ad15be…`) only acts while gate word `0x5f` is
+/// set; it clears that gate and flips `0x5b`, reseeds once, and cycles
+/// the 12 filters plus the eight first-row buy/name/gift/show
+/// controls (and four `0x1401d088..8b` controls). The layout helper
+/// `FUN_004a0660` hides all filters at entry. The live dump stages no
+/// filters (#195), so the visibility rule is a static pin.
 pub const SHOP_EXTMENU_ON_CODE: u32 = 0x1420_0099;
 /// First ext-menu filter (`IDC_BUTTON_SSHOP_EXTMENU_ALL`); twelve
 /// run contiguously through `+11` (none staged live).
 pub const SHOP_EXTMENU_FIRST_CODE: u32 = 0x1420_109B;
 /// Ext-menu filters in the menu (twelve `Shop_ExtMenu` buttons).
 pub const SHOP_EXTMENU_BUTTONS: usize = 12;
-/// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`): display-only,
-/// lands nowhere (labeled no-op).
+/// The eight first-row controls the ext-menu arm flips with the
+/// filters: ITEMBUY1/2, ITEMNAME1/2, ITEMGIFT1/2, ITEMSHOW1/2.
+pub const SHOP_EXTMENU_GROUP_CODES: [u32; 8] = [
+    0x1420_0018,
+    0x1420_0019,
+    0x1440_002C,
+    0x1440_002D,
+    0x1420_0020,
+    0x1420_0021,
+    0x1460_0035,
+    0x1460_0036,
+];
+
+/// Four side controls the open arm hides (`0x1401d088..8b`).
+pub const SHOP_EXTMENU_SIDE_CODES: [u32; 4] = [0x1401_D088, 0x1401_D089, 0x1401_D08A, 0x1401_D08B];
+
+/// Whether one staged control paints with the ext-menu state. The
+/// 12 filters appear on open and hide on close; the eight first-row
+/// controls and four side controls do the reverse. Every other
+/// placement keeps its own gate. The layout helper hides all filters
+/// at entry, which our closed default reproduces.
+#[must_use]
+pub fn shop_extmenu_kept(placed: &ScenePlacement, open: bool) -> bool {
+    let in_filter_run = placed
+        .code
+        .checked_sub(SHOP_EXTMENU_FIRST_CODE)
+        .is_some_and(|offset| offset < SHOP_EXTMENU_BUTTONS as u32);
+    if in_filter_run {
+        return open;
+    }
+    if SHOP_EXTMENU_GROUP_CODES.contains(&placed.code)
+        || SHOP_EXTMENU_SIDE_CODES.contains(&placed.code)
+    {
+        return !open;
+    }
+    true
+}
+/// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`). Static arm
+/// `0x14200008/09` (`ev_f3ad15be…`) cycles index `0x17`: UP 1→12 then
+/// decrements, DOWN 12→1 then increments; it hides the 12×3 grid,
+/// calls caption setter `FUN_0042f870(index,0)`, refreshes the context,
+/// then takes two fresh seeds and resets three layout flags. Neither
+/// arrow stages in the live dump (#195), so the arms answer only a
+/// staged control.
 pub const SHOP_PLANET_UP_CODE: u32 = 0x1420_0008;
 pub const SHOP_PLANET_DOWN_CODE: u32 = 0x1420_0009;
+/// First planet grid cell (12 planets × 3 cells), staged for the
+/// hide-before-turn pass in the two planet arms.
+pub const SHOP_PLANET_GRID_CELLS: usize = 12 * 3;
+/// Layout words the planet arms reset after the two reseeds
+/// (`0x8d4/0x8d5/0x8d6` in the exe object).
+pub const SHOP_PLANET_LAYOUT_FLAGS: [u8; 3] = [0, 0, 1];
+/// Valid planet index range (`0x17` cycles 1..=12).
+pub const SHOP_PLANET_FIRST_INDEX: u8 = 1;
+pub const SHOP_PLANET_LAST_INDEX: u8 = 12;
+
+/// Next planet index for one arrow press. Pure wrap arithmetic from
+/// the two static arms (`ev_f3ad15be…`): UP 1→12, DOWN 12→1.
+#[must_use]
+pub const fn shop_next_planet_index(current: u8, action: ShopAction) -> u8 {
+    let current = if current < SHOP_PLANET_FIRST_INDEX {
+        SHOP_PLANET_FIRST_INDEX
+    } else {
+        current
+    };
+    match action {
+        ShopAction::PlanetUp => {
+            if current == SHOP_PLANET_FIRST_INDEX {
+                SHOP_PLANET_LAST_INDEX
+            } else {
+                current - 1
+            }
+        }
+        ShopAction::PlanetDown => {
+            if current == SHOP_PLANET_LAST_INDEX {
+                SHOP_PLANET_FIRST_INDEX
+            } else {
+                current + 1
+            }
+        }
+        _ => current,
+    }
+}
 /// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
 /// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
 /// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
@@ -604,9 +839,46 @@ pub const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
 /// First item icon (`IDC_IMAGE_SSHOP_ITEMSHOW1`); eight run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
-/// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
-/// contiguously (paint targets, never dispatch).
+/// First owned-bag cell (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
+/// contiguously. Static arm `0x1460003d..46` (`ev_f3ad15be…`) selects
+/// the paged index `DAT_0077ccc0`, cues slot `0x18`, and posts one of
+/// three category notices or an occupied-slot notice. A special item
+/// pair (globals `0x77991c/20`) refuses selection.
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
+/// UI-effect slot cued by a bag-cell selection.
+pub const SHOP_BAG_SELECT_SOUND_SLOT: u8 = 0x18;
+/// Notice targets the bag arm inks for three item categories. Category
+/// byte `0x19` → `0x1460003f`, `0x1a` → `0x1460003e`, `0x1b` →
+/// `0x14600040` (all type 2, `ev_f3ad15be…`).
+pub const SHOP_BAG_NOTICE_CODES: [u32; 3] = [0x1460_003F, 0x1460_003E, 0x1460_0040];
+/// Category bytes that own each target above, in the same order.
+pub const SHOP_BAG_NOTICE_CATEGORIES: [u8; 3] = [0x19, 0x1a, 0x1b];
+
+/// Notice posted by one staged bag-cell press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopBagNotice {
+    /// Category notice: the target control code the exe inks.
+    Category { target: u32 },
+    /// Worn slot occupied: type `0x0d` with string at VA `0x64886c`.
+    SlotOccupied,
+}
+
+impl ShopBagNotice {
+    /// Notice for one staged item category, if the exe posts one.
+    #[must_use]
+    pub const fn for_category(category: u8) -> Option<Self> {
+        let mut index = 0;
+        while index < SHOP_BAG_NOTICE_CATEGORIES.len() {
+            if SHOP_BAG_NOTICE_CATEGORIES[index] == category {
+                return Some(Self::Category {
+                    target: SHOP_BAG_NOTICE_CODES[index],
+                });
+            }
+            index += 1;
+        }
+        None
+    }
+}
 /// Owned-panel tab anchors and selection frame (`MYBAGSELECT` uses
 /// the archive frame body like MyRoom's frame). The static arms at
 /// file `0xa5a75` / `0xa5b63` clear / set the cart flag `+0x8cd`,
@@ -1023,11 +1295,31 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// EXTMENU (`0x14200099`): cycle the 12 filters and their group.
+    ToggleExtMenu,
+    /// ITEMVACATE (`0x14200005`): confirmation and item-code ladder.
+    VacateItem,
+    /// CONFERENCE (`0x142000b6`): notice type `0x14`.
+    Conference,
+    /// Owned bag cell (`0x1460003d..46`): select the paged index
+    /// and post the category notice.
+    SelectBagItem(usize),
+    /// Planet UP (`0x14200008`): decrement index, 1 wraps to 12.
+    PlanetUp,
+    /// Planet DOWN (`0x14200009`): increment index, 12 wraps to 1.
+    PlanetDown,
+    /// Gender button pressed (`+0x18` byte, other button hidden,
+    /// context refresher called).
+    SelectGender(ShopGender),
     /// Category tab selected (0-based in the five-button row). The
     /// FASHION press frame pins the highlight, not a filter rule.
     SelectCategory(usize),
-    /// Full-bleed BACK plate: leave the side and send `ExitShop` 5007.
+    /// Full-bleed BACK plate or static BACK arm: leave the side and
+    /// send `ExitShop` 5007.
     BackToLobby,
+    /// Static GO MYROOM arm: change screen only, no wire (the exit
+    /// 5007 belongs to BACK alone).
+    GoMyRoom,
     /// Item-list scroll pager stepped back.
     ItemPrev,
     /// Item-list scroll pager stepped forward.
@@ -1113,7 +1405,13 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
         SHOP_CHARGE_MONEY_CODE => Some(ShopAction::OpenCashCharge),
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
-        SHOP_BACK_CODE => Some(ShopAction::BackToLobby),
+        SHOP_BACK_CODE | SHOP_STATIC_BACK_CODE => Some(ShopAction::BackToLobby),
+        SHOP_GOMYROOM_CODE => Some(ShopAction::GoMyRoom),
+        SHOP_EXTMENU_ON_CODE => Some(ShopAction::ToggleExtMenu),
+        SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
+        SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
+        SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
+        SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
@@ -1126,12 +1424,29 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
+            .or_else(|| shop_gender_action(code))
+            .or_else(|| shop_bag_item_slot(code))
             .or_else(|| shop_category_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
                     .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
             })
             .or_else(|| shop_tryon_slot(code)),
+    }
+}
+
+/// Owned bag cell behind one `SHOP_MYBAGITEM_FIRST_CODE` code.
+fn shop_bag_item_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_MYBAGITEM_FIRST_CODE, code)?;
+    (slot < SHOP_BAG_CELLS).then_some(ShopAction::SelectBagItem(slot))
+}
+
+/// Gender arm behind one of the two staged GIRL/BOY codes.
+fn shop_gender_action(code: u32) -> Option<ShopAction> {
+    match code {
+        SHOP_GIRL_CODE => Some(ShopAction::SelectGender(ShopGender::Girl)),
+        SHOP_BOY_CODE => Some(ShopAction::SelectGender(ShopGender::Boy)),
+        _ => None,
     }
 }
 

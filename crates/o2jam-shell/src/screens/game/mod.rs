@@ -87,17 +87,18 @@ use super::side::{
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
     select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
-    shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
-    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopFace, MusicShopNotice, MusicShopRow, MyRoomState, PasswordAction,
-    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
-    SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
-    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
-    ShopGood, ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow,
-    WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
-    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE,
-    SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
+    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
+    MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -6704,6 +6705,178 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Whether one ext-menu filter or group control paints now.
+    #[must_use]
+    pub fn shop_extmenu_control_visible(&self, code: u32) -> bool {
+        shop_extmenu_kept(
+            &ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            },
+            self.shop.ext_menu_open(),
+        )
+    }
+
+    /// Accepted ext-menu toggle count.
+    #[must_use]
+    pub fn shop_extmenu_toggles(&self) -> u32 {
+        self.shop.ext_menu_toggles()
+    }
+
+    /// Reseeds made by ext-menu toggles.
+    #[must_use]
+    pub fn shop_extmenu_reseeds(&self) -> u32 {
+        self.shop.ext_menu_reseeds()
+    }
+
+    /// Word `0x5d` after the last ext-menu toggle.
+    #[must_use]
+    pub fn shop_extmenu_secondary_word(&self) -> u8 {
+        self.shop.ext_menu_secondary_word()
+    }
+
+    /// Stage the gate word that allows an ext-menu toggle.
+    pub fn stage_shop_extmenu_ready(&mut self, ready: bool) {
+        self.shop.stage_ext_menu_ready(ready);
+    }
+
+    /// Notice posted by the last ITEMVACATE/CONFERENCE press.
+    #[must_use]
+    pub fn shop_chrome_notice(&self) -> Option<super::side::ShopChromeNotice> {
+        self.shop.chrome_notice()
+    }
+
+    /// Stage the vacate confirmation pair result.
+    pub fn stage_shop_vacate_confirmed(&mut self, confirmed: bool) {
+        self.shop.stage_vacate_confirmed(confirmed);
+    }
+
+    /// Stage the vacate item code.
+    pub fn stage_shop_vacate_item_code(&mut self, code: u32) {
+        self.shop.stage_vacate_item_code(code);
+    }
+
+    /// Stage the vacate item word inked by the type-2 notice.
+    pub fn stage_shop_vacate_item_word(&mut self, word: u32) {
+        self.shop.stage_vacate_item_word(word);
+    }
+
+    /// Selected owned row (global index across bag pages).
+    #[must_use]
+    pub fn shop_bag_selection(&self) -> Option<usize> {
+        self.shop.bag_selection()
+    }
+
+    /// Notice posted by the last bag-cell press.
+    #[must_use]
+    pub fn shop_bag_notice(&self) -> Option<super::side::ShopBagNotice> {
+        self.shop.bag_notice()
+    }
+
+    /// Stage one owned item's category byte for the notice rule.
+    pub fn stage_shop_bag_item_category(&mut self, item_id: u32, category: u8) {
+        self.shop.stage_bag_item_category(item_id, category);
+    }
+
+    /// Stage one owned item's worn-slot occupancy.
+    pub fn stage_shop_bag_item_worn(&mut self, item_id: u32, worn: bool) {
+        self.shop.stage_bag_item_worn(item_id, worn);
+    }
+
+    /// Stage one owned item's special-pair refusal.
+    pub fn stage_shop_bag_item_locked(&mut self, item_id: u32, locked: bool) {
+        self.shop.stage_bag_item_locked(item_id, locked);
+    }
+
+    /// Current planet index (1..=12).
+    #[must_use]
+    pub fn shop_planet_index(&self) -> u8 {
+        self.shop.planet_index()
+    }
+
+    /// Caption-setter argument from the last planet turn.
+    #[must_use]
+    pub fn shop_planet_caption_arg(&self) -> Option<u8> {
+        self.shop.planet_caption_arg()
+    }
+
+    /// Grid cells hidden by the last planet turn.
+    #[must_use]
+    pub fn shop_planet_hidden_cells(&self) -> usize {
+        self.shop.planet_hidden_cells()
+    }
+
+    /// Reseed count from the last planet turn.
+    #[must_use]
+    pub fn shop_planet_reseeds(&self) -> u32 {
+        self.shop.planet_reseeds()
+    }
+
+    /// Layout words after the last planet turn.
+    #[must_use]
+    pub fn shop_planet_layout_flags(&self) -> [u8; 3] {
+        self.shop.planet_layout_flags()
+    }
+
+    /// Refresher call made by the last planet press.
+    #[must_use]
+    pub fn shop_planet_refresh(&self) -> Option<super::side::ShopRefresh> {
+        self.shop.planet_refresh()
+    }
+
+    /// Stage the count of nonempty 12×3 planet cells.
+    pub fn stage_shop_planet_grid(&mut self, nonzero_cells: usize) {
+        self.shop.stage_planet_grid_nonzero(nonzero_cells);
+    }
+
+    /// Stage whether the planet caption setter is armed.
+    pub fn stage_shop_planet_caption(&mut self, armed: bool) {
+        self.shop.stage_planet_caption_armed(armed);
+    }
+
+    /// Whether one staged submenu caption inks for the current
+    /// gender (the exe table hides two slots in one gender).
+    #[must_use]
+    pub fn shop_submenu_caption_visible(&self, code: u32) -> bool {
+        shop_submenu_caption_kept(code, self.shop.gender())
+    }
+
+    /// Gender byte `+0x18` staged by the last GIRL/BOY press.
+    #[must_use]
+    pub fn shop_gender(&self) -> Option<super::side::ShopGender> {
+        self.shop.gender()
+    }
+
+    /// Button hidden by the last gender press.
+    #[must_use]
+    pub fn shop_hidden_gender_button(&self) -> Option<u32> {
+        self.shop.hidden_gender_button()
+    }
+
+    /// Context refresher call made by the last gender press.
+    #[must_use]
+    pub fn shop_gender_refresh(&self) -> Option<super::side::ShopRefresh> {
+        self.shop.gender_refresh()
+    }
+
+    /// Stage the object context that selects the press refresher.
+    pub fn stage_shop_refresh_context(&mut self, context: super::side::ShopRefreshContext) {
+        self.shop.stage_refresh_context(context);
+    }
+
+    /// Stage the "lucky" word passed to the press refresher.
+    pub fn stage_shop_lucky_view(&mut self, lucky_view: bool) {
+        self.shop.stage_lucky_view(lucky_view);
+    }
+
     /// Lower-left panel face: MY BAG at entry, SHOPPING BAG after
     /// a row pick (audit D4).
     #[must_use]
@@ -6948,7 +7121,8 @@ impl ScreenGame {
         let Some(action) = shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
+        let owned = self.shop.bag_goods(self.shop_inventory());
+        let owned_len = owned.len();
         match action {
             ShopAction::BackToLobby => {
                 // The tap leaves the side and emits the empty 5007;
@@ -6956,6 +7130,13 @@ impl ScreenGame {
                 if self.leave_side() {
                     self.outbox.pending_exit_shop = Some(o2jam_net::shop::ExitShop);
                 }
+            }
+            ShopAction::GoMyRoom => {
+                // Static arm `0x14200003` (`ev_f3ad15be…`): screen
+                // change only. The session outbox stays untouched —
+                // no 5007 and no invented opcode on this arm. The
+                // tapped destination frame is the OPEN next step.
+                let _ = self.leave_side();
             }
             ShopAction::OpenCashCharge => {
                 // The charge plate leaves the shop board and opens
@@ -6974,7 +7155,7 @@ impl ScreenGame {
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
                 // avatar-pane figure (restage) and the comment preview.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.shop.select_preview(slot);
                 self.restage_shop_avatar();
             }
@@ -6983,7 +7164,7 @@ impl ScreenGame {
                 // 0x2190-byte copy from global `0x77cd00` into the
                 // local avatar block and a repaint. The snapshot was
                 // taken on character staging, so every slot reverts.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.shop.clear_preview();
                 if let (Some(block), Some(character)) =
                     (self.equipped_block.as_ref(), self.myroom_character.as_mut())
@@ -6997,7 +7178,7 @@ impl ScreenGame {
                 // already staged by the row pick; BUYITEM opens the
                 // web purchase surface. The static ladder below also
                 // queues 5015 when every staged gate passes.
-                if self.shop.apply_action(action, owned_len) {
+                if self.shop.apply_action(action, &owned) {
                     self.shop_purchase_web_open = true;
                 }
                 self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
@@ -7007,11 +7188,11 @@ impl ScreenGame {
                 // press itself stages nothing, but queues the empty
                 // 5038. The session owns the wire; live no-wire tap
                 // stays recorded beside the pin.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.outbox.pending_refresh_bag = Some(RefreshBag);
             }
             _ => {
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
             }
         }
     }
@@ -7529,8 +7710,13 @@ impl ScreenGame {
             // until a staged shelf cell is hovered (audit D4/D5).
             let panel = self.shop_panel();
             let shelf_hovered = self.hovered_item_show_slot().is_some();
+            let gender = self.shop.gender();
+            let ext_menu_open = self.shop.ext_menu_open();
             paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
-                shop_panel_kept(placed, panel) && shop_tooltip_kept(placed, shelf_hovered)
+                shop_panel_kept(placed, panel)
+                    && shop_tooltip_kept(placed, shelf_hovered)
+                    && shop_submenu_caption_kept(placed.code, gender)
+                    && shop_extmenu_kept(placed, ext_menu_open)
             });
             // The purchase page is a web surface over the shop board;
             // its content is not captured, so only the staged client
@@ -8939,7 +9125,8 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MyRoomLowerTab, MyRoomPanel, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
+        MyRoomLowerTab, MyRoomPanel, ShopBagNotice, ShopChromeNotice, ShopGender, ShopRefresh,
+        ShopRefreshContext, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
         LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE,
         LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
         LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
@@ -8954,19 +9141,21 @@ mod game_tests {
         MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
         MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE,
         MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE,
-        ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
-        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
-        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
-        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
-        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
-        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
-        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
-        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
-        SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
+        ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_CELLS, SHOP_BAG_LEFT_CODE,
+        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
+        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
+        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
+        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
+        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
+        SHOP_EXTMENU_GROUP_CODES, SHOP_EXTMENU_ON_CODE, SHOP_EXTMENU_SIDE_CODES,
+        SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE,
+        SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
+        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -23280,6 +23469,63 @@ mod game_tests {
         game
     }
 
+    /// Add one staged control to a synthetic shop board.
+    fn stage_shop_control(game: &mut ScreenGame, code: u32, x: i32) {
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+    }
+
+    /// Board with the two chrome arms and the two bag-face switches.
+    fn shop_chrome_board() -> ScreenGame {
+        use super::super::side::{
+            SHOP_CONFERENCE_CODE, SHOP_ITEMVACATE_CODE, SHOP_MYBACK_POS_CODE, SHOP_MYCART_POS_CODE,
+        };
+        let mut game = open_shop_board(10);
+        for (code, x) in [
+            (SHOP_ITEMVACATE_CODE, 500),
+            (SHOP_MYCART_POS_CODE, 540),
+            (SHOP_MYBACK_POS_CODE, 580),
+            (SHOP_CONFERENCE_CODE, 640),
+        ] {
+            stage_shop_control(&mut game, code, x);
+        }
+        game
+    }
+
+    /// Shop board with two pages of owned goods and ten staged bag
+    /// cells (synthetic placements; no install-root data).
+    fn bag_cell_board() -> ScreenGame {
+        let mut game = open_shop_board(25);
+        game.set_myroom_character(myroom_test_character(vec![
+            0, 3, 999, 1, 2, 5, 7, 9, 11, 13, 15, 17, 19, 21,
+        ]));
+        for slot in 0..SHOP_BAG_CELLS as u32 {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: SHOP_MYBAGITEM_FIRST_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 10 + slot as i32 * 20,
+                    y: 30,
+                    w: 10,
+                    h: 10,
+                },
+            });
+        }
+        game
+    }
+
     fn shop_side_placements() -> Vec<ScenePlacement> {
         // Synthetic `STATE_SHOP` board: eight ITEMBUY hit areas, the
         // scroll with its relative pager children, the cart buy and
@@ -23688,8 +23934,9 @@ mod game_tests {
         //   -> ShopState::set_catalog (+ set_myroom_character on
         //   fetched boots for the owned ids), then click_shop on the
         //   staged BAGLEFT/RIGHT pager. The pager turns over owned
-        //   goods in inventory order (zero/unknown ids skip) and holds
-        //   at both ends; it never queues a send.
+        //   goods in inventory order (zero/unknown ids skip); RIGHT
+        //   holds at the end and LEFT wraps at the start (#784, static
+        //   `0x1420004c/4d`). It never queues a send.
         let mut game = open_shop_board(25);
         game.set_myroom_character(myroom_test_character(vec![
             0, 3, 999, 1, 2, 5, 7, 9, 11, 13, 15, 17, 19, 21,
@@ -23714,7 +23961,7 @@ mod game_tests {
         game.click_shop(291, 576);
         assert_eq!(game.shop_bag_page(), 0);
         game.click_shop(291, 576);
-        assert_eq!(game.shop_bag_page(), 0, "bag PREV holds at the start");
+        assert_eq!(game.shop_bag_page(), 1, "bag PREV wraps to the last page");
         assert_eq!(game.take_shop_buy(), None);
     }
 
@@ -24568,6 +24815,514 @@ mod game_tests {
         assert_eq!(game.take_exit_shop(), Some(ExitShop));
         assert_eq!(game.take_exit_shop(), None, "one press sends once");
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn item_shop_go_myroom_leaves_without_an_exit_send() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GOMYROOM 0x14200003) -> leave_side (screen change
+        //   only). Static pin `FUN_00499760` arm `0x14200003` emits no
+        //   virtual send, unlike the 5007 on BACK `0x14200002`.
+        //   OPEN (next step): one tapped GO MYROOM frame + wire tap.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GOMYROOM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.side(), None, "GOMYROOM changes the screen");
+        assert_eq!(
+            game.take_exit_shop(),
+            None,
+            "GOMYROOM sends no 5007 ExitShop"
+        );
+        assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_extmenu_toggle_cycles_twelve_filters_and_group_visibility() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(EXTMENU_ON 0x14200099) -> ShopState state ->
+        //   paint_side -> shop_extmenu_kept on staged filters/groups.
+        // Static pin `ev_f3ad15be…`: the arm flips `0x5b`, reseeds once,
+        // and cycles the 12 filters against the eight first-row and
+        // four side controls; layout hides filters at entry. The live
+        // dump stages no filters (#195), so only the static rule is
+        // claimed. OPEN (next step): one EXT_ON press frame with
+        // before/after visibility. Synthetic, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        stage_shop_control(&mut game, SHOP_EXTMENU_ON_CODE, 500);
+        game.stage_shop_extmenu_ready(true);
+        let filters: Vec<u32> = (0..SHOP_EXTMENU_BUTTONS as u32)
+            .map(|slot| SHOP_EXTMENU_FIRST_CODE + slot)
+            .collect();
+        let group: Vec<u32> = SHOP_EXTMENU_GROUP_CODES
+            .iter()
+            .chain(SHOP_EXTMENU_SIDE_CODES.iter())
+            .copied()
+            .collect();
+        assert!(filters
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+
+        game.click_shop(510, 40);
+        assert!(filters
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert_eq!(game.shop_extmenu_toggles(), 1);
+        assert_eq!(game.shop_extmenu_reseeds(), 1);
+        assert_eq!(game.shop_extmenu_secondary_word(), 0);
+
+        game.stage_shop_extmenu_ready(true);
+        game.click_shop(510, 40);
+        assert!(filters
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+        assert_eq!(game.shop_extmenu_toggles(), 2);
+        assert_eq!(game.shop_extmenu_reseeds(), 2);
+    }
+
+    #[test]
+    fn shop_extmenu_toggle_is_ignored_while_the_gate_is_closed() {
+        // Same arm: word `0x5f` must be set before the toggle is
+        // honored. Its exe writer is unpinned; our staged gate starts
+        // closed. Synthetic placement, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        stage_shop_control(&mut game, SHOP_EXTMENU_ON_CODE, 500);
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_extmenu_toggles(), 0);
+        assert_eq!(game.shop_extmenu_reseeds(), 0);
+    }
+
+    #[test]
+    fn shop_itemvacate_notice_needs_the_owned_bag_face_closed() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(ITEMVACATE 0x14200005 / MYCART_POS / MYBACK_POS)
+        //   -> ShopState::apply_action -> notice record.
+        // Static pin `ev_f3ad15be…`: the arm runs only while cart flag
+        // `0x8cd == 0`, which our panel face carries. OPEN (next step):
+        // a qualified press frame with the notice text source.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = shop_chrome_board();
+        game.stage_shop_vacate_confirmed(true);
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateConfirmed)
+        );
+        assert_eq!(game.shop_chrome_notice().map(|n| n.notice_type()), Some(1));
+
+        game.click_shop(560, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_chrome_notice(), None, "cart face blocks vacate");
+
+        game.click_shop(590, 40);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateConfirmed)
+        );
+    }
+
+    #[test]
+    fn shop_itemvacate_notice_uses_the_special_item_and_item_word_branches() {
+        // Same arm: an unconfirmed pair with item code `0x23`/`0x24`
+        // posts the type-1 special-item string; any other code posts
+        // type 2 with the item word. Synthetic, hidden-arm safe.
+        let mut game = shop_chrome_board();
+        game.stage_shop_vacate_item_code(0x23);
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateSpecialItem)
+        );
+
+        game.stage_shop_vacate_item_code(5);
+        game.stage_shop_vacate_item_word(4500);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateItem(4500))
+        );
+        assert_eq!(game.shop_chrome_notice().map(|n| n.notice_type()), Some(2));
+    }
+
+    #[test]
+    fn shop_conference_posts_the_type_twenty_notice() {
+        // Static arm `0x142000b6` posts notice type `0x14` with no
+        // text (`ev_f3ad15be…`). Synthetic, hidden-arm safe.
+        let mut game = shop_chrome_board();
+
+        game.click_shop(660, 40);
+
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::Conference)
+        );
+        assert_eq!(
+            game.shop_chrome_notice().map(|n| n.notice_type()),
+            Some(0x14)
+        );
+    }
+
+    #[test]
+    fn shop_bag_pager_wraps_left_and_clears_the_selected_row() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MYBAGITEM / BAGLEFT / BAGRIGHT) ->
+        //   ShopState::apply_action -> bag page + selection word.
+        // Static pins `ev_f3ad15be…`: `0x1420004c` computes
+        // `(page - 1 + count) % count` (wrap at the first page),
+        // `0x1420004d` increments only while `page+1 < count` (hold at
+        // the last), and both clear `DAT_0077ccc0` and refresh.
+        // OPEN (next step): a page-boundary frame pair on a multi-page
+        // bag. Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        assert_eq!(game.shop_bag_pages(), 2);
+        game.click_shop(15, 35);
+        assert_eq!(game.shop_bag_selection(), Some(0));
+
+        game.click_shop(291, 576);
+        assert_eq!(game.shop_bag_page(), 1, "BAGLEFT wraps to the last page");
+        assert_eq!(game.shop_bag_selection(), None, "the stale pick is cleared");
+        assert_eq!(game.shop_bag_notice(), None);
+
+        game.click_shop(410, 576);
+        assert_eq!(game.shop_bag_page(), 1, "BAGRIGHT holds at the last page");
+        assert_eq!(game.shop_bag_selection(), None);
+    }
+
+    #[test]
+    fn shop_bag_cell_selects_the_paged_index_and_posts_its_category_notice() {
+        // Live caller chain (once a bag cell stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MYBAGITEM 0x1460003d..46) ->
+        //   ShopState::apply_action(SelectBagItem) -> notice ink.
+        // Static pin `ev_f3ad15be…`: index = cell + page*10, sound
+        // slot 0x18, category byte 0x19/0x1a/0x1b posts to the target
+        // controls 0x1460003f/3e/40. The item→category join is not
+        // pinned, so the test stages it. OPEN (next step): one
+        // selected-cell frame with the notice ink.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_category(3, 0x1a);
+        game.stage_shop_bag_item_category(19, 0x19);
+
+        game.click_shop(15, 35);
+        assert_eq!(game.shop_bag_selection(), Some(0));
+        assert_eq!(
+            game.shop_bag_notice(),
+            Some(ShopBagNotice::Category {
+                target: 0x1460_003E
+            })
+        );
+
+        game.click_shop(410, 576);
+        game.click_shop(15, 35);
+        assert_eq!(
+            game.shop_bag_selection(),
+            Some(10),
+            "page offsets the index"
+        );
+        assert_eq!(
+            game.shop_bag_notice(),
+            Some(ShopBagNotice::Category {
+                target: 0x1460_003F
+            })
+        );
+    }
+
+    #[test]
+    fn shop_bag_cell_with_a_worn_item_posts_the_occupied_slot_notice() {
+        // Same arm: a nonzero worn slot posts type `0x0d` with the
+        // exe string at VA `0x64886c` after the selection is written.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_category(3, 0x1a);
+        game.stage_shop_bag_item_worn(3, true);
+
+        game.click_shop(15, 35);
+
+        assert_eq!(game.shop_bag_selection(), Some(0));
+        assert_eq!(game.shop_bag_notice(), Some(ShopBagNotice::SlotOccupied));
+    }
+
+    #[test]
+    fn shop_locked_bag_cell_selects_nothing_and_posts_no_notice() {
+        // Same arm: the special-item pair check against globals
+        // `0x77991c/20` skips selection and notice entirely. The
+        // pair values are unpinned, so the test stages the refusal.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_locked(3, true);
+
+        game.click_shop(15, 35);
+
+        assert_eq!(game.shop_bag_selection(), None);
+        assert_eq!(game.shop_bag_notice(), None);
+    }
+
+    #[test]
+    fn shop_girl_press_hides_the_last_two_submenu_captions() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GIRL) -> shop gender byte -> paint_side ->
+        //   shop_submenu_caption_kept on six staged submenu captions.
+        // Static pin `ev_3e020a4a…`: table `0x648530` is indexed by
+        // submenu slot and gender byte `+0x58`; word -1 hides, any
+        // other word keeps the caption. OPEN (next step): read the six
+        // caption strings on a qualified frame in both gender states.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GIRL_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+        let codes: Vec<u32> = (0..SHOP_SUBMENU_BUTTONS as u32)
+            .map(|slot| SHOP_SUBMENU_FIRST_CODE + slot)
+            .collect();
+        assert!(
+            codes
+                .iter()
+                .all(|code| game.shop_submenu_caption_visible(*code)),
+            "before a press every caption paints"
+        );
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_gender(), Some(ShopGender::Girl));
+        assert!(codes[..4]
+            .iter()
+            .all(|code| game.shop_submenu_caption_visible(*code)));
+        assert!(
+            codes[4..]
+                .iter()
+                .all(|code| !game.shop_submenu_caption_visible(*code)),
+            "the two -1 table words hide their captions"
+        );
+    }
+
+    #[test]
+    fn shop_planet_up_wraps_one_to_twelve_and_down_wraps_back() {
+        // Live caller chain (once an arrow stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(PLANET_UP/DOWN 0x14200008/09) ->
+        //   ShopState::apply_action(PlanetUp/PlanetDown).
+        // Static pin `ev_f3ad15be…`: UP 1→12 then decrements, DOWN
+        // 12→1 then increments. OPEN (next step): press frames both
+        // directions; no readout pin exists.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        for (code, x) in [(SHOP_PLANET_UP_CODE, 500), (SHOP_PLANET_DOWN_CODE, 540)] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 30,
+                    h: 20,
+                },
+            });
+        }
+        assert_eq!(game.shop_planet_index(), 1);
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_planet_index(), 12, "UP wraps 1 to 12");
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_planet_index(), 1, "DOWN wraps 12 to 1");
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_planet_index(), 2, "DOWN steps forward");
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_planet_index(), 1, "UP steps back");
+    }
+
+    #[test]
+    fn shop_planet_turn_hides_the_grid_reseeds_and_refreshes_the_context() {
+        // Same static arm: the 12×3 grid hides before the turn, the
+        // caption setter takes the new index when armed, two seeds and
+        // three layout words follow, and the context refresher gets 1
+        // at planet 12. Synthetic placement, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_PLANET_UP_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+        game.stage_shop_planet_grid(2);
+        game.stage_shop_planet_caption(true);
+        game.stage_shop_refresh_context(ShopRefreshContext::FigurePane);
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_planet_hidden_cells(), 2);
+        assert_eq!(game.shop_planet_caption_arg(), Some(12));
+        assert_eq!(game.shop_planet_reseeds(), 2);
+        assert_eq!(game.shop_planet_layout_flags(), [0, 0, 1]);
+        assert_eq!(
+            game.shop_planet_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049e2d0",
+                argument: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn shop_gender_press_writes_the_byte_and_hides_the_other_button() {
+        // Live caller chain (once a gender control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GIRL/BOY 0x14202006/07) ->
+        //   ShopState::apply_action(SelectGender). Static arm
+        //   `ev_f3ad15be…` writes `+0x18` (GIRL 1, BOY 0) and hides the
+        //   other button. The live dump stages neither; OPEN (next
+        //   step): before/after frames in shop and myroom contexts.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        for (code, x) in [(SHOP_GIRL_CODE, 500), (SHOP_BOY_CODE, 540)] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 30,
+                    h: 20,
+                },
+            });
+        }
+
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_gender(), Some(ShopGender::Girl));
+        assert_eq!(game.shop_hidden_gender_button(), Some(SHOP_BOY_CODE));
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_gender(), Some(ShopGender::Boy));
+        assert_eq!(game.shop_hidden_gender_button(), Some(SHOP_GIRL_CODE));
+    }
+
+    #[test]
+    fn shop_gender_press_calls_the_context_refresher_for_the_staged_role() {
+        // Same static arm: the three refreshers are selected by two
+        // object words; the argument is 1 at planet 12. OPEN (next
+        // step): frames naming which of our screens maps to each word.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GIRL_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049ead0",
+                argument: 0,
+            })
+        );
+        game.stage_shop_refresh_context(ShopRefreshContext::FigurePane);
+        game.stage_shop_lucky_view(true);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049e2d0",
+                argument: 1,
+            })
+        );
+        game.stage_shop_refresh_context(ShopRefreshContext::SideRole);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_gender_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049f0c0",
+                argument: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn item_shop_static_back_arm_sends_the_same_empty_5007() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(BACK 0x14200002) -> leave_side + pending_exit_shop
+        //   -> OnlineSession flush -> C2S 5007. The tapped BACK plate
+        //   `ff522720..`/`94b2ea8f..` pins the same pair (#386).
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        use o2jam_net::shop::ExitShop;
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_STATIC_BACK_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 540,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+
+        game.click_shop(550, 40);
+
+        assert_eq!(game.side(), None, "static BACK leaves the shop");
+        assert_eq!(game.take_exit_shop(), Some(ExitShop));
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
     }
 
     #[test]

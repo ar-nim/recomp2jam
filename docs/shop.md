@@ -362,13 +362,149 @@ behavior also live in spec #178's enrichment rows.
   `a_gem_shortfall_blocks_the_static_payment_leg`,
   `a_valid_cart_sends_one_empty_5015_after_the_buy_ladder`.
 
+## #178 enrichment — exit pair (#775)
+
+`FUN_00499760` (`ev_f3ad15be…`) names two static exit arms beside the
+live-pinned full-bleed BACK plate: `0x14200002` BACK cues two UI sounds,
+changes screen, and virtually sends `0x138f` = 5007 ExitShop; `0x14200003`
+GOMYROOM changes screen with **no** send. Both codes now route through
+`shop_action_for_code`: the static BACK arm shares the pinned empty-5007
+outbox with the tapped plate, GOMYROOM calls `leave_side` alone. The two
+sound slots are not pinned, so no UI effect is invented. Guards:
+`item_shop_static_back_arm_sends_the_same_empty_5007` and
+`item_shop_go_myroom_leaves_without_an_exit_send` (synthetic placements,
+hidden-arm safe). **OPEN (next step):** one tapped GO MYROOM frame with a
+wire tap to name the destination and confirm opcode absence.
+
+## #178 enrichment — gender switch (#776)
+
+`FUN_00499760` (`ev_f3ad15be…`) answers GIRL `0x14202006` and BOY
+`0x14202007`: the GIRL arm writes byte `+0x18 = 1`, hides BOY; the BOY
+arm writes `0` and hides GIRL. Both cue slot `0x1b` and call one of
+three refreshers by two object words (both zero → `FUN_0049ead0`, first
+zero/second nonzero → `FUN_0049e2d0`, first nonzero → `FUN_0049f0c0`),
+passing 1 when planet index `0x17` is 12. Our board now stages the
+byte, the hidden button code, and a resolved refresher call; the staged
+context and lucky word are seams for the still-unmapped object words.
+The sound slot is recorded here, not invented in the UI-effect layer.
+Guards: `shop_gender_press_writes_the_byte_and_hides_the_other_button`
+and `shop_gender_press_calls_the_context_refresher_for_the_staged_role`
+(synthetic placements, hidden-arm safe). The live dump stages neither
+button (absence, #195); **OPEN (next step):** before/after exe frame
+pair for each press, in shop and myroom contexts.
+
+## #178 enrichment — planet carousel (#777)
+
+The two planet arms `0x14200008/09` (`ev_f3ad15be…`) hide the staged
+12×3 grid, move index `0x17` with UP 1→12 / DOWN 12→1, ink
+`FUN_0042f870(index,0)` when the figure read arms, rerun the same
+three-way context refresh with the index-12 word, then call the seed
+function twice and reset the three layout words `0x8d4..6` to `0,0,1`.
+Our board stages the grid count and caption arm (the exe→our-object
+join is not pinned), and records the caption argument, hidden cell
+count, two seeds, layout words and refresher call. Sound slot `0x1c`
+is pinned but not modeled in the UI-effect layer. Guards:
+`shop_planet_up_wraps_one_to_twelve_and_down_wraps_back` and
+`shop_planet_turn_hides_the_grid_reseeds_and_refreshes_the_context`
+(synthetic placements, hidden-arm safe). **OPEN (next step):** a
+qualified press frame pair for both directions; no readout pin exists.
+
+## #178 enrichment — gender-indexed captions (#782)
+
+`FUN_004a0660` (`ev_3e020a4a…`) resolves the six submenu captions
+`0x14208012..17` from a word table at VA `0x648530` (REA
+`ev_37bbdf86…`): row stride is the gender byte `+0x58`, six 4-byte
+words per row; `-1` hides the caption, any other word keeps the
+control's own text template. The BOY row inks all six; the GIRL row
+hides slots 5 and 6. Our painter applies that rule once a GIRL/BOY
+press stages the byte (before a press the entry byte is unpinned, so
+nothing is hidden by guesswork). Category tab presses keep the
+live-pinned local highlight only; the cart-state enable gate on the
+row-control family belongs to the #787 work already landed. Guard:
+`shop_girl_press_hides_the_last_two_submenu_captions` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** read the six
+caption strings on a qualified frame in both gender states.
+
+## #178 enrichment — owned bag cells (#783)
+
+The ten bag-cell arms `0x1460003d..46` (`ev_f3ad15be…`) select
+`DAT_0077ccc0` at `cell + page*10`, cue slot `0x18`, and post a notice
+from the item's category byte: `0x19` → `0x1460003f`, `0x1a` →
+`0x1460003e`, `0x1b` → `0x14600040` (type 2). A worn slot posts type
+`0x0d` with string `0x64886c`; a special item pair (globals
+`0x77991c/20`) refuses selection. Our board stages category, worn and
+locked words because the file→entry join is not pinned. To read the
+paged item, `ShopState::apply_action` now takes the owned goods list
+instead of just its length (same five callers). Guards:
+`shop_bag_cell_selects_the_paged_index_and_posts_its_category_notice`,
+`shop_bag_cell_with_a_worn_item_posts_the_occupied_slot_notice`,
+`shop_locked_bag_cell_selects_nothing_and_posts_no_notice` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** one selected-cell
+frame with the notice ink.
+
+## #178 enrichment — bag pager wrap and clear (#784)
+
+The static arms `0x1420004c/4d` (`ev_f3ad15be…`) differ at the ends:
+BAGLEFT applies `(page - 1 + count) % count` (wrap from page 0 to the
+last), BAGRIGHT increments only while `page+1 < count` (hold). Both
+write `DAT_0077ccc0 = -1`, clear the highlight and refresh. Our board
+now wraps LEFT, holds RIGHT, and clears the selected row and its notice
+on either press. CONTRADICTION recorded: #195 above said "holds at
+both ends" from the live sweep; the exe arm pins wrap on LEFT, so the
+earlier note stays as history and the #784 guard owns the behavior.
+Guards: `shop_bag_pager_wraps_left_and_clears_the_selected_row` and
+the updated `shop_bag_pager_turns_over_staged_owned_inventory`
+(synthetic placements, hidden-arm safe). **OPEN (next step):** a
+page-boundary frame pair on a multi-page bag.
+
+## #178 enrichment — vacate and conference notices (#786)
+
+`FUN_00499760` (`ev_f3ad15be…`) answers ITEMVACATE `0x14200005` only
+while the cart flag `0x8cd` is clear. A staged confirmation pair posts
+notice type 1 with string `0x648af0`; item codes `0x23`/`0x24` post
+type 1 with `0x648acc`; any other item posts type 2 with a formatted
+`0x648a90` string. CONFERENCE `0x142000b6` posts type `0x14` with no
+text. Our board stages the confirmation pair, item code and item word
+(the value sources are unpinned) and records the resolved notice.
+CONTRADICTION recorded: spec #178's enrichment row assigns notice type
+`0x12` to ITEMVACATE; the exe arm uses 1/2 and type `0x12` belongs to
+CHARGEMONEY `0x14200004` on a busy web gate. The live CHARGEMONEY press
+still opens the Cash Charge view (#397); the notice-type claim is not
+silently moved. Guards:
+`shop_itemvacate_notice_needs_the_owned_bag_face_closed`,
+`shop_itemvacate_notice_uses_the_special_item_and_item_word_branches`,
+`shop_conference_posts_the_type_twenty_notice` (synthetic placements,
+hidden-arm safe). **OPEN (next step):** qualified press frames with the
+notice text source.
+
+## #178 enrichment — ext-menu toggle (#788)
+
+The EXTMENU arm `0x14200099` (`ev_f3ad15be…`) acts only while gate
+word `0x5f` is set, clears it, flips `0x5b`, takes one fresh seed, and
+cycles visibility: the 12 filters `0x1420109b..a6` appear on open and
+hide on close; the eight first-row ITEMBUY/ITEMNAME/ITEMGIFT/ITEMSHOW
+controls and four `0x1401d088..8b` controls do the reverse. Open also
+clears `0x5d`; both branches refresh the context. Our board stages the
+gate (`0x5f` writer unpinned), counts accepted toggles and seeds, and
+applies one visibility helper in the paint filter. The live dump stages
+no filters (#195), so the rule is static-only. CONTRADICTION recorded:
+#195 called these controls "never stage live" — kept as the live
+absence, not as a claim the handler is dead. Guards:
+`shop_extmenu_toggle_cycles_twelve_filters_and_group_visibility` and
+`shop_extmenu_toggle_is_ignored_while_the_gate_is_closed` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** one EXT_ON press
+frame with before/after visibility.
+
 ## OPEN
 
-1. Entry/exit dispatch call sites.
-2. TEXT caption and icon staging sources (row GEM cells now ink the
+1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
+   MYROOM arms now dispatch; the GO MYROOM destination frame is OPEN.
+2. TEXT caption and icon staging sources — PARTIAL: submenu
+   visibility is pinned by the gender table (#782); the six caption
+   strings and the row GEM cells now ink the
    exe's observed `0` per #722; the table→entry `+0x18` map is still
    unpinned. `MGASH`→`o2_cash` join OPEN — rig capture at known
-   balances still names the cell).
+   balances still names the cell). Submenu string text stays OPEN.
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
    checks the cart, `BUYITEM` opens the web surface with no game-socket
    opcode (W-a NULL, #397),
@@ -379,6 +515,12 @@ behavior also live in spec #178's enrichment rows.
 4. Scroll, bag pager, planet pager, ext-menu filter behavior —
    PARTIAL: scroll pager steps and holds (origin-offset
    read ASSUMED); bag pager steps and holds over staged owned
-   inventory (L/R readout pairing ASSUMED); planet pager and
-   filters display-only — the filter buttons never stage live
-   (absence, ticket #195).
+   inventory (L/R readout pairing ASSUMED), and a cell press selects
+   the owned row with its category notice (#783); LEFT wraps and both
+   pager arms clear the pick (#784); planet pager turns the index with
+   wrap and reseeds (#777); the ext-menu toggle cycles filter and
+   group visibility from the static arm (#788). None of these controls
+   stage live in the pinned dump (absence, ticket #195); their press
+   frames stay OPEN.
+5. Gender buttons — PARTIAL: byte/hidden-button/refresher staged;
+   the screen→object-word mapping and before/after frames stay OPEN.
