@@ -425,6 +425,23 @@ row-control family belongs to the #787 work already landed. Guard:
 placements, hidden-arm safe). **OPEN (next step):** read the six
 caption strings on a qualified frame in both gender states.
 
+## #178 enrichment — owned bag cells (#783)
+
+The ten bag-cell arms `0x1460003d..46` (`ev_f3ad15be…`) select
+`DAT_0077ccc0` at `cell + page*10`, cue slot `0x18`, and post a notice
+from the item's category byte: `0x19` → `0x1460003f`, `0x1a` →
+`0x1460003e`, `0x1b` → `0x14600040` (type 2). A worn slot posts type
+`0x0d` with string `0x64886c`; a special item pair (globals
+`0x77991c/20`) refuses selection. Our board stages category, worn and
+locked words because the file→entry join is not pinned. To read the
+paged item, `ShopState::apply_action` now takes the owned goods list
+instead of just its length (same five callers). Guards:
+`shop_bag_cell_selects_the_paged_index_and_posts_its_category_notice`,
+`shop_bag_cell_with_a_worn_item_posts_the_occupied_slot_notice`,
+`shop_locked_bag_cell_selects_nothing_and_posts_no_notice` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** one selected-cell
+frame with the notice ink.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
@@ -445,7 +462,8 @@ caption strings on a qualified frame in both gender states.
 4. Scroll, bag pager, planet pager, ext-menu filter behavior —
    PARTIAL: scroll pager steps and holds (origin-offset
    read ASSUMED); bag pager steps and holds over staged owned
-   inventory (L/R readout pairing ASSUMED); planet pager now turns
+   inventory (L/R readout pairing ASSUMED), and a cell press selects
+   the owned row with its category notice (#783); planet pager now turns
    the index with wrap and reseeds (#777), but the arrows and filters
    still never stage live (absence, ticket #195). Ext-menu toggle
    remains OPEN (#788).

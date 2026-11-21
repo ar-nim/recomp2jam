@@ -766,9 +766,46 @@ pub const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
 /// First item icon (`IDC_IMAGE_SSHOP_ITEMSHOW1`); eight run
 /// contiguously (paint targets, never dispatch).
 pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
-/// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
-/// contiguously (paint targets, never dispatch).
+/// First owned-bag cell (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
+/// contiguously. Static arm `0x1460003d..46` (`ev_f3ad15be…`) selects
+/// the paged index `DAT_0077ccc0`, cues slot `0x18`, and posts one of
+/// three category notices or an occupied-slot notice. A special item
+/// pair (globals `0x77991c/20`) refuses selection.
 pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
+/// UI-effect slot cued by a bag-cell selection.
+pub const SHOP_BAG_SELECT_SOUND_SLOT: u8 = 0x18;
+/// Notice targets the bag arm inks for three item categories. Category
+/// byte `0x19` → `0x1460003f`, `0x1a` → `0x1460003e`, `0x1b` →
+/// `0x14600040` (all type 2, `ev_f3ad15be…`).
+pub const SHOP_BAG_NOTICE_CODES: [u32; 3] = [0x1460_003F, 0x1460_003E, 0x1460_0040];
+/// Category bytes that own each target above, in the same order.
+pub const SHOP_BAG_NOTICE_CATEGORIES: [u8; 3] = [0x19, 0x1a, 0x1b];
+
+/// Notice posted by one staged bag-cell press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopBagNotice {
+    /// Category notice: the target control code the exe inks.
+    Category { target: u32 },
+    /// Worn slot occupied: type `0x0d` with string at VA `0x64886c`.
+    SlotOccupied,
+}
+
+impl ShopBagNotice {
+    /// Notice for one staged item category, if the exe posts one.
+    #[must_use]
+    pub const fn for_category(category: u8) -> Option<Self> {
+        let mut index = 0;
+        while index < SHOP_BAG_NOTICE_CATEGORIES.len() {
+            if SHOP_BAG_NOTICE_CATEGORIES[index] == category {
+                return Some(Self::Category {
+                    target: SHOP_BAG_NOTICE_CODES[index],
+                });
+            }
+            index += 1;
+        }
+        None
+    }
+}
 /// Owned-panel tab anchors and selection frame (`MYBAGSELECT` uses
 /// the archive frame body like MyRoom's frame). The static arms at
 /// file `0xa5a75` / `0xa5b63` clear / set the cart flag `+0x8cd`,
@@ -1182,6 +1219,9 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Owned bag cell (`0x1460003d..46`): select the paged index
+    /// and post the category notice.
+    SelectBagItem(usize),
     /// Planet UP (`0x14200008`): decrement index, 1 wraps to 12.
     PlanetUp,
     /// Planet DOWN (`0x14200009`): increment index, 12 wraps to 1.
@@ -1300,6 +1340,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)
             .or_else(|| shop_gender_action(code))
+            .or_else(|| shop_bag_item_slot(code))
             .or_else(|| shop_category_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
@@ -1307,6 +1348,12 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
             })
             .or_else(|| shop_tryon_slot(code)),
     }
+}
+
+/// Owned bag cell behind one `SHOP_MYBAGITEM_FIRST_CODE` code.
+fn shop_bag_item_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_MYBAGITEM_FIRST_CODE, code)?;
+    (slot < SHOP_BAG_CELLS).then_some(ShopAction::SelectBagItem(slot))
 }
 
 /// Gender arm behind one of the two staged GIRL/BOY codes.

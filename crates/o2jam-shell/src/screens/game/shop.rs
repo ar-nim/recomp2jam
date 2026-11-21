@@ -4,10 +4,10 @@
 use super::super::side::{
     lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
     shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
-    CheckoutNotice, ShopAction, ShopGender, ShopGood, ShopPanel, ShopRefresh, ShopRefreshContext,
-    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
-    SHOP_PLANET_LAYOUT_FLAGS,
+    CheckoutNotice, ShopAction, ShopBagNotice, ShopGender, ShopGood, ShopPanel, ShopRefresh,
+    ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS,
+    SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
+    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -123,6 +123,17 @@ pub(crate) struct ShopState {
     /// Owned-panel page (ten `MYBAGITEM` icons per page, the staged
     /// `BAGLEFT`/`BAGRIGHT` pager).
     pub(crate) bag_page: usize,
+    /// Exe's selected row word `DAT_0077ccc0` (global owned index,
+    /// `None` is the exe's cleared `-1`).
+    bag_selection: Option<usize>,
+    /// Notice posted by the last bag-cell press.
+    bag_notice: Option<ShopBagNotice>,
+    /// Staged category bytes for owned items (`+4` of the exe entry).
+    bag_item_categories: HashMap<u32, u8>,
+    /// Staged worn-slot occupancy for owned items.
+    bag_item_worn: HashMap<u32, bool>,
+    /// Staged special-item pair that refuses a selection.
+    bag_item_locked: HashMap<u32, bool>,
 }
 
 impl ShopState {
@@ -137,6 +148,8 @@ impl ShopState {
         self.preview = None;
         self.bag_page = 0;
         self.shop_category = None;
+        self.bag_selection = None;
+        self.bag_notice = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -404,6 +417,32 @@ impl ShopState {
         self.preview = None;
     }
 
+    /// Selected owned row (global index across all bag pages).
+    pub(crate) fn bag_selection(&self) -> Option<usize> {
+        self.bag_selection
+    }
+
+    /// Notice posted by the last bag-cell press.
+    pub(crate) fn bag_notice(&self) -> Option<ShopBagNotice> {
+        self.bag_notice
+    }
+
+    /// Stage one owned item's category byte. The file→entry join is
+    /// not pinned, so callers stage it explicitly.
+    pub(crate) fn stage_bag_item_category(&mut self, item_id: u32, category: u8) {
+        self.bag_item_categories.insert(item_id, category);
+    }
+
+    /// Stage whether one owned item occupies a worn slot.
+    pub(crate) fn stage_bag_item_worn(&mut self, item_id: u32, worn: bool) {
+        self.bag_item_worn.insert(item_id, worn);
+    }
+
+    /// Stage the special-item pair that refuses a selection.
+    pub(crate) fn stage_bag_item_locked(&mut self, item_id: u32, locked: bool) {
+        self.bag_item_locked.insert(item_id, locked);
+    }
+
     /// Owned bag page (ten `MYBAGITEM` icons per page).
     pub(crate) fn bag_page(&self) -> usize {
         self.bag_page
@@ -499,9 +538,9 @@ impl ShopState {
     /// non-empty cart): the caller opens the local web purchase
     /// surface, so this board state never touches the wire.
     /// Preview and bag-pager arms report no commit.
-    /// `owned_len` is the staged owned-good count the bag pager
-    /// holds against (same empty-panel rule as the cart pager).
-    pub(crate) fn apply_action(&mut self, action: ShopAction, owned_len: usize) -> bool {
+    /// `owned` is the staged owned-good list the bag pager and the
+    /// cell selector read (same empty-panel rule as the cart pager).
+    pub(crate) fn apply_action(&mut self, action: ShopAction, owned: &[ShopGood]) -> bool {
         match action {
             ShopAction::ToggleRow(slot) => {
                 self.toggle_row(slot);
@@ -514,6 +553,38 @@ impl ShopState {
             }
             ShopAction::RevertTryOn => {
                 self.clear_try_on();
+                false
+            }
+            ShopAction::SelectBagItem(slot) => {
+                // Static arm `0x1460003d..46`: index = cell + page*10,
+                // then sound 0x18 (not modeled here), the selection
+                // word, and a category or worn-slot notice.
+                let index = slot.saturating_add(self.bag_page.saturating_mul(SHOP_BAG_CELLS));
+                let Some(good) = owned.get(index) else {
+                    return false;
+                };
+                if self
+                    .bag_item_locked
+                    .get(&good.item_id)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                self.bag_selection = Some(index);
+                self.bag_notice = if self
+                    .bag_item_worn
+                    .get(&good.item_id)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    Some(ShopBagNotice::SlotOccupied)
+                } else {
+                    self.bag_item_categories
+                        .get(&good.item_id)
+                        .copied()
+                        .and_then(ShopBagNotice::for_category)
+                };
                 false
             }
             ShopAction::PlanetUp | ShopAction::PlanetDown => {
@@ -601,7 +672,7 @@ impl ShopState {
                     .bag_page
                     .saturating_add(1)
                     .saturating_mul(SHOP_BAG_CELLS)
-                    < owned_len
+                    < owned.len()
                 {
                     self.bag_page = self.bag_page.saturating_add(1);
                 }

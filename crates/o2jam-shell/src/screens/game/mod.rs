@@ -6456,6 +6456,33 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Selected owned row (global index across bag pages).
+    #[must_use]
+    pub fn shop_bag_selection(&self) -> Option<usize> {
+        self.shop.bag_selection()
+    }
+
+    /// Notice posted by the last bag-cell press.
+    #[must_use]
+    pub fn shop_bag_notice(&self) -> Option<super::side::ShopBagNotice> {
+        self.shop.bag_notice()
+    }
+
+    /// Stage one owned item's category byte for the notice rule.
+    pub fn stage_shop_bag_item_category(&mut self, item_id: u32, category: u8) {
+        self.shop.stage_bag_item_category(item_id, category);
+    }
+
+    /// Stage one owned item's worn-slot occupancy.
+    pub fn stage_shop_bag_item_worn(&mut self, item_id: u32, worn: bool) {
+        self.shop.stage_bag_item_worn(item_id, worn);
+    }
+
+    /// Stage one owned item's special-pair refusal.
+    pub fn stage_shop_bag_item_locked(&mut self, item_id: u32, locked: bool) {
+        self.shop.stage_bag_item_locked(item_id, locked);
+    }
+
     /// Current planet index (1..=12).
     #[must_use]
     pub fn shop_planet_index(&self) -> u8 {
@@ -6781,7 +6808,8 @@ impl ScreenGame {
         let Some(action) = shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
+        let owned = self.shop.bag_goods(self.shop_inventory());
+        let owned_len = owned.len();
         match action {
             ShopAction::BackToLobby => {
                 // The tap leaves the side and emits the empty 5007;
@@ -6814,7 +6842,7 @@ impl ScreenGame {
             ShopAction::TryOn(slot) => {
                 // One ITEMPRE press drives both browse surfaces: the
                 // avatar-pane figure (restage) and the comment preview.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.shop.select_preview(slot);
                 self.restage_shop_avatar();
             }
@@ -6823,7 +6851,7 @@ impl ScreenGame {
                 // 0x2190-byte copy from global `0x77cd00` into the
                 // local avatar block and a repaint. The snapshot was
                 // taken on character staging, so every slot reverts.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.shop.clear_preview();
                 if let (Some(block), Some(character)) =
                     (self.equipped_block.as_ref(), self.myroom_character.as_mut())
@@ -6837,7 +6865,7 @@ impl ScreenGame {
                 // already staged by the row pick; BUYITEM opens the
                 // web purchase surface. The static ladder below also
                 // queues 5015 when every staged gate passes.
-                if self.shop.apply_action(action, owned_len) {
+                if self.shop.apply_action(action, &owned) {
                     self.shop_purchase_web_open = true;
                 }
                 self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
@@ -6847,11 +6875,11 @@ impl ScreenGame {
                 // press itself stages nothing, but queues the empty
                 // 5038. The session owns the wire; live no-wire tap
                 // stays recorded beside the pin.
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
                 self.outbox.pending_refresh_bag = Some(RefreshBag);
             }
             _ => {
-                self.shop.apply_action(action, owned_len);
+                self.shop.apply_action(action, &owned);
             }
         }
     }
@@ -8706,7 +8734,7 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MyRoomLowerTab, MyRoomPanel, ShopGender, ShopRefresh, ShopRefreshContext,
+        MyRoomLowerTab, MyRoomPanel, ShopBagNotice, ShopGender, ShopRefresh, ShopRefreshContext,
         LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
         LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
         LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
@@ -8718,20 +8746,20 @@ mod game_tests {
         MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
         MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
         MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE,
-        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
-        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
-        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
-        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
-        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
-        SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
-        SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
-        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
-        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
-        SHOP_SUBMENU_FIRST_CODE,
+        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_CELLS,
+        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
+        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
+        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
+        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
+        SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
+        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -22634,6 +22662,30 @@ mod game_tests {
         game
     }
 
+    /// Shop board with two pages of owned goods and ten staged bag
+    /// cells (synthetic placements; no install-root data).
+    fn bag_cell_board() -> ScreenGame {
+        let mut game = open_shop_board(25);
+        game.set_myroom_character(myroom_test_character(vec![
+            0, 3, 999, 1, 2, 5, 7, 9, 11, 13, 15, 17, 19, 21,
+        ]));
+        for slot in 0..SHOP_BAG_CELLS as u32 {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: SHOP_MYBAGITEM_FIRST_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 10 + slot as i32 * 20,
+                    y: 30,
+                    w: 10,
+                    h: 10,
+                },
+            });
+        }
+        game
+    }
+
     fn shop_side_placements() -> Vec<ScenePlacement> {
         // Synthetic `STATE_SHOP` board: eight ITEMBUY hit areas, the
         // scroll with its relative pager children, the cart buy and
@@ -23957,6 +24009,76 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_bag_cell_selects_the_paged_index_and_posts_its_category_notice() {
+        // Live caller chain (once a bag cell stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MYBAGITEM 0x1460003d..46) ->
+        //   ShopState::apply_action(SelectBagItem) -> notice ink.
+        // Static pin `ev_f3ad15be…`: index = cell + page*10, sound
+        // slot 0x18, category byte 0x19/0x1a/0x1b posts to the target
+        // controls 0x1460003f/3e/40. The item→category join is not
+        // pinned, so the test stages it. OPEN (next step): one
+        // selected-cell frame with the notice ink.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_category(3, 0x1a);
+        game.stage_shop_bag_item_category(19, 0x19);
+
+        game.click_shop(15, 35);
+        assert_eq!(game.shop_bag_selection(), Some(0));
+        assert_eq!(
+            game.shop_bag_notice(),
+            Some(ShopBagNotice::Category {
+                target: 0x1460_003E
+            })
+        );
+
+        game.click_shop(410, 576);
+        game.click_shop(15, 35);
+        assert_eq!(
+            game.shop_bag_selection(),
+            Some(10),
+            "page offsets the index"
+        );
+        assert_eq!(
+            game.shop_bag_notice(),
+            Some(ShopBagNotice::Category {
+                target: 0x1460_003F
+            })
+        );
+    }
+
+    #[test]
+    fn shop_bag_cell_with_a_worn_item_posts_the_occupied_slot_notice() {
+        // Same arm: a nonzero worn slot posts type `0x0d` with the
+        // exe string at VA `0x64886c` after the selection is written.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_category(3, 0x1a);
+        game.stage_shop_bag_item_worn(3, true);
+
+        game.click_shop(15, 35);
+
+        assert_eq!(game.shop_bag_selection(), Some(0));
+        assert_eq!(game.shop_bag_notice(), Some(ShopBagNotice::SlotOccupied));
+    }
+
+    #[test]
+    fn shop_locked_bag_cell_selects_nothing_and_posts_no_notice() {
+        // Same arm: the special-item pair check against globals
+        // `0x77991c/20` skips selection and notice entirely. The
+        // pair values are unpinned, so the test stages the refusal.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        game.stage_shop_bag_item_locked(3, true);
+
+        game.click_shop(15, 35);
+
+        assert_eq!(game.shop_bag_selection(), None);
+        assert_eq!(game.shop_bag_notice(), None);
     }
 
     #[test]
