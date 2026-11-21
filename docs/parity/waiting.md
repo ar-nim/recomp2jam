@@ -221,3 +221,27 @@ Guards in `session.rs`:
 RED proofs: removing the `4009` arm in `apply_waiting_frame` makes the
 ready guard time out; removing the `3012` arm makes the chat guard time
 out; restoring both passes. No install-root read (synthetic gateway).
+
+## #556 peer READY pair on the wire and the master's readout (2026-11-21)
+
+CP33 (`~/scratch/close-wr/wire-only/peer.log` 15:51:32) sends peer
+`C2S 4004 team=0` then `C2S 4008 ready`, followed by `S2C 4009
+len=2 hex=0101` on the master (CP33 `master.log`, same instant). The
+shell staged the 4004/4008 pair on a team press but no session caller
+drained that outbox, so the pair never reached the gateway. The next
+wire poll now sends it, and the 4009 echo updates the staged seat, the
+session ready mirror, and the joined-room readout before the master's
+START gate runs.
+
+Guard `peer_ready_click_echo_opens_the_master_gate_and_mirror` — live
+chain: `OnlineSession::paint` → `poll_wire` → `flush_team_send` →
+`SetRoomTeam` 4004 + `Ready` 4008 (peer) → `drain_waiting_chat` →
+`apply_ready_echo` → `ScreenGame::set_member_ready` /
+`joined_room` mirror → `start_gate_verdict` → `confirm_master_start`
+→ `StartGame` 4010. The channel-readable 2009/2003 half stays OPEN
+with the next step named in #291.
+
+RED proofs: without `flush_team_send`, the guard's peer gateway never
+reads 4004 and the master times out waiting for the echo; without the
+mirror write, the guard fails on the joined-room readout assertion.
+Restoring both passes. Synthetic gateway; hidden install-root is N/A.

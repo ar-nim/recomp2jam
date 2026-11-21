@@ -1991,6 +1991,38 @@ impl OnlineSession {
         self.begin_song_select(choice);
     }
 
+    /// Drain one queued Waiting team toggle: the shell's team button
+    /// stages `SetRoomTeam` 4004 followed by `Ready` 4008 (CP33 wire:
+    /// `C2S 4004 team=0` then `C2S 4008 ready`), and this bridge sends
+    /// them in that order on the next wire poll. A failed 4004 keeps the
+    /// pair staged for the next poll; a failed 4008 leaves readiness to
+    /// the guest's next Confirm, which owns the toggle retry.
+    fn flush_team_send(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            return;
+        }
+        let Some(team) = self.game.take_room_team() else {
+            return;
+        };
+        let Some(ready) = self.game.take_team_ready() else {
+            return;
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::SetRoomTeam.id(), &team.encode_body())
+        {
+            tracing::warn!(%source, "team send failed; the pair is requeued");
+            self.game.select_team(team.team);
+            return;
+        }
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::Ready.id(), &ready.encode_body())
+        {
+            tracing::warn!(%source, "team-ready send failed; Confirm retries readiness");
+        }
+    }
+
     /// Drain one queued song pick (ticket #232): once the select-music
     /// dialog has closed, convert the shell's `pending_music_send`
     /// into a `SongChoice` (arena from the joined room) and hand it to
@@ -3512,6 +3544,17 @@ impl OnlineSession {
         };
         self.ready_echoes[usize::from(echo.member_id)] = Some(echo.ready);
         self.game.set_member_ready(echo.member_id, echo.ready);
+        if let Some(room) = self.joined_room.as_mut() {
+            if let Some(slot) = room
+                .slots
+                .iter_mut()
+                .find(|slot| slot.index == echo.member_id)
+            {
+                if let Some(member) = slot.member.as_mut() {
+                    member.ready = echo.ready;
+                }
+            }
+        }
     }
 
     /// Fold one 3004 join broadcast into the staged seats. Memoryer
@@ -3849,6 +3892,7 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
         self.flush_waiting_exit();
+        self.flush_team_send();
         self.flush_channel_logout();
         self.flush_exit_shop();
         self.poll_attempts();
@@ -10103,6 +10147,87 @@ pub(super) mod session_tests {
             session.game.start_gate_verdict(),
             StartGateVerdict::Startable
         );
+    }
+
+    /// #556 two-client wire leg (CP33): the peer's READY click sends
+    /// 4004/4008, the server echoes 4009 to the master, and only that
+    /// echo opens the master's gate. Pin:
+    /// `~/scratch/close-wr/wire-only/peer.log` CP33 `C2S 4004` +
+    /// `C2S 4008` -> `S2C 4009 len=2 hex=0101`. Live caller chain:
+    /// `OnlineSession::menu_key` (guest Confirm) -> `confirm_guest_ready`
+    /// -> `Ready` 4008 -> `OnlineSession::paint` (master) ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` -> `apply_ready_echo`
+    /// -> `ScreenGame::set_member_ready` -> `start_gate_verdict` ->
+    /// `confirm_master_start` -> `StartGame` 4010. The channel-readable
+    /// 2009/2003 half stays OPEN per #291.
+    #[test]
+    fn peer_ready_click_echo_opens_the_master_gate_and_mirror() {
+        let (ready_sent, ready_received) = mpsc::channel();
+        let mut master_room = room_with_peer("tester2");
+        let peer_seat = master_room.slots[1].member.as_mut().expect("seated peer");
+        peer_seat.ready = false;
+        peer_seat.team = 1;
+        let (mut master, master_server) = joined_waiting_session(master_room, move |mut stream| {
+            ready_received
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the peer never sent READY");
+            stream.write_all(&encode_frame(4009, &[1, 1])).unwrap();
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, Request::StartGame.id());
+            assert!(start.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        assert_eq!(
+            master.game.start_gate_verdict(),
+            StartGateVerdict::PeerNotReady,
+            "the gate stays closed before the echo"
+        );
+
+        let (mut peer, peer_server) =
+            joined_waiting_session(guest_snapshot(), move |mut stream| {
+                let team = read_frame(&mut stream);
+                assert_eq!(team.id, Request::SetRoomTeam.id());
+                assert_eq!(team.payload, vec![1]);
+                let ready = read_frame(&mut stream);
+                assert_eq!(ready.id, Request::Ready.id());
+                assert!(ready.payload.is_empty());
+                ready_sent.send(()).unwrap();
+                assert_quiet(&mut stream);
+            });
+        // The pinned pair is queued by the guest's team toggle, which
+        // is the 4004/4008 order in the CP33 wire log. The session must
+        // drain that queue on the next paint; the shell alone only stages it.
+        peer.game.select_team(1);
+        paint_frame(&mut peer);
+        assert_eq!(peer.game.screen(), Screen::Waiting);
+
+        paint_until(&mut master, |session| {
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.ready)
+        });
+        peer_server.join().unwrap();
+        assert_eq!(
+            master.member_ready(1),
+            Some(true),
+            "the echo reaches the master's ready mirror"
+        );
+        assert_eq!(
+            master
+                .joined_room
+                .as_ref()
+                .and_then(|room| room.slots[1].member.as_ref())
+                .map(|member| member.ready),
+            Some(true),
+            "the joined-room readout follows the echo too"
+        );
+        assert_eq!(
+            master.game.start_gate_verdict(),
+            StartGateVerdict::Startable
+        );
+        master.menu_key(MenuKey::Confirm, true);
+        master_server.join().unwrap();
     }
 
     #[test]
