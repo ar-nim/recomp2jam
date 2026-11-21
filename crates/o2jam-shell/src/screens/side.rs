@@ -1122,6 +1122,8 @@ pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
 pub const MSHOP_FIVE_SONG_CAP_NOTICE: &str = "5개 이상 선택할수 없습니다.";
 /// MUSICDELETE confirmation at VA `0x64a5d4` (`FUN_004c7f70`).
 pub const MSHOP_MUSICDELETE_NOTICE: &str = "선택한 파일을 지우겠습니까?";
+/// MUSICDELETE button (`IDC_BUTTON_MSHOP_MUSICDELETE`, `0x1A20007A`).
+pub const MSHOP_MUSICDELETE_CODE: u32 = 0x1A20_007A;
 /// DOWN_CANCEL confirmation at VA `0x64a710` (`FUN_004c7f70`).
 pub const MSHOP_DOWN_CANCEL_NOTICE: &str = "다운로드를 취소하시겠습니까?";
 /// One music-shop notice, identified by its pinned CP949 text.
@@ -1294,6 +1296,8 @@ pub enum MusicShopAction {
     OwnedRow(usize),
     /// SELECTALL toggled the owned marks.
     SelectAll,
+    /// MUSICDELETE pressed (confirmation, then the marked-row clear).
+    MusicDelete,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1336,6 +1340,9 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     }
     if code == MSHOP_SELECT_ALL_CODE {
         return Some(MusicShopAction::SelectAll);
+    }
+    if code == MSHOP_MUSICDELETE_CODE {
+        return Some(MusicShopAction::MusicDelete);
     }
     if (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&code) {
         return Some(MusicShopAction::Top100Chrome { code });

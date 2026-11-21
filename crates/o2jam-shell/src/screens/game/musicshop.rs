@@ -9,8 +9,8 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
     sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
-    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
-    MSHOP_SONG_ROWS,
+    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
+    MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
 
 /// One owned-list row: a 4031 song id, its catalog title, the local
@@ -305,7 +305,9 @@ impl MusicShopState {
     /// this board state never touches the wire.
     pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> bool {
         // A notice owns only the next board press: any control that
-        // follows dismisses it, and the arm may post a fresh one.
+        // follows dismisses it, and the arm may post a fresh one or
+        // consume an armed confirmation.
+        let armed_notice = self.music_shop_notice;
         self.music_shop_notice = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
@@ -325,6 +327,18 @@ impl MusicShopState {
             }
             MusicShopAction::Face(face) => {
                 self.music_shop_face = face;
+                false
+            }
+            MusicShopAction::MusicDelete => {
+                let confirmation = Some((MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE));
+                if armed_notice == confirmation {
+                    // No file removal is claimed: the confirmed arm
+                    // clears the marked rows, and the delete write
+                    // stays OPEN until a synthetic-song capture (#824).
+                    self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                } else if self.owned_rows().iter().any(|row| row.marked) {
+                    self.post_notice(MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE);
+                }
                 false
             }
             MusicShopAction::SelectAll => {
