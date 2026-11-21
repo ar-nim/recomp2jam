@@ -214,6 +214,19 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## WEBAVATAR outcome (ticket #804, 2026-11-22)
+
+`FUN_004a3eb0` (VA `0x4a3eb0`, file `0xa3eb0`,
+EV `ev_aa64e525e7349e0fde17760e31ce4a599dc3a978f9c8038dfce182c95849ccd9`)
+plays sound 13; `FUN_004a4960` (file `0xa4960`,
+EV `ev_5539ea3eb8f4e553ca0c3f04002e017d57900f368c999a342e80375bc4047529`)
+copies "아바타를 웹에 등록." (file `0x2491e0`) into the UI helper at
+`0x513c60` with flag `0xfff9`. Our press cues UI-effect slot `0x0D`
+(decimal 13) and posts the pinned copy in a one-OK sheet. Whether the
+helper shows a notice or opens a browser, and its live pixels, stay OPEN:
+no browser behavior is claimed. Guard:
+`myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim`.
+
 ## CONFERENCE / MESSENGER branches (ticket #803, 2026-11-22)
 
 `FUN_004a3ee0` (file `0xa3ee0`, EV `ev_aa875251…`) case `0x1520006b`

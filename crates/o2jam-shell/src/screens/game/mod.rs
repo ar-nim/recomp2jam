@@ -16335,6 +16335,39 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim() {
+        // Live caller chain: click_myroom_side -> myroom_action_at
+        // (WEBAVATAR) -> one-OK sheet with the pinned file `0x2491e0`
+        // copy. Static pins: FUN_004a3eb0 (file 0xa3eb0,
+        // EV ev_aa64e525…) cues sound 13; FUN_004a4960 (file 0xa4960,
+        // EV ev_5539ea3e…) copies the string with flag 0xfff9.
+        // Whether the helper opens a notice or a browser stays OPEN.
+        use super::super::side::{MyRoomNotice, MYROOM_WEBAVATAR_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_WEBAVATAR_CODE, 10, 10)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(20, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::WebAvatar));
+        assert_eq!(
+            game.myroom_notice().unwrap().message(),
+            [
+                0xBE, 0xC6, 0xB9, 0xD9, 0xC5, 0xB8, 0xB8, 0xA6, 0x20, 0xC0, 0xA5, 0xBF, 0xA1, 0x20,
+                0xB5, 0xEE, 0xB7, 0xCF, 0x2E
+            ],
+            "the pinned cp949 bytes at exe file 0x2491e0"
+        );
+        assert_eq!(game.take_equip_send(), None, "no wire from WEBAVATAR");
+        assert_eq!(game.take_gift_claim(), None);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(game.myroom_notice(), None);
+    }
+
+    #[test]
     fn myroom_conference_and_messenger_branches_post_their_pinned_sheets() {
         // Live caller chain: click_myroom_side -> myroom_action_at ->
         // MyRoomAction::OpenConference / MessengerLiveness -> one-OK
@@ -16560,23 +16593,27 @@ mod game_tests {
             MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
             MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
         };
-        for code in [MYROOM_WEBAVATAR_CODE, MYROOM_BAGSORT_CODE] {
-            assert_eq!(
-                myroom_action_for_code(code),
-                None,
-                "P0 button {code:#X} dispatches nothing"
-            );
-            assert!(
-                myroom_p0_verdict(code).is_some(),
-                "P0 button {code:#X} carries a verdict"
-            );
-        }
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAGSORT_CODE),
+            None,
+            "P0 button dispatches nothing"
+        );
+        assert!(
+            myroom_p0_verdict(MYROOM_BAGSORT_CODE).is_some(),
+            "P0 button carries a verdict"
+        );
         assert_eq!(
             myroom_action_for_code(MYROOM_CONFERENCE_CODE),
             Some(MyRoomAction::OpenConference),
             "CONFERENCE now opens its pinned modal sheet"
         );
         assert_eq!(myroom_p0_verdict(MYROOM_CONFERENCE_CODE), None);
+        assert_eq!(
+            myroom_action_for_code(MYROOM_WEBAVATAR_CODE),
+            Some(MyRoomAction::ShowWebAvatar),
+            "WEBAVATAR now posts the pinned register copy"
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_WEBAVATAR_CODE), None);
         for code in [
             MYROOM_ALARM_CODE,
             MYROOM_ALARM_POPUP_CODE,

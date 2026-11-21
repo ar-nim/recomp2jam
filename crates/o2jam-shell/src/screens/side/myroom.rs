@@ -311,6 +311,10 @@ pub enum MyRoomAction {
     /// CONFERENCE pressed: open modal 20. No caption is pinned, so
     /// only the staged sheet art paints. No wire send.
     OpenConference,
+    /// WEBAVATAR pressed: show the pinned register notice. Whether
+    /// the exe helper also opens a browser stays OPEN; no browser
+    /// claim is made here.
+    ShowWebAvatar,
 }
 
 /// Action for one avatar-room control code (`None` for caption and
@@ -343,6 +347,7 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
         MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
         MYROOM_CONFERENCE_CODE => Some(MyRoomAction::OpenConference),
+        MYROOM_WEBAVATAR_CODE => Some(MyRoomAction::ShowWebAvatar),
         _ => None,
     }
 }
@@ -795,9 +800,6 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
 
 pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
     match code {
-        MYROOM_WEBAVATAR_CODE => Some(
-            "WEBAVATAR P0: no wire send; web avatar page lives outside the gateway - visibly inert",
-        ),
         MYROOM_BAGSORT_CODE => {
             Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
         }

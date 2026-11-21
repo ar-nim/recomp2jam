@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use super::shop::EquippedAvatarBlock;
+use super::ui_effect::UiEffectId;
 use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
@@ -155,6 +156,13 @@ impl ScreenGame {
             }
             MyRoomAction::OpenConference => {
                 self.post_myroom_notice(MyRoomNotice::Conference);
+            }
+            MyRoomAction::ShowWebAvatar => {
+                // The handler plays sound 13 and hands the pinned copy
+                // to the UI helper (files 0xa3eb0/0xa4960). The helper's
+                // browser-vs-notice outcome is OPEN; we show its copy.
+                self.cue_ui_effect(UiEffectId::WebAvatarNotice);
+                self.post_myroom_notice(MyRoomNotice::WebAvatar);
             }
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
