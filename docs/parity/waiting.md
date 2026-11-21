@@ -319,3 +319,24 @@ packs (`0580bc8d…`, `20fbe170…`) pin the wire and the badge art, but
 do not carry equal 07E8 slices in a verdict window. Until that pair
 exists, no pixel-equality claim is made and the #291 story row stays
 unchecked.
+
+## #765 role-gated chrome beyond the song rect (2026-11-21)
+
+Static pins: `FUN_004b4a00` VA `0x4b4a00` (evidence `ev_c5b7cdce…`)
+arms START, MAPLEFT/RIGHT, MUSELECT, the six `1/2/3SKILLLEFT/RIGHT`
+buttons and MASTER_SKILLSEL for the master, and clears the song and
+skill covers; `FUN_004b4d30` VA `0x4b4d30` (evidence `ev_1365b919…`)
+disables those controls for guests, frames READY and shows the covers
+with a per-slot skill frame. The song-rect display rule stays the
+owner decision recorded above, and the guest's owned-item vector fill
+stays OPEN (`docs/caption-sources.md` OPEN 4).
+
+`waiting_control_armed_for_role` now owns the whole pinned set. The
+live-path guard `master_paints_map_and_skill_buttons_that_a_guest_hides`
+stages synthetic bodies from boot (`walk_to_waiting` → `load_scene` →
+`paint_at` → `paint_waiting` → `paint_waiting_scene_with_confirm`) and
+checks that the master paints all eight bodies where the guest paints
+none. RED proof: without the role arms the guest painted all eight.
+The seam table pin lists the three skill-cover ids as guest-only. No
+qualified exe frame pair exists yet for the guest cover frame family;
+that capture step stays OPEN.

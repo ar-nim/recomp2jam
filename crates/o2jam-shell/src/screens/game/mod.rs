@@ -11230,6 +11230,68 @@ mod game_tests {
     ];
 
     #[test]
+    fn master_paints_map_and_skill_buttons_that_a_guest_hides() {
+        // Ticket #765, exe role arms `FUN_004b4a00` (master enable) and
+        // `FUN_004b4d30` (guest disable), evidence `ev_c5b7cdce…` /
+        // `ev_1365b919…`. Live chain: `set_joined_room` ->
+        // `walk_to_waiting` (boot -> Planet -> Channel -> Room ->
+        // Waiting) -> `load_scene` -> `paint_at` -> `paint_waiting` ->
+        // `paint_waiting_scene_with_confirm` ->
+        // `waiting_control_armed_for_role`. Synthetic rects/figures keep
+        // the guard independent of game data. The song-rect rule stays
+        // an owner decision (#278); here only the statically pinned
+        // enable/disable family is claimed.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        const CONTROLS: [(&str, u32, i32, i32); 8] = [
+            ("IDC_BUTTON_SWAIT_MAPLEFT", 0x1620_000C, 60, 40),
+            ("IDC_BUTTON_SWAIT_MAPRIGHT", 0x1620_000D, 100, 40),
+            ("IDC_BUTTON_SWAIT_1SKILLLEFT", 0x1620_0050, 140, 40),
+            ("IDC_BUTTON_SWAIT_1SKILLRIGHT", 0x1620_0051, 180, 40),
+            ("IDC_BUTTON_SWAIT_2SKILLLEFT", 0x1620_0052, 220, 40),
+            ("IDC_BUTTON_SWAIT_2SKILLRIGHT", 0x1620_0053, 260, 40),
+            ("IDC_BUTTON_SWAIT_3SKILLLEFT", 0x1620_0054, 300, 40),
+            ("IDC_BUTTON_SWAIT_3SKILLRIGHT", 0x1620_0055, 340, 40),
+        ];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (index, (id, code, x, y)) in CONTROLS.iter().enumerate() {
+            let sprite = format!("role_gate_test_{index}.ojs");
+            figures.insert(sprite.clone(), solid_test_figure([0x00, 0xF8]));
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: *code,
+                sprite: Some(sprite),
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    w: 12,
+                    h: 12,
+                },
+            });
+        }
+
+        for (member_id, master) in [(0, true), (5, false)] {
+            let mut room = waiting_room();
+            room.member_id = member_id;
+            let mut game = ScreenGame::new();
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            game.load_scene(Screen::Waiting, placements.clone(), figures.clone());
+            let frame = paint_waiting_frame(&mut game, 800, 600);
+            for (_, _, x, y) in CONTROLS {
+                let at = (y as usize) * 800 + (x as usize);
+                assert_eq!(
+                    frame[at] == pack_xrgb(0xF7, 0x00, 0x00),
+                    master,
+                    "map/skill body at ({x},{y}) follows the master role"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn waiting_chrome_sweep_arms_no_hover_state() {
         // Ticket #163 (waiting leg, HOVER stand-in): no waiting
         // chrome was ever hover-captured (`docs/hover.md` covers

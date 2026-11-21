@@ -11268,6 +11268,29 @@ mod paint_tests {
             "IDC_IMAGE_SWAIT_ALBUMMODE",
             false
         ));
+        // #765: the rest of the pinned role set. Master arms map arrows
+        // and all six skill buttons; guests show the three skill covers.
+        for id in [
+            "IDC_BUTTON_SWAIT_MAPLEFT",
+            "IDC_BUTTON_SWAIT_MAPRIGHT",
+            "IDC_BUTTON_SWAIT_1SKILLLEFT",
+            "IDC_BUTTON_SWAIT_1SKILLRIGHT",
+            "IDC_BUTTON_SWAIT_2SKILLLEFT",
+            "IDC_BUTTON_SWAIT_2SKILLRIGHT",
+            "IDC_BUTTON_SWAIT_3SKILLLEFT",
+            "IDC_BUTTON_SWAIT_3SKILLRIGHT",
+        ] {
+            assert!(waiting_control_armed_for_role(id, true), "{id} master");
+            assert!(!waiting_control_armed_for_role(id, false), "{id} guest");
+        }
+        for id in [
+            "IDC_IMAGE_SWAIT_COVERSKILLLEFT",
+            "IDC_IMAGE_SWAIT_COVERSKILLRIGHT",
+            "IDC_IMAGE_SWAIT_COVERSKILLSEL",
+        ] {
+            assert!(!waiting_control_armed_for_role(id, true), "{id} master");
+            assert!(waiting_control_armed_for_role(id, false), "{id} guest");
+        }
     }
 
     #[test]

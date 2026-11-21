@@ -503,16 +503,39 @@ pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
 /// an album-mode room arms it is OPEN. Click routing is untouched: the
 /// host still opens the song dialog from this rect (dispatch case file
 /// `0xb2622`), which is exe behavior, not a shell gap.
+///
+/// #765 extends the gate with the rest of the statically pinned set
+/// (`FUN_004b4a00` evidence `ev_c5b7cdce…`, `FUN_004b4d30` evidence
+/// `ev_1365b919…`): master arms MAPLEFT/RIGHT `0x1620000C/0D` and the
+/// six `1/2/3SKILLLEFT/RIGHT 0x16200050..55`, and clears the three
+/// skill-cover images `0x1650005B..5D`; guests disable those buttons
+/// and show the covers. The guest's per-slot cover frame and owned-item
+/// fill stay OPEN (caption-sources OPEN 4), as does the exact display
+/// rule for the song rect above. The disabled/hidden distinction stays
+/// a shell rule: the exe writes an arm word and a frame, this painter
+/// omits the body.
 #[must_use]
 pub(crate) fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
     match id {
-        "IDC_BUTTON_SWAIT_START" | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL" => is_room_master,
+        "IDC_BUTTON_SWAIT_START"
+        | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL"
+        | "IDC_BUTTON_SWAIT_MAPLEFT"
+        | "IDC_BUTTON_SWAIT_MAPRIGHT"
+        | "IDC_BUTTON_SWAIT_1SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_1SKILLRIGHT"
+        | "IDC_BUTTON_SWAIT_2SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_2SKILLRIGHT"
+        | "IDC_BUTTON_SWAIT_3SKILLLEFT"
+        | "IDC_BUTTON_SWAIT_3SKILLRIGHT" => is_room_master,
         "IDC_BUTTON_SWAIT_READY"
         | "IDC_BUTTON_SWAIT_SKILLSEL"
         | "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE"
-        | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE" => !is_room_master,
+        | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE"
+        | "IDC_IMAGE_SWAIT_COVERMUSIC"
+        | "IDC_IMAGE_SWAIT_COVERSKILLLEFT"
+        | "IDC_IMAGE_SWAIT_COVERSKILLRIGHT"
+        | "IDC_IMAGE_SWAIT_COVERSKILLSEL" => !is_room_master,
         "IDC_BUTTON_SWAIT_MUSELECT" => is_room_master,
-        "IDC_IMAGE_SWAIT_COVERMUSIC" => !is_room_master,
         "IDC_IMAGE_SWAIT_ALBUMMODE" => false,
         _ => true,
     }
