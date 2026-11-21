@@ -75,7 +75,11 @@ if [ "$quick" -eq 1 ]; then
         exit 0
     fi
     step "cargo test -p ${crates[*]} (--quick)"
-    cargo test -p "${crates[@]}"
+    # cargo test needs one -p per crate; extra positionals become name
+    # filters (found by the arch-adapter lane, 2026-11-21).
+    p_args=()
+    for crate in "${crates[@]}"; do p_args+=( -p "$crate" ); done
+    cargo test "${p_args[@]}"
     exit 0
 fi
 
