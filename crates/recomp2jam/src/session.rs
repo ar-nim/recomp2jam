@@ -11671,6 +11671,95 @@ pub(super) mod session_tests {
         server.join().unwrap();
     }
 
+    /// Local half of joining a new room after the master's 3005 exit:
+    /// stage the new room and take the same Room Confirm -> Waiting
+    /// edge `joined_waiting_session` uses. Synthetic room, no
+    /// install-root read, so both guards run with game data hidden.
+    fn reenter_waiting_after_room_exit(session: &mut OnlineSession) {
+        let room = joined_snapshot();
+        session.joined_room = Some(room.clone());
+        session.game.set_joined_room(room);
+        session.joined_waiting = true;
+        session.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn waiting_back_disbands_the_staged_pick_before_a_reentry_can_flush_4000() {
+        // Ticket #732, exe pin #268 (W8 `wa-pick-okback2`): master BACK
+        // sends 3005, the server answers 2007 (room destroyed), so no
+        // pick survives the exit. Live caller chain: main.rs::run_play
+        // -> OnlineSession::ingest_snapshot -> OnlineSession::menu_key(Back)
+        // -> ExitWaiting 3005 -> ScreenGame::menu_key ->
+        // ScreenGame::enter_screen(Waiting -> Room) ->
+        // ScreenGame::disband_waiting_room ->
+        // PendingOutbox::discard_music_send. The next paint must find
+        // no body in OnlineSession::flush_music_send.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            let leave = read_frame(&mut stream);
+            assert_eq!(leave.id, 3005, "Waiting BACK sends the room leave");
+            assert_eq!(
+                leave.payload.len(),
+                2,
+                "0BBD len=6 minus the 4-byte frame header"
+            );
+            assert_quiet(&mut stream);
+        });
+        click_master_song_row_and_ok(&mut session);
+
+        session.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Room);
+        assert!(
+            !session.game.has_pending_music_send(),
+            "the exited room's pick is gone before any re-entry"
+        );
+        reenter_waiting_after_room_exit(&mut session);
+
+        // Reopen the sheet and tap OK without a fresh row pick — the
+        // exact #268 stale-flush gesture, now with no body to flush.
+        session
+            .game_mut()
+            .load_select_music_scene(Vec::new(), std::collections::HashMap::new());
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fresh_pick_after_a_waiting_exit_still_sends_the_pinned_4000() {
+        // Ticket #732: the exit clear must not break the pinned wire
+        // path. Live chain: main.rs::run_play -> OnlineSession::paint ->
+        // ScreenGame::ingest_snapshot -> click_select_music ->
+        // pick_select_music_row -> OnlineSession::flush_music_send ->
+        // SetRoomMusic 4000 / SetRoomArena 4002. Synthetic catalog, no
+        // install-root read (CI-safe with hidden game data).
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 3005);
+            let pick = read_frame(&mut stream);
+            assert_eq!(pick.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&pick.payload).unwrap();
+            assert_eq!(body.music_id, 757, "the fresh row id is on the wire");
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::SetRoomArena.id()
+            );
+            assert_quiet(&mut stream);
+        });
+        click_master_song_row_and_ok(&mut session);
+
+        session.menu_key(MenuKey::Back, true);
+        reenter_waiting_after_room_exit(&mut session);
+        click_master_song_row_and_ok(&mut session);
+        paint_until(&mut session, |session| {
+            !session.game.has_pending_music_send()
+        });
+        server.join().unwrap();
+    }
+
     /// Staged button for the MUSELECT-wire guards: the click lands on
     /// the control's own `.bnd` rect, never on a literal screen point.
     fn staged_waiting_button(id: &str, x: i32, y: i32) -> o2jam_shell::avatar::ScenePlacement {
