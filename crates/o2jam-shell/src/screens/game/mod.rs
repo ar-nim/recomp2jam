@@ -3780,6 +3780,16 @@ impl ScreenGame {
                 self.select_music_notice = None;
                 return true;
             }
+            // CANCEL (`0x27200003`) closes the sheet without the OK
+            // commit (exe `FUN_0043e9b0`, file `0x43ea8c`): the shared
+            // close helper gets 0 instead of OK's 1. A staged pick must
+            // not reach the session bridge after this exit.
+            if staged_rect_hit(&art.placements, "IDC_BUTTON_DSMUSIC_CANCEL", x, y) {
+                self.select_music_art = None;
+                self.select_music_notice = None;
+                self.outbox.discard_music_send();
+                return true;
+            }
         }
         if self.click_select_chrome(x, y) {
             return true;
@@ -7115,6 +7125,16 @@ impl ScreenGame {
         let Some(sprite) = placement.sprite.as_deref() else {
             return true;
         };
+        // The two `?` bodies are backstage plates at open (#272). #764
+        // paints the authored body only while its own guide sheet is
+        // active; both frames are byte-identical in the shipped art, so
+        // no separate hover face is claimed (still OPEN).
+        if sprite == "SelectMusic_LabelQuestion.ojs" {
+            return self.select_help == SelectHelpSheet::Label;
+        }
+        if sprite == "SelectMusic_SearchQuestion.ojs" {
+            return self.select_help == SelectHelpSheet::Search;
+        }
         if crate::staging::SELECT_MUSIC_RANDOM_SPRITES.contains(&sprite) {
             return self.select_mode == SelectMusicMode::Random;
         }
@@ -8622,6 +8642,104 @@ mod game_tests {
             "OK with no pick leaves the dialog open"
         );
         assert!(!game.has_pending_music_send(), "no pick is queued");
+    }
+
+    #[test]
+    fn cancel_button_closes_the_sheet_and_discards_the_staged_pick() {
+        // Ticket #764, exe `FUN_0043e9b0` case `0x27200003` (evidence
+        // `ev_62ffe70b…`): CANCEL calls the shared sheet-close helper
+        // with 0, unlike OK's 1, so no pick is committed. Live chain:
+        // `ingest_snapshot` -> `click_waiting` -> `click_select_music`
+        // -> CANCEL staged `.bnd` rect -> `discard_music_send`.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let cancel = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_CANCEL".to_owned(),
+            code: 0x2720_0003,
+            sprite: None,
+            rect: Rect {
+                x: 702,
+                y: 0,
+                w: 48,
+                h: 38,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(vec![cancel], HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages the pick");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(720, 20));
+        assert!(
+            !game.select_music_dialog_open(),
+            "CANCEL closes the song sheet"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "CANCEL commits no song pick"
+        );
+    }
+
+    #[test]
+    fn a_help_button_click_reveals_its_authored_question_face() {
+        // Ticket #764: the two `?` bodies are staged hidden at open
+        // (#272 placement pin) and their two sprite frames are
+        // byte-identical, so the only pinned visual state is showing the
+        // authored body while its guide sheet is active. The distinct
+        // hover face stays OPEN (no exe capture pins one). Live chain:
+        // `ingest_snapshot` -> `click_select_music` ->
+        // `click_select_chrome` -> `select_help` -> `paint_waiting` ->
+        // `paint_select_music_art` -> `select_sprite_visible`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let sprite = "SelectMusic_LabelQuestion.ojs";
+        for placement in &mut placements {
+            if placement.id == "IDC_BUTTON_DSMUSIC_LABELQUESTION" {
+                placement.sprite = Some(sprite.to_owned());
+            }
+        }
+        let mut figures = HashMap::new();
+        figures.insert(sprite.to_owned(), solid_test_figure([0x00, 0xF8]));
+        game.load_select_music_scene(placements, figures);
+
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &before,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        click_chrome(&mut game, 2);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Label);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        click_chrome(&mut game, 3);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (20, 80),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
     }
 
     /// Waiting game with a pick staged through the real MUSELECT row
@@ -18652,7 +18770,7 @@ mod game_tests {
     /// ids and hit tests are the real ones; the fixture rects keep the
     /// guards independent of installed game data (CI arm).
     fn select_chrome_placements() -> Vec<ScenePlacement> {
-        const IDS: [&str; 11] = [
+        const IDS: [&str; 12] = [
             "IDC_BUTTON_DSMUSIC_MUISCSELECT",
             "IDC_BUTTON_DSMUSIC_RANDOMSELECT",
             "IDC_BUTTON_DSMUSIC_LABELQUESTION",
@@ -18664,6 +18782,7 @@ mod game_tests {
             "IDC_BUTTON_DSMUSIC_SEARCH_TITLE",
             "IDC_BUTTON_DSMUSIC_SEARCH_ARTIST",
             "IDC_BUTTON_DSMUSIC_SERACH",
+            "IDC_BUTTON_DSMUSIC_CANCEL",
         ];
         IDS.iter()
             .enumerate()

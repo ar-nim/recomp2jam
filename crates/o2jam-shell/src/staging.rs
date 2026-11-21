@@ -567,17 +567,13 @@ pub const BYNAME_TABLE: &[ByNameRow] = &[
     },
 ];
 
-/// Bodies the song-select sheet declares whose art the backdrop already
-/// bakes: the `LABELQUESTION 0x27200053` and `SEARCHQUESTION 0x27200055`
-/// rects pair to grey `?` sprites, while `Dialog_SelectMusic.ojs` carries
-/// the dark `?` plates the exe shows at those same coordinates. Their
-/// rects still stage for clicks; the figures stay unloaded so no grey
-/// variant covers the plate (#272 placement residual). Whether the exe
-/// ever shows the grey variant (hover or help-active state) stays OPEN.
-pub const SELECT_MUSIC_BACKDROP_BAKED_SPRITES: &[&str] = &[
-    "SelectMusic_LabelQuestion.ojs",
-    "SelectMusic_SearchQuestion.ojs",
-];
+/// Bodies the song-select sheet declares but never stages as figures.
+/// Empty since #764: the `LABELQUESTION 0x27200053` and
+/// `SEARCHQUESTION 0x27200055` bodies stage again and paint only while
+/// their guide sheet is active (#272 keeps their plates visible at open).
+/// Both authored bodies have two byte-identical frames, so no distinct
+/// hover or help-active face is claimed; the hover face stays OPEN.
+pub const SELECT_MUSIC_BACKDROP_BAKED_SPRITES: &[&str] = &[];
 
 /// Result-tab control faces the sheet backdrop already paints (#349).
 /// `Dialog_SelectMusic.ojs` bakes the header labels, the check-all /
