@@ -230,7 +230,7 @@ impl ScreenGame {
                 let pages = self.myroom_gift_page_count();
                 self.myroom.turn_gift_page(step, pages);
             }
-            MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
+            MyRoomAction::PickGiftCell(cell) => self.apply_myroom_gift_cell_pick(cell),
             MyRoomAction::PressWornWell(well) => self.apply_myroom_well_press(well),
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
@@ -437,38 +437,54 @@ impl ScreenGame {
         });
     }
 
-    /// Claim the selected gift cell: the 5023 body queues for the
-    /// session bridge (`GiftType` follows the picked run — item or
-    /// song — while `is_attributive` stays false: countable stacks
-    /// are unpinned on this path). Without a picked cell or staged
-    /// box rows the press records nothing.
-    fn apply_myroom_claim(&mut self) {
-        let Some(cell) = self.myroom.gift_cell() else {
-            return;
-        };
+    /// Build the exe's 5023 body for one staged gift cell. `GiftType`
+    /// follows the picked run (item or song); the attributive byte
+    /// stays false because the countable-stack lookup is unpinned on
+    /// this path. No staged box row means no claim.
+    fn staged_gift_claim(&self, cell: Option<usize>) -> Option<ClaimGift> {
+        let cell = cell?;
         let page = self.myroom.gift_page();
         let picked = self.myroom_items.as_ref().and_then(|table| {
             self.myroom_character
                 .as_ref()
                 .map(|character| myroom_gift_views(table, &self.catalog_songs, character))
         });
-        let Some(views) = picked else {
-            return;
-        };
-        let Some(view) = myroom_gift_page(&views, page).get(cell) else {
-            return;
-        };
+        let views = picked?;
+        let view = myroom_gift_page(&views, page).get(cell)?;
         let gift_type = if view.is_music {
             GiftType::Music
         } else {
             GiftType::Item
         };
-        self.outbox.pending_gift_claim = Some(ClaimGift {
+        Some(ClaimGift {
             gift_type,
             gift_id: view.gift_id,
             resource_id: view.resource_id,
             is_attributive: false,
-        });
+        })
+    }
+
+    /// Press one gift cell: the exe stores the derived index and calls
+    /// the 5023 send builder immediately (`FUN_004a3ee0`, files
+    /// `0xa4622`/`0xa4f98`). The separate MOVE control remains an
+    /// ours-by-design fallback for an unsent claim; it never doubles
+    /// a queued press.
+    fn apply_myroom_gift_cell_pick(&mut self, cell: usize) {
+        self.myroom.pick_gift_cell(Some(cell));
+        if let Some(claim) = self.staged_gift_claim(Some(cell)) {
+            self.outbox.pending_gift_claim = Some(claim);
+        }
+    }
+
+    /// MOVE fallback: queue the selected gift's 5023 only when the
+    /// cell press has not already queued one.
+    fn apply_myroom_claim(&mut self) {
+        if self.outbox.pending_gift_claim.is_some() {
+            return;
+        }
+        if let Some(claim) = self.staged_gift_claim(self.myroom.gift_cell()) {
+            self.outbox.pending_gift_claim = Some(claim);
+        }
     }
 
     /// MyRoom money captions from the single wallet (the O2/MUSIC/

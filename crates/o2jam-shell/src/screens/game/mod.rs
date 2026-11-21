@@ -15731,6 +15731,34 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_gift_cell_press_queues_5023_for_that_record() {
+        // Live caller chain: boot -> MyRoom side -> staged gift cell
+        // `0x1501c04a` -> click_myroom_side -> session flush
+        // take_gift_claim (5023). Static pin FUN_004a3ee0 cases
+        // `0x1501c04a..4e` store the derived gift index and call the
+        // send builder with opcode `0x139f` (file `0xa4f98` body).
+        use o2jam_net::gift::GiftType;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .item_gifts
+            .push(o2jam_net::GiftItemInfo {
+                gift_id: 7,
+                item_id: 1,
+                sender: "Giver".to_owned(),
+            });
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+        let claim = game
+            .take_gift_claim()
+            .expect("the cell press itself claims the gift");
+        assert_eq!(claim.gift_type, GiftType::Item);
+        assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
+        assert_eq!(game.take_gift_claim(), None, "one press sends once");
+    }
+
+    #[test]
     fn myroom_special_bag_items_open_the_exe_confirm_texts() {
         // Live caller chain: boot -> MyRoom side -> staged bag cell
         // with record byte +4 of 0x19/0x1a/0x1b -> main click dispatch
