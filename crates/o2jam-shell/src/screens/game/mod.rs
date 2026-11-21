@@ -76,14 +76,14 @@ use super::side::{
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
     MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
+    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
+    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
+    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -783,6 +783,9 @@ pub struct ScreenGame {
     /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
     /// ctor sentinels.
     select_filter: SelectMusicFilter,
+    /// Which result list the song dialog shows (`dialog+0x1a0`; tab
+    /// handlers `0x2760002F`/`0x27600030`, file `0x43e1f0`).
+    select_tab: SelectDialogTab,
     /// Which selection panel the song dialog paints (#285). The
     /// opening frame uses the song panel (VA `0x44f8a0`).
     select_mode: SelectMusicMode,
@@ -1172,6 +1175,7 @@ impl ScreenGame {
             announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
+            select_tab: SelectDialogTab::Result,
             select_mode: SelectMusicMode::SongSelect,
             select_help: SelectHelpSheet::None,
             select_page: 0,
@@ -3797,6 +3801,11 @@ impl ScreenGame {
     /// the table — the SERACH button submits the draft, as in the
     /// exe's search arm.
     fn select_rows(&self) -> Vec<SelectMusicRow<'_>> {
+        // The playlist tab rebuilds its own picked-list vector; this
+        // client has no picked-list source, so it stages no rows.
+        if self.select_tab == SelectDialogTab::Playlist {
+            return Vec::new();
+        }
         let mut rows = select_music_rows(&self.catalog_songs, self.select_filter);
         if let Some(index) = self.select_search_index {
             let field = self.select_search_field;
@@ -3830,6 +3839,13 @@ impl ScreenGame {
             return false;
         };
         match action {
+            SelectChromeAction::Tab(tab) => {
+                // Both tab handlers clear the page and the selected
+                // row before rebuilding their active list (files
+                // `0x43e3f7`/`0x43e415` and `0x43e4c9`/`0x43e4e6`).
+                self.select_tab = tab;
+                self.select_page = 0;
+            }
             SelectChromeAction::Mode(mode) => {
                 self.select_mode = mode;
                 self.select_help = SelectHelpSheet::None;
@@ -3892,6 +3908,12 @@ impl ScreenGame {
     #[must_use]
     pub fn select_filter(&self) -> SelectMusicFilter {
         self.select_filter
+    }
+
+    /// Active result list (`Result` on open).
+    #[must_use]
+    pub fn select_tab(&self) -> SelectDialogTab {
+        self.select_tab
     }
 
     /// Live selection panel (`SongSelect` on open).
@@ -4389,6 +4411,7 @@ impl ScreenGame {
     /// `0x43d324`/`0x43d331`/`0x43d33e` plus the empty edit box).
     fn reset_select_chrome(&mut self) {
         self.select_filter = SelectMusicFilter::ALL;
+        self.select_tab = SelectDialogTab::Result;
         self.select_mode = SelectMusicMode::SongSelect;
         self.select_help = SelectHelpSheet::None;
         self.select_page = 0;
@@ -7120,7 +7143,14 @@ impl ScreenGame {
             .select_search_query
             .as_ref()
             .map(|(field, query)| super::side::select_search_status(*field, query));
-        let status = self.select_music_notice.or(search_banner.as_deref());
+        // The playlist tab clears the status caption (the exe writes
+        // the empty string into control `0x27400042`); the result tab
+        // keeps its notice or search banner.
+        let status = if self.select_tab == SelectDialogTab::Playlist {
+            Some("")
+        } else {
+            self.select_music_notice.or(search_banner.as_deref())
+        };
         let live = SelectTextLive {
             page: self.select_page,
             status,
@@ -18987,6 +19017,77 @@ mod game_tests {
             (12, 12),
             pack_xrgb(0x00, 56, 192)
         ));
+    }
+
+    /// The two tab images from `Dialog_SelectMusic.bnd` (`0x2760002F`
+    /// result, `0x27600030` playlist), staged at unique rects for the
+    /// click guard.
+    fn select_tab_placements() -> Vec<ScenePlacement> {
+        [
+            ("IDC_IMAGE_DSMUSIC_TABRESULT", 500),
+            ("IDC_IMAGE_DSMUSIC_TABPLAYLIST", 560),
+        ]
+        .into_iter()
+        .map(|(id, x)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 20,
+                w: 40,
+                h: 20,
+            },
+        })
+        .collect()
+    }
+
+    #[test]
+    fn a_playlist_tab_click_switches_the_row_source_and_resets_the_pager() {
+        // Live chain: MUSELECT -> `load_select_music_scene` ->
+        // `click_select_music` -> `click_select_chrome` -> `select_rows`
+        // -> `paint_select_music_text` -> `select_pager_caption`.
+        // `FUN_0043e1f0` (file `0x43e1f0`) clears the page and selected
+        // row and rebuilds the active list on both tab presses: the
+        // result tab keeps the search rows, the playlist tab names the
+        // picked rows (no picked list is staged in this client).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        placements.extend(select_tab_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+
+        click_chrome(&mut game, 5);
+        assert_eq!(game.select_page(), 1);
+        let result_frame = paint_waiting_frame(&mut game, 800, 600);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(580, 30));
+        assert_eq!(game.select_tab(), SelectDialogTab::Playlist);
+        assert!(game.select_rows().is_empty(), "the playlist has no rows");
+        assert_eq!(game.select_page(), 0, "a tab press restarts the pager");
+        let playlist_frame = paint_waiting_frame(&mut game, 800, 600);
+        let pager = Rect {
+            x: 669,
+            y: 390,
+            w: 54,
+            h: 13,
+        };
+        assert_ne!(
+            rect_pixels(&result_frame, 800, pager),
+            rect_pixels(&playlist_frame, 800, pager),
+            "the pager caption must name the active tab's list"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(520, 30));
+        assert_eq!(game.select_tab(), SelectDialogTab::Result);
+        assert_eq!(game.select_rows().len(), 45);
+        assert_eq!(game.select_page(), 0);
     }
 
     #[test]

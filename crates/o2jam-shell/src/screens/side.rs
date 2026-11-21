@@ -2280,9 +2280,22 @@ pub enum SelectPagerStep {
     Next,
 }
 
+/// Which result list the song dialog shows (`dialog+0x1a0` in the
+/// exe; tab handlers `0x2760002F`/`0x27600030`, file `0x43e1f0`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectDialogTab {
+    /// Search-result rows (the opening tab).
+    #[default]
+    Result,
+    /// Picked-playlist rows. No picked-list source is staged yet.
+    Playlist,
+}
+
 /// One actionable song-dialog chrome press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectChromeAction {
+    /// Switch the result/playlist tab.
+    Tab(SelectDialogTab),
     /// Switch between the song and random panels.
     Mode(SelectMusicMode),
     /// Show one help sheet.
@@ -2299,6 +2312,10 @@ pub enum SelectChromeAction {
     SearchIndex(u8),
 }
 
+const SELECT_TAB_IMAGES: [(&str, SelectDialogTab); 2] = [
+    ("IDC_IMAGE_DSMUSIC_TABRESULT", SelectDialogTab::Result),
+    ("IDC_IMAGE_DSMUSIC_TABPLAYLIST", SelectDialogTab::Playlist),
+];
 const SELECT_MODE_BUTTONS: [(&str, SelectMusicMode); 2] = [
     (
         "IDC_BUTTON_DSMUSIC_MUISCSELECT",
@@ -2415,8 +2432,11 @@ pub fn select_chrome_action_at(
     x: i32,
     y: i32,
 ) -> Option<SelectChromeAction> {
-    button_choice_at(placements, &SELECT_MODE_BUTTONS, x, y)
-        .map(SelectChromeAction::Mode)
+    tab_action_at(placements, x, y)
+        .map(SelectChromeAction::Tab)
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_MODE_BUTTONS, x, y).map(SelectChromeAction::Mode)
+        })
         .or_else(|| {
             button_choice_at(placements, &SELECT_HELP_BUTTONS, x, y).map(SelectChromeAction::Help)
         })
@@ -2430,6 +2450,11 @@ pub fn select_chrome_action_at(
                 .then_some(SelectChromeAction::Search)
         })
         .or_else(|| index_action_at(placements, x, y))
+}
+
+/// Tab image under a staged-dialog click (`None` outside both rects).
+fn tab_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<SelectDialogTab> {
+    button_choice_at(placements, &SELECT_TAB_IMAGES, x, y)
 }
 
 /// Pager press at a staged button: UP/DOWN reorder, LEFT/RIGHT page.

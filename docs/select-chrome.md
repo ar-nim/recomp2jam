@@ -46,6 +46,15 @@ back; #285 makes them paint-gated families instead of absent art.
   (`dialog+0x6b8`), so they clamp at the ends. On the result tab UP/
   DOWN are disabled (VA `0x43e52d`/`0x43e550`). Keyboard keys 11/12
   forward to LEFT/RIGHT (table VA `0x4419bc`).
+- **Result/playlist tabs** — `0x2760002F`/`0x27600030` are handled in
+  `FUN_0043e1f0` (VA `0x43e1f0`, file `0x43e1f0`, evidence
+  `ev_43aeb5c6877e6ecee0652442d5da1ad0ea1adb44655479a2f7702a27f1890500`).
+  Both clear the page (`+0x6b4`) and selected row (`+0x6b0`), then
+  rebuild their own list; the result tab keeps the search rows and
+  disables UP/DOWN, the playlist tab enables them and clears the
+  status caption `0x27400042`. #763 stages this tab word and the
+  page reset; the picked-list vector has no source in this client, so
+  the playlist tab stages no rows and UP/DOWN stay inert.
 - **Search** — `SEARCH_TITLE 0x27201049` sets the dialog search field
   to 0 (VA `0x43e92f`), `SEARCH_ARTIST 0x2720104A` to 1 (VA
   `0x43e957`); `SERACH 0x2720004C` runs the search (key-forward arm
@@ -241,6 +250,9 @@ song-dialog tests and name the live chain from boot staging to
 - `a_chosung_index_click_keeps_only_songs_with_that_korean_initial` —
   an INDEX rect click through `click_select_chrome` into the keyed
   row rebuild and pager caption (#762).
+- `a_playlist_tab_click_switches_the_row_source_and_resets_the_pager` —
+  a tab image click through the same dispatcher into `select_rows`,
+  the pager caption and the status line (#763).
 
 All four wired-family guards were red-proved by disabling the
 `click_select_chrome` call in `ScreenGame::click_select_music`. The
@@ -272,8 +284,10 @@ still OPEN. This note pins geometry, not a qualified exe frame.
 
 ## OPEN after this leg
 
-The 42-button chosung INDEX grid is wired (#762). The two special
-buttons, the result/playlist tab switch, the playlist sort/selection
-family and the UP/DOWN reorder (not offered on the result tab) stay
-OPEN. The next evidence step is a static walk of the special-button
-handler (no code immediate found) and a rig sweep of the playlist tab.
+The 42-button chosung INDEX grid (#762) and the result/playlist tab
+state (#763) are wired. The two special buttons, the playlist
+sort/selection family and the UP/DOWN reorder stay OPEN: no picked
+list is staged, so there is no row to select or reorder. The next
+evidence step is a static walk of the special-button handler (no code
+immediate found), the sort/select handlers and a rig sweep of the
+playlist tab.
