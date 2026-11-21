@@ -1333,6 +1333,67 @@ pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
 /// next step as lanking).
 pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
 pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Six color filters (`IDC_BUTTON_MSHOP_MS_NEW..SILVER`) and the four
+/// box-line frames they stage (`0x1A500004..07`). The filter arm
+/// writes index + 1 into the frame setter (`FUN_004c7f70`, #813).
+pub const MSHOP_GENRE_FILTER_FIRST_CODE: u32 = 0x1A20_1010;
+pub const MSHOP_GENRE_FILTER_COUNT: u32 = 6;
+pub const MSHOP_BOX_FRAME_FIRST_CODE: u32 = 0x1A50_0004;
+pub const MSHOP_BOX_FRAME_COUNT: u32 = 4;
+
+/// One song-shop color filter, in the exe's control-code order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopGenreFilter {
+    /// `NEW`, the filter enabled at shop entry.
+    #[default]
+    New,
+    /// `GOLD`.
+    Gold,
+    /// `BLACK`.
+    Black,
+    /// `BLUE`.
+    Blue,
+    /// `RED`.
+    Red,
+    /// `SILVER`.
+    Silver,
+}
+
+impl MusicShopGenreFilter {
+    /// Zero-based filter index (the exe's state `+0x14e` offset).
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::New => 0,
+            Self::Gold => 1,
+            Self::Black => 2,
+            Self::Blue => 3,
+            Self::Red => 4,
+            Self::Silver => 5,
+        }
+    }
+
+    /// Box-line frame index the filter stages (`index + 1`).
+    #[must_use]
+    pub const fn frame_index(self) -> u32 {
+        self.index() + 1
+    }
+
+    /// Filter behind one `MS_NEW..SILVER` code.
+    #[must_use]
+    pub fn from_code(code: u32) -> Option<Self> {
+        let offset = code.checked_sub(MSHOP_GENRE_FILTER_FIRST_CODE)?;
+        match offset {
+            0 => Some(Self::New),
+            1 => Some(Self::Gold),
+            2 => Some(Self::Black),
+            3 => Some(Self::Blue),
+            4 => Some(Self::Red),
+            5 => Some(Self::Silver),
+            _ => None,
+        }
+    }
+}
 /// Download controls (`0x1A20000E` START, `0x1A20000F` CANCEL).
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
@@ -1549,6 +1610,9 @@ pub enum MusicShopAction {
     BuyRow { slot: usize, gem: bool },
     /// A sort button answered.
     Sort(LankingSort),
+    /// A color filter answered; it resets the browsing page and
+    /// stages one of the four box-line frames (#813).
+    Genre(MusicShopGenreFilter),
     /// A TOP100 board-chrome control was pressed. Carries the staged
     /// control code (`0x1A20007D..0x84`); the exe press frame pins no
     /// ranking board, so this records a client-only press marker and
@@ -1609,6 +1673,9 @@ pub fn music_shop_action_at(
 /// buttons — their slots resolve through the staged `MS_EX` slots
 /// in [`music_shop_buy_slot`] — and for every unnamed control).
 fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
+    if let Some(genre) = MusicShopGenreFilter::from_code(code) {
+        return Some(MusicShopAction::Genre(genre));
+    }
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
     }

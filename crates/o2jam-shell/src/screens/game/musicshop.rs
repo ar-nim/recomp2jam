@@ -8,9 +8,10 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
-    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
-    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
-    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
+    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
+    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS,
+    MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
+    MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -95,6 +96,13 @@ pub(crate) struct MusicShopState {
     /// no live producer for those art plates, so this records the
     /// staged code and only pins the clearing arm (#814).
     pub(crate) music_shop_preview_plate: Option<u32>,
+    /// Active color filter. `NEW` is enabled at entry
+    /// (`FUN_004c6d70`); a filter press resets the song page and
+    /// stages the box-line frame at `filter index + 1` (#813).
+    pub(crate) music_shop_genre_filter: MusicShopGenreFilter,
+    /// Search-result flag (exe state `+0x88`). A filter press clears
+    /// it; the SEARCH arm sets it on a successful match (#815).
+    pub(crate) music_shop_search_active: bool,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -280,6 +288,27 @@ impl MusicShopState {
         self.music_shop_top100_pressed
     }
 
+    /// Active color filter.
+    pub(crate) fn genre_filter(&self) -> MusicShopGenreFilter {
+        self.music_shop_genre_filter
+    }
+
+    /// Box-line frame staged by the active filter (one-based).
+    pub(crate) fn frame_index(&self) -> u32 {
+        self.music_shop_genre_filter.frame_index()
+    }
+
+    /// Whether the visible songs are a search result.
+    pub(crate) fn search_active(&self) -> bool {
+        self.music_shop_search_active
+    }
+
+    /// Stage the search flag at the board seam. The SEARCH arm owns
+    /// it once that arm lands (#815).
+    pub(crate) fn stage_search_active(&mut self, active: bool) {
+        self.music_shop_search_active = active;
+    }
+
     /// Last staged preview plate code, if any.
     pub(crate) fn preview_plate(&self) -> Option<u32> {
         self.music_shop_preview_plate
@@ -459,6 +488,13 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
+                MusicShopEffect::None
+            }
+            MusicShopAction::Genre(genre) => {
+                self.music_shop_genre_filter = genre;
+                self.music_shop_search_active = false;
+                self.music_shop_page = 0;
+                self.clear_page_plates();
                 MusicShopEffect::None
             }
             MusicShopAction::Sort(sort) => {

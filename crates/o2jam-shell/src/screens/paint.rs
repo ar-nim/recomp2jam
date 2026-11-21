@@ -52,15 +52,16 @@ use super::side::{
     wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
     PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState,
     GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE,
-    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE,
-    MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
-    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
-    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE,
+    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CURRENT_PROGRESS_CODE,
+    MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE,
+    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
+    MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1557,6 +1558,50 @@ const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
 /// Own-by-design band behind a pinned Korean shop notice. The text
 /// and the host control code are pinned; the band is presentation.
 const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
+
+/// Own-by-design marker for the active box-line frame. The exe stages
+/// sprite frame `filter index + 1` into four controls; our shell has no
+/// box-line sprite, so the one-based index positions one marker row in
+/// each staged rect. This is presentation, not an exe pixel claim (#813).
+const MUSIC_SHOP_BOX_FRAME_TONE: u32 = pack_xrgb(0xD8, 0xB0, 0x48);
+
+/// Ink the active color filter's frame marker in the four staged
+/// box-line rects. Unstaged controls paint nothing.
+pub fn paint_music_shop_genre_frames(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    frame_index: u32,
+) {
+    for offset in 0..MSHOP_BOX_FRAME_COUNT {
+        let Some(code) = MSHOP_BOX_FRAME_FIRST_CODE.checked_add(offset) else {
+            continue;
+        };
+        let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        if rect.h == 0 || rect.w == 0 {
+            continue;
+        }
+        let marker_row = frame_index.saturating_sub(1).min(rect.h - 1);
+        let Some(y) = rect
+            .y
+            .checked_add(i32::try_from(marker_row).unwrap_or(i32::MAX))
+        else {
+            continue;
+        };
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y,
+                w: rect.w,
+                h: 1,
+            },
+            MUSIC_SHOP_BOX_FRAME_TONE,
+        );
+    }
+}
 
 /// Download bar inks: the exe's mode-2 style is pinned; the
 /// numeric value and the notify behind it stay OPEN (#832), so the
