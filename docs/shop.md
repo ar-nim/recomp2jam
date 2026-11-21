@@ -393,6 +393,22 @@ and `shop_gender_press_calls_the_context_refresher_for_the_staged_role`
 button (absence, #195); **OPEN (next step):** before/after exe frame
 pair for each press, in shop and myroom contexts.
 
+## #178 enrichment — planet carousel (#777)
+
+The two planet arms `0x14200008/09` (`ev_f3ad15be…`) hide the staged
+12×3 grid, move index `0x17` with UP 1→12 / DOWN 12→1, ink
+`FUN_0042f870(index,0)` when the figure read arms, rerun the same
+three-way context refresh with the index-12 word, then call the seed
+function twice and reset the three layout words `0x8d4..6` to `0,0,1`.
+Our board stages the grid count and caption arm (the exe→our-object
+join is not pinned), and records the caption argument, hidden cell
+count, two seeds, layout words and refresher call. Sound slot `0x1c`
+is pinned but not modeled in the UI-effect layer. Guards:
+`shop_planet_up_wraps_one_to_twelve_and_down_wraps_back` and
+`shop_planet_turn_hides_the_grid_reseeds_and_refreshes_the_context`
+(synthetic placements, hidden-arm safe). **OPEN (next step):** a
+qualified press frame pair for both directions; no readout pin exists.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
@@ -411,8 +427,9 @@ pair for each press, in shop and myroom contexts.
 4. Scroll, bag pager, planet pager, ext-menu filter behavior —
    PARTIAL: scroll pager steps and holds (origin-offset
    read ASSUMED); bag pager steps and holds over staged owned
-   inventory (L/R readout pairing ASSUMED); planet pager and
-   filters display-only — the filter buttons never stage live
-   (absence, ticket #195).
+   inventory (L/R readout pairing ASSUMED); planet pager now turns
+   the index with wrap and reseeds (#777), but the arrows and filters
+   still never stage live (absence, ticket #195). Ext-menu toggle
+   remains OPEN (#788).
 5. Gender buttons — PARTIAL: byte/hidden-button/refresher staged;
    the screen→object-word mapping and before/after frames stay OPEN.

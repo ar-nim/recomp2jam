@@ -6456,6 +6456,52 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Current planet index (1..=12).
+    #[must_use]
+    pub fn shop_planet_index(&self) -> u8 {
+        self.shop.planet_index()
+    }
+
+    /// Caption-setter argument from the last planet turn.
+    #[must_use]
+    pub fn shop_planet_caption_arg(&self) -> Option<u8> {
+        self.shop.planet_caption_arg()
+    }
+
+    /// Grid cells hidden by the last planet turn.
+    #[must_use]
+    pub fn shop_planet_hidden_cells(&self) -> usize {
+        self.shop.planet_hidden_cells()
+    }
+
+    /// Reseed count from the last planet turn.
+    #[must_use]
+    pub fn shop_planet_reseeds(&self) -> u32 {
+        self.shop.planet_reseeds()
+    }
+
+    /// Layout words after the last planet turn.
+    #[must_use]
+    pub fn shop_planet_layout_flags(&self) -> [u8; 3] {
+        self.shop.planet_layout_flags()
+    }
+
+    /// Refresher call made by the last planet press.
+    #[must_use]
+    pub fn shop_planet_refresh(&self) -> Option<super::side::ShopRefresh> {
+        self.shop.planet_refresh()
+    }
+
+    /// Stage the count of nonempty 12×3 planet cells.
+    pub fn stage_shop_planet_grid(&mut self, nonzero_cells: usize) {
+        self.shop.stage_planet_grid_nonzero(nonzero_cells);
+    }
+
+    /// Stage whether the planet caption setter is armed.
+    pub fn stage_shop_planet_caption(&mut self, armed: bool) {
+        self.shop.stage_planet_caption_armed(armed);
+    }
+
     /// Gender byte `+0x18` staged by the last GIRL/BOY press.
     #[must_use]
     pub fn shop_gender(&self) -> Option<super::side::ShopGender> {
@@ -23901,6 +23947,80 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_planet_up_wraps_one_to_twelve_and_down_wraps_back() {
+        // Live caller chain (once an arrow stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(PLANET_UP/DOWN 0x14200008/09) ->
+        //   ShopState::apply_action(PlanetUp/PlanetDown).
+        // Static pin `ev_f3ad15be…`: UP 1→12 then decrements, DOWN
+        // 12→1 then increments. OPEN (next step): press frames both
+        // directions; no readout pin exists.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        for (code, x) in [(SHOP_PLANET_UP_CODE, 500), (SHOP_PLANET_DOWN_CODE, 540)] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 30,
+                    w: 30,
+                    h: 20,
+                },
+            });
+        }
+        assert_eq!(game.shop_planet_index(), 1);
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_planet_index(), 12, "UP wraps 1 to 12");
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_planet_index(), 1, "DOWN wraps 12 to 1");
+        game.click_shop(550, 40);
+        assert_eq!(game.shop_planet_index(), 2, "DOWN steps forward");
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_planet_index(), 1, "UP steps back");
+    }
+
+    #[test]
+    fn shop_planet_turn_hides_the_grid_reseeds_and_refreshes_the_context() {
+        // Same static arm: the 12×3 grid hides before the turn, the
+        // caption setter takes the new index when armed, two seeds and
+        // three layout words follow, and the context refresher gets 1
+        // at planet 12. Synthetic placement, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_PLANET_UP_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+        game.stage_shop_planet_grid(2);
+        game.stage_shop_planet_caption(true);
+        game.stage_shop_refresh_context(ShopRefreshContext::FigurePane);
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_planet_hidden_cells(), 2);
+        assert_eq!(game.shop_planet_caption_arg(), Some(12));
+        assert_eq!(game.shop_planet_reseeds(), 2);
+        assert_eq!(game.shop_planet_layout_flags(), [0, 0, 1]);
+        assert_eq!(
+            game.shop_planet_refresh(),
+            Some(ShopRefresh {
+                helper: "FUN_0049e2d0",
+                argument: 1,
+            })
+        );
     }
 
     #[test]

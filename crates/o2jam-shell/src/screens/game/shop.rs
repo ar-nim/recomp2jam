@@ -2,10 +2,12 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_checkout_decision, shop_goods, shop_page_count, shop_try_on_decision,
-    CheckoutDecision, CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopGender, ShopGood,
-    ShopPanel, ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
-    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
+    shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
+    CheckoutNotice, ShopAction, ShopGender, ShopGood, ShopPanel, ShopRefresh, ShopRefreshContext,
+    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
+    SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -66,6 +68,23 @@ pub(crate) struct ShopState {
     /// Cart-list page (five rows per page, the staged `CART_EX`
     /// slots).
     pub(crate) shop_cart_page: usize,
+    /// Planet index `0x17` (1..=12). Our board opens on planet 1;
+    /// the exe's entry word is unpinned.
+    planet_index: u8,
+    /// Number of staged nonzero cells in the exe's 12×3 grid.
+    planet_grid_nonzero: usize,
+    /// Whether the figure-read helper arms `FUN_0042f870`.
+    planet_caption_armed: bool,
+    /// Caption setter argument from the last planet turn.
+    planet_caption_arg: Option<u8>,
+    /// Cells hidden by the last planet turn's first grid pass.
+    planet_hidden_cells: usize,
+    /// `FUN_00411e60` calls on the last turn (two: `+0x8d2/+0x8d3`).
+    planet_reseeds: u32,
+    /// Three layout words reset after the seeds (`+0x8d4..6`).
+    planet_layout_flags: [u8; 3],
+    /// Refresher call made by the last planet press.
+    last_planet_refresh: Option<ShopRefresh>,
     /// Gender byte `+0x18` written by the GIRL/BOY arms (`None`
     /// before the first press — the entry byte is unpinned).
     gender: Option<ShopGender>,
@@ -135,6 +154,46 @@ impl ShopState {
     /// it, and a row check enters the face (`ev_f3ad15be…`).
     pub(crate) fn cart_face_open(&self) -> bool {
         self.panel == ShopPanel::ShoppingBag
+    }
+
+    /// Current planet index (1..=12).
+    pub(crate) fn planet_index(&self) -> u8 {
+        self.planet_index.max(SHOP_PLANET_FIRST_INDEX)
+    }
+
+    /// Argument the last planet turn passed to `FUN_0042f870`.
+    pub(crate) fn planet_caption_arg(&self) -> Option<u8> {
+        self.planet_caption_arg
+    }
+
+    /// Grid cells hidden by the last planet turn.
+    pub(crate) fn planet_hidden_cells(&self) -> usize {
+        self.planet_hidden_cells
+    }
+
+    /// Reseed count from the last planet turn (two in the exe).
+    pub(crate) fn planet_reseeds(&self) -> u32 {
+        self.planet_reseeds
+    }
+
+    /// Three layout words after the last planet turn.
+    pub(crate) fn planet_layout_flags(&self) -> [u8; 3] {
+        self.planet_layout_flags
+    }
+
+    /// Refresher call made by the last planet press.
+    pub(crate) fn planet_refresh(&self) -> Option<ShopRefresh> {
+        self.last_planet_refresh
+    }
+
+    /// Stage how many 12×3 grid cells currently hold planet art.
+    pub(crate) fn stage_planet_grid_nonzero(&mut self, cells: usize) {
+        self.planet_grid_nonzero = cells.min(SHOP_PLANET_GRID_CELLS);
+    }
+
+    /// Stage whether the caption setter is armed by the figure read.
+    pub(crate) fn stage_planet_caption_armed(&mut self, armed: bool) {
+        self.planet_caption_armed = armed;
     }
 
     /// Gender byte `+0x18` staged by the last GIRL/BOY press.
@@ -455,6 +514,21 @@ impl ShopState {
             }
             ShopAction::RevertTryOn => {
                 self.clear_try_on();
+                false
+            }
+            ShopAction::PlanetUp | ShopAction::PlanetDown => {
+                // Static arms `0x14200008/09` (`ev_f3ad15be…`):
+                // hide the 12×3 grid, step the index, ink the caption
+                // when armed, rerun the three-way context refresh with
+                // the index-12 word, then reseed twice and reset the
+                // three layout flags.
+                self.planet_hidden_cells = self.planet_grid_nonzero;
+                self.planet_index = shop_next_planet_index(self.planet_index(), action);
+                self.planet_caption_arg = self.planet_caption_armed.then_some(self.planet_index);
+                self.lucky_view = self.planet_index == SHOP_PLANET_LAST_INDEX;
+                self.last_planet_refresh = Some(self.refresh_context.resolve(self.lucky_view));
+                self.planet_reseeds = self.planet_reseeds.saturating_add(2);
+                self.planet_layout_flags = SHOP_PLANET_LAYOUT_FLAGS;
                 false
             }
             ShopAction::SelectGender(gender) => {

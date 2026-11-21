@@ -674,10 +674,52 @@ pub const SHOP_EXTMENU_ON_CODE: u32 = 0x1420_0099;
 pub const SHOP_EXTMENU_FIRST_CODE: u32 = 0x1420_109B;
 /// Ext-menu filters in the menu (twelve `Shop_ExtMenu` buttons).
 pub const SHOP_EXTMENU_BUTTONS: usize = 12;
-/// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`): display-only,
-/// lands nowhere (labeled no-op).
+/// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`). Static arm
+/// `0x14200008/09` (`ev_f3ad15be…`) cycles index `0x17`: UP 1→12 then
+/// decrements, DOWN 12→1 then increments; it hides the 12×3 grid,
+/// calls caption setter `FUN_0042f870(index,0)`, refreshes the context,
+/// then takes two fresh seeds and resets three layout flags. Neither
+/// arrow stages in the live dump (#195), so the arms answer only a
+/// staged control.
 pub const SHOP_PLANET_UP_CODE: u32 = 0x1420_0008;
 pub const SHOP_PLANET_DOWN_CODE: u32 = 0x1420_0009;
+/// First planet grid cell (12 planets × 3 cells), staged for the
+/// hide-before-turn pass in the two planet arms.
+pub const SHOP_PLANET_GRID_CELLS: usize = 12 * 3;
+/// Layout words the planet arms reset after the two reseeds
+/// (`0x8d4/0x8d5/0x8d6` in the exe object).
+pub const SHOP_PLANET_LAYOUT_FLAGS: [u8; 3] = [0, 0, 1];
+/// Valid planet index range (`0x17` cycles 1..=12).
+pub const SHOP_PLANET_FIRST_INDEX: u8 = 1;
+pub const SHOP_PLANET_LAST_INDEX: u8 = 12;
+
+/// Next planet index for one arrow press. Pure wrap arithmetic from
+/// the two static arms (`ev_f3ad15be…`): UP 1→12, DOWN 12→1.
+#[must_use]
+pub const fn shop_next_planet_index(current: u8, action: ShopAction) -> u8 {
+    let current = if current < SHOP_PLANET_FIRST_INDEX {
+        SHOP_PLANET_FIRST_INDEX
+    } else {
+        current
+    };
+    match action {
+        ShopAction::PlanetUp => {
+            if current == SHOP_PLANET_FIRST_INDEX {
+                SHOP_PLANET_LAST_INDEX
+            } else {
+                current - 1
+            }
+        }
+        ShopAction::PlanetDown => {
+            if current == SHOP_PLANET_LAST_INDEX {
+                SHOP_PLANET_FIRST_INDEX
+            } else {
+                current + 1
+            }
+        }
+        _ => current,
+    }
+}
 /// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
 /// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
 /// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
@@ -1105,6 +1147,10 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Planet UP (`0x14200008`): decrement index, 1 wraps to 12.
+    PlanetUp,
+    /// Planet DOWN (`0x14200009`): increment index, 12 wraps to 1.
+    PlanetDown,
     /// Gender button pressed (`+0x18` byte, other button hidden,
     /// context refresher called).
     SelectGender(ShopGender),
@@ -1204,6 +1250,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
         SHOP_BACK_CODE | SHOP_STATIC_BACK_CODE => Some(ShopAction::BackToLobby),
         SHOP_GOMYROOM_CODE => Some(ShopAction::GoMyRoom),
+        SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
+        SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
