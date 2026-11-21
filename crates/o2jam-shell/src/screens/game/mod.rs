@@ -8460,6 +8460,11 @@ mod game_tests {
 
     #[test]
     fn menu_backs_out_of_lobbies() {
+        // #735: this menu-edge back is ours-by-design. The exe statics
+        // pin ESC for splash/dialog close and Room/Waiting/Planet/Channel
+        // back as chrome control-code dispatch, not a scene key handler
+        // (`docs/back-navigation-735.md`). The staged chrome buttons
+        // carry the pinned path (#734 pins Waiting BACK -> 3005).
         use MenuKey;
         let mut game = ScreenGame::new();
         game.menu_key(MenuKey::Back, true);
@@ -11445,10 +11450,11 @@ mod game_tests {
 
     #[test]
     fn channel_back_closes_to_the_planet_board() {
-        // Esc symmetry with the verified X close (bnd-pinned rect
-        // (541,151)-(589,189), verified native click (577,171)):
-        // Back on the dialog-up phase returns to the bare board.
-        // Exe key-code pin stays OPEN (rig next step in parity).
+        // The dialog-up Back edge returns to the bare board.
+        // #735 statics: ESC is pinned for splash/dialog close; no exe
+        // scene key handler routes it to the Channel back transition.
+        // This edge is therefore ours-by-design, kept alongside the
+        // pinned chrome close (`docs/back-navigation-735.md`).
         use MenuKey;
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());

@@ -356,6 +356,10 @@ fn result_retries_to_waiting_and_leaves_to_room() {
 
 #[test]
 fn waiting_backs_out_to_room_list() {
+    // #735: menu-edge Back from Waiting is ours-by-design; the exe
+    // statics find no Waiting scene key handler for that transition.
+    // The staged BACK button is the pinned path (3005, #734) and is
+    // guarded separately in `recomp2jam`.
     let mut game = ScreenGame::new();
     game.menu_key(MenuKey::Back, true);
     game.click_planet(136, 88);
