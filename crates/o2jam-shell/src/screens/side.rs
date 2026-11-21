@@ -583,8 +583,13 @@ pub const SHOP_EXTMENU_BUTTONS: usize = 12;
 /// lands nowhere (labeled no-op).
 pub const SHOP_PLANET_UP_CODE: u32 = 0x1420_0008;
 pub const SHOP_PLANET_DOWN_CODE: u32 = 0x1420_0009;
-/// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): sort semantics unpinned,
-/// lands nowhere (labeled no-op).
+/// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
+/// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
+/// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
+/// (`ev_ec83763a…`) gates it on cart state. Sort semantics stay
+/// unpinned; `docs/shop.md` records the control as a live no-op, so
+/// the static send and that live absence are both kept with a wire
+/// tap as the next step.
 pub const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
 /// First item icon (`IDC_IMAGE_SSHOP_ITEMSHOW1`); eight run
 /// contiguously (paint targets, never dispatch).
@@ -806,6 +811,9 @@ pub enum ShopAction {
     BagPrev,
     /// Bag pager stepped forward over the owned panel.
     BagNext,
+    /// Bag sort: the static BAGSORT arm queues the empty 5038
+    /// RefreshBag send (live wire tap OPEN, see [`SHOP_BAGSORT_CODE`]).
+    SortBag,
 }
 
 /// Board click under native pixel (`x`, `y`): the staged placement
@@ -876,6 +884,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_CART_RIGHT_CODE => Some(ShopAction::CartNext),
         SHOP_BAG_LEFT_CODE => Some(ShopAction::BagPrev),
         SHOP_BAG_RIGHT_CODE => Some(ShopAction::BagNext),
+        SHOP_BAGSORT_CODE => Some(ShopAction::SortBag),
         SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
         SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         _ => shop_row_toggle(code)

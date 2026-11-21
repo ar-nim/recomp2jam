@@ -105,7 +105,9 @@ use o2jam_net::rooms::{
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
+use o2jam_net::shop::{
+    EquipItem, RefreshBag, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse,
+};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
@@ -6671,6 +6673,12 @@ impl ScreenGame {
         self.outbox.take_exit_shop()
     }
 
+    /// Queued BAGSORT refresh for the session bridge, if any (5038).
+    #[must_use]
+    pub fn take_refresh_bag(&mut self) -> Option<RefreshBag> {
+        self.outbox.take_refresh_bag()
+    }
+
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
     /// opens the local web-purchase surface without a game opcode,
@@ -6722,6 +6730,14 @@ impl ScreenGame {
                 if self.shop.apply_action(action, owned_len) {
                     self.shop_purchase_web_open = true;
                 }
+            }
+            ShopAction::SortBag => {
+                // Static arm `0x142000b7` (file `0x9bfa8`): the sort
+                // press itself stages nothing, but queues the empty
+                // 5038. The session owns the wire; live no-wire tap
+                // stays recorded beside the pin.
+                self.shop.apply_action(action, owned_len);
+                self.outbox.pending_refresh_bag = Some(RefreshBag);
             }
             _ => {
                 self.shop.apply_action(action, owned_len);
@@ -8482,6 +8498,9 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     hash_u64(&mut hash, u64::from(game.shop_purchase_web_open));
     if game.outbox.pending_exit_shop.is_some() {
         hash_u64(&mut hash, 5_007);
+    }
+    if game.outbox.pending_refresh_bag.is_some() {
+        hash_u64(&mut hash, 5_038);
     }
     if let Some(category) = game.shop.category() {
         hash_u64(&mut hash, u64::try_from(category).unwrap_or(u64::MAX));
@@ -22957,8 +22976,8 @@ mod game_tests {
     fn shop_unwired_browse_chrome_lands_nowhere() {
         // Live caller chain: same catalog staging as the preview
         // guard, then click_shop on ControlList-named chrome the live
-        // dump never stages (gender, submenu, ext-menu, bag-sort,
-        // planet pager, per-row gifts, gift commit), plus
+        // dump never stages (gender, submenu, ext-menu, planet
+        // pager, per-row gifts, gift commit), plus
         // the music-shop TOP100 arm (#181: music-shop-only — the item
         // shop owns no TOP100 control), plus the paint-target codes
         // (icons, comment, gem cells, cart totals). Every one lands
@@ -22971,7 +22990,6 @@ mod game_tests {
             SHOP_PLANET_DOWN_CODE,
             SHOP_GIFTITEM_CODE,
             SHOP_EXTMENU_ON_CODE,
-            SHOP_BAGSORT_CODE,
             SHOP_ITEMSHOW_FIRST_CODE,
             SHOP_MYBAGITEM_FIRST_CODE,
             SHOP_ITEMCOMMENT_CODE,
@@ -23016,7 +23034,45 @@ mod game_tests {
         assert_eq!(game.shop_bag_page(), 0);
         assert_eq!(game.shop_preview(), None);
         assert_eq!(game.take_shop_buy(), None);
+        assert_eq!(
+            game.take_refresh_bag(),
+            None,
+            "BAGSORT owns the static 5038, not this no-op family"
+        );
         assert_eq!(game.side(), Some(SideScreen::Shop));
+    }
+
+    #[test]
+    fn bagsort_queues_the_exe_refresh_bag_send() {
+        // Live caller chain:
+        //   main.rs::run_play -> ScreenGame::ingest_snapshot ->
+        //   click_side_screen -> click_shop(SHOP_BAGSORT_CODE) ->
+        //   PendingOutbox -> OnlineSession::poll_wire -> 5038.
+        // Static arm `0x142000b7` pushes virtual send `0x13ae`
+        // (file `0x9bfa8`, ev_f3ad15be…) — keep the live no-wire
+        // contradiction named: one BAGSORT press wire tap is OPEN.
+        let mut game = open_shop_board(2);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SSHOP_BAGSORT".to_owned(),
+            code: SHOP_BAGSORT_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_shop(510, 40);
+
+        assert_eq!(
+            game.take_refresh_bag(),
+            Some(o2jam_net::shop::RefreshBag),
+            "the static BAGSORT arm queues 5038 RefreshBag"
+        );
+        assert_eq!(game.take_refresh_bag(), None, "one press queues one send");
     }
 
     #[test]

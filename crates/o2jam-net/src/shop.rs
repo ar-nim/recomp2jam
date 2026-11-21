@@ -216,6 +216,14 @@ empty_message!(ExitShop, 5007);
 // MusicList ids (acquired songs) plus the FreeMusic flag from 4031.
 empty_message!(SyncMusicPurchase, 5010);
 
+// `RefreshBag` 5038 is the empty virtual send in the Item Shop BAGSORT
+// arm (`0x142000b7` pushes `0x13ae` at VA `0x4b9fa8`, file `0x9bfa8`,
+// evidence `ev_f3ad15be…`); the opcode is named in
+// `docs/net-protocol.md`. CONTRADICTION: `docs/shop.md` records BAGSORT
+// as "stage but record nothing" and the live press wire sweep has no
+// 5038. Both claims stay pinned; one BAGSORT press wire tap is OPEN.
+empty_message!(RefreshBag, 5038);
+
 /// `SyncMusicPurchase` 5011 response: wallets + acquired-music list +
 /// gift boxes + free-pass extension days (reply shape pinned by #192).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1502,6 +1510,17 @@ mod tests {
         let frame = decode_frame(&exit).unwrap();
         assert_eq!(frame.id, 5007);
         assert_eq!(ExitShop::decode_frame(&frame), Ok(ExitShop));
+    }
+
+    #[test]
+    fn bagsort_refresh_bag_encodes_the_static_empty_frame() {
+        // Static BAGSORT arm `0x142000b7` pushes `0x13ae` (file
+        // `0x9bfa8`): 5038 carries only the opcode and length words.
+        let refresh = RefreshBag.encode();
+        assert_eq!(refresh, vec![0x04, 0x00, 0xAE, 0x13]);
+        let frame = decode_frame(&refresh).unwrap();
+        assert_eq!(frame.id, 5038);
+        assert_eq!(RefreshBag::decode_frame(&frame), Ok(RefreshBag));
     }
 
     #[test]

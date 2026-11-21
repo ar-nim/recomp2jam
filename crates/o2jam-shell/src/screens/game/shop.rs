@@ -312,6 +312,10 @@ impl ShopState {
                 }
                 false
             }
+            // Sorting changes no staged board state: the exe's sort
+            // semantics stay OPEN and the wire send belongs to the
+            // click caller, not to this pure board.
+            ShopAction::SortBag => false,
         }
     }
 }

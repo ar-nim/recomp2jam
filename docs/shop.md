@@ -294,6 +294,21 @@ status frame. The peer sees nothing about the shop visit. The peer's
 audio sidecar records `route=sink`, `on_default_sink=0`,
 `preboot_breach=0`.
 
+## #178 enrichment pins (2026-11-22)
+
+Static audit of `FUN_00499760` (`ev_f3ad15be…`, VA `0x499760`) adds
+pins that the earlier live sweeps did not see. Evidence IDs and own-word
+behavior also live in spec #178's enrichment rows.
+
+- BAGSORT `0x142000b7` pushes virtual send `0x13ae` (file `0x9bfa8`),
+  the empty 5038 RefreshBag; `FUN_004a1010` (`ev_ec83763a…`) gates the
+  control on cart state. This CONTRADICTS the #195 note above that
+  BAGSORT "records nothing". Both claims stay recorded: our shell now
+  queues the static send, and the next step is one BAGSORT press wire
+  tap (a NULL tap retires the static claim rather than inventing a
+  handler). Guard: `bagsort_queues_the_exe_refresh_bag_send` and
+  `bagsort_press_sends_one_empty_5038_on_the_game_socket`.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.

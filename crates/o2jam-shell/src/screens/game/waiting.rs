@@ -3,7 +3,7 @@
 
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::{SetRoomArena, SetRoomMusic};
-use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
+use o2jam_net::shop::{EquipItem, ExitShop, RefreshBag, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::{CreateRoom, ExitPlaying, ExitWaiting, JoinRoom, Ready, SetRoomTeam, StartGame};
 
 /// UI message posted by a staged Waiting ambient control. The exe
@@ -116,6 +116,9 @@ pub(crate) struct PendingOutbox {
     /// Queued shop exit awaiting the session send (5007; the full-bleed
     /// BACK rect owns it).
     pub(crate) pending_exit_shop: Option<ExitShop>,
+    /// Queued BAGSORT refresh awaiting the session send (5038; the
+    /// static arm at file `0x9bfa8` owns it, live wire tap OPEN).
+    pub(crate) pending_refresh_bag: Option<RefreshBag>,
     /// Queued song buy awaiting the session send (5010; the row
     /// buy buttons and the cart `BUYITEM` own it).
     pub(crate) pending_music_buy: Option<SyncMusicPurchase>,
@@ -280,6 +283,11 @@ impl PendingOutbox {
     /// BACK press sends once.
     pub(crate) fn take_exit_shop(&mut self) -> Option<ExitShop> {
         self.pending_exit_shop.take()
+    }
+    /// Queued bag refresh for the session bridge, if any (5038). One
+    /// BAGSORT press sends once; the next press replaces an unsent one.
+    pub(crate) fn take_refresh_bag(&mut self) -> Option<RefreshBag> {
+        self.pending_refresh_bag.take()
     }
     /// Queued song buy for the session bridge, if any (5010). One
     /// body per row or cart commit; the seam drains it.

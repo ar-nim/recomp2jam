@@ -153,8 +153,8 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, SellItemResponse, SyncItemPurchase,
-    SyncItemPurchaseReply, SyncMusicPurchase,
+    EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag, SellItemResponse,
+    SyncItemPurchase, SyncItemPurchaseReply, SyncMusicPurchase,
 };
 use o2jam_net::wallet::{SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
@@ -2601,6 +2601,18 @@ impl OnlineSession {
         }
     }
 
+    /// Send one queued BAGSORT refresh (5038 empty body). The static
+    /// arm at file `0x9bfa8` owns the send; the live no-wire tap stays
+    /// recorded, so a failed send only warns and drops the queue.
+    fn flush_refresh_bag(&mut self) {
+        if self.game.take_refresh_bag().is_none() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(RefreshBag::COMMAND, &[]) {
+            tracing::warn!(%source, "bag refresh send failed");
+        }
+    }
+
     /// Drain the wallet answer that follows BACK (5028 → 5029),
     /// and any other 5029 snapshot from the gateway. The body is two
     /// words: gem and cash point, the same slots the 5001 prefix and
@@ -4010,6 +4022,7 @@ impl OnlineSession {
         self.flush_team_send();
         self.flush_channel_logout();
         self.flush_exit_shop();
+        self.flush_refresh_bag();
         self.poll_attempts();
         self.poll_sell_response();
         self.poll_wallet_answer();
@@ -5447,6 +5460,61 @@ pub(super) mod session_tests {
             vec![5007, 5028],
             "the buy leg is quiet; only BACK's 5007/5028 family is sent"
         );
+    }
+
+    #[test]
+    fn bagsort_press_sends_one_empty_5038_on_the_game_socket() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+        //   click_side_screen -> click_shop(SHOP_BAGSORT_CODE) ->
+        //   PendingOutbox.pending_refresh_bag ->
+        //   OnlineSession::poll_wire -> flush_refresh_bag -> 5038.
+        // STATIC claim only: the live BAGSORT tap wire sweep is OPEN.
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BAGSORT_CODE};
+        use std::collections::HashMap;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: "IDC_BUTTON_SSHOP_BAGSORT".to_owned(),
+                code: SHOP_BAGSORT_CODE,
+                sprite: None,
+                rect: o2jam_render::Rect {
+                    x: 500,
+                    y: 30,
+                    w: 40,
+                    h: 20,
+                },
+                role: PlacementRole::Single,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&InputSnapshot::click_at(510, 40));
+        paint_frame(&mut session);
+        paint_frame(&mut session);
+        assert!(session.game.take_refresh_bag().is_none());
+        drop(session);
+        server.join().unwrap();
+        let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(opcodes, vec![5038], "one press sends one empty 5038");
     }
 
     #[test]
