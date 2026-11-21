@@ -143,7 +143,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
-use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply};
+use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply, GiftType};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
@@ -448,6 +448,30 @@ struct EquipAttempt {
     deadline: Instant,
 }
 
+/// Exe's even/odd request-reply pairing for the short MyRoom legs.
+/// Only opcodes whose shell send queue is wired appear here.
+fn myroom_reply_for_request(command: u16) -> Option<u16> {
+    match command {
+        5002 => Some(5003),
+        5030 => Some(5031),
+        5034 => Some(5035),
+        5036 => Some(5037),
+        5038 => Some(5039),
+        _ => None,
+    }
+}
+
+/// Pending short MyRoom request reply (BAGSORT 5038/5039 first):
+/// the request opcode is already on the wire, so only the expected
+/// answer id and the silent-server deadline ride here.
+#[derive(Debug, Clone, Copy)]
+struct MyRoomReplyAttempt {
+    /// Reply opcode the exe pairs with the request.
+    expected: u16,
+    /// When a silent server stops holding the frame loop.
+    deadline: Instant,
+}
+
 /// Pending gift-list fetch (ticket #201): the 5017 send plus the 5018
 /// answer resolve on the per-frame poll. The 5018 body is exe-ignored
 /// (`docs/gifts.md`); the drain only clears the attempt. A timeout
@@ -467,6 +491,10 @@ struct GiftListAttempt {
 struct GiftClaimAttempt {
     /// Claimed gift id for the 5024 success fold.
     gift_id: i32,
+    /// Gift kind, which picks the exe's 5024 notice and music send.
+    gift_type: GiftType,
+    /// Claimed item/music id, used for the item count update.
+    resource_id: i32,
     /// When the silent server stops getting the benefit of the doubt.
     deadline: Instant,
 }
@@ -620,6 +648,9 @@ pub struct OnlineSession {
     /// Live equip apply (`None` while no 5004 apply is in flight; the
     /// per-frame [`Self::poll_equip`] owns it).
     equip_attempt: Option<EquipAttempt>,
+    /// Short MyRoom request/reply legs (`poll_myroom_replies` owns
+    /// them; one attempt per queued frame).
+    myroom_reply_attempts: Vec<MyRoomReplyAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -709,6 +740,7 @@ impl OnlineSession {
             gift_list_attempt: None,
             gift_claim_attempt: None,
             equip_attempt: None,
+            myroom_reply_attempts: Vec::new(),
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -2897,14 +2929,81 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == EquipItemResponse::COMMAND => {
-                    if EquipItemResponse::decode_body(&frame.payload).is_err() {
-                        tracing::debug!(id = frame.id, "dropping undecodable equip reply");
+                    match EquipItemResponse::decode_body(&frame.payload) {
+                        Ok(reply) => self.game.apply_myroom_equip_reply(&reply),
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable equip reply")
+                        }
                     }
                     return None;
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-equip frame in equip drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    /// Send the MyRoom request frames the shell queued (5038
+    /// RefershBag today, the confirm-item opcodes later). A failed
+    /// send requeues the exact body and posts the exe's failure copy
+    /// for the commands that carry one; the next paint retries.
+    fn flush_myroom_sends(&mut self) {
+        let sends = self.game.take_myroom_sends();
+        for send in sends {
+            if let Err(source) = self.gateway.send_frame(send.command, &send.body) {
+                tracing::warn!(%source, command = send.command, "myroom send failed");
+                self.game.post_myroom_send_failure_notice(send.command);
+                self.game.queue_myroom_send(send.command, send.body);
+                continue;
+            }
+            if let Some(expected) = myroom_reply_for_request(send.command) {
+                self.myroom_reply_attempts.push(MyRoomReplyAttempt {
+                    expected,
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
+            }
+        }
+    }
+
+    /// Move every short MyRoom reply leg under the shared drain
+    /// window. Leaving the side drops late answers: they cannot fold
+    /// into another scene's staged rows.
+    fn poll_myroom_replies(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom) {
+            self.myroom_reply_attempts.clear();
+            return;
+        }
+        let attempts = std::mem::take(&mut self.myroom_reply_attempts);
+        for attempt in attempts {
+            if Instant::now() > attempt.deadline {
+                tracing::warn!(reply = attempt.expected, "myroom reply timed out");
+                continue;
+            }
+            self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "myroom reply", |session| {
+                if let Some(kept) = session.drain_myroom_reply(attempt) {
+                    session.myroom_reply_attempts.push(kept);
+                }
+            });
+        }
+    }
+
+    /// Drain one short MyRoom reply: the shell owns the local repaint
+    /// the exe performs at the matching receive case. Every other
+    /// frame stays for the later lobby drains.
+    fn drain_myroom_reply(&mut self, attempt: MyRoomReplyAttempt) -> Option<MyRoomReplyAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == attempt.expected => {
+                    self.game.apply_myroom_reply(frame.id);
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping frame in myroom reply drain");
                 }
                 Err(_) => break,
             }
@@ -2984,6 +3083,8 @@ impl OnlineSession {
         }
         if let Some(claim) = self.game.take_gift_claim() {
             let gift_id = claim.gift_id;
+            let gift_type = claim.gift_type;
+            let resource_id = claim.resource_id;
             if let Err(source) = self
                 .gateway
                 .send_frame(o2jam_net::gift::ClaimGift::COMMAND, &claim.encode_body())
@@ -2992,6 +3093,8 @@ impl OnlineSession {
             } else {
                 self.gift_claim_attempt = Some(GiftClaimAttempt {
                     gift_id,
+                    gift_type,
+                    resource_id,
                     deadline: Instant::now() + PENDING_WIRE_WINDOW,
                 });
             }
@@ -3039,17 +3142,23 @@ impl OnlineSession {
                                 "valid gift claim; verdict byte ignored like the exe"
                             );
                             self.game.apply_gift_claim_success(attempt.gift_id);
+                            self.game.apply_gift_claim_reply(
+                                attempt.gift_type == GiftType::Music,
+                                true,
+                                attempt.resource_id,
+                            );
                         }
                         Ok(GiftClaimReply::Rejected(response)) => {
-                            // SCRIPTED-GATEWAY validity word only. The
-                            // 7.55 failure presentation is OPEN
-                            // (`E-PAYMENT2-5024`); our mcash-tone
-                            // notice is ASSUMED and invents no wire.
                             tracing::debug!(
                                 verdict = response.result_code,
                                 "rejected gift claim; staged box holds"
                             );
                             self.game.post_payment2_failure_notice();
+                            self.game.apply_gift_claim_reply(
+                                attempt.gift_type == GiftType::Music,
+                                false,
+                                attempt.resource_id,
+                            );
                         }
                         Err(_) => {
                             tracing::debug!(id = frame.id, "dropping undecodable gift claim reply");
@@ -6018,26 +6127,44 @@ pub(super) mod session_tests {
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(|mut stream| {
-            let entry = read_frame(&mut stream);
-            assert_eq!(entry.id, 5017);
-            let empty = GetGiftMessageListResponse {
-                invalid: false,
-                messages: Vec::new(),
-            };
-            stream
-                .write_all(&encode_frame(5018, &empty.encode_body()))
-                .unwrap();
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, 5004);
-            let equip = EquipItem::decode_body(&frame.payload).unwrap();
-            assert_eq!((equip.slot, equip.item_id), (0, 1));
-            let reply = EquipItemResponse {
-                result: 0,
-                tail: None,
-            };
-            stream
-                .write_all(&encode_frame(5005, &reply.encode_body()))
-                .unwrap();
+            // The equip leg now also starts at the bag-cell pick, so
+            // the session's per-frame flushes can put 5004 before the
+            // entry's 5017. Answer both in arrival order.
+            let mut saw_equip = false;
+            let mut saw_gift_list = false;
+            while !saw_equip || !saw_gift_list {
+                let frame = read_frame(&mut stream);
+                match frame.id {
+                    5017 => {
+                        let empty = GetGiftMessageListResponse {
+                            invalid: false,
+                            messages: Vec::new(),
+                        };
+                        stream
+                            .write_all(&encode_frame(5018, &empty.encode_body()))
+                            .unwrap();
+                        saw_gift_list = true;
+                    }
+                    5004 => {
+                        let equip = EquipItem::decode_body(&frame.payload).unwrap();
+                        assert_eq!((equip.slot, equip.item_id), (0, 1));
+                        let reply = EquipItemResponse {
+                            result: 0,
+                            tail: Some(o2jam_net::shop::EquipTail {
+                                slot_select: 0,
+                                reserved_a: 0,
+                                entry_id: 1,
+                                reserved_b: 0,
+                            }),
+                        };
+                        stream
+                            .write_all(&encode_frame(5005, &reply.encode_body()))
+                            .unwrap();
+                        saw_equip = true;
+                    }
+                    other => panic!("unexpected frame {other}"),
+                }
+            }
         });
 
         use o2jam_render::Rect;
@@ -6093,6 +6220,12 @@ pub(super) mod session_tests {
         paint_until(&mut session, |s| !s.game.has_pending_equip_send());
         let _ = server.join();
         assert!(!session.game.has_pending_equip_send());
+        assert_eq!(
+            session.game.myroom().bag_cell(),
+            None,
+            "the live 5005 drain clears the picked cell"
+        );
+        assert_eq!(session.game.myroom_counts()[0], 1, "live 5005 fold");
     }
 
     #[test]
@@ -6295,6 +6428,107 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn myroom_bagsort_sends_5038_and_5039_reply_through_scripted_gateway() {
+        // Live caller chain: WindowHandler::ingest_snapshot ->
+        // ScreenGame::click_myroom_side -> BagSort -> outbox 5038 ->
+        // OnlineSession::paint -> flush_myroom_sends -> poll_myroom_replies
+        // -> apply_myroom_reply(5039). Tier 2 scripted gateway; body
+        // widths pinned by the exe send builder file `0xa540f`.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            use o2jam_net::gift::GetGiftMessageListResponse;
+            // The MyRoom send flush runs before the gift-list flush,
+            // so answer whichever request arrives first.
+            let mut saw_sort = false;
+            let mut saw_list = false;
+            while !saw_sort || !saw_list {
+                let frame = read_frame(&mut stream);
+                match frame.id {
+                    5017 => {
+                        let empty = GetGiftMessageListResponse {
+                            invalid: false,
+                            messages: Vec::new(),
+                        };
+                        stream
+                            .write_all(&encode_frame(5018, &empty.encode_body()))
+                            .unwrap();
+                        saw_list = true;
+                    }
+                    5038 => {
+                        assert!(frame.payload.is_empty(), "RefershBag has no fields");
+                        stream.write_all(&encode_frame(5039, &[])).unwrap();
+                        saw_sort = true;
+                    }
+                    other => panic!("unexpected frame {other}"),
+                }
+            }
+        });
+
+        let area = |code: u32, x: i32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![1],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        game.load_side_scene(
+            vec![
+                area(o2jam_shell::screens::side::MYROOM_BAG_FIRST_CODE, 10),
+                area(o2jam_shell::screens::side::MYROOM_BAGSORT_CODE, 100),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.click_myroom_side(11, 11);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        let _ = game.take_equip_send(); // the pick's own leg, not BAGSORT
+        game.click_myroom_side(101, 11);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        paint_until(&mut session, |s| {
+            !s.game.has_pending_myroom_sends() && s.myroom_reply_attempts.is_empty()
+        });
+        let _ = server.join();
+        assert_eq!(
+            session.game.myroom().bag_cell(),
+            None,
+            "the 5039 reply repaints the bag"
+        );
+    }
+
+    #[test]
     fn payment2_completion_body_round_trip_proceeds_with_the_gift_claim() {
         // Live caller chain:
         //   OnlineSession::paint -> flush_gift_claim (5023 send) ->
@@ -6321,6 +6555,11 @@ pub(super) mod session_tests {
         assert!(
             !session.game.billing_failure_notice_open(),
             "the completion body never posts a refusal notice"
+        );
+        // #812: the live drain also posts the exe's item-success copy.
+        assert_eq!(
+            session.game.myroom_notice(),
+            Some("선물이 마이백으로 이동 되었습니다.")
         );
     }
 
@@ -6373,6 +6612,13 @@ pub(super) mod session_tests {
             "the refused gift stays in the box"
         );
         assert!(!hero.inventory.contains(&1), "a refusal mints no item");
+        // #812 re-pin: the exe's exact item-failure caption now owns
+        // the one-OK sheet; the older mcash band stays behind it.
+        assert_eq!(
+            session.game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
+        );
+        session.game.dismiss_myroom_notice();
         let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;
         let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
         assert_eq!(

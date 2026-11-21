@@ -17,13 +17,126 @@ use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
     myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
     myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, MyRoomAction, MyRoomLowerTab,
-    MyRoomPanel, MyRoomState, SideScreen,
+    MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
-use o2jam_net::shop::EquipItem;
+use o2jam_net::shop::{EquipItem, EquipItemResponse};
 use o2jam_net::CharacterInfo;
 use o2jam_render::Frame;
+
+/// Notice posted when a worn well's id has no owned-bag record.
+/// Exact bytes read from the oracle at file `0x2491f4` (VA
+/// `0x6491f4`, cp949); the ticket's "connection lost" gloss is
+/// contradicted by the string, so the exe text wins (EV
+/// `ev_85bc1fde…`, `docs/myroom.md`).
+pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯이 필요합니다.";
+
+/// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
+pub(super) const MYROOM_COUNT_CAP: u32 = 999;
+
+/// Nickname-item confirm, exact bytes read at file `0x2487f8`.
+pub(super) const NICKNAME_ITEM_CONFIRM: &str = "\n현재 사용중이신 닉네임을 \n변경할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+/// Penalty-reset-item confirm, exact bytes at file `0x248788`.
+pub(super) const PENALTY_ITEM_CONFIRM: &str =
+    "\n패널티 레벨을 'O' 으로\n초기화 시켜주는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+/// Slot-expansion-item confirm, exact bytes at file `0x248718`.
+pub(super) const EXPANSION_ITEM_CONFIRM: &str =
+    "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+
+/// Successful item-gift 5024 caption, file `0x249218`.
+pub(super) const GIFT_ITEM_SUCCESS: &str = "선물이 마이백으로 이동 되었습니다.";
+/// Successful music-gift 5024 caption, file `0x249240`.
+pub(super) const GIFT_MUSIC_SUCCESS: &str = "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다.";
+/// Failed item-gift 5024 caption, file `0x2492dc`.
+pub(super) const GIFT_ITEM_FAILURE: &str = "[운영자에게 문의바람]선물받은 아이템 넣기 실패";
+/// Failed music-gift 5024 caption, file `0x2492ac`.
+pub(super) const GIFT_MUSIC_FAILURE: &str = "[운영자에게 문의바람]선물받은 뮤직 넣기 실패";
+/// Follow-up request the exe sends on the music arm of 5024. The
+/// numeric opcode is `0x1392`; our table names 5010 SyncMusicPurchase
+/// (the enrichment gloss called it 5026, which is `0x13a2`). The
+/// game meaning on this arm stays OPEN with a live gifted-account tap.
+pub(super) const GIFT_MUSIC_FOLLOWUP_COMMAND: u16 = 0x1392;
+
+/// BAGSORT failure notice, exact cp949 string decoded from the
+/// oracle at file `0x248f40` (VA `0x648f40`).
+pub(super) const BAG_SORT_FAILURE_NOTICE: &str =
+    "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요.";
+
+/// Vacate notice at file `0x2491c0` (VA `0x6491c0`).
+pub(super) const VACATE_NO_SELECTION_NOTICE: &str = "선택된 아이템이 없습니다.";
+/// Vacate notice at file `0x248acc` (VA `0x648acc`).
+pub(super) const VACATE_DEFAULT_NOTICE: &str = "기본 아이템은 지울 수 없습니다.";
+/// Vacate confirm pattern at file `0x248a90` (VA `0x648a90`).
+pub(super) const VACATE_CONFIRM_PATTERN: &str =
+    "아이템 : {name}\n\n이 아이템을 비우시면 보상 받을 수 없습니다.";
+
+/// Which local edit an OK on a MyRoom confirm sheet commits. Every
+/// arm is own-side: the exe's wire shape for vacate stays OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MyRoomConfirmAction {
+    /// Clear the named worn item from one equipment slot.
+    VacateSlot {
+        /// Equipment array index
+        slot: usize,
+        /// Item id the confirm named; a changed slot is left alone.
+        item_id: i32,
+    },
+    /// Spend one special bag item after its confirm sheet.
+    UseSpecialItem {
+        /// Special item family, from the record's type byte.
+        kind: SpecialItemKind,
+        /// Selected bag cell, the exe's first request word.
+        selection: i32,
+        /// Item id, the exe's second request word where present.
+        item_id: i32,
+    },
+}
+
+/// The three special bag-item families the exe's bag-cell dispatch
+/// opens confirms for (`FUN_004a3ee0`, file `0xa41d4`..`0xa42ac`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecialItemKind {
+    /// Record type `0x19`: nickname change (file `0x2487f8`).
+    Nickname,
+    /// Record type `0x1a`: penalty reset (file `0x248788`).
+    PenaltyReset,
+    /// Record type `0x1b`: slot expansion (file `0x248718`).
+    BagExpansion,
+}
+
+impl SpecialItemKind {
+    /// Classify one item-record type byte, `None` for ordinary items.
+    #[must_use]
+    pub(crate) const fn from_item_type(item_type: u32) -> Option<Self> {
+        match item_type & 0xFF {
+            0x19 => Some(Self::Nickname),
+            0x1A => Some(Self::PenaltyReset),
+            0x1B => Some(Self::BagExpansion),
+            _ => None,
+        }
+    }
+
+    /// Exact confirm caption read from the oracle's byte tables.
+    #[must_use]
+    pub(crate) const fn confirm_text(self) -> &'static str {
+        match self {
+            Self::Nickname => NICKNAME_ITEM_CONFIRM,
+            Self::PenaltyReset => PENALTY_ITEM_CONFIRM,
+            Self::BagExpansion => EXPANSION_ITEM_CONFIRM,
+        }
+    }
+}
+
+/// One MyRoom confirm sheet: the exe's exact caption plus the local
+/// edit its OK commits. CANCEL only closes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MyRoomConfirm {
+    /// Caption inked into the staged TEXT rect
+    pub(crate) text: String,
+    /// Local edit queued behind the OK press
+    pub(crate) action: MyRoomConfirmAction,
+}
 
 impl ScreenGame {
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
@@ -128,18 +241,99 @@ impl ScreenGame {
                 let pages = self.myroom_bag_page_count();
                 self.myroom.turn_bag_page(step, pages);
             }
-            MyRoomAction::PickBagCell(cell) => self.myroom.pick_bag_cell(Some(cell)),
+            MyRoomAction::PickBagCell(cell) => self.apply_myroom_bag_pick(cell),
             MyRoomAction::GiftPage(step) => {
                 let pages = self.myroom_gift_page_count();
                 self.myroom.turn_gift_page(step, pages);
             }
-            MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
+            MyRoomAction::PickGiftCell(cell) => self.apply_myroom_gift_cell_pick(cell),
+            MyRoomAction::PressWornWell(well) => self.apply_myroom_well_press(well),
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+            MyRoomAction::BagSort => self.apply_myroom_bag_sort(),
             MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
+    }
+
+    /// Pick one owned bag cell: record the cursor and queue the
+    /// exe's 5004 immediately. The send case (file `0xa4bb6`..`0xa4bcb`)
+    /// derives the slot from the record's type/slot bytes and passes
+    /// the clicked bag index as the second word; the worn id it reads
+    /// is never appended. The server's 5005 then owns the visible
+    /// restage, so the pick itself mirrors no local equipment.
+    fn apply_myroom_bag_pick(&mut self, cell: usize) {
+        self.myroom.pick_bag_cell(Some(cell));
+        let Some(row_item_id) = self.myroom_items.as_ref().and_then(|table| {
+            self.myroom_character.as_ref().and_then(|character| {
+                myroom_bag_rows(table, &character.inventory, self.myroom.bag_page())
+                    .get(cell)
+                    .map(|row| row.item_id)
+            })
+        }) else {
+            return;
+        };
+        let Some((item_type, record_slot)) = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| avatar_item_by_id(table, row_item_id))
+            .map(|row| (row.item_type, myroom_record_slot(row)))
+        else {
+            return;
+        };
+        let Some(slot) = myroom_equip_slot(item_type, record_slot) else {
+            return;
+        };
+        let global_index = self
+            .myroom
+            .bag_page()
+            .saturating_mul(MYROOM_BAG_CELLS)
+            .saturating_add(cell);
+        let Ok(bag_index) = i32::try_from(global_index) else {
+            return;
+        };
+        self.outbox.pending_equip = Some(EquipItem {
+            slot: i32::from(slot),
+            item_id: bag_index,
+        });
+        if let Some(kind) = SpecialItemKind::from_item_type(item_type) {
+            self.myroom_notice = None;
+            self.myroom_confirm = Some(MyRoomConfirm {
+                text: kind.confirm_text().to_owned(),
+                action: MyRoomConfirmAction::UseSpecialItem {
+                    kind,
+                    selection: bag_index,
+                    item_id: i32::try_from(row_item_id).unwrap_or(0),
+                },
+            });
+        }
+    }
+
+    /// Apply a successful 5005 equip reply: the exe repaints the wells
+    /// and bag from its staged records, advances the count vector for
+    /// the answered slot (capped at 999, file `0x4a54e0` reply arm)
+    /// and clears the cell cursor now that the rows have moved.
+    /// Painting is already a projection of staged data; this seam
+    /// changes only the server-confirmed state.
+    pub fn apply_myroom_equip_reply(&mut self, response: &EquipItemResponse) {
+        let Some(tail) = response.tail else {
+            return;
+        };
+        if let Ok(slot) = usize::try_from(tail.slot_select) {
+            if let Some(count) = self.myroom_counts.get_mut(slot) {
+                *count = count.saturating_add(1).min(MYROOM_COUNT_CAP);
+            }
+        }
+        self.myroom.pick_bag_cell(None);
+    }
+
+    /// BAGSORT press: queue the empty 5038 RefershBag frame. The
+    /// exe's send builder writes only the opcode and length word for
+    /// this case (`0x4a540f`, file `0xa540f`); the 5039 reply repaints
+    /// the bag and the failure string is filed at `0x248f40`.
+    fn apply_myroom_bag_sort(&mut self) {
+        self.outbox.queue_myroom_send(5038, Vec::new());
     }
 
     /// Equip the selected bag cell: the slot derives from the item
@@ -186,57 +380,127 @@ impl ScreenGame {
         self.restage_worn_figure();
     }
 
-    /// Vacate the selected slot: the same-ordinal equipment cell
-    /// clears to 0 and the worn figure restages through the #193 hook.
-    /// The button-ordinal to equipment-slot identity is ours-by-design
-    /// (the 11 staged buttons name no equipment slot in the block dump;
-    /// equip slots 11..16 have no button) — next step: rig walk of the
-    /// vacate gesture naming the slot and any wire send. Queues nothing:
-    /// the vacate send shape is unpinned (OPEN, `docs/myroom.md`).
-    fn apply_myroom_vacate(&mut self) {
-        let slot = usize::from(self.myroom.selected_slot());
-        if let Some(cell) = self
-            .myroom_character
-            .as_mut()
-            .and_then(|character| character.equipment.get_mut(slot))
-        {
-            *cell = 0;
-        }
-        self.restage_worn_figure();
-    }
-
-    /// Claim the selected gift cell: the 5023 body queues for the
-    /// session bridge (`GiftType` follows the picked run — item or
-    /// song — while `is_attributive` stays false: countable stacks
-    /// are unpinned on this path). Without a picked cell or staged
-    /// box rows the press records nothing.
-    fn apply_myroom_claim(&mut self) {
-        let Some(cell) = self.myroom.gift_cell() else {
+    /// Press one worn equipment well: the exe passes the well
+    /// ordinal as the 5004 slot word and the owned-bag index its
+    /// worn-id selector finds as the second word (`FUN_004a49f0`,
+    /// files `0xa4aec`/`0xa4af4`; selector `0x537dd0`). A missing id
+    /// posts the file `0x2491f4` notice and queues no send. The live
+    /// mouse event reaches this seam through the staged well rect;
+    /// which native event fires the exe handler stays OPEN (#793).
+    fn apply_myroom_well_press(&mut self, well: u8) {
+        let Some(character) = self.myroom_character.as_ref() else {
             return;
         };
+        let Some(worn_id) = character.equipment.get(usize::from(well)).copied() else {
+            return;
+        };
+        if worn_id == 0 {
+            return;
+        }
+        let Some(bag_index) = character.inventory.iter().position(|id| *id == worn_id) else {
+            self.myroom_notice = Some(WORN_WELL_MISS_NOTICE.to_owned());
+            return;
+        };
+        let Ok(item_id) = i32::try_from(bag_index) else {
+            return;
+        };
+        self.outbox.pending_equip = Some(EquipItem {
+            slot: i32::from(well),
+            item_id,
+        });
+    }
+
+    /// Vacate the selected slot per exe case `0x15200004`: an empty
+    /// cell posts the file `0x2491c0` notice, ids `0x23/0x24` the file
+    /// `0x248acc` refusal, and any other item opens the file `0x248a90`
+    /// no-compensation confirm. Only its OK clears the same-ordinal
+    /// equipment cell and restages through the #193 hook. The
+    /// button-ordinal to equipment-slot identity is ours-by-design;
+    /// no vacate wire shape is pinned (OPEN, `docs/myroom.md`).
+    fn apply_myroom_vacate(&mut self) {
+        let slot = usize::from(self.myroom.selected_slot());
+        let Some(item_id) = self
+            .myroom_character
+            .as_ref()
+            .and_then(|character| character.equipment.get(slot))
+            .copied()
+        else {
+            return;
+        };
+        if item_id == 0 {
+            self.myroom_notice = Some(VACATE_NO_SELECTION_NOTICE.to_owned());
+            self.myroom_confirm = None;
+            return;
+        }
+        if item_id == 0x23 || item_id == 0x24 {
+            self.myroom_notice = Some(VACATE_DEFAULT_NOTICE.to_owned());
+            self.myroom_confirm = None;
+            return;
+        }
+        let item_name = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| {
+                u32::try_from(item_id)
+                    .ok()
+                    .and_then(|id| avatar_item_by_id(table, id))
+            })
+            .map_or_else(|| item_id.to_string(), |row| row.name.clone());
+        self.myroom_notice = None;
+        self.myroom_confirm = Some(MyRoomConfirm {
+            text: VACATE_CONFIRM_PATTERN.replace("{name}", &item_name),
+            action: MyRoomConfirmAction::VacateSlot { slot, item_id },
+        });
+    }
+
+    /// Build the exe's 5023 body for one staged gift cell. `GiftType`
+    /// follows the picked run (item or song); the attributive byte
+    /// stays false because the countable-stack lookup is unpinned on
+    /// this path. No staged box row means no claim.
+    fn staged_gift_claim(&self, cell: Option<usize>) -> Option<ClaimGift> {
+        let cell = cell?;
         let page = self.myroom.gift_page();
         let picked = self.myroom_items.as_ref().and_then(|table| {
             self.myroom_character
                 .as_ref()
                 .map(|character| myroom_gift_views(table, &self.catalog_songs, character))
         });
-        let Some(views) = picked else {
-            return;
-        };
-        let Some(view) = myroom_gift_page(&views, page).get(cell) else {
-            return;
-        };
+        let views = picked?;
+        let view = myroom_gift_page(&views, page).get(cell)?;
         let gift_type = if view.is_music {
             GiftType::Music
         } else {
             GiftType::Item
         };
-        self.outbox.pending_gift_claim = Some(ClaimGift {
+        Some(ClaimGift {
             gift_type,
             gift_id: view.gift_id,
             resource_id: view.resource_id,
             is_attributive: false,
-        });
+        })
+    }
+
+    /// Press one gift cell: the exe stores the derived index and calls
+    /// the 5023 send builder immediately (`FUN_004a3ee0`, files
+    /// `0xa4622`/`0xa4f98`). The separate MOVE control remains an
+    /// ours-by-design fallback for an unsent claim; it never doubles
+    /// a queued press.
+    fn apply_myroom_gift_cell_pick(&mut self, cell: usize) {
+        self.myroom.pick_gift_cell(Some(cell));
+        if let Some(claim) = self.staged_gift_claim(Some(cell)) {
+            self.outbox.pending_gift_claim = Some(claim);
+        }
+    }
+
+    /// MOVE fallback: queue the selected gift's 5023 only when the
+    /// cell press has not already queued one.
+    fn apply_myroom_claim(&mut self) {
+        if self.outbox.pending_gift_claim.is_some() {
+            return;
+        }
+        if let Some(claim) = self.staged_gift_claim(self.myroom.gift_cell()) {
+            self.outbox.pending_gift_claim = Some(claim);
+        }
     }
 
     /// MyRoom money captions from the single wallet (the O2/MUSIC/

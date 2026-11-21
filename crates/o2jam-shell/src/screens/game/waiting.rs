@@ -67,6 +67,18 @@ pub(crate) const RESULT_RETRY_BACKDROP_FRAME_SHA256S: [&str; 3] = [
     "c2ad594a44b115f7ea87b74dcd033776fa222af2f0bb89e59ec8ae0fda959feb",
 ];
 
+/// One MyRoom request frame with an already-encoded body. The opcode
+/// and body widths stay at the exe-pinned call site; the session seam
+/// only owns framing and the gateway write. Used by the short
+/// request/reply arms (5038 RefershBag and the confirm-item sends).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyRoomWireSend {
+    /// Request opcode (for example 5038).
+    pub command: u16,
+    /// Encoded body, empty for the exe's no-field sends.
+    pub body: Vec<u8>,
+}
+
 /// Queued session-bridge sends behind the shell screens (#139
 /// cluster 1: the Data Clump of all thirteen `pending_*` wire
 /// queues). Every queueing arm stages its pinned body here and the
@@ -133,6 +145,9 @@ pub(crate) struct PendingOutbox {
     pub(crate) pending_gift_claim: Option<ClaimGift>,
     /// Gift-list fetch awaiting the session (5017; queued on entry).
     pub(crate) pending_gift_list: bool,
+    /// MyRoom request frames awaiting the session bridge (5038 and
+    /// the special-item confirm family).
+    pub(crate) pending_myroom_sends: Vec<MyRoomWireSend>,
 }
 
 impl PendingOutbox {
@@ -267,6 +282,22 @@ impl PendingOutbox {
     /// One take sends once; the next MOVE replaces the queued claim.
     pub(crate) fn take_gift_claim(&mut self) -> Option<ClaimGift> {
         self.pending_gift_claim.take()
+    }
+    /// Queue one MyRoom request frame for the session bridge. Bodies
+    /// are built at the pinned call site; later presses append, never
+    /// replace, so two distinct requests cannot cancel each other.
+    pub(crate) fn queue_myroom_send(&mut self, command: u16, body: Vec<u8>) {
+        self.pending_myroom_sends
+            .push(MyRoomWireSend { command, body });
+    }
+    /// Drain the MyRoom request queue once, in press order.
+    pub(crate) fn take_myroom_sends(&mut self) -> Vec<MyRoomWireSend> {
+        std::mem::take(&mut self.pending_myroom_sends)
+    }
+    /// Whether a MyRoom request frame is still unsent.
+    #[must_use]
+    pub(crate) fn has_pending_myroom_sends(&self) -> bool {
+        !self.pending_myroom_sends.is_empty()
     }
     /// Gift-list fetch for the session bridge, if any (5017; queued
     /// on avatar-room entry). One take sends once.

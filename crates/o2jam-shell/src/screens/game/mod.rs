@@ -26,8 +26,16 @@ use self::chat::ChatState;
 pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
+
 pub(crate) use self::musicshop::OwnedRow;
 use self::musicshop::{MusicShopEffect, MusicShopState};
+
+use self::myroom::{
+    MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
+    BAG_SORT_FAILURE_NOTICE, GIFT_ITEM_FAILURE, GIFT_ITEM_SUCCESS, GIFT_MUSIC_FAILURE,
+    GIFT_MUSIC_FOLLOWUP_COMMAND, GIFT_MUSIC_SUCCESS, MYROOM_COUNT_CAP,
+};
+
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
@@ -35,6 +43,7 @@ pub use self::room_fuse::FuseClock;
 use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::{EquippedAvatarBlock, ShopState};
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
+pub use self::waiting::MyRoomWireSend;
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
@@ -48,27 +57,27 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_billing_failure_notice,
-    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
-    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_face, paint_music_shop_notice,
-    paint_music_shop_owned_rows, paint_music_shop_progress, paint_music_shop_row_selection,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_figure,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit, paint_avi_scene,
+    paint_billing_failure_notice, paint_cash_charge_frame, paint_channel_chat,
+    paint_dialog_frame_record, paint_dialog_scene, paint_information_message, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_face,
+    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
+    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_myroom_information, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -109,9 +118,11 @@ use o2jam_net::rooms::{
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, RefreshBag, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse,
+    ChangeName, EquipItem, RefreshBag, SellItem, SyncItemPurchase, SyncMusicPurchase,
+    SyncMusicPurchaseResponse,
 };
 use o2jam_net::wallet::{StartPayment, SyncCashPointResponse};
+
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
     GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
@@ -881,6 +892,16 @@ pub struct ScreenGame {
     /// (qualified B8 pack). It owns clicks until its OK is pressed;
     /// the Messenger main sheet stays unwired (P0).
     messenger_liveness_open: bool,
+    /// One-OK MyRoom notice posted by an exe-pinned press arm (first:
+    /// the worn-well miss at file `0x2491f4`). It owns clicks until
+    /// OK like the other Information sheets.
+    myroom_notice: Option<String>,
+    /// One-OK/CANCEL MyRoom confirm sheet, with the local edit its OK
+    /// commits (first arm: the vacate no-compensation warning).
+    myroom_confirm: Option<MyRoomConfirm>,
+    /// Per-slot MyRoom count vector advanced by a successful 5005
+    /// reply (capped at 999 by the exe's reply handler).
+    myroom_counts: [u32; 17],
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1274,6 +1295,9 @@ impl ScreenGame {
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
             messenger_liveness_open: false,
+            myroom_notice: None,
+            myroom_confirm: None,
+            myroom_counts: [0; 17],
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1886,6 +1910,189 @@ impl ScreenGame {
     #[must_use]
     pub const fn messenger_liveness_open(&self) -> bool {
         self.messenger_liveness_open
+    }
+
+    /// Text of the open MyRoom notice, if any (one-OK sheet).
+    #[must_use]
+    pub fn myroom_notice(&self) -> Option<&str> {
+        self.myroom_notice.as_deref()
+    }
+
+    /// Dismiss the MyRoom notice without a send. The staged OK rect
+    /// also calls this through [`Self::click_dispatch`].
+    pub fn dismiss_myroom_notice(&mut self) {
+        self.myroom_notice = None;
+    }
+
+    /// Drain the MyRoom request queue for the session bridge.
+    pub fn take_myroom_sends(&mut self) -> Vec<MyRoomWireSend> {
+        self.outbox.take_myroom_sends()
+    }
+
+    /// Put a failed MyRoom send back so the next paint retries it.
+    pub fn queue_myroom_send(&mut self, command: u16, body: Vec<u8>) {
+        self.outbox.queue_myroom_send(command, body);
+    }
+
+    /// Queue the request body for one exe dialog OK (`FUN_004a4c50`).
+    /// The opcode and field widths are pinned by the send builder's
+    /// byte/dword tables (file `0xa54ac` / `0xa5484`); the rename
+    /// buffer's contents and the two request words stay OPEN on the
+    /// MyRoom path, so our staged cell/index stand in without a live
+    /// tap claim.
+    pub fn queue_myroom_dialog_send(&mut self, dialog_id: u32, selection: i32, entry: i32) {
+        match dialog_id {
+            0x04 => {
+                let sell = SellItem { selection, entry };
+                self.outbox
+                    .queue_myroom_send(5002, o2jam_net::WireMessage::encode_body(&sell));
+            }
+            0x23 => {
+                let rename = ChangeName {
+                    name: String::new(),
+                    selection,
+                    entry,
+                };
+                self.outbox
+                    .queue_myroom_send(5030, o2jam_net::WireMessage::encode_body(&rename));
+            }
+            0x24 => {
+                // Send-builder case 0xa52ce: two fixed-size words.
+                let mut body = Vec::with_capacity(8);
+                body.extend_from_slice(&selection.to_le_bytes());
+                body.extend_from_slice(&entry.to_le_bytes());
+                self.outbox.queue_myroom_send(5034, body);
+            }
+            0x26 => {
+                // Send-builder case 0xa540f: opcode + length only.
+                self.outbox.queue_myroom_send(5036, Vec::new());
+            }
+            _ => {}
+        }
+    }
+
+    /// Post the exe's failure copy for a failed MyRoom request. Only
+    /// BAGSORT's string is pinned today; other commands stay quiet.
+    pub fn post_myroom_send_failure_notice(&mut self, command: u16) {
+        if command == 5038 {
+            self.post_bag_sort_failure_notice();
+        }
+    }
+
+    /// Whether a MyRoom request is still unsent (session retry seam).
+    #[must_use]
+    pub fn has_pending_myroom_sends(&self) -> bool {
+        self.outbox.has_pending_myroom_sends()
+    }
+
+    /// Apply one MyRoom reply opcode: 5039 repaints the bag from the
+    /// staged server rows and drops the cell cursor (#798). Unknown
+    /// reply ids stay untouched — never invent a local effect.
+    pub fn apply_myroom_reply(&mut self, reply_command: u16) {
+        if reply_command == 5039 {
+            self.myroom.pick_bag_cell(None);
+        }
+    }
+
+    /// Ink the exe's 5024 outcome caption and take its music arm's
+    /// follow-up request. The success path also drops the gift cursor
+    /// and advances the item's per-slot count when its equip slot can
+    /// be derived (the count-slot join on this arm stays OPEN; only
+    /// the cap and the notices are exe-pinned).
+    pub fn apply_gift_claim_reply(&mut self, is_music: bool, accepted: bool, resource_id: i32) {
+        self.myroom_notice = Some(
+            match (is_music, accepted) {
+                (true, true) => GIFT_MUSIC_SUCCESS,
+                (false, true) => GIFT_ITEM_SUCCESS,
+                (true, false) => GIFT_MUSIC_FAILURE,
+                (false, false) => GIFT_ITEM_FAILURE,
+            }
+            .to_owned(),
+        );
+        self.myroom.pick_gift_cell(None);
+        if !accepted {
+            return;
+        }
+        if is_music {
+            self.outbox
+                .queue_myroom_send(GIFT_MUSIC_FOLLOWUP_COMMAND, Vec::new());
+            return;
+        }
+        let slot = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| {
+                u32::try_from(resource_id)
+                    .ok()
+                    .and_then(|id| avatar_item_by_id(table, id))
+            })
+            .and_then(|row| myroom_equip_slot(row.item_type, myroom_record_slot(row)));
+        let slot = usize::from(slot.unwrap_or(0));
+        if let Some(count) = self.myroom_counts.get_mut(slot) {
+            *count = count.saturating_add(1).min(MYROOM_COUNT_CAP);
+        }
+    }
+
+    /// Post the exe's BAGSORT failure notice (file `0x248f40`).
+    pub fn post_bag_sort_failure_notice(&mut self) {
+        self.myroom_notice = Some(BAG_SORT_FAILURE_NOTICE.to_owned());
+        self.myroom_confirm = None;
+    }
+
+    /// Per-slot MyRoom counts from server-confirmed equip replies.
+    #[must_use]
+    pub const fn myroom_counts(&self) -> [u32; 17] {
+        self.myroom_counts
+    }
+
+    /// Caption of the open MyRoom confirm sheet, if any.
+    #[must_use]
+    pub fn myroom_confirm_text(&self) -> Option<&str> {
+        self.myroom_confirm
+            .as_ref()
+            .map(|confirm| confirm.text.as_str())
+    }
+
+    /// Commit the open MyRoom confirm's local arm and close the sheet.
+    /// No send belongs to any arm today: the exe's vacate wire shape
+    /// stays OPEN, so this only mirrors the confirmed own-side edit.
+    fn confirm_myroom_action(&mut self) {
+        let Some(confirm) = self.myroom_confirm.take() else {
+            return;
+        };
+        match confirm.action {
+            MyRoomConfirmAction::VacateSlot { slot, item_id } => {
+                let cell = self
+                    .myroom_character
+                    .as_mut()
+                    .and_then(|character| character.equipment.get_mut(slot));
+                if let Some(worn) = cell {
+                    if *worn == item_id {
+                        *worn = 0;
+                    }
+                }
+                self.restage_worn_figure();
+            }
+            MyRoomConfirmAction::UseSpecialItem {
+                kind,
+                selection,
+                item_id,
+            } => {
+                // The exe's OK handler indexes dialog ids by
+                // `id - 4` (`FUN_004a4c50`, file `0xa4c6d`). The
+                // nickname item uses 0x23 here; the main click
+                // handler also opens 0x25 for that item, whose OK
+                // posts a "0" notice instead. That disagreement is
+                // documented, not resolved: the 5030 body's new
+                // name also stays OPEN until a live press + tap.
+                let dialog_id = match kind {
+                    MyRoomSpecialKind::Nickname => 0x23,
+                    MyRoomSpecialKind::PenaltyReset => 0x24,
+                    MyRoomSpecialKind::BagExpansion => 0x26,
+                };
+                self.queue_myroom_dialog_send(dialog_id, selection, item_id);
+            }
+        }
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -3475,6 +3682,8 @@ impl ScreenGame {
     #[must_use]
     pub fn dialog_owns_input(&self) -> bool {
         self.messenger_liveness_open
+            || self.myroom_notice.is_some()
+            || self.myroom_confirm.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
             || self.room_dialog.is_some()
@@ -5411,6 +5620,23 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.myroom_confirm.is_some() {
+            let (ok_hit, cancel_hit) = self.myroom_confirm_button_hits(x, y);
+            if ok_hit {
+                self.confirm_myroom_action();
+            } else if cancel_hit {
+                self.myroom_confirm = None;
+            }
+            return;
+        }
+        if self.myroom_notice.is_some() {
+            // The exe's one-OK Information sheet consumes the click;
+            // no wire is queued by the notice or its dismissal.
+            if self.information_ok_hit(x, y) {
+                self.myroom_notice = None;
+            }
+            return;
+        }
         if self.messenger_liveness_open {
             // The one-OK sheet owns every click until OK; it sends
             // no wire (Memoryer has no messenger endpoint).
@@ -5962,6 +6188,21 @@ impl ScreenGame {
         }
     }
 
+    /// MyRoom confirm OK/CANCEL hits: the staged dialog's `.bnd` rects
+    /// when art is staged, the native fallback boxes otherwise. Both
+    /// buttons are needed because CANCEL leaves the worn set alone.
+    fn myroom_confirm_button_hits(&self, x: i32, y: i32) -> (bool, bool) {
+        let staged_ok = self
+            .relay_down_art
+            .as_ref()
+            .filter(|art| art.has_figures())
+            .is_some_and(|art| dialog_rect_hit(&art.placements, INFORMATION_OK_CODE, x, y));
+        (
+            staged_ok || rect_hit(&information_ok_fallback_rect(), x, y),
+            rect_hit(&information_cancel_fallback_rect(), x, y),
+        )
+    }
+
     /// One-OK Information sheet hit for `0X21200002`: its staged
     /// `.bnd` rect when art is staged, else the archive-less fallback
     /// plate. Shared by the relay notice and the Room fuse (#367).
@@ -6347,6 +6588,8 @@ impl ScreenGame {
         }
         self.billing_failure_notice = false;
         self.messenger_liveness_open = false;
+        self.myroom_notice = None;
+        self.myroom_confirm = None;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -7421,6 +7664,12 @@ impl ScreenGame {
             // Same staged Information sheet and Information origin as
             // the relay notice; the B8 pack pins one OK and no wire.
             paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
+        }
+        if let Some(notice) = self.myroom_notice.as_deref() {
+            paint_myroom_information(frame, self.relay_down_art.as_ref(), notice);
+        }
+        if let Some(confirm) = self.myroom_confirm.as_ref() {
+            paint_myroom_confirm(frame, self.relay_down_art.as_ref(), &confirm.text);
         }
         self.paint_dialog_frame_states(frame);
     }
@@ -15270,6 +15519,53 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_bag_cell_pick_queues_5004_with_the_exe_bag_index() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // bag cell -> click_myroom_side -> session flush take_equip_send.
+        // Static pin `FUN_004a49f0` file `0xa4bb6..0xa4bcb`: the
+        // type->slot rule picks the slot word and the clicked bag
+        // index is the second word. The currently worn id is read
+        // but not appended by the exe; that ticket gloss is wrong.
+        let mut game = myroom_open_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        let send = game.take_equip_send().expect("cell pick queues 5004");
+        assert_eq!(
+            (send.slot, send.item_id),
+            (0, 0),
+            "derived slot + bag index"
+        );
+
+        // The 5005 reply repaints from staged rows (already a
+        // projection of the character), clears the cell cursor and
+        // advances the slot count with the exe's 999 cap.
+        use o2jam_net::shop::{EquipItemResponse, EquipTail};
+        game.apply_myroom_equip_reply(&EquipItemResponse {
+            result: 0,
+            tail: Some(EquipTail {
+                slot_select: 0,
+                reserved_a: 0,
+                entry_id: 1,
+                reserved_b: 0,
+            }),
+        });
+        assert_eq!(game.myroom().bag_cell(), None, "reply clears selection");
+        assert_eq!(game.myroom_counts()[0], 1);
+        for _ in 0..1_000 {
+            game.apply_myroom_equip_reply(&EquipItemResponse {
+                result: 0,
+                tail: Some(EquipTail {
+                    slot_select: 0,
+                    reserved_a: 0,
+                    entry_id: 1,
+                    reserved_b: 0,
+                }),
+            });
+        }
+        assert_eq!(game.myroom_counts()[0], 999, "999 cap on the vector");
+    }
+
+    #[test]
     fn myroom_equip_queues_5004_with_derived_slot() {
         // Live caller chain:
         //   main.rs::run_play -> OnlineSession::ingest_snapshot
@@ -15433,8 +15729,11 @@ mod game_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
-        // Slot 0 is selected by default and wears item 1.
+        // Slot 0 is selected by default and wears item 1. The exe
+        // asks for confirmation first; only OK clears the slot.
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.myroom_confirm_text().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         let hero = game.myroom_character.as_ref().expect("staged character");
         assert_eq!(hero.equipment[0], 0, "the selected slot clears");
         assert_eq!(hero.equipment[1], 2, "only the selected slot clears");
@@ -15443,6 +15742,71 @@ mod game_tests {
             figure.len(),
             1,
             "the portrait loses the vacated part, never pins it stale"
+        );
+    }
+
+    #[test]
+    fn myroom_vacate_refuses_empty_and_default_items_before_confirming() {
+        // Live caller chain: boot -> MyRoom side -> staged VACATE ->
+        // click_myroom_side -> exe case `0x15200004` notice/confirm
+        // arms. File `0x2491c0` (no selection), `0x248acc` (default id)
+        // and `0x248a90` (no-compensation confirm).
+        use super::super::side::MYROOM_VACATE_CODE;
+        let mut game = myroom_open_overlay();
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_VACATE_CODE, 10, 40)],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "empty slot posts a notice");
+        assert_eq!(
+            game.myroom_notice(),
+            Some("선택된 아이템이 없습니다."),
+            "exe file 0x2491c0 copy"
+        );
+        assert_eq!(game.take_equip_send(), None, "no vacate wire is invented");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.dialog_owns_input(), "OK dismisses the notice");
+
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 0x23;
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "a default item cannot be cleared");
+        assert_eq!(
+            game.myroom_notice(),
+            Some("기본 아이템은 지울 수 없습니다."),
+            "exe file 0x248acc copy"
+        );
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            0x23,
+            "the default item survives the refusal"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 1;
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "a named item asks first");
+        assert_eq!(
+            game.myroom_confirm_text(),
+            Some("아이템 : Gear1\n\n이 아이템을 비우시면 보상 받을 수 없습니다."),
+            "exe file 0x248a90 pattern with the staged item name"
+        );
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            1,
+            "OK must be pressed before the clear"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            0,
+            "OK clears the confirmed slot"
         );
     }
 
@@ -15594,6 +15958,295 @@ mod game_tests {
             paint_first_pixel(&after),
             o2jam_render::pack_xrgb(255, 0, 0)
         );
+    }
+
+    #[test]
+    fn myroom_5024_reply_inks_item_and_music_outcomes() {
+        // Live caller chain: OnlineSession::drain_gift_claim (scripted
+        // 5024) -> ScreenGame::apply_gift_claim_success +
+        // apply_gift_claim_reply -> one-OK notice / 0x1392 follow-up.
+        // Captions are the exact exe byte tables at files `0x249218`,
+        // `0x249240`, `0x2492dc`, `0x2492ac` (EV `ev_c1ed8832…`).
+        let mut game = myroom_open_overlay();
+        game.apply_gift_claim_reply(false, true, 1);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("선물이 마이백으로 이동 되었습니다.")
+        );
+        assert_eq!(game.myroom_counts()[0], 1, "item claim count");
+        assert!(game.take_myroom_sends().is_empty(), "item arm sends none");
+
+        game.apply_gift_claim_reply(true, true, 42);
+        assert_eq!(
+            game.myroom_notice(),
+            Some(
+                "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다."
+            )
+        );
+        let sends = game.take_myroom_sends();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].command, 0x1392);
+        assert!(sends[0].body.is_empty());
+
+        game.apply_gift_claim_reply(false, false, 1);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
+        );
+        game.apply_gift_claim_reply(true, false, 42);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 뮤직 넣기 실패")
+        );
+        assert!(
+            game.take_myroom_sends().is_empty(),
+            "failure arms send none"
+        );
+    }
+
+    #[test]
+    fn myroom_gift_cell_press_queues_5023_for_that_record() {
+        // Live caller chain: boot -> MyRoom side -> staged gift cell
+        // `0x1501c04a` -> click_myroom_side -> session flush
+        // take_gift_claim (5023). Static pin FUN_004a3ee0 cases
+        // `0x1501c04a..4e` store the derived gift index and call the
+        // send builder with opcode `0x139f` (file `0xa4f98` body).
+        use o2jam_net::gift::GiftType;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .item_gifts
+            .push(o2jam_net::GiftItemInfo {
+                gift_id: 7,
+                item_id: 1,
+                sender: "Giver".to_owned(),
+            });
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+        let claim = game
+            .take_gift_claim()
+            .expect("the cell press itself claims the gift");
+        assert_eq!(claim.gift_type, GiftType::Item);
+        assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
+        assert_eq!(game.take_gift_claim(), None, "one press sends once");
+    }
+
+    #[test]
+    fn myroom_special_bag_items_open_the_exe_confirm_texts() {
+        // Live caller chain: boot -> MyRoom side -> staged bag cell
+        // with record byte +4 of 0x19/0x1a/0x1b -> main click dispatch
+        // (FUN_004a3ee0, files 0xa41d4/0xa423d/0xa427d) -> confirm
+        // sheet. The count-word "스킬 정보" arm at file 0x24886c is
+        // OPEN: our 2001 inventory has no count vector, so no notice
+        // is invented. Live capture: one exe press per type with the
+        // confirm button visible (#808).
+        use super::super::side::MYROOM_BAG_FIRST_CODE;
+        const TEXTS: [&str; 3] = [
+            "\n현재 사용중이신 닉네임을 \n변경할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+            "\n패널티 레벨을 'O' 으로\n초기화 시켜주는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+            "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?",
+        ];
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let rows = [0x19_u32, 0x1A, 0x1B]
+            .into_iter()
+            .enumerate()
+            .map(|(index, item_type)| o2jam_file::AvatarItemRow {
+                item_id: 25 + u32::try_from(index).unwrap_or(0),
+                item_type,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Special{item_type:#x}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![25, 26, 27],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        let placements: Vec<_> = (0..3)
+            .map(|cell| {
+                myroom_hit_placement(
+                    MYROOM_BAG_FIRST_CODE + u32::try_from(cell).unwrap_or(0),
+                    100 + cell * 60,
+                    10,
+                )
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        for (cell, text) in TEXTS.into_iter().enumerate() {
+            let x = 110 + i32::try_from(cell).unwrap_or(0) * 60;
+            game.ingest_snapshot(&InputSnapshot::click_at(x, 20));
+            assert_eq!(game.myroom_confirm_text(), Some(text), "type {cell:#x}");
+            let _ = game.take_equip_send(); // the bag-pick equip leg
+                                            // CANCEL leaves the item in the bag (no request is invented).
+            game.ingest_snapshot(&InputSnapshot::click_at(520, 368));
+            assert_eq!(game.myroom_confirm_text(), None);
+            assert!(game.take_myroom_sends().is_empty(), "CANCEL sends nothing");
+        }
+    }
+
+    #[test]
+    fn myroom_special_item_confirm_ok_queues_the_exe_request() {
+        // Live caller chain: MyRoom bag cell -> confirm sheet -> OK ->
+        // confirm_myroom_action -> queue_myroom_dialog_send ->
+        // session flush. Static pins: dialog id table file `0xa4d80`
+        // and send cases `0xa4cb0`/`0xa4ce7`/`0xa4d00`/`0xa4c94`.
+        use super::super::side::MYROOM_BAG_FIRST_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let rows = [0x19_u32, 0x1A, 0x1B]
+            .into_iter()
+            .enumerate()
+            .map(|(index, item_type)| o2jam_file::AvatarItemRow {
+                item_id: 25 + u32::try_from(index).unwrap_or(0),
+                item_type,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Special{item_type:#x}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows });
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            inventory: vec![25, 26, 27],
+            ..o2jam_net::CharacterInfo::default()
+        });
+        let placements: Vec<_> = (0..3)
+            .map(|cell| {
+                myroom_hit_placement(
+                    MYROOM_BAG_FIRST_CODE + u32::try_from(cell).unwrap_or(0),
+                    100 + cell * 60,
+                    10,
+                )
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        for (cell, command) in [5030_u16, 5034, 5036].into_iter().enumerate() {
+            game.ingest_snapshot(&InputSnapshot::click_at(110 + cell as i32 * 60, 20));
+            let _ = game.take_equip_send();
+            game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+            let sends = game.take_myroom_sends();
+            assert_eq!(sends.len(), 1, "one request per confirmed item");
+            assert_eq!(sends[0].command, command);
+            assert_eq!(
+                sends[0].body.len(),
+                match command {
+                    5030 => 9, // null-terminated (empty) name + two words
+                    5034 => 8, // two words
+                    _ => 0,    // header only
+                }
+            );
+        }
+
+        // The goods dialog's id 4 arm is the same send builder's 5002.
+        game.queue_myroom_dialog_send(4, 3, 25);
+        let sells = game.take_myroom_sends();
+        assert_eq!(sells.len(), 1);
+        assert_eq!(sells[0].command, 5002);
+        assert_eq!(
+            sells[0].body,
+            o2jam_net::WireMessage::encode_body(&SellItem {
+                selection: 3,
+                entry: 25,
+            })
+        );
+    }
+
+    #[test]
+    fn myroom_bagsort_press_queues_5038_and_5039_reply_repaints() {
+        // Live caller chain: boot -> MyRoom side -> staged BAGSORT ->
+        // click_myroom_side -> outbox 5038 -> session send -> 5039
+        // reply -> apply_myroom_reply. Static pins: send builder case
+        // `0x4a540f` (empty body), reply case `0x13af` (repaint), and
+        // failure text at file `0x248f40`.
+        use super::super::side::{MYROOM_BAGSORT_CODE, MYROOM_BAG_FIRST_CODE};
+        let mut game = myroom_open_overlay();
+        let _ = game.take_equip_send(); // entry pick, not this press
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_BAGSORT_CODE, 600, 10),
+            ],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        let _ = game.take_equip_send(); // the cell's equip leg
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        let sends = game.take_myroom_sends();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].command, 5038);
+        assert!(sends[0].body.is_empty(), "RefershBag carries no fields");
+        assert!(!game.has_pending_myroom_sends());
+
+        game.apply_myroom_reply(5039);
+        assert_eq!(game.myroom().bag_cell(), None, "5039 repaints the bag");
+        game.post_bag_sort_failure_notice();
+        assert_eq!(
+            game.myroom_notice(),
+            Some(
+                "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요."
+            ),
+            "exe file 0x248f40 copy"
+        );
+    }
+
+    #[test]
+    fn myroom_worn_well_press_requeues_5004_with_the_worn_bag_index() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // well `0x15600013` -> click_myroom_side -> session flush
+        // take_equip_send (5004). Static pin: `FUN_004a49f0` file
+        // `0xa4aec` sends the well ordinal plus the index the worn
+        // id lookup (`0x537dd0`) finds in the owned bag.
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 3;
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_SLOT_IMAGE_FIRST_CODE, 600, 10)],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        let send = game.take_equip_send().expect("well press queues 5004");
+        assert_eq!(
+            (send.slot, send.item_id),
+            (0, 2),
+            "well ordinal + bag index"
+        );
+        assert_eq!(game.take_equip_send(), None, "one press sends once");
+    }
+
+    #[test]
+    fn myroom_worn_well_press_without_an_owned_id_opens_the_notice() {
+        // Same live chain, miss arm: `0x537dd0` returns -1, so no
+        // 5004 leaves and the exe's file `0x2491f4` notice owns the
+        // sheet. The live mouse event stays OPEN (#793).
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 999;
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_SLOT_IMAGE_FIRST_CODE, 600, 10)],
+            HashMap::new(),
+        );
+        assert!(!game.dialog_owns_input(), "no sheet before the press");
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        assert!(game.dialog_owns_input(), "the miss notice owns input");
+        assert_eq!(game.take_equip_send(), None, "a miss sends no equip");
     }
 
     #[test]
@@ -15998,8 +16651,11 @@ mod game_tests {
         for pixel in pixels {
             hash_u64(&mut hash, u64::from(pixel));
         }
+        // #797 re-pin: the VACATE press now opens the exe's
+        // no-selection notice, which inks the Information sheet over
+        // the same staged rects; one screen, no wire.
         assert_eq!(
-            hash, 0x570F_AD14_1C10_0CCB,
+            hash, 0x8174_B6A9_75A2_9977,
             "MyRoom ScreenGame cluster output drifted"
         );
     }
@@ -16271,16 +16927,19 @@ mod game_tests {
         //   seam stays empty.
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
-            myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
-            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_NOTICEBOARD_CODE,
-            MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE, MYROOM_VACATE_CODE,
-            MYROOM_WEBAVATAR_CODE,
+            myroom_action_for_code, myroom_p0_verdict, MyRoomAction, MYROOM_ALARM_CODE,
+            MYROOM_ALARM_POPUP_CODE, MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE,
+            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
+            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
         };
-        for code in [
-            MYROOM_WEBAVATAR_CODE,
-            MYROOM_CONFERENCE_CODE,
-            MYROOM_BAGSORT_CODE,
-        ] {
+        // #798 re-pin: BAGSORT is no longer a P0 no-op; the exe's
+        // 5038 send is wired and the verdict is retired.
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAGSORT_CODE),
+            Some(MyRoomAction::BagSort)
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_BAGSORT_CODE), None);
+        for code in [MYROOM_WEBAVATAR_CODE, MYROOM_CONFERENCE_CODE] {
             assert_eq!(
                 myroom_action_for_code(code),
                 None,
@@ -23515,8 +24174,7 @@ mod game_tests {
     /// `stage_online_identity` join, minus the gateway).
     fn open_shop_preview_board() -> ScreenGame {
         use super::super::side::{
-            SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-            SHOP_GIFTITEM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+            SHOP_AVATAR_CODE, SHOP_GIFTITEM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMGIFT_FIRST_CODE,
             SHOP_ITEMPRE_FIRST_CODE, SHOP_MGASH_CODE,
         };
         let mut game = ScreenGame::new();
@@ -25782,6 +26440,10 @@ mod game_tests {
             "no picked gift claims nothing"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        // An empty slot is refused with the exe's no-selection notice;
+        // dismissing it costs no wire.
+        assert!(game.myroom_notice().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);

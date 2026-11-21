@@ -170,7 +170,8 @@ pub const MYROOM_PCROOMMARK_CODE: u32 = 0x1550_006A;
 pub const MYROOM_WEBAVATAR_CODE: u32 = 0x1520_0058;
 /// Conference button (`IDC_BUTTON_SMYROOM_CONFERENCE`): P0, queues nothing.
 pub const MYROOM_CONFERENCE_CODE: u32 = 0x1520_006B;
-/// Bag-sort button (`IDC_BUTTON_SMYROOM_BAGSORT`): P0, queues nothing.
+/// Bag-sort button (`IDC_BUTTON_SMYROOM_BAGSORT`): exe case
+/// `0x1520006c` queues the empty 5038 RefershBag request (#798).
 pub const MYROOM_BAGSORT_CODE: u32 = 0x1520_006C;
 /// Messenger button (`IDC_BUTTON_SMYROOM_MESSENGER`): P0, queues nothing.
 pub const MYROOM_MESSENGER_CODE: u32 = 0x1520_006D;
@@ -190,8 +191,11 @@ pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
 /// order, so well ordinal `0..11` pairs with the same `ItemType`
 /// ordinal in the 2001 equipment array (`docs/net-protocol.md`).
 pub const MYROOM_SLOT_IMAGE_FIRST_CODE: u32 = 0x1560_0013;
-/// Selector buttons that pair with a labelled equipment well.
-pub const MYROOM_SLOT_WELLS: usize = MYROOM_SLOT_BUTTONS;
+/// Worn-well images `0x15600013..22`: the exe press handler walks
+/// 16 well codes (`FUN_004a49f0`, file `0xa4a0b` range check `0x19`,
+/// with the `0x1e` gap skipped). The first eleven names pair with
+/// the slot-selector buttons; the rest stay unnamed in the block.
+pub const MYROOM_SLOT_WELLS: usize = 16;
 
 /// Large upper-right panel: `IDC_IMAGE_SMYROOM_SLOTCOVER`
 /// (`Myroom_SlotCover.ojs`, 109x81-derived 494x312 body at `.bnd` rect
@@ -273,6 +277,9 @@ pub enum MyRoomAction {
     GiftPage(MyRoomStep),
     /// Gift cell pressed: cell index within the page `0..5`.
     PickGiftCell(usize),
+    /// Worn well pressed: index `0..16` within the well code run
+    /// `0x15600013..22` (`FUN_004a49f0`, file `0xa4a26`).
+    PressWornWell(u8),
     /// INVENTORY pressed: equip the selected bag cell.
     ApplyEquip,
     /// Vacate pressed: clears the selected worn slot (button ordinal =
@@ -285,6 +292,8 @@ pub enum MyRoomAction {
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,
+    /// BAGSORT pressed: queue the empty 5038 RefershBag request.
+    BagSort,
     /// MESSENGER pressed: open the exe-pinned one-OK liveness sheet.
     /// This is a UI response to the absent backend, not a Messenger
     /// main sheet or a wire send.
@@ -298,6 +307,12 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
     if (MYROOM_SLOT_FIRST_CODE..MYROOM_SLOT_FIRST_CODE + MYROOM_SLOT_BUTTONS_U32).contains(&code) {
         let slot = u8::try_from(code - MYROOM_SLOT_FIRST_CODE).ok()?;
         return Some(MyRoomAction::SelectSlot(slot));
+    }
+    if (MYROOM_SLOT_IMAGE_FIRST_CODE..MYROOM_SLOT_IMAGE_FIRST_CODE + MYROOM_SLOT_WELLS_U32)
+        .contains(&code)
+    {
+        let well = u8::try_from(code - MYROOM_SLOT_IMAGE_FIRST_CODE).ok()?;
+        return Some(MyRoomAction::PressWornWell(well));
     }
     if (MYROOM_BAG_FIRST_CODE..MYROOM_BAG_FIRST_CODE + MYROOM_BAG_CELLS_U32).contains(&code) {
         let cell = usize::try_from(code - MYROOM_BAG_FIRST_CODE).ok()?;
@@ -319,6 +334,7 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_BACK_CODE => Some(MyRoomAction::BackToLobby),
         MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
+        MYROOM_BAGSORT_CODE => Some(MyRoomAction::BagSort),
         MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
         _ => None,
     }
@@ -328,6 +344,8 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
 const MYROOM_BAG_CELLS_U32: u32 = 10;
 /// Gift-cell count as `u32` for code arithmetic without casts.
 const MYROOM_GIFT_CELLS_U32: u32 = 5;
+/// Well-image count as `u32` for code arithmetic without casts.
+const MYROOM_SLOT_WELLS_U32: u32 = MYROOM_SLOT_WELLS as u32;
 
 /// Avatar-room action under native pixel (`x`, `y`): the staged
 /// `.bnd` placement whose code dispatches and whose rect contains
@@ -726,9 +744,6 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
         ),
         MYROOM_CONFERENCE_CODE => {
             Some("CONFERENCE P0: no wire send; backend never wired - visibly inert")
-        }
-        MYROOM_BAGSORT_CODE => {
-            Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
         }
         MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
             Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")

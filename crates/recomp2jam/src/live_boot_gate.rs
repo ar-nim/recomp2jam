@@ -1533,10 +1533,17 @@ mod live_boot_gate_tests {
             vacate.rect.x + i32::try_from(vacate.rect.w / 2).unwrap_or(0),
             vacate.rect.y + i32::try_from(vacate.rect.h / 2).unwrap_or(0),
         ));
+        // #797: the press now asks the exe's no-compensation confirm;
+        // only its OK (the one-OK Information fallback rect) clears.
+        assert!(
+            live.myroom_confirm_text().is_some(),
+            "the live ITEMSELL press asks before clearing"
+        );
+        live.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         assert_eq!(
             live.myroom_character().map(|hero| hero.equipment[0]),
             Some(0),
-            "the ITEMSELL press clears the selected worn slot on the live path"
+            "the confirmed ITEMSELL clears the selected worn slot on the live path"
         );
         server.join().unwrap();
     }
