@@ -5,7 +5,8 @@
 use super::super::super::avatar::{avatar_item_by_id, ScenePlacement};
 use super::super::paint::rect_hit;
 use super::{
-    equipped_item_view, wallet_amount_caption, SelectMusicSong, ShopItemView, WalletState,
+    equipped_item_view, next_up_threshold, wallet_amount_caption, SelectMusicSong, ShopItemView,
+    WalletState,
 };
 use o2jam_file::{AvatarItemRow, AvatarItemTable};
 use o2jam_net::{CharacterInfo, GiftItemInfo, GiftMusicInfo};
@@ -70,7 +71,8 @@ pub const MYROOM_GIFT_RIGHT_CODE: u32 = 0x1520_0049;
 /// queued `ClaimGift` 5023 shape is exe-pinned (`docs/gifts.md`);
 /// next step: rig walk of the gift-box claim gesture.
 pub const MYROOM_MOVE_CODE: u32 = 0x1550_0053;
-/// BACK button (`Myroom_Back.ojs`): returns to the opening lobby.
+/// BACK button (`Myroom_Back.ojs`): returns to the opening lobby and
+/// queues the exe's empty 5007 ExitShop send (#802).
 pub const MYROOM_BACK_CODE: u32 = 0x1520_0002;
 /// GOSHOP button (`Myroom_GoShop.ojs`): opens the item shop.
 /// Records only — nested sides stay rejected, so the hop is OPEN
@@ -186,17 +188,20 @@ pub const MYROOM_GIFT_ITEMNAME_CODE: u32 = 0x1540_0051;
 /// Gift sender caption (`IDC_TEXT_GIFT_SENDER`).
 pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
 /// First equipment-well image (`0X15600013..22`, 16 Korean-labelled
-/// slot images in the `STATE_MYROOM` block, `docs/myroom.md`). The
-/// first eleven names match the eleven slot-selector buttons in code
-/// order, so well ordinal `0..11` pairs with the same `ItemType`
-/// ordinal in the 2001 equipment array (`docs/net-protocol.md`).
+/// slot images in the `STATE_MYROOM` block, `docs/myroom.md`).
 pub const MYROOM_SLOT_IMAGE_FIRST_CODE: u32 = 0x1560_0013;
+
 /// Worn-well images `0x15600013..22`: the exe press handler walks
 /// 16 well codes (`FUN_004a49f0`, file `0xa4a0b` range check `0x19`,
 /// with the `0x1e` gap skipped). The first eleven names pair with
 /// the slot-selector buttons; the rest stay unnamed in the block.
 pub const MYROOM_SLOT_WELLS: usize = 16;
 
+/// Count of bound equipment wells (`0X15600013..22`).
+pub const MYROOM_EQUIPMENT_WELLS: usize = 16;
+/// Selector buttons that pair with a labelled equipment well (the
+/// first eleven wells). Selection is still button-only; the well
+/// join itself uses the item record byte, see [`myroom_worn_well_items`].
 /// Large upper-right panel: `IDC_IMAGE_SMYROOM_SLOTCOVER`
 /// (`Myroom_SlotCover.ojs`, 109x81-derived 494x312 body at `.bnd` rect
 /// (240,46)-(734,358)). This is the exe's default Inventory face.
@@ -218,6 +223,23 @@ pub enum MyRoomPanel {
     Inventory,
     /// `Myroom_Status.ojs` plate plus the INVENTORY button body.
     Status,
+}
+
+/// Messenger branch selected by the exe's global words before
+/// `FUN_004a3ee0` case `0x1520006d` (file `0xa3ee0`,
+/// EV `ev_aa875251…`). The disconnected branch is the B8 pack's one-OK
+/// liveness sheet; the other two strings are pinned at files
+/// `0x247dc0`/`0x247e08`, and modal 21 has no pinned caption. The wire
+/// writer of those globals is OPEN, so callers stage the branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MyRoomMessengerState {
+    /// No messenger server: one-OK connection-lost notice (default).
+    #[default]
+    Disconnected,
+    /// Info loading: one-OK loading notice.
+    Loading,
+    /// Info available: modal 21, caption unpinned.
+    Available,
 }
 
 /// Whether one staged MyRoom placement belongs to the visible panel
@@ -292,12 +314,23 @@ pub enum MyRoomAction {
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,
+
     /// BAGSORT pressed: queue the empty 5038 RefershBag request.
     BagSort,
     /// MESSENGER pressed: open the exe-pinned one-OK liveness sheet.
     /// This is a UI response to the absent backend, not a Messenger
     /// main sheet or a wire send.
+
+    /// MESSENGER pressed: open the branch pinned by the staged
+    /// messenger state. No wire send.
     MessengerLiveness,
+    /// CONFERENCE pressed: open modal 20. No caption is pinned, so
+    /// only the staged sheet art paints. No wire send.
+    OpenConference,
+    /// WEBAVATAR pressed: show the pinned register notice. Whether
+    /// the exe helper also opens a browser stays OPEN; no browser
+    /// claim is made here.
+    ShowWebAvatar,
 }
 
 /// Action for one avatar-room control code (`None` for caption and
@@ -336,6 +369,8 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
         MYROOM_BAGSORT_CODE => Some(MyRoomAction::BagSort),
         MYROOM_MESSENGER_CODE => Some(MyRoomAction::MessengerLiveness),
+        MYROOM_CONFERENCE_CODE => Some(MyRoomAction::OpenConference),
+        MYROOM_WEBAVATAR_CODE => Some(MyRoomAction::ShowWebAvatar),
         _ => None,
     }
 }
@@ -414,6 +449,39 @@ pub fn myroom_record_slot(row: &AvatarItemRow) -> u8 {
     u8::try_from((word >> 24) & 0xFF).unwrap_or(0)
 }
 
+/// Well number and item id for each worn 2001 word. The exe's
+/// state entry (`FUN_004a3730`, file `0xa3730`, EV `ev_004adf63…`)
+/// scans equipment words and stores each at the index named by its
+/// item record byte `+0x18` when that byte is below 17; a later word
+/// naming the same well wins. This CONTRADICTS the earlier ordinal
+/// join (`ee8aa26`, only correct for sequential record bytes): the
+/// 7.55 behavior oracle is the record-byte join. OPEN next step: a
+/// live non-sequential account with paired wells and 2001 body.
+#[must_use]
+pub fn myroom_worn_well_items(table: &AvatarItemTable, equipment: &[i32]) -> Vec<(u8, u32)> {
+    let mut wells: [Option<u32>; MYROOM_EQUIPMENT_WELLS] = [None; MYROOM_EQUIPMENT_WELLS];
+    for word in equipment {
+        let Some(item_id) = u32::try_from(*word).ok() else {
+            continue;
+        };
+        let Some(row) = avatar_item_by_id(table, item_id) else {
+            continue;
+        };
+        let well = usize::from(myroom_record_slot(row));
+        if let Some(well_item) = wells.get_mut(well) {
+            *well_item = Some(item_id);
+        }
+    }
+    wells
+        .into_iter()
+        .enumerate()
+        .filter_map(|(well, item)| {
+            let well = u8::try_from(well).ok()?;
+            item.map(|item_id| (well, item_id))
+        })
+        .collect()
+}
+
 /// Live avatar-room selection: slot pick, bag page/cursor, gift
 /// page/cursor. Slot semantics stay OPEN; the state only records
 /// and clamps so painter and clicker share one selection.
@@ -433,6 +501,8 @@ pub struct MyRoomState {
     panel: MyRoomPanel,
     /// Visible lower-panel tab (exe default: MY BAG).
     lower_tab: MyRoomLowerTab,
+    /// Branch of the MESSENGER notice (exe globals, staged here).
+    messenger_state: MyRoomMessengerState,
 }
 
 impl Default for MyRoomState {
@@ -454,6 +524,7 @@ impl MyRoomState {
             gift_cell: None,
             panel: MyRoomPanel::Inventory,
             lower_tab: MyRoomLowerTab::Bag,
+            messenger_state: MyRoomMessengerState::Disconnected,
         }
     }
 
@@ -512,6 +583,18 @@ impl MyRoomState {
         self.lower_tab = tab;
     }
 
+    /// Selected MESSENGER branch.
+    #[must_use]
+    pub const fn messenger_state(self) -> MyRoomMessengerState {
+        self.messenger_state
+    }
+
+    /// Stage the MESSENGER branch named by the exe globals. No wire
+    /// send is implied: this only selects which sheet answers a press.
+    pub fn set_messenger_state(&mut self, state: MyRoomMessengerState) {
+        self.messenger_state = state;
+    }
+
     /// Record a slot-button press; past the eleventh button the
     /// press lands nowhere (button ordinals are `0..11`).
     pub fn select_slot(&mut self, slot: u8) {
@@ -543,13 +626,20 @@ impl MyRoomState {
         }
     }
 
-    /// Turn the gift page one step, clamped like the bag pager.
-    /// Turning clears the gift cursor.
+    /// Turn the gift page: LEFT wraps from the first page to the last,
+    /// RIGHT clamps at the last (the gift pager differs from the bag
+    /// pager here — `FUN_004a3ee0` cases `0x15200048/49`, file `0xa3ee0`,
+    /// EV `ev_aa875251…`). Turning clears the gift cursor. A one-page
+    /// box never moves.
     pub fn turn_gift_page(&mut self, step: MyRoomStep, pages: usize) {
         let last = pages.saturating_sub(1);
         match step {
             MyRoomStep::Previous => {
-                self.gift_page = self.gift_page.saturating_sub(1);
+                self.gift_page = if self.gift_page == 0 {
+                    last
+                } else {
+                    self.gift_page - 1
+                };
             }
             MyRoomStep::Next => {
                 self.gift_page = self.gift_page.saturating_add(1).min(last);
@@ -691,8 +781,11 @@ pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftVi
 }
 
 /// Identity captions from fetched character data: nickname, level,
-/// cash point (`N PT`), experience, next-up exp (staged experience, room
-/// precedent), win-rate (staged wins/battles percent), and penalties.
+/// cash point (`N PT`), experience, next-up exp (the exe's 99-entry
+/// level threshold), win-rate (staged wins/battles percent), and
+/// penalties. The numeric formats are exe-pinned at file `0xa7a80`
+/// (EV `ev_21ce4a71...`): `" %d"` for level, exp and next-up,
+/// `"Lv %d"` for penalty level, `"%d"` for penalty count.
 /// Cash wallets live on the
 /// single [`WalletState`] now ([`myroom_wallet_captions` paints the
 /// O2/MUSIC/ITEM cash controls), so they stay out of this record.
@@ -712,18 +805,18 @@ pub fn myroom_win_rate_text(character: &CharacterInfo) -> String {
 }
 
 pub fn myroom_next_up_exp_text(character: &CharacterInfo) -> String {
-    character.experience.to_string()
+    next_up_threshold(character.level).map_or_else(String::new, |threshold| format!(" {threshold}"))
 }
 
 pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)> {
     vec![
         (MYROOM_NICKNAME_CODE, character.nickname.clone()),
-        (MYROOM_LEVEL_CODE, character.level.to_string()),
+        (MYROOM_LEVEL_CODE, format!(" {}", character.level)),
         (
             MYROOM_CASH_POINT_CODE,
             format!("{} PT", character.cash_point),
         ),
-        (MYROOM_EXP_CODE, character.experience.to_string()),
+        (MYROOM_EXP_CODE, format!(" {}", character.experience)),
         (MYROOM_NEXTUPEXP_CODE, myroom_next_up_exp_text(character)),
         (MYROOM_WINRATE_CODE, myroom_win_rate_text(character)),
         (
@@ -732,19 +825,13 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
         ),
         (
             MYROOM_PENALTY_LEVEL_CODE,
-            character.penalty_level.to_string(),
+            format!("Lv {}", character.penalty_level),
         ),
     ]
 }
 
 pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
     match code {
-        MYROOM_WEBAVATAR_CODE => Some(
-            "WEBAVATAR P0: no wire send; web avatar page lives outside the gateway - visibly inert",
-        ),
-        MYROOM_CONFERENCE_CODE => {
-            Some("CONFERENCE P0: no wire send; backend never wired - visibly inert")
-        }
         MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
             Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")
         }

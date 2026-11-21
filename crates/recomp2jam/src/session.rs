@@ -4415,6 +4415,8 @@ fn level_for_difficulty(difficulty: u8) -> usize {
 
 #[cfg(test)]
 pub(super) mod session_tests {
+    #[cfg(test)]
+    use o2jam_shell::screens::side::MyRoomNotice;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
@@ -6559,7 +6561,7 @@ pub(super) mod session_tests {
         // #812: the live drain also posts the exe's item-success copy.
         assert_eq!(
             session.game.myroom_notice(),
-            Some("선물이 마이백으로 이동 되었습니다.")
+            Some(&MyRoomNotice::GiftItemSuccess)
         );
     }
 
@@ -6616,7 +6618,7 @@ pub(super) mod session_tests {
         // the one-OK sheet; the older mcash band stays behind it.
         assert_eq!(
             session.game.myroom_notice(),
-            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
+            Some(&MyRoomNotice::GiftItemFailure)
         );
         session.game.dismiss_myroom_notice();
         let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;

@@ -7,21 +7,25 @@
 use std::collections::HashMap;
 
 use super::shop::EquippedAvatarBlock;
+use super::ui_effect::UiEffectId;
 use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::paint::{
-    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_screen,
+    myroom_notice_board_frame, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_screen,
 };
 use crate::screens::side::{
-    myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
-    myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
-    myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, MyRoomAction, MyRoomLowerTab,
-    MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
+    myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
+    myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
+    myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
+    myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab,
+    MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
+    MYROOM_NOTICE_TEXT_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
-use o2jam_net::shop::{EquipItem, EquipItemResponse};
+use o2jam_net::shop::{EquipItem, EquipItemResponse, ExitShop};
 use o2jam_net::CharacterInfo;
 use o2jam_render::Frame;
 
@@ -29,9 +33,6 @@ use o2jam_render::Frame;
 /// Exact bytes read from the oracle at file `0x2491f4` (VA
 /// `0x6491f4`, cp949); the ticket's "connection lost" gloss is
 /// contradicted by the string, so the exe text wins (EV
-/// `ev_85bc1fde…`, `docs/myroom.md`).
-pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯이 필요합니다.";
-
 /// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
 pub(super) const MYROOM_COUNT_CAP: u32 = 999;
 
@@ -44,29 +45,12 @@ pub(super) const PENALTY_ITEM_CONFIRM: &str =
 pub(super) const EXPANSION_ITEM_CONFIRM: &str =
     "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
 
-/// Successful item-gift 5024 caption, file `0x249218`.
-pub(super) const GIFT_ITEM_SUCCESS: &str = "선물이 마이백으로 이동 되었습니다.";
-/// Successful music-gift 5024 caption, file `0x249240`.
-pub(super) const GIFT_MUSIC_SUCCESS: &str = "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다.";
-/// Failed item-gift 5024 caption, file `0x2492dc`.
-pub(super) const GIFT_ITEM_FAILURE: &str = "[운영자에게 문의바람]선물받은 아이템 넣기 실패";
-/// Failed music-gift 5024 caption, file `0x2492ac`.
-pub(super) const GIFT_MUSIC_FAILURE: &str = "[운영자에게 문의바람]선물받은 뮤직 넣기 실패";
 /// Follow-up request the exe sends on the music arm of 5024. The
 /// numeric opcode is `0x1392`; our table names 5010 SyncMusicPurchase
 /// (the enrichment gloss called it 5026, which is `0x13a2`). The
 /// game meaning on this arm stays OPEN with a live gifted-account tap.
 pub(super) const GIFT_MUSIC_FOLLOWUP_COMMAND: u16 = 0x1392;
 
-/// BAGSORT failure notice, exact cp949 string decoded from the
-/// oracle at file `0x248f40` (VA `0x648f40`).
-pub(super) const BAG_SORT_FAILURE_NOTICE: &str =
-    "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요.";
-
-/// Vacate notice at file `0x2491c0` (VA `0x6491c0`).
-pub(super) const VACATE_NO_SELECTION_NOTICE: &str = "선택된 아이템이 없습니다.";
-/// Vacate notice at file `0x248acc` (VA `0x648acc`).
-pub(super) const VACATE_DEFAULT_NOTICE: &str = "기본 아이템은 지울 수 없습니다.";
 /// Vacate confirm pattern at file `0x248a90` (VA `0x648a90`).
 pub(super) const VACATE_CONFIRM_PATTERN: &str =
     "아이템 : {name}\n\n이 아이템을 비우시면 보상 받을 수 없습니다.";
@@ -216,7 +200,12 @@ impl ScreenGame {
         let action = myroom_action_at(&self.side_placements, x, y);
         match action {
             Some(MyRoomAction::BackToLobby) => {
-                self.leave_side();
+                // The exe's BACK case changes state and sends 5007
+                // (FUN_004a3ee0 case 0x15200002, file 0xa3ee0); the
+                // session bridge owns the wire, the shell the return.
+                if self.leave_side() {
+                    self.outbox.pending_exit_shop = Some(ExitShop);
+                }
             }
             Some(action) => self.apply_myroom_action(action),
             None => {}
@@ -251,8 +240,27 @@ impl ScreenGame {
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+
             MyRoomAction::BagSort => self.apply_myroom_bag_sort(),
-            MyRoomAction::MessengerLiveness => self.messenger_liveness_open = true,
+            MyRoomAction::MessengerLiveness => {
+                let notice = match self.myroom.messenger_state() {
+                    MyRoomMessengerState::Disconnected => MyRoomNotice::MessengerUnavailable,
+                    MyRoomMessengerState::Loading => MyRoomNotice::MessengerLoading,
+                    MyRoomMessengerState::Available => MyRoomNotice::MessengerModal,
+                };
+                self.post_myroom_notice(notice);
+            }
+            MyRoomAction::OpenConference => {
+                self.post_myroom_notice(MyRoomNotice::Conference);
+            }
+            MyRoomAction::ShowWebAvatar => {
+                // The handler plays sound 13 and hands the pinned copy
+                // to the UI helper (files 0xa3eb0/0xa4960). The helper's
+                // browser-vs-notice outcome is OPEN; we show its copy.
+                self.cue_ui_effect(UiEffectId::WebAvatarNotice);
+                self.post_myroom_notice(MyRoomNotice::WebAvatar);
+            }
+
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }
@@ -398,7 +406,7 @@ impl ScreenGame {
             return;
         }
         let Some(bag_index) = character.inventory.iter().position(|id| *id == worn_id) else {
-            self.myroom_notice = Some(WORN_WELL_MISS_NOTICE.to_owned());
+            self.post_myroom_notice(MyRoomNotice::WornWellMiss);
             return;
         };
         let Ok(item_id) = i32::try_from(bag_index) else {
@@ -428,12 +436,12 @@ impl ScreenGame {
             return;
         };
         if item_id == 0 {
-            self.myroom_notice = Some(VACATE_NO_SELECTION_NOTICE.to_owned());
+            self.post_myroom_notice(MyRoomNotice::VacateNoSelection);
             self.myroom_confirm = None;
             return;
         }
         if item_id == 0x23 || item_id == 0x24 {
-            self.myroom_notice = Some(VACATE_DEFAULT_NOTICE.to_owned());
+            self.post_myroom_notice(MyRoomNotice::VacateDefault);
             self.myroom_confirm = None;
             return;
         }
@@ -518,14 +526,18 @@ impl ScreenGame {
     /// Slot selection, equip commit, bag/gift pagers, and gift claim
     /// ride [`Self::click_myroom_side`]; vacate clears the selected worn
     /// slot and restages but queues nothing (send shape OPEN,
-    /// `docs/myroom.md`); goshop/shop-hop send nothing (same OPEN).
+    /// `docs/myroom.md`); BACK queues the pinned 5007 exit, GOSHOP
+    /// changes state without an extra send (#802).
     pub(super) fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
                 let panel = self.myroom.panel();
-                art.paint_backdrop_live(frame, Screen::Myroom, |placed| {
-                    myroom_panel_kept(placed, panel)
-                });
+                art.paint_backdrop_live_selected(
+                    frame,
+                    Screen::Myroom,
+                    |placed| myroom_panel_kept(placed, panel),
+                    |placed| myroom_notice_board_frame(placed, &art.figures),
+                );
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
                 self.paint_myroom_overlay(frame, &art.placements, &art.figures);
             }
@@ -568,7 +580,7 @@ impl ScreenGame {
         paint_myroom_slot_icons(
             frame,
             placements,
-            &character.equipment,
+            &myroom_worn_well_items(table, &character.equipment),
             &self.shop_item_portraits,
         );
         // Identity fields belong to the status face; the exe's default
@@ -578,6 +590,9 @@ impl ScreenGame {
         } else {
             Vec::new()
         };
+        // FREEINFO lines and skill rows come from the staged pass word
+        // (EV ev_bf4287e7…); its wire source stays OPEN.
+        captions.extend(myroom_freeinfo_captions(&self.myroom_pass));
         // Money paints from the single wallet (#202): the character
         // record fed it at staging, purchases refresh it after.
         captions.extend(myroom_wallet_captions(&self.wallet));
@@ -586,6 +601,9 @@ impl ScreenGame {
             self.myroom.gift_page(),
             self.myroom.gift_cell(),
         ));
+        if let Some(MyRoomNotice::NoticeBoard { text }) = self.myroom_notice() {
+            captions.push((MYROOM_NOTICE_TEXT_CODE, text.clone()));
+        }
         paint_myroom_data(
             frame,
             placements,

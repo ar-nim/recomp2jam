@@ -35,6 +35,9 @@ pub enum UiEffectId {
     SliderApply,
     /// Channel BACK / EXIT (exe `0x48ff45`), slot `0x23`.
     ChannelExit,
+    /// MyRoom WEBAVATAR notice (exe `0x4a3ee0`, file `0xa3eb0`,
+    /// EV `ev_aa64e525…`), slot `0x0D` = decimal sound 13.
+    WebAvatarNotice,
 }
 
 impl UiEffectId {
@@ -47,6 +50,7 @@ impl UiEffectId {
             Self::PlanetExit => 0x05,
             Self::ChannelRowJoin | Self::OptionTabSwitch => 0x09,
             Self::ChannelExit => 0x23,
+            Self::WebAvatarNotice => 0x0D,
         }
     }
 
@@ -60,6 +64,7 @@ impl UiEffectId {
             0x02 => Some(Self::DialogDecline),
             0x05 => Some(Self::PlanetExit),
             0x09 => Some(Self::ChannelRowJoin),
+            0x0D => Some(Self::WebAvatarNotice),
             0x23 => Some(Self::ChannelExit),
             _ => None,
         }
@@ -78,6 +83,7 @@ mod tests {
             UiEffectId::PlanetExit,
             UiEffectId::ChannelRowJoin,
             UiEffectId::ChannelExit,
+            UiEffectId::WebAvatarNotice,
         ] {
             assert_eq!(UiEffectId::from_slot(effect.slot()), Some(effect));
             assert!(usize::from(effect.slot()) < UI_EFFECT_SLOT_COUNT);

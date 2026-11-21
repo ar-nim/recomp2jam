@@ -32,8 +32,7 @@ use self::musicshop::{MusicShopEffect, MusicShopState};
 
 use self::myroom::{
     MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
-    BAG_SORT_FAILURE_NOTICE, GIFT_ITEM_FAILURE, GIFT_ITEM_SUCCESS, GIFT_MUSIC_FAILURE,
-    GIFT_MUSIC_FOLLOWUP_COMMAND, GIFT_MUSIC_SUCCESS, MYROOM_COUNT_CAP,
+    GIFT_MUSIC_FOLLOWUP_COMMAND, MYROOM_COUNT_CAP,
 };
 
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
@@ -64,9 +63,9 @@ use super::paint::{
     paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_face,
     paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
     paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_confirm, paint_myroom_figure, paint_myroom_information, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
@@ -90,15 +89,15 @@ use super::side::{
     shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
     side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
     CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
-    MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState, PasswordAction,
+    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
+    SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow,
+    WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
+    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -889,20 +888,27 @@ pub struct ScreenGame {
     /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
     /// the type-100 dismissal queue (#367).
     room_no_response: RoomNoResponseFuse,
+
     /// One-OK liveness sheet over MyRoom after a MESSENGER press
     /// (qualified B8 pack). It owns clicks until its OK is pressed;
     /// the Messenger main sheet stays unwired (P0).
     messenger_liveness_open: bool,
-    /// One-OK MyRoom notice posted by an exe-pinned press arm (first:
-    /// the worn-well miss at file `0x2491f4`). It owns clicks until
-    /// OK like the other Information sheets.
-    myroom_notice: Option<String>,
     /// One-OK/CANCEL MyRoom confirm sheet, with the local edit its OK
     /// commits (first arm: the vacate no-compensation warning).
     myroom_confirm: Option<MyRoomConfirm>,
     /// Per-slot MyRoom count vector advanced by a successful 5005
     /// reply (capped at 999 by the exe's reply handler).
     myroom_counts: [u32; 17],
+
+    /// Staged pass/membership state behind the FREEINFO lines. The
+    /// wire writer of the exe's `0x768b34` word stays OPEN.
+    myroom_pass: MyRoomPassInfo,
+    /// NOTICE_TEXT caption value. The exe's writer is untraced, so
+    /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
+    /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
+    /// bytes are exe-string pinned in [`MyRoomNotice`].
+    myroom_notice: Option<MyRoomNotice>,
+
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1295,10 +1301,14 @@ impl ScreenGame {
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
+
             messenger_liveness_open: false,
             myroom_notice: None,
             myroom_confirm: None,
             myroom_counts: [0; 17],
+
+            myroom_pass: MyRoomPassInfo::default(),
+
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1907,16 +1917,60 @@ impl ScreenGame {
         self.room_no_response.sheet_open()
     }
 
-    /// Whether the pinned Messenger liveness sheet owns input.
+    /// Whether the pinned Messenger liveness sheet owns input. Other
+    /// MyRoom notices also own it, but this query names the B8 press.
     #[must_use]
     pub const fn messenger_liveness_open(&self) -> bool {
-        self.messenger_liveness_open
+        matches!(self.myroom_notice, Some(MyRoomNotice::MessengerUnavailable))
     }
 
-    /// Text of the open MyRoom notice, if any (one-OK sheet).
+    /// Open MyRoom one-OK notice, if any (message bytes and values).
     #[must_use]
-    pub fn myroom_notice(&self) -> Option<&str> {
-        self.myroom_notice.as_deref()
+    pub const fn myroom_notice(&self) -> Option<&MyRoomNotice> {
+        self.myroom_notice.as_ref()
+    }
+
+    /// Stage which MESSENGER branch answers a press. The exe's
+    /// globals that select the branch have no wire-source pin.
+    pub fn set_myroom_messenger_state(&mut self, state: MyRoomMessengerState) -> &mut Self {
+        self.myroom.set_messenger_state(state);
+        self
+    }
+
+    /// Stage the pass word, date string and skill-row names behind
+    /// the FREEINFO captions. Staging never moves the flow; without a
+    /// staged word the exe's blank case holds.
+    pub fn set_myroom_pass(&mut self, pass: MyRoomPassInfo) -> &mut Self {
+        self.myroom_pass = pass;
+        self
+    }
+
+    /// Post one exe-pinned MyRoom one-OK sheet. A new notice replaces
+    /// an old one; the sheet owns input until its OK is pressed.
+    pub fn post_myroom_notice(&mut self, notice: MyRoomNotice) {
+        self.myroom_notice = Some(notice);
+    }
+
+    /// Fold one special-item reply into the staged room and post its
+    /// one-OK sheet. Nickname success and penalty clear change the
+    /// staged character; the bag-size notice derives its before value
+    /// from the exe's `after - 30` rule (file `0xa54e0`).
+    pub fn apply_myroom_notice(&mut self, notice: MyRoomNotice) {
+        match &notice {
+            MyRoomNotice::NicknameChanged { new, .. } => {
+                if let Some(character) = self.myroom_character.as_mut() {
+                    character.nickname.clone_from(new);
+                }
+            }
+            MyRoomNotice::PenaltyCleared => {
+                if let Some(character) = self.myroom_character.as_mut() {
+                    character.penalty_count = 0;
+                    character.penalty_level = 0;
+                }
+            }
+            _ => {}
+        }
+        self.post_myroom_notice(notice);
     }
 
     /// Dismiss the MyRoom notice without a send. The staged OK rect
@@ -2001,15 +2055,13 @@ impl ScreenGame {
     /// be derived (the count-slot join on this arm stays OPEN; only
     /// the cap and the notices are exe-pinned).
     pub fn apply_gift_claim_reply(&mut self, is_music: bool, accepted: bool, resource_id: i32) {
-        self.myroom_notice = Some(
-            match (is_music, accepted) {
-                (true, true) => GIFT_MUSIC_SUCCESS,
-                (false, true) => GIFT_ITEM_SUCCESS,
-                (true, false) => GIFT_MUSIC_FAILURE,
-                (false, false) => GIFT_ITEM_FAILURE,
-            }
-            .to_owned(),
-        );
+        let notice = match (is_music, accepted) {
+            (true, true) => MyRoomNotice::GiftMusicSuccess,
+            (false, true) => MyRoomNotice::GiftItemSuccess,
+            (true, false) => MyRoomNotice::GiftMusicFailure,
+            (false, false) => MyRoomNotice::GiftItemFailure,
+        };
+        self.post_myroom_notice(notice);
         self.myroom.pick_gift_cell(None);
         if !accepted {
             return;
@@ -2036,7 +2088,7 @@ impl ScreenGame {
 
     /// Post the exe's BAGSORT failure notice (file `0x248f40`).
     pub fn post_bag_sort_failure_notice(&mut self) {
-        self.myroom_notice = Some(BAG_SORT_FAILURE_NOTICE.to_owned());
+        self.post_myroom_notice(MyRoomNotice::BagSortRetry);
         self.myroom_confirm = None;
     }
 
@@ -3763,7 +3815,7 @@ impl ScreenGame {
 
     /// One-OK sheets that layer over a side or the Room board.
     fn overlay_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
-        if self.messenger_liveness_open {
+        if self.myroom_notice.is_some() {
             Some((DialogHost::MessengerLiveness, self.relay_down_art.as_ref()?))
         } else if self.room_no_response_dialog_open() {
             Some((DialogHost::RoomFuse, self.relay_down_art.as_ref()?))
@@ -5646,6 +5698,14 @@ impl ScreenGame {
             }
             return;
         }
+        if self.myroom_notice.is_some() {
+            // The one-OK sheet owns every click until OK and sends no
+            // wire of its own.
+            if self.information_ok_hit(x, y) {
+                self.myroom_notice = None;
+            }
+            return;
+        }
         if self.room_no_response_dialog_open() {
             if self.information_ok_hit(x, y) {
                 self.post_room_no_response_dismissal();
@@ -6588,9 +6648,13 @@ impl ScreenGame {
             self.tutorial_key_lights.clear();
         }
         self.billing_failure_notice = false;
+
         self.messenger_liveness_open = false;
         self.myroom_notice = None;
         self.myroom_confirm = None;
+
+        self.myroom_notice = None;
+
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -7846,13 +7910,11 @@ impl ScreenGame {
         if self.billing_failure_notice_open() {
             paint_billing_failure_notice(frame);
         }
-        if self.messenger_liveness_open {
+        if let Some(notice) = self.myroom_notice.as_ref() {
             // Same staged Information sheet and Information origin as
-            // the relay notice; the B8 pack pins one OK and no wire.
-            paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
-        }
-        if let Some(notice) = self.myroom_notice.as_deref() {
-            paint_myroom_information(frame, self.relay_down_art.as_ref(), notice);
+            // the relay notice; the pinned copy replaces its TEXT.
+            let message = notice.message();
+            paint_information_message(frame, self.relay_down_art.as_ref(), &message);
         }
         if let Some(confirm) = self.myroom_confirm.as_ref() {
             paint_myroom_confirm(frame, self.relay_down_art.as_ref(), &confirm.text);
@@ -15950,7 +16012,7 @@ mod game_tests {
         assert!(game.dialog_owns_input(), "empty slot posts a notice");
         assert_eq!(
             game.myroom_notice(),
-            Some("선택된 아이템이 없습니다."),
+            Some(&MyRoomNotice::VacateNoSelection),
             "exe file 0x2491c0 copy"
         );
         assert_eq!(game.take_equip_send(), None, "no vacate wire is invented");
@@ -15965,7 +16027,7 @@ mod game_tests {
         assert!(game.dialog_owns_input(), "a default item cannot be cleared");
         assert_eq!(
             game.myroom_notice(),
-            Some("기본 아이템은 지울 수 없습니다."),
+            Some(&MyRoomNotice::VacateDefault),
             "exe file 0x248acc copy"
         );
         assert_eq!(
@@ -16158,35 +16220,21 @@ mod game_tests {
         // `0x249240`, `0x2492dc`, `0x2492ac` (EV `ev_c1ed8832…`).
         let mut game = myroom_open_overlay();
         game.apply_gift_claim_reply(false, true, 1);
-        assert_eq!(
-            game.myroom_notice(),
-            Some("선물이 마이백으로 이동 되었습니다.")
-        );
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::GiftItemSuccess));
         assert_eq!(game.myroom_counts()[0], 1, "item claim count");
         assert!(game.take_myroom_sends().is_empty(), "item arm sends none");
 
         game.apply_gift_claim_reply(true, true, 42);
-        assert_eq!(
-            game.myroom_notice(),
-            Some(
-                "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다."
-            )
-        );
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::GiftMusicSuccess));
         let sends = game.take_myroom_sends();
         assert_eq!(sends.len(), 1);
         assert_eq!(sends[0].command, 0x1392);
         assert!(sends[0].body.is_empty());
 
         game.apply_gift_claim_reply(false, false, 1);
-        assert_eq!(
-            game.myroom_notice(),
-            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
-        );
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::GiftItemFailure));
         game.apply_gift_claim_reply(true, false, 42);
-        assert_eq!(
-            game.myroom_notice(),
-            Some("[운영자에게 문의바람]선물받은 뮤직 넣기 실패")
-        );
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::GiftMusicFailure));
         assert!(
             game.take_myroom_sends().is_empty(),
             "failure arms send none"
@@ -16383,9 +16431,7 @@ mod game_tests {
         game.post_bag_sort_failure_notice();
         assert_eq!(
             game.myroom_notice(),
-            Some(
-                "마이백 아이템 정렬 실행 중\n오류가 발생되었습니다.\n\n잠시 후 다시 시도해주세요."
-            ),
+            Some(&MyRoomNotice::BagSortRetry),
             "exe file 0x248f40 copy"
         );
     }
@@ -16634,9 +16680,25 @@ mod game_tests {
 
         let mut character = myroom_test_character(Vec::new());
         character.equipment[JACKET_SLOT] = JACKET_ITEM_ID;
+        let mut table = myroom_test_table();
+        table.rows.push(o2jam_file::AvatarItemRow {
+            item_id: u32::try_from(JACKET_ITEM_ID).expect("fixture id"),
+            item_type: 2,
+            price: 100,
+            params: [
+                0,
+                0,
+                u32::try_from(JACKET_SLOT).expect("fixture slot") << 24,
+                0,
+            ],
+            flags: (0, 0),
+            name: "FixtureJacket".to_owned(),
+            description: String::new(),
+            sprites: Vec::new(),
+        });
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Room);
-        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_items(table);
         game.set_myroom_character(character);
         Arc::make_mut(&mut game.shop_item_portraits).insert(
             u32::try_from(JACKET_ITEM_ID).unwrap_or(0),
@@ -16671,6 +16733,74 @@ mod game_tests {
             (60..108).any(|y| (120..168).any(|x| buf[y * 800 + x] != 0)),
             "the jacket's staged shop icon inks its 2001 equipment well"
         );
+    }
+
+    /// Ticket #794: the item record's `+0x18` byte names the well,
+    /// not the equipment word's ordinal. A non-sequential byte must
+    /// ink its own well and leave the ordinal well blank.
+    #[test]
+    fn myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal() {
+        // Live caller chain: S2C 2001 equipment -> set_myroom_character
+        // -> paint_at -> paint_side -> paint_myroom_overlay ->
+        // paint_myroom_slot_icons. The join is the pinned state-entry
+        // rule (FUN_004a3730, EV ev_004adf63…), not a UI guess.
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        const WELL: u8 = 3;
+        const ITEM_ID: i32 = 401;
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: u32::try_from(ITEM_ID).expect("fixture id"),
+                item_type: 2,
+                price: 100,
+                params: [0, 0, u32::from(WELL) << 24, 0],
+                flags: (0, 0),
+                name: "NonSequentialGear".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        };
+        let mut character = myroom_test_character(Vec::new());
+        character.equipment[0] = ITEM_ID;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.set_myroom_items(table);
+        game.set_myroom_character(character);
+        Arc::make_mut(&mut game.shop_item_portraits).insert(
+            u32::try_from(ITEM_ID).expect("fixture id"),
+            solid_test_figure([0x00, 0x7C]),
+        );
+        let well_placement = |well: u8| ScenePlacement {
+            role: PlacementRole::Single,
+            id: format!("IDC_IMAGE_SMYROOM_WELL{well}"),
+            code: MYROOM_SLOT_IMAGE_FIRST_CODE + u32::from(well),
+            sprite: None,
+            rect: Rect {
+                x: 40 + i32::from(well) * 60,
+                y: 60,
+                w: 48,
+                h: 48,
+            },
+        };
+        game.load_side_scene(
+            vec![well_placement(0), well_placement(WELL)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let inked = |well: u8| {
+            let x0 = 40 + i32::from(well) * 60;
+            (60..108).any(|y| (x0..x0 + 48).any(|x| buf[y * 800 + x as usize] != 0))
+        };
+        assert!(inked(WELL), "the record slot byte inks its own well");
+        assert!(!inked(0), "the equipment ordinal no longer picks the well");
     }
 
     /// Ticket #199 breathe leg: the staged MyRoom figure must idle-
@@ -16844,7 +16974,7 @@ mod game_tests {
         // no-selection notice, which inks the Information sheet over
         // the same staged rects; one screen, no wire.
         assert_eq!(
-            hash, 0x8174_B6A9_75A2_9977,
+            hash, 0x1E83_9DC1_2092_27CE,
             "MyRoom ScreenGame cluster output drifted"
         );
     }
@@ -16881,15 +17011,15 @@ mod game_tests {
     }
 
     #[test]
-    fn myroom_info_plate_paints_next_up_exp_from_staged_experience() {
+    fn myroom_info_plate_paints_next_up_exp_from_the_level_threshold() {
         // Live caller chain (feed): same 2001 staging as
         // `myroom_info_plate_paints_win_rate_from_staged_battles`.
         // Live caller chain (read):
         //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
         //   -> myroom_identity_captions -> myroom_next_up_exp_text.
-        // Room-panel precedent: the 7.55 room capture shows `Exp.` in
-        // the next-up well, so the plate paints staged experience
-        // (single-capture pin, OPEN whether it tracks a threshold).
+        // Static oracle: FUN_004a7a80 prints table[level] in the
+        // next-up well; the old room-panel precedent painted staged
+        // experience and is documented as a contradiction.
         // Pure shell state: no archives read, so no CI skip.
         use super::super::side::{
             myroom_identity_captions, MYROOM_EXP_CODE, MYROOM_NEXTUPEXP_CODE,
@@ -16905,8 +17035,8 @@ mod game_tests {
                 .find(|(candidate, _)| *candidate == code)
                 .map(|(_, text)| text.as_str())
         };
-        assert_eq!(caption(MYROOM_EXP_CODE), Some("2133"));
-        assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some("2133"));
+        assert_eq!(caption(MYROOM_EXP_CODE), Some(" 2133"));
+        assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some(" 884"));
     }
 
     #[test]
@@ -16991,6 +17121,289 @@ mod game_tests {
             .expect("staged")
             .inventory
             .contains(&13));
+    }
+
+    #[test]
+    fn myroom_staged_notice_text_inks_its_bnd_rect() {
+        // Live caller chain: staged NOTICE control value -> paint_at
+        // -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // Static pin: FUN_004a9890 (file 0xa9890, EV ev_f3b4a8b0…)
+        // inks 0x15500068 in white with the Korean face. The content
+        // writer stays OPEN, so the value is staged explicitly.
+        use super::super::side::MYROOM_NOTICE_TEXT_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character(Vec::new()));
+        game.post_myroom_notice(MyRoomNotice::NoticeBoard {
+            text: "공지사항".to_owned(),
+        });
+        game.show_myroom_panel(MyRoomPanel::Status);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_NOTICE_TEXT_CODE, 200, 100)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (100..120).any(|y| (200..240).any(|x| buf[y * 800 + x] != 0)),
+            "the staged notice value inks NOTICE_TEXT"
+        );
+    }
+
+    #[test]
+    fn myroom_notice_board_selects_frame_two_when_the_body_has_it() {
+        // Static pin: FUN_004a9890 stages NOTICEBOARD (0x15500069)
+        // frame 2. Frame choice is pure; geometry stays in the .bnd.
+        use super::super::paint::myroom_notice_board_frame;
+        use super::super::side::MYROOM_NOTICEBOARD_CODE;
+        use crate::avatar::{FigureLayer, PlacementRole};
+        let figure = |word: u16| {
+            let pixels = word.to_le_bytes().repeat(4 * 4);
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).expect("solid frame"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let mut board = figure(0x7C00);
+        for word in [0x03E0, 0x001F] {
+            let extra = figure(word);
+            for layer in 0..extra.len() {
+                board.push_layer(extra.layer(layer).expect("frame").clone());
+            }
+        }
+        let placement = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "NOTICEBOARD".to_owned(),
+            code: MYROOM_NOTICEBOARD_CODE,
+            sprite: Some("Notice.ojs".to_owned()),
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        };
+        let figures = HashMap::from([("Notice.ojs".to_owned(), board)]);
+        assert_eq!(myroom_notice_board_frame(&placement, &figures), Some(2));
+        let two_frames = HashMap::from([("Notice.ojs".to_owned(), figure(0x7C00))]);
+        assert_eq!(myroom_notice_board_frame(&placement, &two_frames), None);
+    }
+
+    #[test]
+    fn myroom_staged_pass_inks_the_pinned_freeinfo_lines() {
+        // Live caller chain: staged pass word -> paint_at -> paint_side
+        // -> paint_myroom_overlay -> paint_myroom_data -> FREEINFO rect.
+        // The wire writer of pass word `0x768b34` is OPEN; this guard
+        // pins the presentation of a staged value (EV ev_bf4287e7…).
+        use super::super::side::{MyRoomPassInfo, MYROOM_FREEINFO_FIRST_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character(Vec::new()));
+        game.set_myroom_pass(MyRoomPassInfo {
+            word: Some(1),
+            until: "2026-12-31".to_owned(),
+            skills: Vec::new(),
+        });
+        game.show_myroom_panel(MyRoomPanel::Status);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_FREEINFO_FIRST_CODE, 200, 100)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (100..120).any(|y| (200..240).any(|x| buf[y * 800 + x] != 0)),
+            "the staged pass word inks FREEINFO1"
+        );
+    }
+
+    #[test]
+    fn myroom_gift_left_click_wraps_to_the_last_staged_page() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // GIFT_LEFT rect -> click_myroom_side -> apply_myroom_action ->
+        // MyRoomState::turn_gift_page -> painter shows last-page rows.
+        // Page count comes from 6 gifts / 5 cells rounded up (= 2).
+        use super::super::side::{MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE};
+        use o2jam_net::GiftItemInfo;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        let mut character = myroom_test_character(Vec::new());
+        for gift_id in 1..=6 {
+            character.item_gifts.push(GiftItemInfo {
+                gift_id,
+                item_id: gift_id,
+                sender: "Sender".to_owned(),
+            });
+        }
+        game.set_myroom_character(character);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_GIFT_LEFT_CODE, 100, 10),
+                myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 200, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.ingest_snapshot(&InputSnapshot::click_at(210, 20));
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(110, 20));
+        assert_eq!(game.myroom().gift_page(), 1, "LEFT wraps on the click path");
+        assert_eq!(game.myroom().gift_cell(), None, "selection was cleared");
+    }
+
+    #[test]
+    fn myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim() {
+        // Live caller chain: click_myroom_side -> myroom_action_at
+        // (WEBAVATAR) -> one-OK sheet with the pinned file `0x2491e0`
+        // copy. Static pins: FUN_004a3eb0 (file 0xa3eb0,
+        // EV ev_aa64e525…) cues sound 13; FUN_004a4960 (file 0xa4960,
+        // EV ev_5539ea3e…) copies the string with flag 0xfff9.
+        // Whether the helper opens a notice or a browser stays OPEN.
+        use super::super::side::{MyRoomNotice, MYROOM_WEBAVATAR_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_WEBAVATAR_CODE, 10, 10)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(20, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::WebAvatar));
+        assert_eq!(
+            game.myroom_notice().unwrap().message(),
+            [
+                0xBE, 0xC6, 0xB9, 0xD9, 0xC5, 0xB8, 0xB8, 0xA6, 0x20, 0xC0, 0xA5, 0xBF, 0xA1, 0x20,
+                0xB5, 0xEE, 0xB7, 0xCF, 0x2E
+            ],
+            "the pinned cp949 bytes at exe file 0x2491e0"
+        );
+        assert_eq!(game.take_equip_send(), None, "no wire from WEBAVATAR");
+        assert_eq!(game.take_gift_claim(), None);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(game.myroom_notice(), None);
+    }
+
+    #[test]
+    fn myroom_conference_and_messenger_branches_post_their_pinned_sheets() {
+        // Live caller chain: click_myroom_side -> myroom_action_at ->
+        // MyRoomAction::OpenConference / MessengerLiveness -> one-OK
+        // sheet. Static pins: FUN_004a3ee0 cases 0x1520006b/6d
+        // (file 0xa3ee0, EV ev_aa875251…); messenger strings at files
+        // 0x247dc0/0x247e08; modal 21 caption stays unpinned.
+        use super::super::side::{
+            MyRoomMessengerState, MyRoomNotice, MYROOM_CONFERENCE_CODE, MYROOM_MESSENGER_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_CONFERENCE_CODE, 10, 10),
+                myroom_hit_placement(MYROOM_MESSENGER_CODE, 60, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(20, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::Conference));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(
+            game.myroom_notice(),
+            Some(&MyRoomNotice::MessengerUnavailable),
+            "the default branch is the pinned B8 liveness sheet"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.set_myroom_messenger_state(MyRoomMessengerState::Loading);
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::MessengerLoading));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.set_myroom_messenger_state(MyRoomMessengerState::Available);
+        game.ingest_snapshot(&InputSnapshot::click_at(70, 20));
+        assert_eq!(game.myroom_notice(), Some(&MyRoomNotice::MessengerModal));
+        assert_eq!(game.take_equip_send(), None, "no wire from either press");
+    }
+
+    #[test]
+    fn myroom_special_reply_folds_nickname_and_penalty_then_posts_its_notice() {
+        // Live caller chain: OnlineSession::poll_wire ->
+        // ScreenGame::apply_myroom_notice -> staged 2001 character +
+        // one-OK INFORMATION sheet -> click OK clears it.
+        // Static pins: FUN_004a54e0 cases 0x13a7/0x13ab
+        // (EV ev_45f6c6d0…, file 0xa54e0).
+        use super::super::side::MyRoomNotice;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let mut character = myroom_test_character(Vec::new());
+        character.penalty_count = 3;
+        character.penalty_level = 2;
+        game.set_myroom_character(character);
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        game.apply_myroom_notice(MyRoomNotice::NicknameChanged {
+            old: "Before".to_owned(),
+            new: "After".to_owned(),
+        });
+        assert_eq!(
+            game.myroom_character().map(|row| row.nickname.as_str()),
+            Some("After"),
+            "the 5031 success reply renames the staged character"
+        );
+        assert!(matches!(
+            game.myroom_notice(),
+            Some(MyRoomNotice::NicknameChanged { .. })
+        ));
+
+        game.apply_myroom_notice(MyRoomNotice::PenaltyCleared);
+        let staged = game.myroom_character().expect("staged");
+        assert_eq!((staged.penalty_count, staged.penalty_level), (0, 0));
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(game.myroom_notice(), None, "OK dismisses the sheet");
+    }
+
+    #[test]
+    fn myroom_special_reply_inks_the_exe_copy_in_the_one_ok_sheet() {
+        // The sheet's message bytes are the pinned exe strings; the
+        // geometry stays with `Dialog_Information.bnd` (no literals).
+        use super::super::side::MyRoomNotice;
+        let message = MyRoomNotice::NicknameChanged {
+            old: "Old".to_owned(),
+            new: "New".to_owned(),
+        }
+        .message();
+        assert!(message.windows(3).any(|window| window == b"Old"));
+        assert!(message.windows(3).any(|window| window == b"New"));
+        let retry = MyRoomNotice::PenaltyRetry.message();
+        assert_eq!(retry, MyRoomNotice::PenaltyRetry.message());
+        assert!(retry.starts_with(&[0xC6, 0xE4, 0xB3, 0xCE]));
     }
 
     #[test]
@@ -17121,6 +17534,7 @@ mod game_tests {
             MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
             MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
         };
+
         // #798 re-pin: BAGSORT is no longer a P0 no-op; the exe's
         // 5038 send is wired and the verdict is retired.
         assert_eq!(
@@ -17128,17 +17542,42 @@ mod game_tests {
             Some(MyRoomAction::BagSort)
         );
         assert_eq!(myroom_p0_verdict(MYROOM_BAGSORT_CODE), None);
-        for code in [MYROOM_WEBAVATAR_CODE, MYROOM_CONFERENCE_CODE] {
+        // #803/#804: CONFERENCE and WEBAVATAR answer now (modal +
+        // notice); both verdicts retired like BAGSORT.
+        for (code, action) in [
+            (MYROOM_WEBAVATAR_CODE, MyRoomAction::ShowWebAvatar),
+            (MYROOM_CONFERENCE_CODE, MyRoomAction::OpenConference),
+        ] {
             assert_eq!(
                 myroom_action_for_code(code),
-                None,
-                "P0 button {code:#X} dispatches nothing"
+                Some(action),
+                "button {code:#X} dispatches its pinned action"
             );
             assert!(
-                myroom_p0_verdict(code).is_some(),
+                myroom_p0_verdict(code).is_none(),
                 "P0 button {code:#X} carries a verdict"
             );
         }
+
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAGSORT_CODE),
+            Some(MyRoomAction::BagSort),
+            "BAGSORT now queues the pinned 5038"
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_BAGSORT_CODE), None);
+        assert_eq!(
+            myroom_action_for_code(MYROOM_CONFERENCE_CODE),
+            Some(MyRoomAction::OpenConference),
+            "CONFERENCE now opens its pinned modal sheet"
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_CONFERENCE_CODE), None);
+        assert_eq!(
+            myroom_action_for_code(MYROOM_WEBAVATAR_CODE),
+            Some(MyRoomAction::ShowWebAvatar),
+            "WEBAVATAR now posts the pinned register copy"
+        );
+        assert_eq!(myroom_p0_verdict(MYROOM_WEBAVATAR_CODE), None);
+
         for code in [
             MYROOM_ALARM_CODE,
             MYROOM_ALARM_POPUP_CODE,
@@ -17343,6 +17782,12 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(551, 11));
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(
+            game.take_exit_shop(),
+            Some(o2jam_net::shop::ExitShop),
+            "MyRoom BACK queues the same empty 5007 as shop BACK"
+        );
+        assert_eq!(game.take_exit_shop(), None, "one press sends once");
     }
 
     #[test]

@@ -10,10 +10,26 @@ use crate::avatar::{paint_placement_layer, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::side::{
     myroom_action_for_code, MyRoomAction, MyRoomLowerTab, MyRoomState, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
-    MYROOM_SLOT_IMAGE_FIRST_CODE, MYROOM_SLOT_WELLS,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_SELECT_CODE,
+    MYROOM_SLOT_IMAGE_FIRST_CODE,
 };
 use o2jam_render::{scale_rect_to_frame, Frame, Rect};
+
+/// NOTICEBOARD frame selected by the exe's notice writer
+/// (`FUN_004a9890`, file `0xa9890`, EV `ev_f3b4a8b0…`): frame 2 when
+/// the staged body carries it, otherwise the normal all-layer stack.
+/// No geometry lives here — the `.bnd` placement still owns the rect.
+#[must_use]
+pub fn myroom_notice_board_frame(
+    placed: &ScenePlacement,
+    figures: &HashMap<String, AvatarFigure>,
+) -> Option<usize> {
+    if placed.code != MYROOM_NOTICEBOARD_CODE {
+        return None;
+    }
+    let sprite = placed.sprite.as_deref()?;
+    figures.get(sprite)?.layer(2).map(|_| 2)
+}
 
 /// Avatar room: staged bound art, flat card fallback.
 /// Slot images name no bodies and captions join nowhere, so figures
@@ -22,28 +38,26 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Myroom);
 }
 
-/// Equipment wells over the staged `0X15600013..22` rects: the 2001
-/// equipment word at each `ItemType` ordinal names an item row; that
-/// row's shop icon (sprite slot 0, never worn) inks the paired well.
-/// The first eleven comments of the slot images and slot buttons name
-/// the same parts in the same order (`docs/myroom.md`); the wire
-/// equipment array follows `ItemType` 0..16 (`docs/net-protocol.md`).
+/// Equipment wells over the staged `0X15600013..22` rects: each
+/// worn 2001 word carries its item record byte `+0x18`, and that byte
+/// names the well (state entry `FUN_004a3730`, EV `ev_004adf63…`,
+/// file `0xa3730`). The earlier ordinal join in `ee8aa26` only holds
+/// when those bytes follow array order; the contradiction is pinned
+/// in `docs/myroom.md`. `worn` is the resolved (well, item id) run.
+/// The row's shop icon (sprite slot 0, never worn) inks the well.
 /// No word, row, portrait, or staged well means no ink — no fallback
 /// art or literal geometry (ADR-0003).
 pub fn paint_myroom_slot_icons(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
-    equipment: &[i32],
+    worn: &[(u8, u32)],
     portraits: &HashMap<u32, AvatarFigure>,
 ) {
-    for (slot, item_id) in equipment.iter().enumerate().take(MYROOM_SLOT_WELLS) {
-        let Ok(item_id) = u32::try_from(*item_id) else {
+    for (well, item_id) in worn {
+        let Some(portrait) = portraits.get(item_id) else {
             continue;
         };
-        let Some(portrait) = portraits.get(&item_id) else {
-            continue;
-        };
-        let code = MYROOM_SLOT_IMAGE_FIRST_CODE + u32::try_from(slot).unwrap_or(u32::MAX);
+        let code = MYROOM_SLOT_IMAGE_FIRST_CODE + u32::from(*well);
         let Some(placed) = placements.iter().find(|placed| placed.code == code) else {
             continue;
         };

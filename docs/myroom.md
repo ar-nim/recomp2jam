@@ -174,6 +174,148 @@ serves the wells, so equip/vacate restages update both figure and well.
 Guard: `myroom_worn_item_inks_its_staged_equipment_well` with a synthetic
 portrait and jacket slot 5; no ink before the painter was wired.
 
+### Well join contradiction (ticket #794, 2026-11-22)
+
+The ordinal join above (`ee8aa26`) assumes the equipment array ordinal
+equals the well number. State entry `FUN_004a3730` (VA `0x4a3730`, file
+`0xa3730`, EV `ev_004adf63036fbbdbfa97bf4a5f5cae816abb3c74e1179576408f93df669735e9`)
+instead scans 29 equipment words and stores each in a 17-entry worn array
+indexed by that item record's byte `+0x18` when it is below 17; the 16 wells
+read that array. The exe is the behavior oracle, so the join now resolves
+`(well, item id)` from the record byte, with last writer winning on a
+duplicate well. The older ordinal join was only correct for sequential
+record bytes and is kept here as the documented contradiction, not as a
+silent fallback. OPEN next step: a live non-sequential account, capture the
+wells and pair them with the 2001 body. Guard:
+`myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal`.
+
+## STATUS word/format table (ticket #799, 2026-11-22)
+
+`FUN_004a7a80` (VA `0x4a7a80`, file `0xa7a80`,
+EV `ev_21ce4a71b4e5b3ae8f617832f47b721dbd37c96375ae8f73086aad6a49989c9b`)
+inks STATUS from these pinned words/formats: nickname `0x15400037` from
+`0x77cd05` with a 121-pixel fit loop; level `0x38` and experience `0x3a`
+as `" %d"` (VA `0x648140`); next-up `0x3b` as `table[level]` for level < 99
+from the 99-entry u32 table at file `0x24776c` (REA read
+`ev_b062b9faf5ba4bc445bcda0356993bae5fb098c8959e8d645ccf84f6367a8f7b`),
+and nothing past the table; rank `0x3d` as `" %d 등"` (file `0x249474`)
+when its web-served word is nonzero (the overnight note transcribed this
+as `만`; raw cp949 bytes at file `0x249474` decode to `등` — code-byte pin
+wins, but no rank word is staged in our client); penalty count `0x66` as `"%d"`, level
+`0x67` as `"Lv %d"`; bonus `0x39` as `"%d PT"`. Money G/W keep their
+settled 5029 wallet source (#202).
+
+CONTRADICTION: the older hash-pinned room-panel capture read `Next Up 500`
+(level 1) and `Next Up 5001` (level 7), which no index of this table
+produces (884, 1819, …, 10404 at index 7). The exe code and table are the
+behavior oracle per project rule; the earlier capture is kept visible as
+the open question. OPEN next step: pair a known-level exe STATUS frame with
+the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
+Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
+and `myroom_status_prints_the_exe_number_and_penalty_formats`.
+
+## Gift pager wrap/clamp (ticket #806, 2026-11-22)
+
+`FUN_004a3ee0` cases `0x15200048/49` (file `0xa3ee0`,
+EV `ev_aa8752511eb19d9d34701592a529586e5808751c2b8169e2b5009cdeb3b66c20`)
+read the dialog's page/count words at `+0xac/+0xb0`: LEFT wraps from page
+0 to the last page, RIGHT clamps at the last page, and both clear the
+gift selection. `FUN_004a8dc0` derives the count as gift-vector length / 5
+rounded up. The bag pager still clamps both ends — the two pagers differ.
+Guards: `myroom_gift_pager_wraps_left_clamps_right_and_clears_selection`
+and `myroom_gift_left_click_wraps_to_the_last_staged_page` (staged rects,
+6 gifts → 2 pages). No exe account with >5 gifts was captured; that live
+pixel leg stays OPEN.
+
+## WEBAVATAR outcome (ticket #804, 2026-11-22)
+
+`FUN_004a3eb0` (VA `0x4a3eb0`, file `0xa3eb0`,
+EV `ev_aa64e525e7349e0fde17760e31ce4a599dc3a978f9c8038dfce182c95849ccd9`)
+plays sound 13; `FUN_004a4960` (file `0xa4960`,
+EV `ev_5539ea3eb8f4e553ca0c3f04002e017d57900f368c999a342e80375bc4047529`)
+copies "아바타를 웹에 등록." (file `0x2491e0`) into the UI helper at
+`0x513c60` with flag `0xfff9`. Our press cues UI-effect slot `0x0D`
+(decimal 13) and posts the pinned copy in a one-OK sheet. Whether the
+helper shows a notice or opens a browser, and its live pixels, stay OPEN:
+no browser behavior is claimed. Guard:
+`myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim`.
+
+## CONFERENCE / MESSENGER branches (ticket #803, 2026-11-22)
+
+`FUN_004a3ee0` (file `0xa3ee0`, EV `ev_aa875251…`) case `0x1520006b`
+opens modal 20; case `0x1520006d` branches on the messenger globals into
+the connection-lost string (file `0x247dc0`), the loading string (file
+`0x247e08`) or modal 21. Our client stages the branch explicitly (the
+globals' writer is OPEN) and shows the pinned one-OK sheet; the two modal
+captions are unpinned, so only staged sheet art paints, never invented
+copy. Neither press queues wire. Guard:
+`myroom_conference_and_messenger_branches_post_their_pinned_sheets`.
+
+## BACK / GOSHOP wire split (ticket #802, 2026-11-22)
+
+`FUN_004a3ee0` (VA `0x4a3ee0`, file `0xa3ee0`,
+EV `ev_aa8752511eb19d9d34701592a529586e5808751c2b8169e2b5009cdeb3b66c20`)
+case `0x15200002` changes state and calls the send builder with opcode
+`0x138f`/5007 (EV `ev_d3647af672ca1747c74f03fd9ce38e9d79e589b278186fd70c5606f7a3b42b94`);
+case `0x15200003` (GOSHOP) only changes state. Our BACK now queues the
+same empty `ExitShop` as the item-shop BACK; `OnlineSession::flush_exit_shop`
+sends 5007 and the 5028 wallet-refresh follow-up. GOSHOP stays local.
+The live BACK press/tap remains ticket #426.
+Guard: `myroom_back_sends_one_empty_5007_and_goshop_sends_nothing`
+(scripted gateway), plus the shell guard
+`myroom_back_click_returns_to_the_lobby`.
+
+## NOTICE board path (ticket #801, 2026-11-22)
+
+`FUN_004a9890` (VA `0x4a9890`, file `0xa9890`,
+EV `ev_f3b4a8b0b0524f7d3f59ab7f07ca6466c22dca32e557b313529527925e8d26f6`)
+inks `NOTICE_TEXT 0x15500068` from the control value with the Korean face
+at file `0x24407c`, colour `0xffffff`, and stages `NOTICEBOARD 0x15500069`
+frame 2. Our painter selects frame 2 when the staged body carries it;
+white ink uses the owner-approved modern font rasterizer (glyph
+rasterization is presentation, not gameplay). The control-value writer is
+still untraced: `ScreenGame::set_myroom_notice_text` stages content
+without inventing a caption. Guards:
+`myroom_staged_notice_text_inks_its_bnd_rect` and
+`myroom_notice_board_selects_frame_two_when_the_body_has_it`.
+
+## FREEINFO lines and skill rows (ticket #800, 2026-11-22)
+
+`FUN_004a8010` (VA `0x4a8010`, file `0xa8010`,
+EV `ev_bf4287e718ef7c085b5513838dc663397805504008bfd6e740c4e1eb4031d3d2`)
+writes FREEINFO1 `0x15400041` (first line in colour `0xd2b559`), FREEINFO2
+`0x42`, and up to four 28-byte skill rows starting at `0x43` from the pass
+word `0x768b34`. Pass 1 is the PC-room label; 2/4/8/0x10/0x40/0x80/0x200/
+0x400/0x420 are the all-songs label with a date; 0x20/0x800 are the free-all
+songs label; 0x100 adds a second date line. The string bytes are pinned at
+files `0x2494a4`–`0x2495ec`.
+
+Our client stages the pass word explicitly (`ScreenGame::set_myroom_pass`);
+the wire writer of `0x768b34`, the date and the skill-record source stay
+OPEN, so no unverified pass is claimed. Presentation guard:
+`myroom_staged_pass_inks_the_pinned_freeinfo_lines`; copy guards in
+`screens/side/myroom_freeinfo.rs`. A known-pass exe capture is the next
+evidence step.
+
+## Special-item replies (ticket #799 body, 2026-11-22)
+
+`FUN_004a54e0` (VA `0x4a54e0`, file `0xa54e0`,
+EV `ev_45f6c6d01e4fd29e88a8123c77b2088b9bd3f10d84604d3748e9ac2057c9e7b6`)
+posts pinned one-OK copy for 5031 (nickname old→new at body `+0xb8`/`+0x1bc`,
+error -97), 5033 (new-name confirmation verdict 0, code 1), 5035 (penalty
+clear, error -98), 5037 (bag slots `after - 30 -> after`, error -96) and 5039
+(bag-sort failure -95). Strings are copied by file offset into
+`screens/side/myroom_notice.rs`; the sheet geometry is still
+`Dialog_Information.bnd`. The 5031 success and 5035 success also fold into
+the staged character (nickname, penalties). The exe's legacy encoding for
+the interpolated name bytes stays OPEN; our wire strings are UTF-8.
+
+`OnlineSession::poll_wire -> poll_myroom_replies` drains these opcodes only
+while the MyRoom side owns an idle socket; a pending attempt keeps the
+socket. Level-2 scripted-gateway guard:
+`myroom_penalty_reply_opens_the_pinned_one_ok_sheet_through_scripted_gateway`.
+The live known-state reply capture stays OPEN.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to
