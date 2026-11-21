@@ -94,6 +94,64 @@ paint is removed.
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
 | Composition | `CDPayment` web billing views; the Item Shop charge plate opens the `EV-B8-CASH-FRAME` chrome | (ev: `EV-B8-CASH-FRAME`) Live boot stages `Dialog_ChargeCash.bnd` with the Item Shop host board; the plate click leaves the shop and opens Payment, whose painter draws the staged frame and X close at the pinned rects. Both billing views (`STATE_PAYMENT` 9 rects, `STATE_PAYMENT2` 12) and the Cash Charge chrome (3 rects) stage from parsed binds; their embedded-IE client areas stay blank by owner pin (`docs/agents/environment.md`) — no notice, balance or success is invented. Guards: `billing_and_gift_web_sheets_stage_only_their_bound_chrome`, `payment_views_leave_the_embedded_web_client_blank`, `cash_charge_sheet_stages_the_b8_frame_client_and_close`, `itemshop_charge_plate_at_b8_click_opens_cash_charge`, `live_boot_itemshop_charge_plate_paints_cash_charge_chrome` (live chain boot → plate → Payment → painter), `live_boot_charge_plate_snapshot_click_paints_chrome` (live snapshot click → paint), `live_boot_charge_plate_close_press_returns_to_host_board` and `cash_charge_close_press_hits_the_b8_sprite_anchor` (boot-3 X press at `(590,23)` → parsed close sprite → host board), `payment_entry_queues_no_wire_call`, `payment_side_without_staged_rects_paints_nothing` (ADR-0003) | (R) PASS (v: cb2/dialogs-sheets) |
-| Input | Billing entry and the web bridge | (ev: `EV-B8-CASH-FRAME`, docs/smoke/payment-tutorial-hand-session.md) Charge plate and Payment entry queue no wire call on any send seam (guards `payment_entry_queues_no_wire_call`, `live_boot_itemshop_charge_plate_paints_cash_charge_chrome`). The boot-3 X press is honored by the client through the staged close sprite (`live_boot_charge_plate_close_press_returns_to_host_board`); BACK stays unpinned (#467). OPEN: the live web bridge and gateway replay naming host/session join; next step: gateway replay through the billing endpoints | (R) OPEN (v: cb2/work-payment) |
+| Input | Billing entry and the web bridge | (ev: `EV-B8-CASH-FRAME`, docs/smoke/payment-tutorial-hand-session.md) Charge plate and Payment entry queue no wire call on any send seam (guards `payment_entry_queues_no_wire_call`, `live_boot_itemshop_charge_plate_paints_cash_charge_chrome`). The boot-3 X press is honored by the client through the staged close sprite (`live_boot_charge_plate_close_press_returns_to_host_board`); BACK stays unpinned (#467). The scripted-gateway gift arms (`payment2_completion_body_round_trip_proceeds_with_the_gift_claim`, `payment2_failure_body_posts_the_mcash_tone_notice_and_keeps_the_gift_box`) pin the 5023/5024 verdict body and its native surfacing on our side; they are not exe frames. OPEN: the live web bridge and gateway replay naming host/session join; next step: gateway replay through the billing endpoints | (R) OPEN (v: cb2/work-payment) |
 | Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
 | Transitions | Lobby ↔ Payment/Payment2 via the side visit | (ev: docs/smoke/payment-tutorial-hand-session.md) The hand session visits both billing views and returns (trace `fixtures/input-trace/payment-tutorial-hand-session.json`). Guards: `payment_tutorial_hand_session_visits_both_and_returns`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+### Payment2 completion/failure exchanges at the scripted gateway (#468)
+
+**Version pin.** `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`;
+`Interface1.opi` SHA-256
+`d66541198965d622ff0177b306d916885ae4d64ae07b2c2264fcbdd850d50584`.
+No boot was spent for this ticket: the qualified web-window pack remains
+`~/scratch/side-scenes/b8-cash` (manifest `f9d4a6953c55b75b4f04db3c0ece198bd2032361ac65dc8275ce07ccb6aa3f8b`),
+which never visits the gift page. The four `gift_step_01..04.asp` pages are
+archived URL labels (`~/scratch/o2jam-research-findings.md`), not exe frames.
+
+**Pins in hand.** The gift claim is `C2S 5023` (10 B: type, gift id,
+resource id, attributive byte) → `S2C 5024` (`i32` validity + verdict byte).
+The exe gates its success path on the validity word (file `0xa6135`) and
+never reads the verdict byte (file `0xa6156`); Memoryer's live completion
+body `0000000004` therefore completes the claim with verdict 4 (`0cca888`).
+The purchase family pins a 2885-byte 5011 success body (#403) and a
+length-based 5011 failure classification (`bb9b961`); both stay the precedent
+for scripted-gateway bodies, not new Payment2 opcodes.
+
+**Exchanges.** One fake-gateway session serves `5018` (empty gift list),
+then asserts the exact 5023 request body `[0,7,0,0,0,1,0,0,0,0]` before
+answering 5024:
+
+| Arm | 5024 body | Classification | Result on our client |
+|---|---|---|---|
+| Completion | `0000000004` | valid → `GiftClaimReply::Completed` | the staged box row empties and the item enters the bag (`0cca888`); no refusal notice |
+| Failure | `0100000004` | invalid → `GiftClaimReply::Rejected` | the box row stays, no item is minted, and the shared billing-refusal notice opens |
+
+The failure body is the SCRIPTED-GATEWAY shape (Memoryer invalid-sell capture);
+its verdict byte stays opaque. No new TCP opcode is invented: Payment2 entry
+itself stays wire-quiet (`payment_entry_queues_no_wire_call`).
+
+**Surfacing.** `OnlineSession::paint → flush_gift_claim → poll_gift_claim →
+drain_gift_claim` drives both arms; `ScreenGame::post_payment2_failure_notice`
+sets the one native billing-notice state already used by #405, painted by
+`paint_billing_failure_notice` at `BILLING_FAILURE_NOTICE_RECT` with the flat
+`#67BAF0` band and centered CP949 copy. This is an ASSUMED older-version
+mcash presentation (owner decision `e8d01`), not a 7.55 notice pixel. Two
+live-chain guards name the bodies and the painted pixels:
+`payment2_completion_body_round_trip_proceeds_with_the_gift_claim` and
+`payment2_failure_body_posts_the_mcash_tone_notice_and_keeps_the_gift_box`;
+`payment2_failure_notice_uses_the_mcash_tone_band_without_a_wire` pins the
+shell surface and its no-wire dismissal. Red proof: inverting the 5024
+validity classification fails both live-chain guards; removing the notice
+paint fails only the failure guard (scratch logs
+`~/scratch/impl-468-red-proof*.txt`).
+
+**OPEN arms (exe-side).** `E-PAYMENT2-5024`: the exe's 7.55 failure
+presentation on `gift_input.aspx` is unpinned — next step, one qualified
+executable capture of a rejected gift confirmation driven through the
+scripted gateway (with its wire tap and page URL), never a boot into the dead
+host for this ticket. The qualified exe mount frame for `STATE_PAYMENT2`
+and the live HTTP request lines (host/session join) stay OPEN under #469/#427;
+no pixel or request line is claimed here. `E-W-5011`'s genuine server failure
+body also stays OPEN under #405; its 4-byte scripted fixture is only the
+precedent for the failure classification.

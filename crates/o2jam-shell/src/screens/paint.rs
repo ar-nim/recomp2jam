@@ -1820,13 +1820,13 @@ pub fn paint_music_shop_row_selection(
     }
 }
 
-/// Native verdict band for a refused music purchase (#405). The
-/// geometry and flat `#67BAF0` blue are ours-by-design from the
-/// archived `mcash_error_CashType.asp` tone (ASSUMED older-version
-/// reference, NOT 7.55-oracle): no 7.55 notice pixel or banner art
-/// survives, so no exe parity is claimed. 626x290 is the archived
-/// table size, centered in the 800x600 native canvas.
-pub const MUSIC_PURCHASE_NOTICE_RECT: Rect = Rect {
+/// Native verdict band for a refused billing confirmation (#405 music,
+/// #468 Payment2 gift). The geometry and flat `#67BAF0` blue are
+/// ours-by-design from the archived `mcash_error_CashType.asp` tone
+/// (ASSUMED older-version reference, NOT 7.55-oracle): no 7.55 notice
+/// pixel or banner art survives, so no exe parity is claimed. 626x290
+/// is the archived table size, centered in the 800x600 native canvas.
+pub const BILLING_FAILURE_NOTICE_RECT: Rect = Rect {
     x: 87,
     y: 155,
     w: 626,
@@ -1834,16 +1834,16 @@ pub const MUSIC_PURCHASE_NOTICE_RECT: Rect = Rect {
 };
 
 /// Flat body blue of the archived error page (`bgcolor="#67BAF0"`).
-const MUSIC_PURCHASE_NOTICE_TONE: u32 = pack_xrgb(0x67, 0xBA, 0xF0);
+const BILLING_FAILURE_NOTICE_TONE: u32 = pack_xrgb(0x67, 0xBA, 0xF0);
 /// Black 9pt-like ink of the archived notice (rasterizer presentation,
 /// owner decision `e8d01`).
-const MUSIC_PURCHASE_NOTICE_INK: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
+const BILLING_FAILURE_NOTICE_INK: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
 /// Top inset and pitch of the centered copy inside the band. The
 /// source page leaves a 50 px header for its unarchived banner art;
 /// the native stand-in keeps the space instead of inventing art.
-const MUSIC_PURCHASE_NOTICE_TEXT_TOP: i32 = 44;
-const MUSIC_PURCHASE_NOTICE_LINE_PITCH: i32 = 42;
-const MUSIC_PURCHASE_NOTICE_LINE_HEIGHT: u32 = 24;
+const BILLING_FAILURE_NOTICE_TEXT_TOP: i32 = 44;
+const BILLING_FAILURE_NOTICE_LINE_PITCH: i32 = 42;
+const BILLING_FAILURE_NOTICE_LINE_HEIGHT: u32 = 24;
 
 /// CP949 lines of the archived failed-purchase notice, in source
 /// order, decoded from the Wayback body at
@@ -1851,7 +1851,7 @@ const MUSIC_PURCHASE_NOTICE_LINE_HEIGHT: u32 = 24;
 /// Graded ASSUMED-from-older-version; the 7.55 notice copy remains
 /// OPEN (`E-W-5011`) with a scripted-gateway tapped capture as the
 /// next evidence step.
-pub const MUSIC_PURCHASE_NOTICE_LINES_CP949: &[&[u8]] = &[
+pub const BILLING_FAILURE_NOTICE_LINES_CP949: &[&[u8]] = &[
     &[
         0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0x20, 0xB0, 0xE1, 0xC1, 0xA6,
         0x20, 0xBF, 0xC0, 0xB7, 0xF9, 0x20, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2, 0xC3, 0xA2,
@@ -1891,7 +1891,7 @@ fn cp949_text_width_at_scale(text: &str, scale: f32) -> f32 {
 /// One centered line of the native notice inside its frame-scaled
 /// slice of the band. The line fits the band width; the x origin is
 /// the leftover half-width, never a hand-tuned literal.
-fn paint_centered_music_notice_line(frame: &mut Frame<'_>, line_rect: Rect, cp949_bytes: &[u8]) {
+fn paint_centered_billing_notice_line(frame: &mut Frame<'_>, line_rect: Rect, cp949_bytes: &[u8]) {
     let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
     let scale = cp949_fit_scale(&text, line_rect.w as f32, line_rect.h as f32);
     if scale <= 0.0 {
@@ -1906,29 +1906,31 @@ fn paint_centered_music_notice_line(frame: &mut Frame<'_>, line_rect: Rect, cp94
         left as i32,
         0,
         &text,
-        MUSIC_PURCHASE_NOTICE_INK,
+        BILLING_FAILURE_NOTICE_INK,
         scale,
     );
     composite_text_image(frame, &line_rect, &image);
 }
 
-/// Paint the native failed-purchase notice over the music-shop board:
+/// Paint the native billing-refusal notice over the current board:
 /// flat blue band with the archived copy centered line by line. No
 /// staged `.bnd` rect is involved — this is the owner-approved native
 /// stand-in for the dead billing page (Spec #750), not exe geometry.
-pub fn paint_music_purchase_failure_notice(frame: &mut Frame<'_>) {
-    let band = scale_rect_to_frame(&MUSIC_PURCHASE_NOTICE_RECT, frame.w, frame.h);
-    fill_rect(frame, &band, MUSIC_PURCHASE_NOTICE_TONE);
-    for (index, cp949_bytes) in MUSIC_PURCHASE_NOTICE_LINES_CP949.iter().enumerate() {
+/// Both #405's scripted 5011 failure and #468's rejected gift claim
+/// use it; the 7.55 notice pixels stay OPEN with a scripted capture.
+pub fn paint_billing_failure_notice(frame: &mut Frame<'_>) {
+    let band = scale_rect_to_frame(&BILLING_FAILURE_NOTICE_RECT, frame.w, frame.h);
+    fill_rect(frame, &band, BILLING_FAILURE_NOTICE_TONE);
+    for (index, cp949_bytes) in BILLING_FAILURE_NOTICE_LINES_CP949.iter().enumerate() {
         let native_line = Rect {
-            x: MUSIC_PURCHASE_NOTICE_RECT.x,
-            y: MUSIC_PURCHASE_NOTICE_RECT.y
-                + MUSIC_PURCHASE_NOTICE_TEXT_TOP
-                + i32::try_from(index).unwrap_or(0) * MUSIC_PURCHASE_NOTICE_LINE_PITCH,
-            w: MUSIC_PURCHASE_NOTICE_RECT.w,
-            h: MUSIC_PURCHASE_NOTICE_LINE_HEIGHT,
+            x: BILLING_FAILURE_NOTICE_RECT.x,
+            y: BILLING_FAILURE_NOTICE_RECT.y
+                + BILLING_FAILURE_NOTICE_TEXT_TOP
+                + i32::try_from(index).unwrap_or(0) * BILLING_FAILURE_NOTICE_LINE_PITCH,
+            w: BILLING_FAILURE_NOTICE_RECT.w,
+            h: BILLING_FAILURE_NOTICE_LINE_HEIGHT,
         };
-        paint_centered_music_notice_line(
+        paint_centered_billing_notice_line(
             frame,
             scale_rect_to_frame(&native_line, frame.w, frame.h),
             cp949_bytes,

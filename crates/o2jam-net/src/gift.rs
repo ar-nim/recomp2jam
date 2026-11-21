@@ -402,6 +402,40 @@ impl WireMessage for ClaimGiftResponse {
     }
 }
 
+/// One 5024 answer classified by the exe's validity gate (#468).
+///
+/// The exe takes its success path when the first body word is zero
+/// (file `0xa6135`) and never reads the verdict byte (file `0xa6156`).
+/// The scripted-gateway failure body is `0100000004` (validity 1,
+/// verdict 4) from the Memoryer invalid-sell capture; its verdict
+/// byte stays opaque. The 7.55 presentation of a failed gift
+/// confirmation is OPEN (`E-PAYMENT2-5024`): the next evidence step is
+/// a scripted-gateway tapped capture through the gift wizard, whose
+/// four `gift_step_01..04` pages are archived labels only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftClaimReply {
+    /// Valid 5024: the gift claim proceeds (any verdict byte).
+    Completed(ClaimGiftResponse),
+    /// Nonzero validity word: the staged gift box stays untouched.
+    Rejected(ClaimGiftResponse),
+}
+
+impl GiftClaimReply {
+    /// Classify a 5024 body by its validity word, never by the verdict.
+    ///
+    /// # Errors
+    ///
+    /// The same decode errors as [`ClaimGiftResponse::decode_body`].
+    pub fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let response = ClaimGiftResponse::decode_body(body)?;
+        Ok(if response.invalid {
+            Self::Rejected(response)
+        } else {
+            Self::Completed(response)
+        })
+    }
+}
+
 /// `CheckGiftFreePass` 5041 response: recipient lookup verdict.
 /// Absent from 7.55 wire with 5040 (no `0x13b1` immediate or
 /// dispatch in `.text`); shape is Memoryer's
@@ -826,6 +860,45 @@ mod tests {
         assert_eq!(
             ClaimGiftResult::from_u8(2),
             Some(ClaimGiftResult::NotDefined)
+        );
+    }
+
+    #[test]
+    fn scripted_gift_completion_body_classifies_as_completed_claim() {
+        // seam: pure codec. The 5-byte body is the pinned Memoryer
+        // completion body (`0000000004`); verdict 4 is exe-ignored,
+        // so the validity word alone opens the success path.
+        assert_eq!(
+            GiftClaimReply::decode_body(&[0, 0, 0, 0, 4]),
+            Ok(GiftClaimReply::Completed(ClaimGiftResponse {
+                invalid: false,
+                result_code: 4,
+            }))
+        );
+    }
+
+    #[test]
+    fn scripted_gift_failure_body_classifies_as_rejected_claim() {
+        // seam: pure codec. The scripted failure body (`0100000004`)
+        // takes the exe's error path; no server verdict is invented.
+        assert_eq!(
+            GiftClaimReply::decode_body(&[1, 0, 0, 0, 4]),
+            Ok(GiftClaimReply::Rejected(ClaimGiftResponse {
+                invalid: true,
+                result_code: 4,
+            }))
+        );
+    }
+
+    #[test]
+    fn gift_claim_reply_rejects_short_and_trailing_bodies() {
+        assert_eq!(
+            GiftClaimReply::decode_body(&[0; 4]),
+            Err(Error::TruncatedMessage { need: 5, have: 4 })
+        );
+        assert_eq!(
+            GiftClaimReply::decode_body(&[0, 0, 0, 0, 0, 0]),
+            Err(Error::TrailingBytes(1))
         );
     }
 
