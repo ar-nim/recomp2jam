@@ -26,7 +26,19 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
 
 ## Verdicts
 
-- **MAPNAME — PINNED** (name table plus room word). Map-cycle path:
+- **MAPNAME — PINNED** (name table plus room word). The master's
+  arrow cycle is `FUN_004bb570` (VA `0x4bb570`, evidence
+  `ev_c9d69d8472c39643a5b3f030978707add16ef0d4682e3a17b965114d71ea3282`,
+  called from `FUN_004b81e0` with -1/+1, evidence
+  `ev_d729fea260f89b201499112a6f203184ec25834663c326d03686788e73592563`):
+  normal rooms step the word by one, skip the four stage words at rdata
+  `0x649ac4` (`140,170,180,240`, bytes evidence
+  `ev_df240aa2d3d7f8da4d9632a68c2362d71b8d3961170694925efa7976a84b4d1e`),
+  and send `0xfa2` (4002, `SetRoomArena`). The wrap arm calls
+  `FUN_004bb2c0`, which ORs in a random flag (evidence
+  `ev_86c97094081d83f52aaf43e37f3c8ef43b623ff446aafb42cab2e77df1177dc9`);
+  since #766 the shell leaves that arm OPEN instead of inventing a
+  stage. Map-cycle path:
   lookup through `0x48bcf0` (file `0xb3e02`), store through `0x50f520`
   (file `0xb4067`). The string is the centered entry of the rdata
   table at file `0x249990` (`None`, `한가한대전장의오후`,

@@ -1387,6 +1387,60 @@ pub(crate) fn paint_waiting_skills(
     }
 }
 
+/// Direction of one master map-arrow press (`FUN_004bb570`, VA
+/// `0x4bb570`, evidence `ev_c9d69d8472c39643a5b3f030978707add16ef0d4682e3a17b965114d71ea3282`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingMapStep {
+    /// `MAPLEFT 0x1620000C`: step -1 (file `0x4b832d`).
+    Previous,
+    /// `MAPRIGHT 0x1620000D`: step +1 (file `0x4b8384`).
+    Next,
+}
+
+/// Stage words the exe skips in the normal map cycle (rdata
+/// `0x649ac4`, bytes evidence
+/// `ev_df240aa2d3d7f8da4d9632a68c2362d71b8d3961170694925efa7976a84b4d1e`).
+const WAITING_MAP_SKIP_STAGES: [i32; 4] = [140, 170, 180, 240];
+
+/// Frame count the exe uses when `IDC_IMAGE_SWAIT_MAP 0x1650001A` has
+/// no staged image (file `0x4bb575`). Staged Waiting art supplies the
+/// real count from `Wait_Map.ojs` instead.
+pub const WAITING_MAP_DEFAULT_FRAMES: i32 = 14;
+
+/// Next room word for one map-arrow press.
+///
+/// Normal branch: add the step, skip the four pinned stage words, and
+/// send the result through 0xfa2. `None` is the exe's random-wrap arm
+/// (current word at frame 1 with PREVIOUS, or at the frame count with
+/// NEXT): it calls `FUN_004bb2c0` to OR in a random flag, whose seed and
+/// live wire echo are still OPEN. The high-word branch is pinned and
+/// deterministic: PREVIOUS restores the frame count, NEXT restores 1.
+#[must_use]
+pub fn waiting_map_cycle(arena: i32, step: WaitingMapStep, frame_count: i32) -> Option<i32> {
+    if arena & !0xFFFF != 0 {
+        return Some(match step {
+            WaitingMapStep::Previous => frame_count,
+            WaitingMapStep::Next => 1,
+        });
+    }
+    let delta = match step {
+        WaitingMapStep::Previous => -1,
+        WaitingMapStep::Next => 1,
+    };
+    if (step == WaitingMapStep::Previous && arena == 1)
+        || (step == WaitingMapStep::Next && arena == frame_count)
+    {
+        return None;
+    }
+    let mut next = arena.checked_add(delta)?;
+    for skipped in WAITING_MAP_SKIP_STAGES {
+        if next == skipped {
+            next = next.checked_add(delta)?;
+        }
+    }
+    Some(next)
+}
+
 /// Map-cycle names behind the `MAPNAME` caption, in room-word order
 /// (map-cycle path, rdata file `0x249990`): the exe centers entry
 /// `low == 0 ? 3 : low % 4` of (`None`, `한가한대전장의오후`,

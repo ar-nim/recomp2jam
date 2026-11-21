@@ -3425,8 +3425,9 @@ pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
 pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
-    waiting_confirm_control_id, waiting_map_name, waiting_skillcount_text, WaitingCaptions,
-    WaitingConfirmState, WaitingLevel, WaitingSong,
+    waiting_confirm_control_id, waiting_map_cycle, waiting_map_name, waiting_skillcount_text,
+    WaitingCaptions, WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSong,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
@@ -11291,6 +11292,26 @@ mod paint_tests {
             assert!(!waiting_control_armed_for_role(id, true), "{id} master");
             assert!(waiting_control_armed_for_role(id, false), "{id} guest");
         }
+    }
+
+    #[test]
+    fn map_arrow_cycle_skips_the_pinned_stages_and_leaves_random_wrap_open() {
+        // Seam pin for the pure cycle: the live click path is guarded
+        // in `screens::game::game_tests`, and this table leg needs no
+        // staged art or game data. Exe `FUN_004bb570` (evidence
+        // `ev_c9d69d84…`); skip words at rdata `0x649ac4`.
+        use super::WaitingMapStep::{Next, Previous};
+        assert_eq!(waiting_map_cycle(7, Next, 14), Some(8));
+        assert_eq!(waiting_map_cycle(7, Previous, 14), Some(6));
+        assert_eq!(waiting_map_cycle(139, Next, 14), Some(141));
+        assert_eq!(waiting_map_cycle(141, Previous, 14), Some(139));
+        assert_eq!(waiting_map_cycle(14, Next, 14), None, "random wrap OPEN");
+        assert_eq!(waiting_map_cycle(1, Previous, 14), None, "random wrap OPEN");
+        assert_eq!(
+            waiting_map_cycle(i32::MIN + 5, Next, 14),
+            Some(1),
+            "random room word takes the pinned low branch"
+        );
     }
 
     #[test]

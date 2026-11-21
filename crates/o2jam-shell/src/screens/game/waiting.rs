@@ -2,7 +2,7 @@
 //! wire-queue outbox the session seam drains (#139 cluster 1).
 
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
-use o2jam_net::play::SetRoomMusic;
+use o2jam_net::play::{SetRoomArena, SetRoomMusic};
 use o2jam_net::shop::{EquipItem, ExitShop, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::{CreateRoom, ExitPlaying, ExitWaiting, JoinRoom, Ready, SetRoomTeam, StartGame};
 
@@ -41,6 +41,9 @@ pub(crate) struct PendingOutbox {
     pub(crate) pending_team_ready: bool,
     /// Queued song pick awaiting the session (4000; the dialog row owns it).
     pub(crate) pending_music_send: Option<SetRoomMusic>,
+    /// Queued map-arrow stage word awaiting the session (4002; the
+    /// master's MAPLEFT/RIGHT rects own it).
+    pub(crate) pending_arena_send: Option<SetRoomArena>,
     /// Queued RETRY press awaiting the session (4010 `0xfaa`, empty;
     /// the result RETRY button and its Confirm arm own it).
     pub(crate) pending_result_retry: bool,
@@ -115,6 +118,21 @@ impl PendingOutbox {
     #[must_use]
     pub(crate) fn has_pending_music_send(&self) -> bool {
         self.pending_music_send.is_some()
+    }
+    /// Queued map stage word for the session bridge, if any (4002).
+    /// One take sends once; a later arrow press replaces the unsent word.
+    pub(crate) fn take_arena_send(&mut self) -> Option<SetRoomArena> {
+        self.pending_arena_send.take()
+    }
+    /// Queue a map-arrow stage word. A failed send calls this again so
+    /// the next wire poll retries the same body.
+    pub(crate) fn queue_arena_send(&mut self, arena: i32) {
+        self.pending_arena_send = Some(SetRoomArena::new(arena));
+    }
+    /// Whether a map-arrow stage word is queued for the session bridge.
+    #[must_use]
+    pub(crate) fn has_pending_arena_send(&self) -> bool {
+        self.pending_arena_send.is_some()
     }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,

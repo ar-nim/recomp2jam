@@ -340,3 +340,26 @@ none. RED proof: without the role arms the guest painted all eight.
 The seam table pin lists the three skill-cover ids as guest-only. No
 qualified exe frame pair exists yet for the guest cover frame family;
 that capture step stays OPEN.
+
+## #766 map arrows and MAPNAME (2026-11-21)
+
+Static pins: `IDC_BUTTON_SWAIT_MAPLEFT/RIGHT 0x1620000C/0D` are
+master-armed by `FUN_004b4a00` (evidence `ev_c5b7cdce…`) and guest-disabled
+by `FUN_004b4d30` (evidence `ev_1365b919…`). The press dispatcher calls
+`FUN_004bb570` with -1/+1 (evidence `ev_c9d69d84…`, call site
+`ev_d729fea2…`); the normal branch steps the room word, skips four rdata
+stage words (`ev_df240aa2…`), and sends 0xfa2. `MAPNAME` still resolves
+through the low room word to the pinned cycle table (OPEN 3 about the
+separate `0x4ad350` applier is unchanged).
+
+The shell stages both arrow rects with the role gate from #765. A
+master press updates the joined room word from the staged `Wait_Map.ojs`
+frame count (exe default 14 when no body stages), queues `SetRoomArena`
+4002, and the next caption paint resolves the new word. Guards:
+`master_map_arrow_click_cycles_the_room_word_and_queues_4002` (synthetic
+Waiting art, no game data), `map_arrow_cycle_skips_the_pinned_stages_and_leaves_random_wrap_open`
+(pure cycle table), and `map_arrow_click_sends_4002_from_the_live_boot_path`
+(fake gateway, boot path through `OnlineSession::paint`). RED proof:
+before the click arm the room word stayed at 7. The random wrap arm
+(`FUN_004bb2c0`) stays OPEN with a live arrow-click capture at a cycle
+boundary as the next evidence step.

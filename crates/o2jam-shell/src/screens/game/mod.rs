@@ -59,11 +59,11 @@ use super::paint::{
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingLevel, WaitingMapStep, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -95,7 +95,7 @@ use o2jam_audio::{
 use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
-use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
+use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -2173,6 +2173,20 @@ impl ScreenGame {
         self.outbox.has_pending_music_send()
     }
 
+    /// Queued map-arrow stage word for the session bridge (4002).
+    pub fn take_arena_send(&mut self) -> Option<SetRoomArena> {
+        self.outbox.take_arena_send()
+    }
+    /// Whether a map-arrow stage word waits for the 4002 send.
+    #[must_use]
+    pub fn has_pending_arena_send(&self) -> bool {
+        self.outbox.has_pending_arena_send()
+    }
+    /// Requeue a map stage word after a failed 4002 send.
+    pub fn queue_arena_send(&mut self, arena: i32) {
+        self.outbox.queue_arena_send(arena);
+    }
+
     /// Whether the song-select dialog overlay is currently staged
     /// (ticket #232): the session bridge waits for it to close
     /// before converting a queued pick into a `SongChoice`.
@@ -3974,6 +3988,21 @@ impl ScreenGame {
             self.select_team(team);
             return;
         }
+        // Map arrows: the master-only cycle arm (exe dispatch file
+        // `0x4b832d`/`0x4b8384` calls `FUN_004bb570` with -1/+1 after
+        // the same master gate the role setup uses). The random wrap
+        // arm stays OPEN, so `None` consumes no invented stage.
+        let map_step = if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MAPLEFT", x, y) {
+            Some(WaitingMapStep::Previous)
+        } else if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MAPRIGHT", x, y) {
+            Some(WaitingMapStep::Next)
+        } else {
+            None
+        };
+        if let Some(step) = map_step.filter(|_| self.is_room_master()) {
+            self.cycle_waiting_map(step);
+            return;
+        }
         // Song-select open trigger: the room master's MUSELECT button
         // (`IDC_BUTTON_SWAIT_MUSELECT`, file `0xb2622`) stages the
         // dialog. Non-master clicks are dropped by the exe, so they
@@ -4017,6 +4046,32 @@ impl ScreenGame {
         } else if confirm {
             self.confirm_waiting();
         }
+    }
+
+    /// Frame count of the staged map image (`0x1650001A`): one sprite
+    /// record per frame, or the exe's no-control default. Read from
+    /// staged art, never a literal stage table.
+    fn waiting_map_frame_count(&self) -> i32 {
+        const MAP_SPRITE: &str = "Wait_Map.ojs";
+        self.scene_art(Screen::Waiting)
+            .and_then(|art| art.figures.get(MAP_SPRITE))
+            .map_or(WAITING_MAP_DEFAULT_FRAMES, |figure| {
+                i32::try_from(figure.len()).unwrap_or(WAITING_MAP_DEFAULT_FRAMES)
+            })
+    }
+
+    /// Apply one pinned map cycle step to the joined room word and
+    /// queue its `SetRoomArena` 4002 body for the session bridge.
+    fn cycle_waiting_map(&mut self, step: WaitingMapStep) {
+        let frame_count = self.waiting_map_frame_count();
+        let Some(room) = self.waiting.as_mut() else {
+            return;
+        };
+        let Some(next) = waiting_map_cycle(room.arena, step, frame_count) else {
+            return;
+        };
+        room.arena = next;
+        self.outbox.queue_arena_send(next);
     }
 
     /// Hit one result button: the staged `.bnd` rect verbatim where
@@ -11289,6 +11344,50 @@ mod game_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn master_map_arrow_click_cycles_the_room_word_and_queues_4002() {
+        // Ticket #766, exe `FUN_004bb570` (evidence `ev_c9d69d84…`) with
+        // call site `FUN_004b81e0` (step -1 for MAPLEFT, +1 for
+        // MAPRIGHT, master-gated). Live chain: `set_joined_room` ->
+        // `walk_to_waiting` -> staged Waiting rect -> `ingest_snapshot`
+        // -> `click_waiting` -> `click_waiting_button` ->
+        // `waiting_map_cycle` -> room arena -> `paint_waiting` ->
+        // `paint_waiting_mapname`. Synthetic rects keep the guard
+        // independent of game data. The random wrap arm stays OPEN, so
+        // this leg pins only the interior cycle.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let mut room = waiting_room();
+        room.arena = 7;
+        let right = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_SWAIT_MAPRIGHT".to_owned(),
+            code: 0x1620_000D,
+            sprite: None,
+            rect: Rect {
+                x: 667,
+                y: 539,
+                w: 33,
+                h: 20,
+            },
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, vec![right], HashMap::new());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(680, 548));
+        assert_eq!(
+            game.waiting.as_ref().map(|room| room.arena),
+            Some(8),
+            "MAPRIGHT advances the room word by one"
+        );
+        assert!(
+            game.has_pending_arena_send(),
+            "the arrow queues SetRoomArena 4002"
+        );
     }
 
     #[test]
