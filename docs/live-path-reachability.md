@@ -66,6 +66,25 @@ Seam guards alone never close such a ticket. Docs and presentational fixes
 use `(none -- docs: <why>)` or `(none -- presentational: <why>)` and skip
 this leg.
 
+## Live-input legs (ticket #739)
+
+The fast scripted gateway guards stay in `session.rs`; one live leg per
+player-visible family now sits beside them in
+`crates/recomp2jam/src/live_input_legs.rs`. Each leg boots through
+`connect::connect_and_login_with_transport` and
+`assemble_online_session`, drives Menu/pointer snapshots through
+`GameLoop::ingest_snapshot` (no direct `menu_key` or staged scene
+load), and asserts the wire opcode on a recording gateway. Staged
+button points come from the parsed `.bnd` placements; the two lobby
+faces keep their pinned e2e coordinates. Missing `install-root` skips
+the leg cleanly.
+
+| Family | Guard |
+|---|---|
+| scene BACK/exits (`#734` class) | `live_click_waiting_back_sends_the_room_leave_from_boot` |
+| dialog OK/dismiss | `live_click_dialog_ok_releases_the_held_channel_rows` |
+| Waiting join/ready/start/back | `live_click_guest_ready_then_back_from_boot`, `live_click_master_start_then_back_from_boot` |
+
 ## Worked example: #191, #192, #193
 
 - #191 — seam guard `shop_board_stages_goods_from_avatar_source` called
