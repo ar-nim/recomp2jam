@@ -10573,6 +10573,8 @@ mod paint_tests {
             playing: false,
             has_song: true,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         };
         assert_eq!(
             staged_seat_text(&champion, Some("CHAMPION")),
@@ -10591,6 +10593,8 @@ mod paint_tests {
             playing: false,
             has_song: false,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         };
         assert_eq!(
             staged_seat_text(&challenger, Some("CHALLENGER")),

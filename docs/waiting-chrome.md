@@ -36,6 +36,39 @@ qualified capture, it stays OPEN with a named next step.
   layer selects stays OPEN (next step: one matched note-effect capture
   per toggle state).
 
+## Seat state icons (#769) — PINNED refresh slots
+
+The 7.55 `ControlList_Interface.txt` (sha256
+`d66541198965d622ff0177b306d916885ae4d64ae07b2c2264fcbdd850d50584`,
+`Interface1.opi` slot 1595) authors `SET 0x0C 0x00015000` with twelve
+children: ReadyWindow, AvatarInfo (text), Avatar (image), BossMark,
+ReadyText, WaitingImage, NoMusic, NoGem, PCRoom, Downloading,
+DownBar, Playing (codes `0x1650002C..37`, with codes `0x2D`/`0x2E`
+owned by the text/avatar children). `FUN_0050dd50` indexes that exact
+child vector (evidence `ev_e6184e5bd8d9b8f1e0629447d86f4567aef7ba254c99efdd92af29c179ae90aa`),
+so the indices in the frame applier `FUN_0052a2b0` (evidence
+`ev_ee564ef6b796c08bc09c43e2f62b9a133759ed7650078043904d83e9ebea22a1`)
+map to authored bodies.
+
+- Refresh slot 7 (`Wait_NoGemImage.ojs`) paints frame 1 when the seat's
+  `+0x217c` music-state byte is 2 (NoAccess). `FUN_004b2e30` sets the
+  backing word through `FUN_0052ac60` (dossier
+  `ev_87cb9191aafbd93164a29eb66ff55dae787e92aa7bd7fc5a1d17532db954b6bb`).
+- Slot 8 (`Wait_PCRoomMark.ojs`) paints frame 1 on a nonzero `+0x212c`
+  free-pass word (same refresh, `FUN_0052ac90`; field pin
+  `docs/relay.md` §states).
+- Slot 11 (`Wait_Playing.ojs`) paints frame 1 when `+0x2130`
+  playing-state equals 1 (`FUN_0052acf0` writes the word, the applier
+  tests `== 1`).
+- Slots 9/10 (Downloading and its bar) share the word set from
+  `+0x217c == 4`, the existing matched-ab-339 pin. Slot 3 (BossMark)
+  is the #303 master emblem pin.
+
+The shell stages NoGem and PC-room bodies per seat from those two wire
+words; `Wait_ReadyWindow`, `Wait_BossMark`, `Wait_ReadyText`,
+`Wait_NoMusicImage`, Downloading/bar and PLAYING keep their earlier
+sources. A two-client capture isolating each icon byte stays OPEN.
+
 ## Chat tabs and messenger lamp (#770) — PINNED buttons, OPEN alert source
 
 - `FUN_004b7c60` handles the four `CHAT_ALL/FRIEND/GUILD/WHISPER`

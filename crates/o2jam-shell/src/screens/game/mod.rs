@@ -11638,6 +11638,91 @@ mod game_tests {
         assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
     }
 
+    fn waiting_seat_icon_game() -> ScreenGame {
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        peer.music_state = o2jam_net::MusicState::NoAccess.code();
+        peer.free_pass = 1;
+        peer.playing_state = 1;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let icons = [
+            ("Wait_NoGemImage.ojs", 0x1650_0033, 10, 10),
+            ("Wait_PCRoomMark.ojs", 0x1650_0034, 30, 10),
+            ("Wait_Playing.ojs", 0x1650_0037, 50, 10),
+        ];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (sprite, code, x, y) in icons {
+            for (parent, parent_x) in [
+                ("IDC_BUTTON_SWAIT_EXTEND1", 48),
+                ("IDC_BUTTON_SWAIT_EXTEND2", 190),
+            ] {
+                placements.push(ScenePlacement {
+                    role: PlacementRole::Clone,
+                    id: parent.to_owned(),
+                    code,
+                    sprite: Some(sprite.to_owned()),
+                    rect: Rect {
+                        x: parent_x + x,
+                        y: 127 + y,
+                        w: 8,
+                        h: 8,
+                    },
+                });
+            }
+            let mut figure = AvatarFigure::default();
+            for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+                figure.push_layer(FigureLayer {
+                    image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                    dx: 0,
+                    dy: 0,
+                    colorkey: 0xFFFF,
+                });
+            }
+            figures.insert(sprite.to_owned(), figure);
+        }
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn seat_state_icons_light_only_the_seat_whose_wire_bytes_arm_them() {
+        // Live chain: 3003 `set_joined_room` -> `walk_to_waiting` ->
+        // `paint_at` -> `paint_waiting_scene` -> `staged_seats` ->
+        // `paint_waiting_seat_marks`. `FUN_004b2e30` maps the seat's
+        // `+0x217c` music-state 2 to NoGem, `+0x212c` free-pass word
+        // to the PC badge, and `+0x2130` playing-state 1 to PLAYING
+        // (`FUN_0052a2b0` slots 7/8/11, dossier `ev_ee564ef6...`).
+        let mut game = waiting_seat_icon_game();
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for (offset, label) in [(10, "NoGem"), (30, "PC"), (50, "PLAYING")] {
+            let own = (137 * 800 + (48 + offset)) as usize;
+            let peer = (137 * 800 + (190 + offset)) as usize;
+            assert_eq!(buf[own], 0, "{label} must stay dark on the own seat");
+            assert_eq!(
+                buf[peer],
+                pack_xrgb(0, 0, 255),
+                "{label} must light on the armed peer seat"
+            );
+        }
+    }
+
     #[test]
     fn waiting_dialog_up_routes_rows_and_holds_chrome() {
         // Ticket #163 (waiting leg, CLICK dialog-up arm): with the

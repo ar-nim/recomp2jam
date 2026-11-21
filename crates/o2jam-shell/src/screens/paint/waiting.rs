@@ -814,6 +814,12 @@ pub(crate) struct StagedSeat {
     pub(crate) has_song: bool,
     /// This member's `4035`/`4037` music-state byte says a download runs.
     pub(crate) downloading: bool,
+    /// Music-state 2 (`NoAccess`) arms the seat's NoGem plate
+    /// (exe seat `+0x217c`, refresh slot 7).
+    pub(crate) no_gem: bool,
+    /// A nonzero free-pass word arms the PC-room badge
+    /// (exe seat `+0x212c`, refresh slot 8).
+    pub(crate) pc_room: bool,
 }
 
 /// Seat parents of the `SET 0x0C 0x00015000` seat template, in seat
@@ -846,6 +852,10 @@ enum SeatIndicator {
     ReadyPlate,
     /// `Wait_NoMusicImage.ojs`: the room names no song yet.
     NoSong,
+    /// `Wait_NoGemImage.ojs`: music-state 2, the song needs a gem.
+    NoGem,
+    /// `Wait_PCRoomMark.ojs`: a nonzero free-pass word.
+    PCRoom,
     /// `Wait_Playing.ojs`: the member is playing.
     Playing,
     /// `Wait_Downloding.ojs`: the member is downloading the room song.
@@ -862,6 +872,8 @@ impl SeatIndicator {
             SeatIndicator::MasterStar => "Wait_BossMark.ojs",
             SeatIndicator::ReadyPlate => "Wait_ReadyText.ojs",
             SeatIndicator::NoSong => "Wait_NoMusicImage.ojs",
+            SeatIndicator::NoGem => "Wait_NoGemImage.ojs",
+            SeatIndicator::PCRoom => "Wait_PCRoomMark.ojs",
             SeatIndicator::Playing => "Wait_Playing.ojs",
             SeatIndicator::DownloadingBadge => "Wait_Downloding.ojs",
             SeatIndicator::DownloadingBar => "Wait_Downloding_Bar.ojs",
@@ -879,6 +891,8 @@ impl SeatIndicator {
             SeatIndicator::MasterStar => seat.master.then_some(1),
             SeatIndicator::ReadyPlate => seat.ready.then_some(1),
             SeatIndicator::NoSong => (!seat.has_song).then_some(1),
+            SeatIndicator::NoGem => seat.no_gem.then_some(1),
+            SeatIndicator::PCRoom => seat.pc_room.then_some(1),
             SeatIndicator::Playing => seat.playing.then_some(1),
             SeatIndicator::DownloadingBadge | SeatIndicator::DownloadingBar => {
                 seat.downloading.then_some(1)
@@ -887,23 +901,27 @@ impl SeatIndicator {
     }
 }
 
-/// Indicator body behind one seat-template sprite name. Bodies with no
-/// pinned flag return `None` and stay dark:
+/// Indicator body behind one seat-template sprite name. The exe's
+/// seat refresh (`FUN_004b2e30` -> `FUN_0052a2b0`, dossier
+/// `ev_ee564ef6...`) stages the twelve authored children by index; the
+/// child vector includes the two text/avatar children, so slots 7/8/11
+/// are `Wait_NoGemImage.ojs`, `Wait_PCRoomMark.ojs` and
+/// `Wait_Playing.ojs`. Slot 7 arms on `music_state == 2` (NoAccess),
+/// slot 8 on a nonzero free-pass word, slot 11 on playing-state 1.
+/// Bodies with no pinned flag return `None` and stay dark:
 ///
-/// - `Wait_PCRoomMark.ojs` — PC-room badge; the wire carries no
-///   matching field (OPEN: find the flag the exe reads).
-/// - `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` — the member's
-///   `music-state=4` download badge and bar, pinned by matched-ab-339.
 /// - `Waiting_P2P_Image.ojs` — P2P versus banner; needs the room's
 ///   venue class (OPEN).
-/// - `Wait_NoGemImage.ojs` — gem-less marker; `RoomMember.gem` exists,
-///   but which value arms the plate is untraced (OPEN).
+/// - `Wait_ReadyWindow.ojs` team frames come from the authored team
+///   plate (already staged by the cover painter), not this flag pass.
 fn seat_indicator(sprite: &str) -> Option<SeatIndicator> {
     [
         SeatIndicator::TeamPlate,
         SeatIndicator::MasterStar,
         SeatIndicator::ReadyPlate,
         SeatIndicator::NoSong,
+        SeatIndicator::NoGem,
+        SeatIndicator::PCRoom,
         SeatIndicator::Playing,
         SeatIndicator::DownloadingBadge,
         SeatIndicator::DownloadingBar,
@@ -988,6 +1006,12 @@ fn is_downloading(member: &o2jam_net::RoomMember) -> bool {
     member.music_state == o2jam_net::MusicState::Downloading.code()
 }
 
+/// Wire `music-state=2` is the exe's NoGem marker (`FUN_004b2e30`
+/// refresh slot 7, seat `+0x217c`).
+fn is_no_gem(member: &o2jam_net::RoomMember) -> bool {
+    member.music_state == o2jam_net::MusicState::NoAccess.code()
+}
+
 /// Staged seats in cover order: wire slot `i` owns cover `i`, and our
 /// own seat owns cover `member_id` when the 3003 snapshot does not
 /// list it. The p343 matched capture pins both: the slot-0 master
@@ -1023,6 +1047,8 @@ pub(crate) fn staged_seats(room: &JoinedRoom, local_name: Option<&str>) -> Vec<S
             playing: own_slot.is_some_and(|member| member.playing_state != 0),
             has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
             downloading: own_slot.is_some_and(is_downloading),
+            no_gem: own_slot.is_some_and(is_no_gem),
+            pc_room: own_slot.is_some_and(|member| member.free_pass != 0),
         };
     }
     seats
@@ -1043,6 +1069,8 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
             downloading: is_downloading(member),
+            no_gem: is_no_gem(member),
+            pc_room: member.free_pass != 0,
         },
         None if slot.state_code == RoomSlotState::Locked as i32 => StagedSeat {
             name: String::new(),
@@ -1056,6 +1084,8 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             playing: false,
             has_song: false,
             downloading: false,
+            no_gem: false,
+            pc_room: false,
         },
         None => empty_staged_seat(),
     }
@@ -1075,6 +1105,8 @@ fn empty_staged_seat() -> StagedSeat {
         playing: false,
         has_song: false,
         downloading: false,
+        no_gem: false,
+        pc_room: false,
     }
 }
 
