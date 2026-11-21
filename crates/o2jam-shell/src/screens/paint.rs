@@ -2706,6 +2706,50 @@ pub fn paint_room_no_response_dialog(frame: &mut Frame<'_>, art: Option<&SceneAr
     paint_information_message(frame, art, NO_RESPONSE_MESSAGE_CP949);
 }
 
+/// One-OK MyRoom notice: the same staged `Dialog_Information` sheet
+/// with a UTF-8 caption, for strings read from the 7.55 byte tables
+/// and decoded before staging (the executable consumes cp949, our
+/// font rasterizer takes UTF-8). Geometry still comes only from the
+/// staged `.bnd` rects or the archive-less fallback; no notice text
+/// is invented here.
+pub fn paint_myroom_information(frame: &mut Frame<'_>, art: Option<&SceneArt>, message: &str) {
+    if let Some(art) = art.filter(|art| art.has_figures()) {
+        paint_dialog_scene(frame, art);
+        let (origin_x, origin_y) = dialog_origin(&art.placements);
+        for placement in &art.placements {
+            if placement.code == INFORMATION_MESSAGE_CODE {
+                paint_text_into_rect(
+                    frame,
+                    Rect {
+                        x: placement.rect.x + origin_x,
+                        y: placement.rect.y + origin_y,
+                        w: placement.rect.w,
+                        h: placement.rect.h,
+                    },
+                    message,
+                    CP949_INK,
+                );
+            }
+        }
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: frame.h as u32,
+        },
+        scrim_color(),
+    );
+    let (text, _, _) = quit_fallback_rects();
+    paint_text_into_rect(frame, text, message, CP949_INK);
+    let ok = scale_rect_to_frame(&information_ok_fallback_rect(), frame.w, frame.h);
+    fill_rect(frame, &ok, CHANNEL_ENTER_TONE);
+    draw_text(frame, ok.x + 8, ok.y + 8, "OK", art_title_ink());
+}
+
 /// One-OK sheet painter shared by the relay notice, the Room fuse, and
 /// the refused channel enter (#717). The caller owns the exact CP949
 /// bytes; geometry comes only from the staged `.bnd` rects or the

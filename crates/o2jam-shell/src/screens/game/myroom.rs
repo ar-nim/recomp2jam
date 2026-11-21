@@ -24,6 +24,13 @@ use o2jam_net::shop::EquipItem;
 use o2jam_net::CharacterInfo;
 use o2jam_render::Frame;
 
+/// Notice posted when a worn well's id has no owned-bag record.
+/// Exact bytes read from the oracle at file `0x2491f4` (VA
+/// `0x6491f4`, cp949); the ticket's "connection lost" gloss is
+/// contradicted by the string, so the exe text wins (EV
+/// `ev_85bc1fde…`, `docs/myroom.md`).
+pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯이 필요합니다.";
+
 impl ScreenGame {
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
     /// and gift name source. Staging never moves the flow.
@@ -132,6 +139,7 @@ impl ScreenGame {
                 self.myroom.turn_gift_page(step, pages);
             }
             MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
+            MyRoomAction::PressWornWell(well) => self.apply_myroom_well_press(well),
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
@@ -182,6 +190,36 @@ impl ScreenGame {
             character.equipment[usize::from(slot)] = item_word;
         }
         self.restage_worn_figure();
+    }
+
+    /// Press one worn equipment well: the exe passes the well
+    /// ordinal as the 5004 slot word and the owned-bag index its
+    /// worn-id selector finds as the second word (`FUN_004a49f0`,
+    /// files `0xa4aec`/`0xa4af4`; selector `0x537dd0`). A missing id
+    /// posts the file `0x2491f4` notice and queues no send. The live
+    /// mouse event reaches this seam through the staged well rect;
+    /// which native event fires the exe handler stays OPEN (#793).
+    fn apply_myroom_well_press(&mut self, well: u8) {
+        let Some(character) = self.myroom_character.as_ref() else {
+            return;
+        };
+        let Some(worn_id) = character.equipment.get(usize::from(well)).copied() else {
+            return;
+        };
+        if worn_id == 0 {
+            return;
+        }
+        let Some(bag_index) = character.inventory.iter().position(|id| *id == worn_id) else {
+            self.myroom_notice = Some(WORN_WELL_MISS_NOTICE.to_owned());
+            return;
+        };
+        let Ok(item_id) = i32::try_from(bag_index) else {
+            return;
+        };
+        self.outbox.pending_equip = Some(EquipItem {
+            slot: i32::from(well),
+            item_id,
+        });
     }
 
     /// Vacate the selected slot: the same-ordinal equipment cell

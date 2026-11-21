@@ -52,9 +52,9 @@ use super::paint::{
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
-    paint_music_shop_wallet, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_music_shop_wallet, paint_myroom_figure, paint_myroom_information, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
@@ -876,6 +876,10 @@ pub struct ScreenGame {
     /// (qualified B8 pack). It owns clicks until its OK is pressed;
     /// the Messenger main sheet stays unwired (P0).
     messenger_liveness_open: bool,
+    /// One-OK MyRoom notice posted by an exe-pinned press arm (first:
+    /// the worn-well miss at file `0x2491f4`). It owns clicks until
+    /// OK like the other Information sheets.
+    myroom_notice: Option<String>,
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1264,6 +1268,7 @@ impl ScreenGame {
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
             messenger_liveness_open: false,
+            myroom_notice: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1875,6 +1880,18 @@ impl ScreenGame {
     #[must_use]
     pub const fn messenger_liveness_open(&self) -> bool {
         self.messenger_liveness_open
+    }
+
+    /// Text of the open MyRoom notice, if any (one-OK sheet).
+    #[must_use]
+    pub fn myroom_notice(&self) -> Option<&str> {
+        self.myroom_notice.as_deref()
+    }
+
+    /// Dismiss the MyRoom notice without a send. The staged OK rect
+    /// also calls this through [`Self::click_dispatch`].
+    pub fn dismiss_myroom_notice(&mut self) {
+        self.myroom_notice = None;
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -3463,6 +3480,7 @@ impl ScreenGame {
     #[must_use]
     pub fn dialog_owns_input(&self) -> bool {
         self.messenger_liveness_open
+            || self.myroom_notice.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
             || self.room_dialog.is_some()
@@ -5398,6 +5416,14 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.myroom_notice.is_some() {
+            // The exe's one-OK Information sheet consumes the click;
+            // no wire is queued by the notice or its dismissal.
+            if self.information_ok_hit(x, y) {
+                self.myroom_notice = None;
+            }
+            return;
+        }
         if self.messenger_liveness_open {
             // The one-OK sheet owns every click until OK; it sends
             // no wire (Memoryer has no messenger endpoint).
@@ -6334,6 +6360,7 @@ impl ScreenGame {
         }
         self.billing_failure_notice = false;
         self.messenger_liveness_open = false;
+        self.myroom_notice = None;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -7246,6 +7273,9 @@ impl ScreenGame {
             // Same staged Information sheet and Information origin as
             // the relay notice; the B8 pack pins one OK and no wire.
             paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
+        }
+        if let Some(notice) = self.myroom_notice.as_deref() {
+            paint_myroom_information(frame, self.relay_down_art.as_ref(), notice);
         }
         self.paint_dialog_frame_states(frame);
     }
@@ -15406,6 +15436,54 @@ mod game_tests {
             paint_first_pixel(&after),
             o2jam_render::pack_xrgb(255, 0, 0)
         );
+    }
+
+    #[test]
+    fn myroom_worn_well_press_requeues_5004_with_the_worn_bag_index() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // well `0x15600013` -> click_myroom_side -> session flush
+        // take_equip_send (5004). Static pin: `FUN_004a49f0` file
+        // `0xa4aec` sends the well ordinal plus the index the worn
+        // id lookup (`0x537dd0`) finds in the owned bag.
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 3;
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_SLOT_IMAGE_FIRST_CODE, 600, 10)],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        let send = game.take_equip_send().expect("well press queues 5004");
+        assert_eq!(
+            (send.slot, send.item_id),
+            (0, 2),
+            "well ordinal + bag index"
+        );
+        assert_eq!(game.take_equip_send(), None, "one press sends once");
+    }
+
+    #[test]
+    fn myroom_worn_well_press_without_an_owned_id_opens_the_notice() {
+        // Same live chain, miss arm: `0x537dd0` returns -1, so no
+        // 5004 leaves and the exe's file `0x2491f4` notice owns the
+        // sheet. The live mouse event stays OPEN (#793).
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 999;
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_SLOT_IMAGE_FIRST_CODE, 600, 10)],
+            HashMap::new(),
+        );
+        assert!(!game.dialog_owns_input(), "no sheet before the press");
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        assert!(game.dialog_owns_input(), "the miss notice owns input");
+        assert_eq!(game.take_equip_send(), None, "a miss sends no equip");
     }
 
     #[test]
