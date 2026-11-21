@@ -5,12 +5,21 @@
 //! native pixels when the game covers the root), and injects the same
 //! scripted gesture as the Wayland arm. No external display is needed
 //! and the owner session is never touched.
+//!
+//! Live chain: `scripts/rig-x11-click-proof.sh` ->
+//! `x11_arm_routes_click_through_real_game` -> `run_probe` ->
+//! `inject_click`/`inject_motion` -> [`click_event_plan`] ->
+//! `x11rb::xtest_fake_input`. The unit suite keeps the display-free
+//! half: `x11_*plan*` guards assert the byte/event sequence; the live
+//! window proof stays in the rig lane (issue #738).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use x11rb::protocol::xproto::{BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT};
+use x11rb::protocol::xtest::ConnectionExt as _;
 
 use crate::log;
 use crate::{InputSnapshot, SnapshotSource};
@@ -36,6 +45,71 @@ const BOOT_WAIT: Duration = Duration::from_secs(60);
 /// Gear-disc position in native pixels (pinned e2e coord, shared with
 /// the Wayland arm).
 const GEAR_POSITION: (i16, i16) = (729, 580);
+/// XTEST fake input always sends time 0 (no synthetic timestamp).
+const EVENT_TIME: u32 = 0;
+/// XTEST fake input uses the core pointer (device 0) for this probe.
+const EVENT_DEVICE: u8 = 0;
+
+/// One XTEST fake-input event the driver sends to the X server.
+///
+/// The headless seam tests encode this plan in an explicit
+/// little-endian byte form: `[type, detail, time, root, x, y]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct XtestEvent {
+    event_type: u8,
+    detail: u8,
+    root: u32,
+    x: i16,
+    y: i16,
+}
+
+impl XtestEvent {
+    /// Encode type and detail, then little-endian time, root,
+    /// and point. The device is the fixed core pointer (zero).
+    /// Test-only: the live arm passes the fields to x11rb directly.
+    #[cfg(test)]
+    fn encode(self) -> [u8; 14] {
+        let mut bytes = [0u8; 14];
+        bytes[0] = self.event_type;
+        bytes[1] = self.detail;
+        bytes[2..6].copy_from_slice(&EVENT_TIME.to_le_bytes());
+        bytes[6..10].copy_from_slice(&self.root.to_le_bytes());
+        bytes[10..12].copy_from_slice(&self.x.to_le_bytes());
+        bytes[12..14].copy_from_slice(&self.y.to_le_bytes());
+        bytes
+    }
+}
+
+/// Motion-only event: the silent control arm of the probe.
+fn motion_event(root: u32, position: (i16, i16)) -> XtestEvent {
+    XtestEvent {
+        event_type: MOTION_NOTIFY_EVENT,
+        detail: 0,
+        root,
+        x: position.0,
+        y: position.1,
+    }
+}
+
+/// One button edge; only the event type differs between press and release.
+fn button_event(root: u32, position: (i16, i16), event_type: u8) -> XtestEvent {
+    XtestEvent {
+        event_type,
+        detail: LEFT_BUTTON,
+        root,
+        x: position.0,
+        y: position.1,
+    }
+}
+
+/// Motion, press, release: one human click on the X11 arm.
+fn click_event_plan(root: u32, position: (i16, i16)) -> [XtestEvent; 3] {
+    [
+        motion_event(root, position),
+        button_event(root, position, BUTTON_PRESS_EVENT),
+        button_event(root, position, BUTTON_RELEASE_EVENT),
+    ]
+}
 
 /// Two-phase verdict of one X11 probe run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,20 +227,12 @@ fn inject_click(
     root: u32,
     position: (i16, i16),
 ) -> Result<()> {
-    use x11rb::protocol::xproto::{BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT};
-    use x11rb::protocol::xtest::ConnectionExt as _;
-    let (x, y) = position;
-    connection
-        .xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, x, y, 0)?
-        .check()?;
-    connection
-        .xtest_fake_input(BUTTON_PRESS_EVENT, LEFT_BUTTON, 0, root, x, y, 0)?
-        .check()?;
+    let [motion, press, release] = click_event_plan(root, position);
+    send_fake_input(connection, motion)?;
+    send_fake_input(connection, press)?;
     connection.flush()?;
     std::thread::sleep(CLICK_HOLD);
-    connection
-        .xtest_fake_input(BUTTON_RELEASE_EVENT, LEFT_BUTTON, 0, root, x, y, 0)?
-        .check()?;
+    send_fake_input(connection, release)?;
     connection.flush()?;
     Ok(())
 }
@@ -178,12 +244,27 @@ fn inject_motion(
     root: u32,
     position: (i16, i16),
 ) -> Result<()> {
-    use x11rb::protocol::xproto::MOTION_NOTIFY_EVENT;
-    use x11rb::protocol::xtest::ConnectionExt as _;
-    connection
-        .xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, position.0, position.1, 0)?
-        .check()?;
+    send_fake_input(connection, motion_event(root, position))?;
     connection.flush()?;
+    Ok(())
+}
+
+/// Send one planned event and wait for the server to accept it.
+fn send_fake_input(
+    connection: &impl x11rb::connection::Connection,
+    event: XtestEvent,
+) -> Result<()> {
+    connection
+        .xtest_fake_input(
+            event.event_type,
+            event.detail,
+            EVENT_TIME,
+            event.root,
+            event.x,
+            event.y,
+            EVENT_DEVICE,
+        )?
+        .check()?;
     Ok(())
 }
 
@@ -433,6 +514,38 @@ mod x11_tests {
         );
     }
 
+    /// Headless stand-in for the rig-lane live proof: the driver's
+    /// XTEST plan is three framed events — motion warms the pointer,
+    /// press opens the click, release closes it. No display or server
+    /// is touched (tier rules in docs/agents/triage-labels.md).
+    #[test]
+    fn x11_click_plan_encodes_motion_press_release_bytes() {
+        let plan = click_event_plan(0x1234, (10, -20));
+        let bytes: Vec<u8> = plan.iter().flat_map(|event| event.encode()).collect();
+        let expected = [
+            6, 0, 0, 0, 0, 0, 0x34, 0x12, 0, 0, 0x0a, 0, 0xec, 0xff, // motion
+            4, 1, 0, 0, 0, 0, 0x34, 0x12, 0, 0, 0x0a, 0, 0xec, 0xff, // press
+            5, 1, 0, 0, 0, 0, 0x34, 0x12, 0, 0, 0x0a, 0, 0xec, 0xff, // release
+        ];
+        assert_eq!(bytes, expected);
+    }
+
+    /// The silent control arm must carry no button edge at all.
+    #[test]
+    fn x11_motion_plan_encodes_one_event_without_button_edges() {
+        let bytes = motion_event(7, (100, 200)).encode();
+        assert_eq!(bytes, [6, 0, 0, 0, 0, 0, 7, 0, 0, 0, 100, 0, 200, 0]);
+    }
+
+    /// All three edges of one click aim at the same root pixel.
+    #[test]
+    fn x11_click_plan_aims_every_event_at_the_same_root_and_point() {
+        let plan = click_event_plan(9, (-1, 2));
+        assert!(plan
+            .iter()
+            .all(|event| event.root == 9 && (event.x, event.y) == (-1, 2)));
+    }
+
     #[test]
     fn lock_path_names_the_display_lock() {
         assert_eq!(display_lock_path(99), PathBuf::from("/tmp/.X99-lock"));
@@ -521,8 +634,7 @@ mod x11_tests {
     }
 
     fn game_data_present() -> bool {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
-        root.join("O2Jam").is_dir() || root.join("o2jam").is_dir()
+        o2jam_file::data_root::root_has_game_data(&o2jam_file::data_root::install_root())
     }
 
     fn workspace_game_binary() -> PathBuf {

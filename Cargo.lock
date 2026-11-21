@@ -771,6 +771,7 @@ name = "input-drive"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "o2jam-file",
  "o2jam-render",
  "o2jam-shell",
  "x11rb",

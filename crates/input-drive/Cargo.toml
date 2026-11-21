@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+o2jam-file = { path = "../o2jam-file" }
 o2jam-shell = { path = "../o2jam-shell" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
