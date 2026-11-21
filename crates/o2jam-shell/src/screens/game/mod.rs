@@ -75,17 +75,18 @@ use super::side::{
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
     select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
-    shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
-    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
-    LankingSort, MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
-    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
+    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
+    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
+    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
+    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
+    TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -6456,6 +6457,49 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Whether one ext-menu filter or group control paints now.
+    #[must_use]
+    pub fn shop_extmenu_control_visible(&self, code: u32) -> bool {
+        shop_extmenu_kept(
+            &ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            },
+            self.shop.ext_menu_open(),
+        )
+    }
+
+    /// Accepted ext-menu toggle count.
+    #[must_use]
+    pub fn shop_extmenu_toggles(&self) -> u32 {
+        self.shop.ext_menu_toggles()
+    }
+
+    /// Reseeds made by ext-menu toggles.
+    #[must_use]
+    pub fn shop_extmenu_reseeds(&self) -> u32 {
+        self.shop.ext_menu_reseeds()
+    }
+
+    /// Word `0x5d` after the last ext-menu toggle.
+    #[must_use]
+    pub fn shop_extmenu_secondary_word(&self) -> u8 {
+        self.shop.ext_menu_secondary_word()
+    }
+
+    /// Stage the gate word that allows an ext-menu toggle.
+    pub fn stage_shop_extmenu_ready(&mut self, ready: bool) {
+        self.shop.stage_ext_menu_ready(ready);
+    }
+
     /// Notice posted by the last ITEMVACATE/CONFERENCE press.
     #[must_use]
     pub fn shop_chrome_notice(&self) -> Option<super::side::ShopChromeNotice> {
@@ -7361,10 +7405,12 @@ impl ScreenGame {
             let panel = self.shop_panel();
             let shelf_hovered = self.hovered_item_show_slot().is_some();
             let gender = self.shop.gender();
+            let ext_menu_open = self.shop.ext_menu_open();
             paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
                 shop_panel_kept(placed, panel)
                     && shop_tooltip_kept(placed, shelf_hovered)
                     && shop_submenu_caption_kept(placed.code, gender)
+                    && shop_extmenu_kept(placed, ext_menu_open)
             });
             // The purchase page is a web surface over the shop board;
             // its content is not captured, so only the staged client
@@ -8774,14 +8820,14 @@ mod game_tests {
         SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
         SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
         SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-        SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE,
-        SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE,
-        SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
-        SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
-        SHOP_SUBMENU_FIRST_CODE,
+        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_GROUP_CODES,
+        SHOP_EXTMENU_ON_CODE, SHOP_EXTMENU_SIDE_CODES, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
+        SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
+        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -24065,6 +24111,73 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_extmenu_toggle_cycles_twelve_filters_and_group_visibility() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(EXTMENU_ON 0x14200099) -> ShopState state ->
+        //   paint_side -> shop_extmenu_kept on staged filters/groups.
+        // Static pin `ev_f3ad15be…`: the arm flips `0x5b`, reseeds once,
+        // and cycles the 12 filters against the eight first-row and
+        // four side controls; layout hides filters at entry. The live
+        // dump stages no filters (#195), so only the static rule is
+        // claimed. OPEN (next step): one EXT_ON press frame with
+        // before/after visibility. Synthetic, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        stage_shop_control(&mut game, SHOP_EXTMENU_ON_CODE, 500);
+        game.stage_shop_extmenu_ready(true);
+        let filters: Vec<u32> = (0..SHOP_EXTMENU_BUTTONS as u32)
+            .map(|slot| SHOP_EXTMENU_FIRST_CODE + slot)
+            .collect();
+        let group: Vec<u32> = SHOP_EXTMENU_GROUP_CODES
+            .iter()
+            .chain(SHOP_EXTMENU_SIDE_CODES.iter())
+            .copied()
+            .collect();
+        assert!(filters
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+
+        game.click_shop(510, 40);
+        assert!(filters
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert_eq!(game.shop_extmenu_toggles(), 1);
+        assert_eq!(game.shop_extmenu_reseeds(), 1);
+        assert_eq!(game.shop_extmenu_secondary_word(), 0);
+
+        game.stage_shop_extmenu_ready(true);
+        game.click_shop(510, 40);
+        assert!(filters
+            .iter()
+            .all(|code| !game.shop_extmenu_control_visible(*code)));
+        assert!(group
+            .iter()
+            .all(|code| game.shop_extmenu_control_visible(*code)));
+        assert_eq!(game.shop_extmenu_toggles(), 2);
+        assert_eq!(game.shop_extmenu_reseeds(), 2);
+    }
+
+    #[test]
+    fn shop_extmenu_toggle_is_ignored_while_the_gate_is_closed() {
+        // Same arm: word `0x5f` must be set before the toggle is
+        // honored. Its exe writer is unpinned; our staged gate starts
+        // closed. Synthetic placement, hidden-arm safe.
+        let mut game = open_shop_board(10);
+        stage_shop_control(&mut game, SHOP_EXTMENU_ON_CODE, 500);
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_extmenu_toggles(), 0);
+        assert_eq!(game.shop_extmenu_reseeds(), 0);
     }
 
     #[test]

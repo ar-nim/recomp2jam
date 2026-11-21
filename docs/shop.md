@@ -477,6 +477,24 @@ silently moved. Guards:
 hidden-arm safe). **OPEN (next step):** qualified press frames with the
 notice text source.
 
+## #178 enrichment — ext-menu toggle (#788)
+
+The EXTMENU arm `0x14200099` (`ev_f3ad15be…`) acts only while gate
+word `0x5f` is set, clears it, flips `0x5b`, takes one fresh seed, and
+cycles visibility: the 12 filters `0x1420109b..a6` appear on open and
+hide on close; the eight first-row ITEMBUY/ITEMNAME/ITEMGIFT/ITEMSHOW
+controls and four `0x1401d088..8b` controls do the reverse. Open also
+clears `0x5d`; both branches refresh the context. Our board stages the
+gate (`0x5f` writer unpinned), counts accepted toggles and seeds, and
+applies one visibility helper in the paint filter. The live dump stages
+no filters (#195), so the rule is static-only. CONTRADICTION recorded:
+#195 called these controls "never stage live" — kept as the live
+absence, not as a claim the handler is dead. Guards:
+`shop_extmenu_toggle_cycles_twelve_filters_and_group_visibility` and
+`shop_extmenu_toggle_is_ignored_while_the_gate_is_closed` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** one EXT_ON press
+frame with before/after visibility.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
@@ -499,9 +517,10 @@ notice text source.
    read ASSUMED); bag pager steps and holds over staged owned
    inventory (L/R readout pairing ASSUMED), and a cell press selects
    the owned row with its category notice (#783); LEFT wraps and both
-   pager arms clear the pick (#784); planet pager now turns
-   the index with wrap and reseeds (#777), but the arrows and filters
-   still never stage live (absence, ticket #195). Ext-menu toggle
-   remains OPEN (#788).
+   pager arms clear the pick (#784); planet pager turns the index with
+   wrap and reseeds (#777); the ext-menu toggle cycles filter and
+   group visibility from the static arm (#788). None of these controls
+   stage live in the pinned dump (absence, ticket #195); their press
+   frames stay OPEN.
 5. Gender buttons — PARTIAL: byte/hidden-button/refresher staged;
    the screen→object-word mapping and before/after frames stay OPEN.

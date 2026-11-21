@@ -128,6 +128,17 @@ pub(crate) struct ShopState {
     bag_selection: Option<usize>,
     /// Notice posted by the last bag-cell press.
     bag_notice: Option<ShopBagNotice>,
+    /// Ext-menu state `0x5b` (true: filters shown).
+    ext_menu_open: bool,
+    /// Gate word `0x5f`. The exe writer is unpinned; a staged
+    /// EXTMENU control is our ready seam.
+    ext_menu_ready: bool,
+    /// Accepted toggle count (gate-closed presses do not toggle).
+    ext_menu_toggles: u32,
+    /// `FUN_00411e60` calls on ext-menu toggles (one per press).
+    ext_menu_reseeds: u32,
+    /// Word `0x5d`, cleared on every open.
+    ext_menu_secondary_word: u8,
     /// Notice posted by ITEMVACATE or CONFERENCE.
     chrome_notice: Option<ShopChromeNotice>,
     /// Staged confirmation-pair result for the vacate ladder.
@@ -426,6 +437,31 @@ impl ShopState {
         self.preview = None;
     }
 
+    /// Whether the 12 ext-menu filters are currently shown.
+    pub(crate) fn ext_menu_open(&self) -> bool {
+        self.ext_menu_open
+    }
+
+    /// Accepted ext-menu toggle count.
+    pub(crate) fn ext_menu_toggles(&self) -> u32 {
+        self.ext_menu_toggles
+    }
+
+    /// Reseeds made by ext-menu toggles.
+    pub(crate) fn ext_menu_reseeds(&self) -> u32 {
+        self.ext_menu_reseeds
+    }
+
+    /// Word `0x5d` after the last toggle.
+    pub(crate) fn ext_menu_secondary_word(&self) -> u8 {
+        self.ext_menu_secondary_word
+    }
+
+    /// Stage the gate word `0x5f` that allows an ext-menu toggle.
+    pub(crate) fn stage_ext_menu_ready(&mut self, ready: bool) {
+        self.ext_menu_ready = ready;
+    }
+
     /// Notice posted by the last ITEMVACATE/CONFERENCE press.
     pub(crate) fn chrome_notice(&self) -> Option<ShopChromeNotice> {
         self.chrome_notice
@@ -589,6 +625,23 @@ impl ShopState {
             }
             ShopAction::RevertTryOn => {
                 self.clear_try_on();
+                false
+            }
+            ShopAction::ToggleExtMenu => {
+                // Static arm `0x14200099` (`ev_f3ad15be…`): the `0x5f`
+                // gate opens the press once, then `0x5b` flips and one
+                // seed is taken; open clears `0x5d` and hides the row
+                // groups, close restores them and hides the filters.
+                if !self.ext_menu_ready {
+                    return false;
+                }
+                self.ext_menu_ready = false;
+                self.ext_menu_open = !self.ext_menu_open;
+                self.ext_menu_toggles = self.ext_menu_toggles.saturating_add(1);
+                self.ext_menu_reseeds = self.ext_menu_reseeds.saturating_add(1);
+                if self.ext_menu_open {
+                    self.ext_menu_secondary_word = 0;
+                }
                 false
             }
             ShopAction::VacateItem => {

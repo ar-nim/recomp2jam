@@ -732,15 +732,56 @@ pub const SHOP_ITEMGIFT_IDS: [&str; 8] = [
 pub const SHOP_GIFTITEM_CODE: u32 = 0x1420_0071;
 /// Cart gift button id (the [`ShopGiftNoop`] record behind it).
 pub const SHOP_GIFTITEM_ID: &str = "IDC_BUTTON_SSHOP_GIFTITEM";
-/// Ext-menu opener (`IDC_BUTTON_SSHOP_EXTMENU_ON`): its twelve
-/// filter children stage nothing live, so the opener records
-/// nothing (labeled no-op).
+/// Ext-menu opener (`IDC_BUTTON_SSHOP_EXTMENU_ON`). Static arm
+/// `0x14200099` (`ev_f3ad15be…`) only acts while gate word `0x5f` is
+/// set; it clears that gate and flips `0x5b`, reseeds once, and cycles
+/// the 12 filters plus the eight first-row buy/name/gift/show
+/// controls (and four `0x1401d088..8b` controls). The layout helper
+/// `FUN_004a0660` hides all filters at entry. The live dump stages no
+/// filters (#195), so the visibility rule is a static pin.
 pub const SHOP_EXTMENU_ON_CODE: u32 = 0x1420_0099;
 /// First ext-menu filter (`IDC_BUTTON_SSHOP_EXTMENU_ALL`); twelve
 /// run contiguously through `+11` (none staged live).
 pub const SHOP_EXTMENU_FIRST_CODE: u32 = 0x1420_109B;
 /// Ext-menu filters in the menu (twelve `Shop_ExtMenu` buttons).
 pub const SHOP_EXTMENU_BUTTONS: usize = 12;
+/// The eight first-row controls the ext-menu arm flips with the
+/// filters: ITEMBUY1/2, ITEMNAME1/2, ITEMGIFT1/2, ITEMSHOW1/2.
+pub const SHOP_EXTMENU_GROUP_CODES: [u32; 8] = [
+    0x1420_0018,
+    0x1420_0019,
+    0x1440_002C,
+    0x1440_002D,
+    0x1420_0020,
+    0x1420_0021,
+    0x1460_0035,
+    0x1460_0036,
+];
+
+/// Four side controls the open arm hides (`0x1401d088..8b`).
+pub const SHOP_EXTMENU_SIDE_CODES: [u32; 4] = [0x1401_D088, 0x1401_D089, 0x1401_D08A, 0x1401_D08B];
+
+/// Whether one staged control paints with the ext-menu state. The
+/// 12 filters appear on open and hide on close; the eight first-row
+/// controls and four side controls do the reverse. Every other
+/// placement keeps its own gate. The layout helper hides all filters
+/// at entry, which our closed default reproduces.
+#[must_use]
+pub fn shop_extmenu_kept(placed: &ScenePlacement, open: bool) -> bool {
+    let in_filter_run = placed
+        .code
+        .checked_sub(SHOP_EXTMENU_FIRST_CODE)
+        .is_some_and(|offset| offset < SHOP_EXTMENU_BUTTONS as u32);
+    if in_filter_run {
+        return open;
+    }
+    if SHOP_EXTMENU_GROUP_CODES.contains(&placed.code)
+        || SHOP_EXTMENU_SIDE_CODES.contains(&placed.code)
+    {
+        return !open;
+    }
+    true
+}
 /// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`). Static arm
 /// `0x14200008/09` (`ev_f3ad15be…`) cycles index `0x17`: UP 1→12 then
 /// decrements, DOWN 12→1 then increments; it hides the 12×3 grid,
@@ -1251,6 +1292,8 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// EXTMENU (`0x14200099`): cycle the 12 filters and their group.
+    ToggleExtMenu,
     /// ITEMVACATE (`0x14200005`): confirmation and item-code ladder.
     VacateItem,
     /// CONFERENCE (`0x142000b6`): notice type `0x14`.
@@ -1361,6 +1404,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
         SHOP_BACK_CODE | SHOP_STATIC_BACK_CODE => Some(ShopAction::BackToLobby),
         SHOP_GOMYROOM_CODE => Some(ShopAction::GoMyRoom),
+        SHOP_EXTMENU_ON_CODE => Some(ShopAction::ToggleExtMenu),
         SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
         SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
         SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
