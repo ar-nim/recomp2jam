@@ -1654,23 +1654,167 @@ pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
 /// next step as lanking).
 pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
 pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Owned-list pager (`IDC_BUTTON_MSHOP_MYALL_LEFT/RIGHT`): the exe
+/// wraps left, clamps right, and only answers outside a download
+/// (`FUN_004c7f70` cases `0x1A20000C/0x0D`, #817).
+pub const MSHOP_MYALL_LEFT_CODE: u32 = 0x1A20_000C;
+pub const MSHOP_MYALL_RIGHT_CODE: u32 = 0x1A20_000D;
+/// Six color filters (`IDC_BUTTON_MSHOP_MS_NEW..SILVER`) and the four
+/// box-line frames they stage (`0x1A500004..07`). The filter arm
+/// writes index + 1 into the frame setter (`FUN_004c7f70`, #813).
+pub const MSHOP_GENRE_FILTER_FIRST_CODE: u32 = 0x1A20_1010;
+pub const MSHOP_GENRE_FILTER_COUNT: u32 = 6;
+pub const MSHOP_BOX_FRAME_FIRST_CODE: u32 = 0x1A50_0004;
+pub const MSHOP_BOX_FRAME_COUNT: u32 = 4;
+
+/// One song-shop color filter, in the exe's control-code order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopGenreFilter {
+    /// `NEW`, the filter enabled at shop entry.
+    #[default]
+    New,
+    /// `GOLD`.
+    Gold,
+    /// `BLACK`.
+    Black,
+    /// `BLUE`.
+    Blue,
+    /// `RED`.
+    Red,
+    /// `SILVER`.
+    Silver,
+}
+
+impl MusicShopGenreFilter {
+    /// Zero-based filter index (the exe's state `+0x14e` offset).
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::New => 0,
+            Self::Gold => 1,
+            Self::Black => 2,
+            Self::Blue => 3,
+            Self::Red => 4,
+            Self::Silver => 5,
+        }
+    }
+
+    /// Box-line frame index the filter stages (`index + 1`).
+    #[must_use]
+    pub const fn frame_index(self) -> u32 {
+        self.index() + 1
+    }
+
+    /// Filter behind one `MS_NEW..SILVER` code.
+    #[must_use]
+    pub fn from_code(code: u32) -> Option<Self> {
+        let offset = code.checked_sub(MSHOP_GENRE_FILTER_FIRST_CODE)?;
+        match offset {
+            0 => Some(Self::New),
+            1 => Some(Self::Gold),
+            2 => Some(Self::Black),
+            3 => Some(Self::Blue),
+            4 => Some(Self::Red),
+            5 => Some(Self::Silver),
+            _ => None,
+        }
+    }
+}
 /// Download controls (`0x1A20000E` START, `0x1A20000F` CANCEL).
 /// Their rects stage with the shop, but the shop-side 5012 send
 /// site is OPEN, so both stay inert instead of guessing a wire
 /// ride (#179 story 17).
-/// Right-rank panel buttons (`0x1A200016..18`): the 곡명 press has
-/// one qualified frame with no reorder (the rank order was already
-/// active), and no pager press frame exists. They stay inert here;
-/// our song-board sort directions remain ASSUMED (`E-T`, #411).
+/// Owned-list header sorts (`IDC_BUTTON_MSHOP_MY_TITLE/PLAYTIME/
+/// DOWNSTATUS`, `0x1A200016..18`). `FUN_004d2660` VA `0x4d2660`
+/// routes each code to its own comparator and toggles one direction
+/// word at `state+0x370 + index*4` (evidence
+/// `ev_b0506437a4ea82d1321f6c55cfc20fdab8eef49734591c22d0bb50fe9710baa1`,
+/// comparators `ev_0b02af203b1f902309426f69cb8e8a169e07f6b24c2a492635804d464cd900f6`,
+/// `ev_4a1cc12bf001f4152c7964bfd8f188a284f841a1a5ed905a6acd907ad2f827d6`,
+/// `ev_01b810adfa5908e568df2920399c5c466ae6eb887590d07eb11a2932a317a3de`).
+/// The play-time and download-date fields have no shell source yet.
 pub const MSHOP_RANK_BUTTON_FIRST_CODE: u32 = 0x1A20_0016;
 pub const MSHOP_RANK_BUTTON_LAST_CODE: u32 = 0x1A20_0018;
-/// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
-/// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
-/// exe press frame names a result (matrix `E-T`), so they stay
-/// inert until a capture pins the behavior (#413).
+pub const MSHOP_OWNED_TITLE_SORT_CODE: u32 = 0x1A20_0016;
+pub const MSHOP_OWNED_PLAYTIME_SORT_CODE: u32 = 0x1A20_0017;
+pub const MSHOP_OWNED_DOWNSTATUS_SORT_CODE: u32 = 0x1A20_0018;
+
+/// One owned-list sort key, in the exe's header order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnedSort {
+    /// Title: the exe comparator uses the catalog title bytes and id.
+    Title,
+    /// Play time: the exe comparator reads ASCII digit fields the
+    /// shell does not stage; the local fallback keeps id order.
+    PlayTime,
+    /// Download status: the exe comparator reads three date-like
+    /// bytes; the local fallback uses the installed chart bit.
+    DownloadStatus,
+}
+
+impl OwnedSort {
+    /// Index into the exe's three direction words.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Title => 0,
+            Self::PlayTime => 1,
+            Self::DownloadStatus => 2,
+        }
+    }
+
+    /// Sort key behind one owned-header code.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            MSHOP_OWNED_TITLE_SORT_CODE => Some(Self::Title),
+            MSHOP_OWNED_PLAYTIME_SORT_CODE => Some(Self::PlayTime),
+            MSHOP_OWNED_DOWNSTATUS_SORT_CODE => Some(Self::DownloadStatus),
+            _ => None,
+        }
+    }
+}
+/// Music-shop SEARCH edit and button (`0x1A30007B`/`0x1A20007C`).
+/// The init stages the Korean hint; the SEARCH arm lowercases the
+/// edit text and every catalog title through `FUN_005f7310`
+/// (#815). CASHFILLUP (`0x1A200009`) stays inert until its web
+/// helper arm lands (#836).
 pub const MSHOP_SEARCH_EDIT_CODE: u32 = 0x1A30_007B;
 pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
 pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
+/// The click posts notice id `0x12` when the web helper returns no
+/// path. The exe's notice copy is OPEN; our client uses a legible
+/// fallback caption, never an exe-text claim (#836).
+pub const MSHOP_CASHFILLUP_NOTICE_ID: u16 = 0x12;
+pub const MSHOP_CASHFILLUP_FALLBACK_CAPTION: &str = "WEB UNAVAILABLE (0x12)";
+/// Pinned CP949 copy for the search edit hint and its two notices.
+pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
+pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
+pub const MSHOP_NO_SEARCH_HITS_NOTICE: &str = "검색된 곡이 없습니다.";
+
+/// Lightboard tooltip (`0x1A50006E`). The exe writes its lines with
+/// `굴림체` and falls back to the banner below. The font name is
+/// evidence only: our rasterizer uses the owner's cross-platform
+/// system font; the pinned copy and control geometry are the claim
+/// (#819).
+pub const MSHOP_LIGHTBOARD_TOOLTIP_CODE: u32 = 0x1A50_006E;
+pub const MSHOP_LIGHTBOARD_FONT: &str = "굴림체";
+pub const MSHOP_LIGHTBOARD_FALLBACK: &str = "신나는 음악게임 오투잼";
+
+/// Whether a lightboard figure stays painted at a hover point.
+#[must_use]
+pub fn music_shop_tooltip_kept(placed: &ScenePlacement, hovered: bool) -> bool {
+    placed.code != MSHOP_LIGHTBOARD_TOOLTIP_CODE || hovered
+}
+
+/// Whether the pointer sits in the staged lightboard tooltip rect.
+#[must_use]
+pub fn music_shop_tooltip_hovered(placements: &[ScenePlacement], x: i32, y: i32) -> bool {
+    placements
+        .iter()
+        .filter(|placed| placed.code == MSHOP_LIGHTBOARD_TOOLTIP_CODE)
+        .any(|placed| super::paint::rect_hit(&placed.rect, x, y))
+}
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
 /// return is pinned by the bnd arm; the shared 5007 ExitShop send is
@@ -1724,6 +1868,10 @@ pub enum MusicShopNotice {
     DeleteFiles,
     /// DOWN_CANCEL asked before cancelling an active transfer.
     CancelDownload,
+    /// SEARCH pressed with empty or unchanged edit text.
+    EmptySearch,
+    /// SEARCH found no catalog title containing the query.
+    NoSearchHits,
 }
 
 impl MusicShopNotice {
@@ -1734,6 +1882,8 @@ impl MusicShopNotice {
             Self::FiveSongCap => MSHOP_FIVE_SONG_CAP_NOTICE,
             Self::DeleteFiles => MSHOP_MUSICDELETE_NOTICE,
             Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
+            Self::EmptySearch => MSHOP_EMPTY_SEARCH_NOTICE,
+            Self::NoSearchHits => MSHOP_NO_SEARCH_HITS_NOTICE,
         }
     }
 }
@@ -1870,6 +2020,12 @@ pub enum MusicShopAction {
     BuyRow { slot: usize, gem: bool },
     /// A sort button answered.
     Sort(LankingSort),
+    /// A color filter answered; it resets the browsing page and
+    /// stages one of the four box-line frames (#813).
+    Genre(MusicShopGenreFilter),
+    /// An owned-list header sorted the owned rows and cleared their
+    /// marks (#816).
+    OwnedSort(OwnedSort),
     /// A TOP100 board-chrome control was pressed. Carries the staged
     /// control code (`0x1A20007D..0x84`); the exe press frame pins no
     /// ranking board, so this records a client-only press marker and
@@ -1879,6 +2035,10 @@ pub enum MusicShopAction {
     MsPrev,
     /// Shop-list pager stepped forward.
     MsNext,
+    /// Owned-list pager stepped back.
+    MyPrev,
+    /// Owned-list pager stepped forward.
+    MyNext,
     /// One of the two owned face tabs was pressed.
     Face(MusicShopFace),
     /// Owned `MY_EX` row picked (0-based on the owned list).
@@ -1891,6 +2051,10 @@ pub enum MusicShopAction {
     DownStart,
     /// DOWN_CANCEL pressed: confirm, then drop the active queue.
     DownCancel,
+    /// SEARCH pressed with the current edit text.
+    Search,
+    /// CASHFILLUP pressed; the web helper has no local path.
+    CashFillup,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -1930,6 +2094,12 @@ pub fn music_shop_action_at(
 /// buttons — their slots resolve through the staged `MS_EX` slots
 /// in [`music_shop_buy_slot`] — and for every unnamed control).
 fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
+    if let Some(genre) = MusicShopGenreFilter::from_code(code) {
+        return Some(MusicShopAction::Genre(genre));
+    }
+    if let Some(sort) = OwnedSort::from_code(code) {
+        return Some(MusicShopAction::OwnedSort(sort));
+    }
     if let Some(sort) = music_shop_sort_for_code(code) {
         return Some(MusicShopAction::Sort(sort));
     }
@@ -1954,8 +2124,12 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     match code {
         MSHOP_TAB_DOWN_CODE => Some(MusicShopAction::Face(MusicShopFace::Download)),
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
+        MSHOP_SEARCH_CODE => Some(MusicShopAction::Search),
+        MSHOP_CASH_FILLUP_CODE => Some(MusicShopAction::CashFillup),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
+        MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),
+        MSHOP_MYALL_RIGHT_CODE => Some(MusicShopAction::MyNext),
         MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
@@ -2008,6 +2182,36 @@ pub fn music_shop_top100_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
         .collect();
     rects.sort_by_key(|(code, _)| *code);
     rects.into_iter().map(|(_, rect)| rect).collect()
+}
+
+/// First/last of the seven download caption texts (`0x1A40001B..21`)
+/// and the one extra shifted control (`0x1A400071`).
+pub const MSHOP_DOWN_CAPTION_FIRST_CODE: u32 = 0x1A40_001B;
+pub const MSHOP_DOWN_CAPTION_LAST_CODE: u32 = 0x1A40_0021;
+pub const MSHOP_EXTRA_CAPTION_CODE: u32 = 0x1A40_0071;
+
+/// Staged rect with the exe's per-control placement offsets
+/// (`FUN_004c72a0`, evidence
+/// `ev_5f3fca6dbfdacd694bb430ed098c54fd03447398cc676c5987a0c050139f889b`).
+/// All seven captions get y+2 first; the first two are then
+/// rewritten to y−1 and the last to y−2. The extra control shifts
+/// x−2/y+1/w+2. Other rects keep their parsed geometry.
+#[must_use]
+pub fn music_shop_caption_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> {
+    let mut rect = placements.iter().find(|placed| placed.code == code)?.rect;
+    if (MSHOP_DOWN_CAPTION_FIRST_CODE..=MSHOP_DOWN_CAPTION_LAST_CODE).contains(&code) {
+        rect.y = rect.y.saturating_add(2);
+        if code <= MSHOP_DOWN_CAPTION_FIRST_CODE + 1 {
+            rect.y = rect.y.saturating_sub(3);
+        } else if code == MSHOP_DOWN_CAPTION_LAST_CODE {
+            rect.y = rect.y.saturating_sub(4);
+        }
+    } else if code == MSHOP_EXTRA_CAPTION_CODE {
+        rect.x = rect.x.saturating_sub(2);
+        rect.y = rect.y.saturating_add(1);
+        rect.w = rect.w.saturating_add(2);
+    }
+    Some(rect)
 }
 
 /// Staged song-row hit areas in top-to-bottom order (the five
@@ -6709,6 +6913,67 @@ mod side_tests {
         );
     }
 
+    #[test]
+    fn music_shop_caption_rects_carry_the_pinned_y_offsets() {
+        // seam: pure staged-rect geometry. `FUN_004c72a0` adds +2 to
+        // all seven caption rects, then overwrites 0x1B/0x1C with
+        // −1 and 0x21 with −2; the 0x71 rect shifts x−2/y+1/w+2.
+        let area = |code: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 80,
+                h: 16,
+            },
+        };
+        let placements: Vec<ScenePlacement> = [
+            MSHOP_DOWN_TEXT_CODE,
+            0x1A40_001C,
+            0x1A40_001D,
+            0x1A40_0021,
+            0x1A40_0071,
+            MSHOP_MONEY_GEM_CODE,
+        ]
+        .map(area)
+        .to_vec();
+        assert_eq!(
+            music_shop_caption_rect(&placements, MSHOP_DOWN_TEXT_CODE).map(|rect| rect.y),
+            Some(99),
+            "0x1B is rewritten to y−1"
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_001C).map(|rect| rect.y),
+            Some(99)
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_001D).map(|rect| rect.y),
+            Some(102)
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_0021).map(|rect| rect.y),
+            Some(98),
+            "0x21 is rewritten to y−2"
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, 0x1A40_0071),
+            Some(Rect {
+                x: 98,
+                y: 101,
+                w: 82,
+                h: 16,
+            })
+        );
+        assert_eq!(
+            music_shop_caption_rect(&placements, MSHOP_MONEY_GEM_CODE).map(|rect| rect.y),
+            Some(100),
+            "money rects are stored without a shift"
+        );
+    }
+
     fn music_shop_board_placements() -> Vec<ScenePlacement> {
         // Synthetic board mirroring the staged `STATE_MUSICSHOP`
         // geometry: five MS_EX hit areas, row-local buy buttons, and
@@ -6931,29 +7196,40 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_rank_buttons_stay_inert_until_a_press_pairs_them() {
-        // The 곡명 press left the rank readout at `01/47` and the
-        // list unchanged, and no pager press was captured. No sort
-        // direction or rank-page pairing may be inferred from the
-        // bnd rects alone; the board's own sort buttons are separate.
-        for code in MSHOP_RANK_BUTTON_FIRST_CODE..=MSHOP_RANK_BUTTON_LAST_CODE {
-            assert_eq!(
-                music_shop_action_for_code(code),
-                None,
-                "rank code {code:#x} has no pinned press behavior"
-            );
-        }
+    fn music_shop_owned_header_codes_route_to_the_three_sort_keys() {
+        // FUN_004d2660 dispatches 0x1A200016..18 to the owned sort
+        // comparators, not to the TOP100 rank vectors. The static
+        // evidence names the routing and the direction toggle; the
+        // two unstaged value fields stay OPEN.
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_TITLE_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::Title))
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_PLAYTIME_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::PlayTime))
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_OWNED_DOWNSTATUS_SORT_CODE),
+            Some(MusicShopAction::OwnedSort(OwnedSort::DownloadStatus))
+        );
     }
 
     #[test]
-    fn music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist() {
-        // The search edit/button and CASHFILLUP rects are visible in
-        // the qualified entry frame, but no press result was captured
-        // (`E-T`). No sort, buy, or navigation may be guessed for
-        // them; the Item Shop charge plate is a different spec.
+    fn music_shop_search_and_cashfillup_buttons_dispatch() {
+        // SEARCH's lowercased substring arm is pinned from the exe
+        // (#815). The edit is a text target, not a click action.
+        // CASHFILLUP posts notice id 0x12 on this web-less client
+        // (#836); its exe copy stays OPEN.
         assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_EDIT_CODE), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_CODE), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE), None);
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_SEARCH_CODE),
+            Some(MusicShopAction::Search)
+        );
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE),
+            Some(MusicShopAction::CashFillup)
+        );
     }
 
     #[test]

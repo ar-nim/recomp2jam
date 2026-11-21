@@ -1,6 +1,7 @@
 //! Song-shop songs, sorts, pages, and the fetched flag board
 //! behind the music-shop side screen (#139 cluster 4).
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
@@ -8,9 +9,10 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
-    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
-    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
-    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
+    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
+    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
+    MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
+    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -90,6 +92,34 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Last staged song-shop preview plate control code. The exe
+    /// clears `0x1A200003`/`0x1A500002` on a page turn; our shell has
+    /// no live producer for those art plates, so this records the
+    /// staged code and only pins the clearing arm (#814).
+    pub(crate) music_shop_preview_plate: Option<u32>,
+    /// Active color filter. `NEW` is enabled at entry
+    /// (`FUN_004c6d70`); a filter press resets the song page and
+    /// stages the box-line frame at `filter index + 1` (#813).
+    pub(crate) music_shop_genre_filter: MusicShopGenreFilter,
+    /// Search-result flag (exe state `+0x88`). A filter press clears
+    /// it; the SEARCH arm sets it on a successful match (#815).
+    pub(crate) music_shop_search_active: bool,
+    /// Text in the staged `0x1A30007B` edit. Typed characters go
+    /// here while the music-shop side owns the keyboard (#815).
+    pub(crate) music_shop_search_draft: String,
+    /// Last committed query (exe state `+0x95`); an empty or equal
+    /// draft posts the prompt instead of searching again.
+    pub(crate) music_shop_search_query: Option<String>,
+    /// Catalog song ids whose lowercased title contains the query.
+    pub(crate) music_shop_search_hits: Vec<u32>,
+    /// Lines staged for the lightboard tooltip. The exe takes a
+    /// vector of 0x1C-byte line records; their source is OPEN, so
+    /// this seam holds the text and the painter owns presentation
+    /// (#819).
+    pub(crate) music_shop_tooltip_lines: Vec<String>,
+    /// Notice id posted by CASHFILLUP when no web path exists. The
+    /// exe's text for id `0x12` stays OPEN (#836).
+    pub(crate) music_shop_cashfillup_notice_id: Option<u16>,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -101,6 +131,14 @@ pub(crate) struct MusicShopState {
     /// keeps a twelve-column per-page mark table; presses toggle one
     /// cell (`FUN_004cdca0`).
     pub(crate) music_shop_owned_marks: [bool; MSHOP_OWNED_ROWS],
+    /// Visible owned-list page (twelve ids per page, exe state
+    /// `+0x25`). The MYALL pager wraps left, clamps right, and is
+    /// gated while a download stands (#817).
+    pub(crate) music_shop_owned_page: usize,
+    /// Active owned-list sort key and its per-key direction word
+    /// (exe `state+0x370 + index*4`, #816).
+    pub(crate) music_shop_owned_sort: Option<OwnedSort>,
+    pub(crate) music_shop_owned_sort_descending: [bool; 3],
     /// Standing notice and the staged control code whose rect hosts
     /// it. The exe posts these strings through its notice helper;
     /// the host rect is ours-by-design chrome over the bnd layout.
@@ -129,6 +167,8 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+        self.music_shop_search_active = false;
+        self.music_shop_search_hits.clear();
     }
 
     /// Stage the local `Music\` scan (§1) behind the shop. The
@@ -143,6 +183,10 @@ impl MusicShopState {
     pub(crate) fn stage_board(&mut self, answer: MusicListAnswer) {
         self.music_shop_board = Some(answer);
         self.music_shop_page = 0;
+        self.music_shop_owned_page = 0;
+        self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+        self.music_shop_owned_sort = None;
+        self.music_shop_owned_sort_descending = [false; 3];
     }
 
     /// Stage the per-song price words from `OJNList.dat` table 3.
@@ -241,24 +285,87 @@ impl MusicShopState {
         self.music_shop_notice = Some((notice, code));
     }
 
+    /// Owned-list page count (at least one, like the song pager).
+    pub(crate) fn owned_pages(&self) -> usize {
+        self.music_shop_board.as_ref().map_or(1, |board| {
+            shop_page_count(board.entries.len(), MSHOP_OWNED_ROWS)
+        })
+    }
+
+    /// Visible owned-list page index.
+    pub(crate) fn owned_page(&self) -> usize {
+        self.music_shop_owned_page
+    }
+
+    /// Active owned-list sort key.
+    pub(crate) fn owned_sort(&self) -> Option<OwnedSort> {
+        self.music_shop_owned_sort
+    }
+
+    /// Direction of the active owned-list sort key.
+    pub(crate) fn owned_sort_descending(&self) -> bool {
+        self.music_shop_owned_sort
+            .is_some_and(|sort| self.music_shop_owned_sort_descending[sort.index()])
+    }
+
+    /// Catalog title of one owned song id, or the bare id.
+    fn owned_title(&self, song_id: u16) -> String {
+        self.music_shop_songs
+            .iter()
+            .find(|song| song.song_id == u32::from(song_id))
+            .map_or_else(|| song_id.to_string(), |song| song.title.clone())
+    }
+
+    /// Exe-backed compare for one owned header. Play time and
+    /// download date have no staged value source, so their local
+    /// fallback keys are id and installed bit respectively.
+    fn compare_owned_entries(
+        &self,
+        sort: OwnedSort,
+        first: &MusicListEntry,
+        second: &MusicListEntry,
+    ) -> Ordering {
+        let order = match sort {
+            OwnedSort::Title => self
+                .owned_title(first.id)
+                .to_lowercase()
+                .cmp(&self.owned_title(second.id).to_lowercase())
+                .then_with(|| first.id.cmp(&second.id)),
+            OwnedSort::PlayTime => first.id.cmp(&second.id),
+            OwnedSort::DownloadStatus => {
+                song_installed(u32::from(first.id), self.music_shop_installed.as_ref())
+                    .cmp(&song_installed(
+                        u32::from(second.id),
+                        self.music_shop_installed.as_ref(),
+                    ))
+                    .then_with(|| first.id.cmp(&second.id))
+            }
+        };
+        if self.music_shop_owned_sort_descending[sort.index()] {
+            order.reverse()
+        } else {
+            order
+        }
+    }
+
     /// Owned rows from the fetched 4031 ids joined to the catalog
-    /// titles and the local chart scan, twelve at most.
+    /// titles and the local chart scan, twelve at most on this page.
     pub(crate) fn owned_rows(&self) -> Vec<OwnedRow> {
         let Some(board) = self.music_shop_board.as_ref() else {
             return Vec::new();
         };
-        board
-            .entries
+        let mut entries = board.entries.clone();
+        if let Some(sort) = self.music_shop_owned_sort {
+            entries.sort_by(|first, second| self.compare_owned_entries(sort, first, second));
+        }
+        let (start, end) =
+            lanking_page_window(entries.len(), MSHOP_OWNED_ROWS, self.music_shop_owned_page);
+        entries[start..end]
             .iter()
-            .take(MSHOP_OWNED_ROWS)
             .enumerate()
             .map(|(slot, entry)| OwnedRow {
                 song_id: entry.id,
-                title: self
-                    .music_shop_songs
-                    .iter()
-                    .find(|song| song.song_id == u32::from(entry.id))
-                    .map_or_else(|| entry.id.to_string(), |song| song.title.clone()),
+                title: self.owned_title(entry.id),
                 installed: song_installed(u32::from(entry.id), self.music_shop_installed.as_ref()),
                 marked: self.music_shop_owned_marks[slot],
             })
@@ -273,6 +380,84 @@ impl MusicShopState {
     /// Last pressed TOP100 board-chrome control code, if any.
     pub(crate) fn top100_pressed(&self) -> Option<u32> {
         self.music_shop_top100_pressed
+    }
+
+    /// Active color filter.
+    pub(crate) fn genre_filter(&self) -> MusicShopGenreFilter {
+        self.music_shop_genre_filter
+    }
+
+    /// Box-line frame staged by the active filter (one-based).
+    pub(crate) fn frame_index(&self) -> u32 {
+        self.music_shop_genre_filter.frame_index()
+    }
+
+    /// Whether the visible songs are a search result.
+    pub(crate) fn search_active(&self) -> bool {
+        self.music_shop_search_active
+    }
+
+    /// Current edit text.
+    pub(crate) fn search_draft(&self) -> &str {
+        &self.music_shop_search_draft
+    }
+
+    /// Marked title hits from the last successful search.
+    pub(crate) fn search_hits(&self) -> &[u32] {
+        &self.music_shop_search_hits
+    }
+
+    /// Type one non-control character into the search edit.
+    pub(crate) fn push_search_char(&mut self, typed: char) {
+        if !typed.is_control() {
+            self.music_shop_search_draft.push(typed);
+        }
+    }
+
+    /// Erase one character from the search edit.
+    pub(crate) fn delete_search_char(&mut self) {
+        self.music_shop_search_draft.pop();
+    }
+
+    /// Lines staged for the lightboard tooltip.
+    pub(crate) fn tooltip_lines(&self) -> &[String] {
+        &self.music_shop_tooltip_lines
+    }
+
+    /// Stage tooltip lines at the board seam; an empty slice keeps
+    /// the exe's fallback banner.
+    pub(crate) fn stage_tooltip_lines(&mut self, lines: &[&str]) {
+        self.music_shop_tooltip_lines = lines.iter().map(|line| (*line).to_owned()).collect();
+    }
+
+    /// Standing CASHFILLUP notice id, if the button was pressed.
+    pub(crate) fn cashfillup_notice_id(&self) -> Option<u16> {
+        self.music_shop_cashfillup_notice_id
+    }
+
+    /// Stage the search flag at the board seam. The SEARCH arm owns
+    /// it once that arm lands (#815).
+    pub(crate) fn stage_search_active(&mut self, active: bool) {
+        self.music_shop_search_active = active;
+    }
+
+    /// Last staged preview plate code, if any.
+    pub(crate) fn preview_plate(&self) -> Option<u32> {
+        self.music_shop_preview_plate
+    }
+
+    /// Stage a preview plate at the board seam. No live click arm
+    /// stages one yet; the pinned behavior is the page-turn clear.
+    pub(crate) fn stage_preview_plate(&mut self, code: u32) {
+        self.music_shop_preview_plate = Some(code);
+    }
+
+    /// Drop the art a page turn makes stale: preview plate, picked
+    /// row, and pressed rank key (exe `MSALL` arm, #814).
+    fn clear_page_plates(&mut self) {
+        self.music_shop_preview_plate = None;
+        self.music_shop_selected_row = None;
+        self.music_shop_top100_pressed = None;
     }
 
     /// Checked song-shop cart ids in pick order.
@@ -324,7 +509,15 @@ impl MusicShopState {
     /// Sorted song-shop rows with live flags on the current page
     /// (owned page: small, five rows at most).
     pub(crate) fn visible_rows(&self) -> Vec<MusicShopRow> {
-        let mut songs = self.music_shop_songs.clone();
+        let mut songs: Vec<LankingSong> = if self.music_shop_search_active {
+            self.music_shop_songs
+                .iter()
+                .filter(|song| self.music_shop_search_hits.contains(&song.song_id))
+                .cloned()
+                .collect()
+        } else {
+            self.music_shop_songs.clone()
+        };
         if let Some(sort) = self.music_shop_sort {
             sort_lanking_songs(&mut songs, sort);
         }
@@ -348,6 +541,7 @@ impl MusicShopState {
         // consume an armed confirmation.
         let armed_notice = self.music_shop_notice;
         self.music_shop_notice = None;
+        self.music_shop_cashfillup_notice_id = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
                 self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
@@ -437,6 +631,58 @@ impl MusicShopState {
                 }
                 MusicShopEffect::None
             }
+            MusicShopAction::CashFillup => {
+                // The exe calls its web helper with argument 0 and
+                // posts notice id 0x12 on an empty result. This client
+                // has no charge web path, so that is the only arm.
+                self.music_shop_cashfillup_notice_id = Some(MSHOP_CASHFILLUP_NOTICE_ID);
+                MusicShopEffect::None
+            }
+            MusicShopAction::Search => {
+                let draft = self.music_shop_search_draft.clone();
+                if draft.is_empty()
+                    || self.music_shop_search_query.as_deref() == Some(draft.as_str())
+                {
+                    self.post_notice(MusicShopNotice::EmptySearch, MSHOP_SEARCH_CODE);
+                    return MusicShopEffect::None;
+                }
+                let needle = draft.to_lowercase();
+                let hits: Vec<u32> = self
+                    .music_shop_songs
+                    .iter()
+                    .filter(|song| song.title.to_lowercase().contains(&needle))
+                    .map(|song| song.song_id)
+                    .collect();
+                if hits.is_empty() {
+                    self.post_notice(MusicShopNotice::NoSearchHits, MSHOP_SEARCH_CODE);
+                    return MusicShopEffect::None;
+                }
+                self.music_shop_search_query = Some(draft);
+                self.music_shop_search_hits = hits;
+                self.music_shop_search_active = true;
+                self.music_shop_page = 0;
+                self.clear_page_plates();
+                MusicShopEffect::None
+            }
+            MusicShopAction::OwnedSort(sort) => {
+                let direction = sort.index();
+                if self.music_shop_owned_sort == Some(sort) {
+                    self.music_shop_owned_sort_descending[direction] =
+                        !self.music_shop_owned_sort_descending[direction];
+                } else {
+                    self.music_shop_owned_sort = Some(sort);
+                }
+                self.music_shop_owned_page = 0;
+                self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                MusicShopEffect::None
+            }
+            MusicShopAction::Genre(genre) => {
+                self.music_shop_genre_filter = genre;
+                self.music_shop_search_active = false;
+                self.music_shop_page = 0;
+                self.clear_page_plates();
+                MusicShopEffect::None
+            }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
                 self.music_shop_page = 0;
@@ -445,21 +691,40 @@ impl MusicShopState {
                 MusicShopEffect::None
             }
             MusicShopAction::MsPrev => {
-                self.music_shop_page = self.music_shop_page.saturating_sub(1);
-                self.music_shop_selected_row = None;
-                self.music_shop_top100_pressed = None;
+                let pages = self.list_pages();
+                self.music_shop_page = self
+                    .music_shop_page
+                    .checked_sub(1)
+                    .unwrap_or_else(|| pages.saturating_sub(1));
+                self.clear_page_plates();
                 MusicShopEffect::None
             }
             MusicShopAction::MsNext => {
-                if self
-                    .music_shop_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_SONG_ROWS)
-                    < self.music_shop_songs.len()
-                {
-                    self.music_shop_page = self.music_shop_page.saturating_add(1);
-                    self.music_shop_selected_row = None;
-                    self.music_shop_top100_pressed = None;
+                let next = self.music_shop_page.saturating_add(1);
+                if next < self.list_pages() {
+                    self.music_shop_page = next;
+                    self.clear_page_plates();
+                }
+                MusicShopEffect::None
+            }
+            MusicShopAction::MyPrev => {
+                if !self.music_shop_download_active {
+                    let pages = self.owned_pages();
+                    self.music_shop_owned_page = self
+                        .music_shop_owned_page
+                        .checked_sub(1)
+                        .unwrap_or_else(|| pages.saturating_sub(1));
+                    self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                }
+                MusicShopEffect::None
+            }
+            MusicShopAction::MyNext => {
+                if !self.music_shop_download_active {
+                    let next = self.music_shop_owned_page.saturating_add(1);
+                    if next < self.owned_pages() {
+                        self.music_shop_owned_page = next;
+                        self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                    }
                 }
                 MusicShopEffect::None
             }

@@ -45,17 +45,20 @@ use super::game::OwnedRow;
 use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
-    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
-    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
-    planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
-    shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects, wallet_amount_caption,
-    wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
-    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
-    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
-    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE,
-    MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
-    MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE,
+    music_shop_caption_rect, music_shop_cart_page_rects, music_shop_cart_slots,
+    music_shop_owned_slots, music_shop_page_rects, music_shop_slots, music_shop_tiled_rect,
+    planet_action_for_code, planet_band_rect, planet_caption_for_code, planet_plate_clip,
+    shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects,
+    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice,
+    MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel,
+    WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE,
+    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_FALLBACK_CAPTION,
+    MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE,
+    MSHOP_GEM_PRICE_CODE, MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE,
+    MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE,
     MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
     QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE,
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
@@ -1559,6 +1562,97 @@ const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
 /// and the host control code are pinned; the band is presentation.
 const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
 
+/// Own-by-design marker for a title-search hit. The exe calls its
+/// hit-marking helper on each match; the band is presentation over
+/// the staged `MS_EX` rect (#815).
+const MUSIC_SHOP_SEARCH_HIT_TONE: u32 = pack_xrgb(0xC0, 0xD0, 0x40);
+
+/// Ink the search edit's Korean hint or typed draft, and mark the
+/// matching song rows. Unstaged edit/rows paint nothing.
+pub fn paint_music_shop_search(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    draft: &str,
+    hits: &[u32],
+    visible_rows: &[MusicShopRow],
+) {
+    if let Some(edit) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_SEARCH_EDIT_CODE)
+    {
+        let text = if draft.is_empty() {
+            MSHOP_SEARCH_HINT
+        } else {
+            draft
+        };
+        paint_text_into_rect(frame, edit.rect, text, CP949_INK);
+    }
+    for (row, slot) in visible_rows.iter().zip(music_shop_slots(placements)) {
+        if !hits.contains(&row.song.song_id) {
+            continue;
+        }
+        let rect = scale_rect_to_frame(&slot, frame.w, frame.h);
+        let band_height = 2_u32.min(rect.h);
+        if band_height == 0 {
+            continue;
+        }
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.w,
+                h: band_height,
+            },
+            MUSIC_SHOP_SEARCH_HIT_TONE,
+        );
+    }
+}
+
+/// Own-by-design marker for the active box-line frame. The exe stages
+/// sprite frame `filter index + 1` into four controls; our shell has no
+/// box-line sprite, so the one-based index positions one marker row in
+/// each staged rect. This is presentation, not an exe pixel claim (#813).
+const MUSIC_SHOP_BOX_FRAME_TONE: u32 = pack_xrgb(0xD8, 0xB0, 0x48);
+
+/// Ink the active color filter's frame marker in the four staged
+/// box-line rects. Unstaged controls paint nothing.
+pub fn paint_music_shop_genre_frames(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    frame_index: u32,
+) {
+    for offset in 0..MSHOP_BOX_FRAME_COUNT {
+        let Some(code) = MSHOP_BOX_FRAME_FIRST_CODE.checked_add(offset) else {
+            continue;
+        };
+        let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        if rect.h == 0 || rect.w == 0 {
+            continue;
+        }
+        let marker_row = frame_index.saturating_sub(1).min(rect.h - 1);
+        let Some(y) = rect
+            .y
+            .checked_add(i32::try_from(marker_row).unwrap_or(i32::MAX))
+        else {
+            continue;
+        };
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y,
+                w: rect.w,
+                h: 1,
+            },
+            MUSIC_SHOP_BOX_FRAME_TONE,
+        );
+    }
+}
+
 /// Download bar inks: the exe's mode-2 style is pinned; the
 /// numeric value and the notify behind it stay OPEN (#832), so the
 /// split here is own-by-design presentation over staged rects.
@@ -1608,13 +1702,87 @@ pub fn paint_music_shop_progress(
             MUSIC_SHOP_PROGRESS_FILL_TONE,
         );
     }
-    if let Some(staged) = placements
-        .iter()
-        .find(|placed| placed.code == MSHOP_DOWN_TEXT_CODE)
-    {
-        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    if let Some(native_rect) = music_shop_caption_rect(placements, MSHOP_DOWN_TEXT_CODE) {
+        let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
         paint_text_into_rect(frame, rect, &format!("{completed}/{total}"), CP949_INK);
     }
+}
+
+/// Ink the lightboard tooltip's lines inside its staged rect while
+/// the pointer hovers. An empty line vector uses the exe's pinned
+/// fallback banner. The exe's `굴림체` face is presentation here:
+/// the owner's cross-platform rasterizer supplies the glyphs.
+pub fn paint_music_shop_tooltip(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    pointer: Option<(i32, i32)>,
+    lines: &[String],
+) {
+    let Some((x, y)) = pointer else {
+        return;
+    };
+    let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_LIGHTBOARD_TOOLTIP_CODE)
+    else {
+        return;
+    };
+    if !rect_hit(&staged.rect, x, y) {
+        return;
+    }
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    if rect.h == 0 || rect.w == 0 {
+        return;
+    }
+    let fallback = [MSHOP_LIGHTBOARD_FALLBACK.to_owned()];
+    let shown: &[String] = if lines.is_empty() { &fallback } else { lines };
+    let Ok(count) = u32::try_from(shown.len()) else {
+        return;
+    };
+    let line_height = (rect.h / count).max(1);
+    for (index, line) in shown.iter().enumerate() {
+        let Ok(offset) = u32::try_from(index) else {
+            continue;
+        };
+        let Some(top) = rect
+            .y
+            .checked_add(i32::try_from(offset.saturating_mul(line_height)).unwrap_or(i32::MAX))
+        else {
+            continue;
+        };
+        paint_text_into_rect(
+            frame,
+            Rect {
+                x: rect.x,
+                y: top,
+                w: rect.w,
+                h: line_height,
+            },
+            line,
+            CP949_INK,
+        );
+    }
+}
+
+/// Ink the CASHFILLUP id-only notice inside its staged rect. The
+/// exe posts id `0x12` but its copy is OPEN; this caption is ours by
+/// design, never an exe-text claim (#836).
+pub fn paint_music_shop_cashfillup_notice(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    notice_id: Option<u16>,
+) {
+    let Some(id) = notice_id else {
+        return;
+    };
+    let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_CASH_FILLUP_CODE)
+    else {
+        return;
+    };
+    let caption = format!("{MSHOP_CASHFILLUP_FALLBACK_CAPTION} {id:#04x}");
+    paint_text_into_rect(frame, staged.rect, &caption, CP949_INK);
 }
 
 /// Ink a standing shop notice inside the staged rect of the control
@@ -1996,7 +2164,7 @@ pub fn paint_music_shop_wallet(
     ];
     let labels = ["G", "W"];
     for ((code, amount), label) in cells.into_iter().zip(labels) {
-        if let Some(rect) = shop_template_rect(placements, code) {
+        if let Some(rect) = music_shop_caption_rect(placements, code) {
             let text = format!("{} {}", label, wallet_amount_caption(amount));
             paint_text_into_rect(frame, rect, &text, CP949_INK);
         }
