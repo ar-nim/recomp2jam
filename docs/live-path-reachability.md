@@ -92,6 +92,21 @@ arrives between that answer and the OK click. It pins the bracket
 (answer < sheet < OK) from relay pin `64caf0c4…8ebd629bbec7208`
 without inventing an exe timeout.
 
+## Solo Result BACK from the settled panel (ticket #683)
+
+`settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer`
+is a tier-2 scripted-gateway guard. Live chain:
+`main.rs::run_play` → `OnlineSession::ingest_snapshot` →
+`ScreenGame::click_result` (rect 5, (752,581)) →
+`take_result_back` → `flush_result_wire` → `C2S 4021` → `S2C 4022`
+→ Room. The qualifying settled panel comes from
+`~/scratch/p366-solo/s3-result-timed` (frame `3ea6c481…`, miss 20,
+gem 15527, rank F) and is painted before the click. The clicked-cause
+frame itself stays OPEN: boot 3 clicked the mid-animation panel and
+boot 4 never reached Result. Next capture: one qualified frame-clock
+pack with the settled SCORE panel immediately before the rect-5 click
+and the 4021/4022 tap in the same manifest.
+
 | Family | Guard |
 |---|---|
 | scene BACK/exits (`#734` class) | `live_click_waiting_back_sends_the_room_leave_from_boot` |

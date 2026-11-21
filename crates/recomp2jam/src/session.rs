@@ -9945,6 +9945,76 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer() {
+        // Ticket #683. Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+        //   ScreenGame::click_result (rect 5 at (752,581)) ->
+        //   ScreenGame::take_result_back ->
+        //   OnlineSession::flush_result_wire -> C2S ExitPlaying 4021 ->
+        //   S2C 4022 -> Room.
+        // The settled panel is pinned by the qualified solo pack
+        // `~/scratch/p366-solo/s3-result-timed` (manifest
+        // `aabbe18e…c99ca2`, frame `3ea6c481…f75da550b44e2165c102e7a4`:
+        // SCORE, GOOD!, miss 20, rank F, gem 15527, RETRY/BACK). The
+        // clicked-cause frame itself stays OPEN: boot 3's BACK landed
+        // on a mid-animation panel, so this guard pins the wire half
+        // over a panel painted with those same settled words.
+        use o2jam_net::MatchResult;
+
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            let entry_exit = read_frame(&mut stream);
+            assert_eq!(entry_exit.id, Request::ExitPlaying.id());
+            assert!(entry_exit.payload.is_empty());
+            let clicked_exit = read_frame(&mut stream);
+            assert_eq!(clicked_exit.id, Request::ExitPlaying.id());
+            assert!(clicked_exit.payload.is_empty(), "4021 `0xfb5` is empty");
+            // The exe's BACK-SOLO wire pair: C2S 4021 -> S2C 4022
+            // (13-byte body) before the room re-stage (`870ba02f…`).
+            stream.write_all(&encode_frame(4022, &[0u8; 13])).unwrap();
+            assert_quiet(&mut stream);
+        });
+
+        play_one_note_to_result(&mut session);
+        assert_eq!(session.game.screen(), Screen::Result);
+        session.game.stage_result_member_record(
+            0,
+            ResultMemberRecord {
+                cool: 0,
+                good: 0,
+                bad: 0,
+                miss: 20,
+                max_combo: 0,
+                jam_combo: 0,
+                long_note_score: 0,
+                score: 0,
+                reward: 0,
+                result: MatchResult::Draw,
+                speed: 1,
+                level: 7,
+                experience: 9_945,
+                gem: 15_527,
+                cash_point: 0,
+                room_master: true,
+            },
+        );
+        paint_frame(&mut session);
+        assert_eq!(session.game.screen(), Screen::Result, "settled panel is up");
+        session.ingest_snapshot(&InputSnapshot::click_at(752, 581));
+        assert_eq!(
+            session.game.screen(),
+            Screen::Room,
+            "rect 5 leaves for Room"
+        );
+        paint_frame(&mut session);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn guest_tally_stages_winning_teams_and_leaves_to_room() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
             stream.write_all(&encode_frame(4011, &[])).unwrap();
