@@ -17,8 +17,9 @@ use o2jam_shell::avatar::{AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::paint::ROOM_HOVER_SPRITE;
 use o2jam_shell::screens::side::SideScreen;
 use o2jam_shell::staging::{
-    read_install_archives, stage_cash_charge, stage_dialog, stage_room_hover_overlay, stage_state,
-    state_of_screen, state_of_side, Dialog, StageContext, State,
+    read_install_archives, stage_cash_charge, stage_dialog, stage_payment_pages,
+    stage_room_hover_overlay, stage_state, state_of_screen, state_of_side, Dialog, StageContext,
+    State,
 };
 use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -330,19 +331,11 @@ fn side_stage_data(
     let interface = installed.interface?;
     let ctx = StageContext::default();
     if side == SideScreen::Payment {
-        let mut placements = Vec::new();
-        let mut figures = HashMap::new();
-        for state in [State::Payment, State::Payment2] {
-            let Some(art) = stage_state(&interface, state, ctx).art else {
-                continue;
-            };
-            placements.extend(art.placements);
-            figures.extend(art.figures);
-        }
-        if placements.is_empty() {
+        let merged = stage_payment_pages(&interface, ctx).into_merged();
+        if merged.placements.is_empty() {
             return None;
         }
-        return Some((placements, figures));
+        return Some((merged.placements, merged.figures));
     }
     let state = state_of_side(side)?;
     let art = stage_state(&interface, state, ctx).art?;

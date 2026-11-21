@@ -13,6 +13,63 @@ Exe 7.55 `OTwo.exe` sha256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9d
 | `IDC_BUTTON_CHARGECASH_CLOSE` `0x83200003`, ordinal 3, `ChargeCash_Btn_Close.ojs` anchor `(400,2)` | `(400,2)-(448,38)` → `(571,5)-(619,41)` | black X at the frame's upper right |
 | Host `IDC_BUTTON_SSHOP_CHARGEMONEY` `0x14200004`, `State_ItemShop.bnd` rect 4 | `(56,340)-(147,364)` | contains the b8 click `(92,355)`; host board is `State_ItemShop.bnd` rect 1 `(0,0)-(800,600)` |
 
+### Client-side rect-to-page map (`STATE_PAYMENT`, #428)
+
+This is a **chrome map from the declarations**, not a live mount frame.
+Source: `ControlList_Interface.txt` `STATE_PAYMENT` (decl 9) paired with
+`State_Payment.bnd` (9 rects) in `Interface1.opi` SHA-256
+`d66541198965d622ff0177b306d916885ae4d64ae07b2c2264fcbdd850d50584`, with
+exe 7.55 SHA-256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`.
+Rects are native corners; `code & 0xFFF − 1` selects the `.bnd` record. The
+block-self row `IDC_STATE_PAYMENT` (`0x1D000000`) has no rect and is not a
+placement. `staging::stage_payment_pages` stages the sheet;
+`staging::payment_page_placements` maps staged rects by the declaration's
+`0x1D` code family, and the live boot stages through that seam.
+
+| Control | Code | Rect |
+|---|---|---|
+| `IDC_BACK_SPAYMENT` | `0x1D100001` | (0,0)-(800,600) |
+| `IDC_TEXT_SPAYMENT_MGMONEY` | `0x1D400002` | (82,513)-(177,526) |
+| `IDC_TEXT_SPAYMENT_O2MONEY` | `0x1D400003` | (82,540)-(177,553) |
+| `IDC_BUTTON_SPAYMENT_EXIT` | `0x1D200004` | (712,570)-(793,592) |
+| `IDC_IMAGE_SPAYMENT_WEB` | `0x1D500005` | (26,61)-(773,481) |
+| `IDC_IMAGE_SPAYMENT_LOADING` | `0x1D500006` | (619,529)-(738,552) |
+| `IDC_TEXT_SPAYMENT_O2CASH` | `0x1D400007` | (259,513)-(333,525) |
+| `IDC_TEXT_SPAYMENT_MUSICCASH` | `0x1D400008` | (259,535)-(333,547) |
+| `IDC_TEXT_SPAYMENT_ITEMCASH` | `0x1D400009` | (259,557)-(333,569) |
+
+`payment_input.aspx` is a lifecycle page label (`docs/web-surfaces.md`), not
+a page our native sheet mounts or fills. OPEN: an REA xref of the
+`STATE_PAYMENT` mount plus one qualified exe mount frame; next step: capture
+that frame and xref before claiming which rect receives a live page notice.
+
+### Client-side rect-to-page map (`STATE_PAYMENT2`, #470)
+
+Same source and method as above, with `STATE_PAYMENT2` (decl 12) paired with
+`State_Payment2.bnd` (12 rects). The block-self row `IDC_STATE_PAYMENT2`
+(`0x1E000000`) has no rect. The declaration gives FREEPASS and COUPON the
+same rect; the map keeps both rows rather than inventing a separation.
+
+| Control | Code | Rect |
+|---|---|---|
+| `IDC_BACK_SPAYMENT2` | `0x1E100001` | (0,0)-(800,600) |
+| `IDC_TEXT_SPAYMENT2_MGMONEY` | `0x1E400002` | (82,513)-(177,526) |
+| `IDC_TEXT_SPAYMENT2_O2MONEY` | `0x1E400003` | (82,540)-(177,553) |
+| `IDC_BUTTON_SPAYMENT2_EXIT` | `0x1E200004` | (712,570)-(793,592) |
+| `IDC_IMAGE_SPAYMENT2_WEB` | `0x1E500005` | (26,61)-(773,481) |
+| `IDC_IMAGE_SPAYMENT2_LOADING` | `0x1E500006` | (619,529)-(738,552) |
+| `IDC_TEXT_SPAYMENT2_O2CASH` | `0x1E400007` | (259,513)-(333,525) |
+| `IDC_TEXT_SPAYMENT2_MUSICCASH` | `0x1E400008` | (259,535)-(333,547) |
+| `IDC_TEXT_SPAYMENT2_ITEMCASH` | `0x1E400009` | (259,557)-(333,569) |
+| `IDC_BUTTON_SPAYMENT2_FREEPASS` | `0x1E20200A` | (653,9)-(775,41) |
+| `IDC_BUTTON_SPAYMENT2_COUPON` | `0x1E20200B` | (653,9)-(775,41) |
+| `IDC_BUTTON_SPAYMENT2_CASHCHARGE` | `0x1E20000C` | (71,560)-(170,590) |
+
+`gift_input.aspx` is likewise a label, not a mounted page. OPEN: REA xref of
+the `CStatePayment2`/`CDPayment` gift mount plus one qualified mount frame;
+next step: capture that frame before claiming gift-page content or a
+per-rect notice destination.
+
 ### Tier-4 live-click re-check (`EV-B8-CASH-FRAME`, reopened #362)
 
 The reopened negative (`~/scratch/live-4/cash-rust-final/pack`, web-client MAE

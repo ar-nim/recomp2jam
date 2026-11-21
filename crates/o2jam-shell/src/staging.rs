@@ -26,10 +26,11 @@ use crate::screens::messenger::{
 use crate::screens::paint::{CashChargeArt, SceneArt, ROOM_HOVER_SPRITE};
 use crate::screens::side::{
     shop_child_geometry, PlanetOptionTab, ShopChildGeometry, SideScreen, CASH_CHARGE_DIALOG_BLOCK,
-    CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, INFORMATION_DIALOG_BLOCK,
-    PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-    SHOPPINGBAG_ADD_DIALOG_BLOCK, SHOP_CHILD_ORIGIN_Y, TUTORIAL_BACKGROUND_SPRITE,
-    TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
+    CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, GIFT_PAGE, INFORMATION_DIALOG_BLOCK,
+    PASSWORD_DIALOG_BLOCK, PAYMENT2_BIND_FILE, PAYMENT2_BLOCK, PAYMENT_BIND_FILE, PAYMENT_BLOCK,
+    PAYMENT_PAGE, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK, SHOPPINGBAG_ADD_DIALOG_BLOCK,
+    SHOP_CHILD_ORIGIN_Y, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
+    TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -746,6 +747,118 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
         PlacementArm::FullCanvas => stage_full_canvas_row(archive, row, ctx),
         PlacementArm::PlayingSubset => stage_playing_row(archive, row, ctx),
     }
+}
+
+/// Low twelve bits of a control code: the exe's `.bnd` record ordinal.
+const PAYMENT_RECT_ORDINAL_MASK: u32 = 0xFFF;
+/// Top byte of a control code: the exe's `STATE_*` family
+/// (`0x1D` for `STATE_PAYMENT`, `0x1E` for `STATE_PAYMENT2`).
+const PAYMENT_CODE_FAMILY_MASK: u32 = 0xFF00_0000;
+
+/// One billing page's client-side chrome map. The page string is a
+/// lifecycle label from `docs/web-surfaces.md`, not a live web mount;
+/// all geometry comes from the declared Block and its `.bnd`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaymentPage {
+    /// Exe State that declares this sheet.
+    pub state: State,
+    /// `ControlList` block staging the sheet.
+    pub block: &'static str,
+    /// Bind file holding the sheet's rects.
+    pub bind_file: &'static str,
+    /// Lifecycle page label (the web content stays native/blank).
+    pub page: &'static str,
+    /// Top byte of every control code declared in the block.
+    pub code_prefix: u32,
+}
+
+impl PaymentPage {
+    /// True for a staged control declared in this page's block.
+    #[must_use]
+    pub const fn owns_code(self, code: u32) -> bool {
+        code & PAYMENT_CODE_FAMILY_MASK == self.code_prefix
+    }
+}
+
+/// Billing pages in exe State order. The codes are the shipped
+/// block-self controls `IDC_STATE_PAYMENT` (`0x1D000000`) and
+/// `IDC_STATE_PAYMENT2` (`0x1E000000`); no geometry is invented.
+pub const PAYMENT_PAGES: [PaymentPage; 2] = [
+    PaymentPage {
+        state: State::Payment,
+        block: PAYMENT_BLOCK,
+        bind_file: PAYMENT_BIND_FILE,
+        page: PAYMENT_PAGE,
+        code_prefix: 0x1D00_0000,
+    },
+    PaymentPage {
+        state: State::Payment2,
+        block: PAYMENT2_BLOCK,
+        bind_file: PAYMENT2_BIND_FILE,
+        page: GIFT_PAGE,
+        code_prefix: 0x1E00_0000,
+    },
+];
+
+/// Each billing page staged from its own declaration, keyed by
+/// [`PAYMENT_PAGES`] order. Pages stay separate here; the painter
+/// still receives one merged sheet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PaymentPages {
+    art: [Option<StagedArt>; PAYMENT_PAGES.len()],
+}
+
+impl PaymentPages {
+    /// One page's staged art, if its declaration resolved.
+    #[must_use]
+    pub fn art_for(&self, page: PaymentPage) -> Option<&StagedArt> {
+        let index = PAYMENT_PAGES
+            .iter()
+            .position(|candidate| *candidate == page)?;
+        self.art.get(index).and_then(Option::as_ref)
+    }
+
+    /// The merged sheet today's Payment painter consumes, in page
+    /// order. Missing pages contribute nothing (ADR-0003).
+    #[must_use]
+    pub fn into_merged(self) -> StagedArt {
+        let mut merged = StagedArt::default();
+        for art in self.art {
+            let Some(art) = art else {
+                continue;
+            };
+            merged.placements.extend(art.placements);
+            merged.figures.extend(art.figures);
+        }
+        merged
+    }
+}
+
+/// Stage each billing page through the same State-keyed declaration
+/// the live boot uses. A missing Block or bind leaves that page empty.
+#[must_use]
+pub fn stage_payment_pages(archive: &[u8], ctx: StageContext) -> PaymentPages {
+    let mut art: [Option<StagedArt>; PAYMENT_PAGES.len()] = std::array::from_fn(|_| None);
+    for (index, page) in PAYMENT_PAGES.iter().enumerate() {
+        art[index] = stage_state(archive, page.state, ctx).art;
+    }
+    PaymentPages { art }
+}
+
+/// Staged chrome placements owned by one billing page, in `.bnd`
+/// ordinal order (the exe pairs by code, never by file position).
+/// Empty input yields an empty map — no fallback rects.
+#[must_use]
+pub fn payment_page_placements(
+    placements: &[ScenePlacement],
+    page: PaymentPage,
+) -> Vec<&ScenePlacement> {
+    let mut mapped: Vec<_> = placements
+        .iter()
+        .filter(|placed| page.owns_code(placed.code))
+        .collect();
+    mapped.sort_by_key(|placed| placed.code & PAYMENT_RECT_ORDINAL_MASK);
+    mapped
 }
 
 /// Stage one dialog from archive bytes through the bound arm: the
