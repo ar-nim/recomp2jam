@@ -633,6 +633,8 @@ mod tests {
         );
     }
 
+    use std::sync::OnceLock;
+
     use super::*;
     use o2jam_game::{build_level_chart, CoolStreak, Judgement, PillStock, Score, Sequencer};
     use o2jam_shell::InputSnapshot;
@@ -703,6 +705,36 @@ mod tests {
         assert!(score.points > 0, "autoplay produced a score");
     }
 
+    /// The one walk fixture: a primary trace and its replay proof.
+    /// Both are built together on first access so guards only read.
+    struct WalkFixture {
+        walk: E2eReport,
+        replay: E2eReport,
+    }
+
+    static WALK_FIXTURE: OnceLock<WalkFixture> = OnceLock::new();
+
+    fn walk_fixture() -> &'static WalkFixture {
+        WALK_FIXTURE.get_or_init(|| WalkFixture {
+            walk: drive_e2e_walk().expect("scripted walk"),
+            replay: drive_e2e_walk().expect("scripted walk replay"),
+        })
+    }
+
+    fn shared_e2e_report() -> &'static E2eReport {
+        &walk_fixture().walk
+    }
+
+    #[test]
+    fn e2e_snapshot_reuses_one_walk_when_guards_share_it() {
+        let first = shared_e2e_report();
+        let second = shared_e2e_report();
+        assert!(
+            std::ptr::eq(first.steps.as_ptr(), second.steps.as_ptr()),
+            "every guard must read the same immutable trace"
+        );
+    }
+
     /// Screens the walk must show, in player order.
     const E2E_SCREEN_PATH: [&str; 8] = [
         "avi", "planet", "channel", "room", "waiting", "loading", "playing", "result",
@@ -721,8 +753,8 @@ mod tests {
 
     #[test]
     fn e2e_walk_boots_from_splash_to_result_through_every_landed_state() {
-        let report = drive_e2e_walk().unwrap();
-        let screens = visited_screens(&report);
+        let report = shared_e2e_report();
+        let screens = visited_screens(report);
         for want in E2E_SCREEN_PATH {
             assert!(
                 screens.contains(&want.to_owned()),
@@ -786,8 +818,8 @@ mod tests {
 
     #[test]
     fn e2e_walk_replays_to_the_same_final_hash() {
-        let first = drive_e2e_walk().unwrap();
-        let second = drive_e2e_walk().unwrap();
+        let fixture = walk_fixture();
+        let (first, second) = (&fixture.walk, &fixture.replay);
         assert_eq!(first.result_hash, second.result_hash);
         assert_eq!(first.final_hash, second.final_hash);
         let first_path: Vec<&str> = first
@@ -805,7 +837,7 @@ mod tests {
 
     #[test]
     fn e2e_walk_side_states_open_and_return_to_waiting() {
-        let report = drive_e2e_walk().unwrap();
+        let report = shared_e2e_report();
         for side in E2E_SIDE_TOUR {
             let opened = report
                 .steps
@@ -824,7 +856,7 @@ mod tests {
 
     #[test]
     fn e2e_walk_options_opens_and_closes_on_the_board() {
-        let report = drive_e2e_walk().unwrap();
+        let report = shared_e2e_report();
         let opened = report
             .steps
             .iter()
