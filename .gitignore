@@ -72,3 +72,8 @@ Thumbs.db
 
 # gate-check temporary hidden install-root (slot symlink)
 .install-root.gate-hidden
+
+# last successful full-pack sweep (issue #737)
+.gate-full-sweep-stamp
+.install-root.gate-dangling
+.extracted.gate-dangling

@@ -6,10 +6,11 @@
 # `tail`:
 #   1. cargo fmt --check
 #   2. cargo clippy --workspace --all-targets -- -D warnings
-#   3. cargo test --workspace  (install-root present)
-#   4. cargo test --workspace  (install-root hidden)
-#   5. git push origin main
-#   6. git rev-parse equality (main == origin/main)
+#   3. cargo test --workspace  (install-root present; cheap sample suite)
+#   4. full-pack sweep when the stamp is absent or older than seven days
+#   5. cargo test --workspace  (install-root hidden)
+#   6. git push origin main
+#   7. git rev-parse equality (main == origin/main)
 #
 # Tiering (owner 2026-11-20): the full suite is the MERGE gate. Per-ticket
 # legs use --quick (steps 1-2 plus only the affected crates' tests - seconds
@@ -23,6 +24,8 @@
 # arms export O2JAM_INSTALL_ROOT (scripts/lib/data-root.sh) so stale test
 # binaries cannot borrow another worktree's archives; the hidden arm
 # probes that its named root and fallback are unreachable before testing.
+# The 515-chart sweeps stay in the repo but are skipped in the per-merge
+# suite (issue #737); the staleness arm below runs them once a week.
 #
 # Usage: scripts/gate-check.sh [--no-push|--dry-run] [--quick [--] [crate...]] [--hidden]
 #   --no-push / --dry-run : skip the push + verify step (for local proof runs).
@@ -36,9 +39,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 source "$REPO_ROOT/scripts/lib/data-root.sh"
+source "$REPO_ROOT/scripts/lib/sweep-stamp.sh"
+source "$REPO_ROOT/scripts/lib/sweep-sample.sh"
 
 PRESENT_ROOT="$REPO_ROOT/install-root"
 HIDDEN_ROOT="$REPO_ROOT/.install-root.gate-hidden"
+UNREACHABLE_ROOT="$REPO_ROOT/.install-root.gate-unreachable"
+SWEEP_STAMP="$REPO_ROOT/.gate-full-sweep-stamp"
+SWEEP_SAMPLE="$REPO_ROOT/fixtures/full-pack-sample.sha256"
+SUITE_SKIPS=(--skip real_ojn_covers_extract_and_decode
+             --skip shipped_charts_set_bit26_only_on_tutorial_bgm_records)
 
 no_push=0
 quick=0
@@ -72,6 +82,24 @@ cleanup_gate() {
 }
 trap cleanup_gate EXIT
 
+# The full sweep is a data arm: no archives means nothing to sweep and no
+# stamp to write, so the next data-bearing gate still pays the evidence cost.
+run_full_pack_sweep_if_stale() {
+    if ! data_root_has_archives "$PRESENT_ROOT"; then
+        printf 'gate-check: full-pack sweep skipped (no archives)\n'
+        return 0
+    fi
+    if ! sweep_stamp_is_stale "$SWEEP_STAMP"; then
+        printf 'gate-check: full-pack sweep skipped (stamp is fresh)\n'
+        return 0
+    fi
+    step "full-pack sweep (stamp absent or older than seven days)"
+    cargo test -p o2jam-file real_ojn_covers_extract_and_decode -- --exact
+    cargo test -p o2jam-file --test ojn_bit26_sweep -- \
+        --exact shipped_charts_set_bit26_only_on_tutorial_bgm_records
+    date +%s > "$SWEEP_STAMP"
+}
+
 present_root_existed=0
 if [ -e "$PRESENT_ROOT" ]; then present_root_existed=1; fi
 hide_dangling_data_links "$REPO_ROOT"
@@ -94,13 +122,18 @@ if [ "$quick" -eq 1 ]; then
         exit 0
     fi
     step "cargo test -p ${crates[*]} (--quick)"
-    cargo test -p "${crates[@]}"
+    cargo test -p "${crates[@]}" -- "${SUITE_SKIPS[@]}"
     exit 0
 fi
 
 step "cargo test --workspace (install-root present)"
 export O2JAM_INSTALL_ROOT="$PRESENT_ROOT"
-cargo test --workspace
+cargo test --workspace -- "${SUITE_SKIPS[@]}"
+
+step "hash-pinned sample of the shipped chart pack"
+verify_sweep_sample "$PRESENT_ROOT" "$SWEEP_SAMPLE"
+
+run_full_pack_sweep_if_stale
 
 if [ "$hidden_arm" -eq 1 ]; then
     step "hidden-arm data probe (archives must be unreachable)"
@@ -109,11 +142,11 @@ if [ "$hidden_arm" -eq 1 ]; then
         HIDDEN_BACKUP="$HIDDEN_ROOT"
         mv "$PRESENT_ROOT" "$HIDDEN_BACKUP"
     fi
-    export O2JAM_INSTALL_ROOT="$HIDDEN_ROOT"
-    assert_hidden_data_unreachable "$HIDDEN_ROOT" "$PRESENT_ROOT"
+    export O2JAM_INSTALL_ROOT="$UNREACHABLE_ROOT"
+    assert_hidden_data_unreachable "$UNREACHABLE_ROOT" "$PRESENT_ROOT"
 
     step "cargo test --workspace (install-root hidden)"
-    cargo test --workspace
+    cargo test --workspace -- "${SUITE_SKIPS[@]}"
     if [ -n "$HIDDEN_BACKUP" ] && [ -e "$HIDDEN_BACKUP" ]; then
         mv "$HIDDEN_BACKUP" "$PRESENT_ROOT"
     fi

@@ -122,7 +122,10 @@ catches things, not everywhere:
 - **Per merge (senior):** full mode (default) — the whole workspace suite,
   present arm, plus the hidden install-root arm. This is the tier that
   catches semantic-merge breaks and missing hidden-arm skips; it is
-  mandatory before every push.
+  mandatory before every push. The 515-chart sweeps are excluded from the
+  suite; a hash-pinned dozen-chart sample is checked every merge, and the
+  full pack sweep runs when `.gate-full-sweep-stamp` is absent or older
+  than seven days (issue #737; no scheduler).
 - **Hidden arm on demand:** `--hidden` when a diff touches data-dependent
   guards but the run is not a merge; the hidden arm also runs nightly.
 
