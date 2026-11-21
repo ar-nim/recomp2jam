@@ -59,3 +59,19 @@ parks. A sheet with no second record gets no active frame.
   six staged sheets through the live staging chain (skips without
   install-root), proves their control bodies carry records, and keeps every
   exe pin marker at `None`.
+
+## Close verification: #626 against #675 (`ca857c4`)
+
+| Acceptance part | Verdict | Evidence |
+| --- | --- | --- |
+| Rest, hover and active states exist and are visible on a staged control | MET | `messenger_rest_leaves_the_staged_stack_alone`, `messenger_hover_selects_the_first_record_when_the_sheet_carries_it`, `messenger_held_press_selects_the_second_record_over_hover`, `messenger_release_returns_the_control_to_hover`, `messenger_press_on_another_sheet_does_not_light_the_open_sheet`, `messenger_single_record_control_has_no_active_frame`; composition guard `messenger_hover_repaints_the_parent_relative_staged_record` paints both records at the staged child rect. |
+| Parent-relative placement honors the parsed `Dialog_*` origin | MET | `messenger_hover_repaints_the_parent_relative_staged_record`; live chain `main.rs::run_play` -> `assemble_online_session` -> `session::OnlineSession::stage_live_art` -> `live_art::stage_live_scenes` -> `stage_messenger_sheets` -> `stage_messenger_sheet`. |
+| The three states **match the exe** per sheet | OPEN — `N-FRAMES` | No qualified mount capture names a rest/hover/active record pair. `messenger_frame_states_stay_open_until_a_qualified_mount_pack` keeps every `messenger_frame_exe_pin` at `None`; the table above names the capture needed for each sheet. The selector is a labeled stand-in, not an exe pixel match. |
+
+Red proof (this lane): temporarily mapping rest to record 0 failed
+`messenger_rest_leaves_the_staged_stack_alone`; temporarily returning a fake
+pin for the Main sheet failed
+`messenger_frame_states_stay_open_until_a_qualified_mount_pack`. Both
+guards passed again after the sabotage was reverted. The honest OPEN marker
+is part of the close: #626's row is checked for the state machinery landed
+by #675, with the exe frame pair still named as the next evidence step.

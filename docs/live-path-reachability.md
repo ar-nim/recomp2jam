@@ -112,6 +112,17 @@ and the 4021/4022 tap in the same manifest.
 | scene BACK/exits (`#734` class) | `live_click_waiting_back_sends_the_room_leave_from_boot` |
 | dialog OK/dismiss | `live_click_dialog_ok_releases_the_held_channel_rows` |
 | Waiting join/ready/start/back | `live_click_guest_ready_then_back_from_boot`, `live_click_master_start_then_back_from_boot` |
+| Messenger host P0 (#631, tier-1) | `live_room_messenger_press_reaches_its_labeled_p0_from_boot` |
+
+`live_room_messenger_press_reaches_its_labeled_p0_from_boot` boots through
+`connect::connect_and_login_with_transport`, walks to the Room board through
+pointer snapshots only, then presses the staged `IDC_BUTTON_SROOM_MESSENGER`
+rect by its parsed code `0x13200048`. The chain ends at
+`ScreenGame::click_room_control` → `RoomControlAction::Unwired`; the guard
+asserts the labeled P0 record, no side screen or liveness sheet, and no wire
+frame. This is one live caller chain into the Messenger family, not a
+exe mount pin: the four unpinned hosts stay `N-HOST` (#646/#648/#650/#652)
+and the master arm stays `N-MASTER` (#644).
 
 ## Worked example: #191, #192, #193
 
