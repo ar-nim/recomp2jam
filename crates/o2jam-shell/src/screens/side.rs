@@ -32,10 +32,12 @@ use o2jam_net::{
 use o2jam_render::{Frame, Rect};
 
 mod myroom;
+mod myroom_freeinfo;
 mod myroom_notice;
 mod myroom_status;
 
 pub use self::myroom::*;
+pub use self::myroom_freeinfo::{myroom_freeinfo_captions, MyRoomPassInfo};
 pub use self::myroom_notice::MyRoomNotice;
 pub use self::myroom_status::{next_up_threshold, NEXT_UP_THRESHOLDS};
 

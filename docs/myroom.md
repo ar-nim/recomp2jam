@@ -214,6 +214,24 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## FREEINFO lines and skill rows (ticket #800, 2026-11-22)
+
+`FUN_004a8010` (VA `0x4a8010`, file `0xa8010`,
+EV `ev_bf4287e718ef7c085b5513838dc663397805504008bfd6e740c4e1eb4031d3d2`)
+writes FREEINFO1 `0x15400041` (first line in colour `0xd2b559`), FREEINFO2
+`0x42`, and up to four 28-byte skill rows starting at `0x43` from the pass
+word `0x768b34`. Pass 1 is the PC-room label; 2/4/8/0x10/0x40/0x80/0x200/
+0x400/0x420 are the all-songs label with a date; 0x20/0x800 are the free-all
+songs label; 0x100 adds a second date line. The string bytes are pinned at
+files `0x2494a4`–`0x2495ec`.
+
+Our client stages the pass word explicitly (`ScreenGame::set_myroom_pass`);
+the wire writer of `0x768b34`, the date and the skill-record source stay
+OPEN, so no unverified pass is claimed. Presentation guard:
+`myroom_staged_pass_inks_the_pinned_freeinfo_lines`; copy guards in
+`screens/side/myroom_freeinfo.rs`. A known-pass exe capture is the next
+evidence step.
+
 ## Special-item replies (ticket #799 body, 2026-11-22)
 
 `FUN_004a54e0` (VA `0x4a54e0`, file `0xa54e0`,

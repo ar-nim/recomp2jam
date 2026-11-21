@@ -77,15 +77,15 @@ use super::side::{
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopRow, MyRoomNotice, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
-    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    MusicShopAction, MusicShopRow, MyRoomNotice, MyRoomPassInfo, MyRoomState, PasswordAction,
+    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
+    SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow,
+    WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
+    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -874,6 +874,9 @@ pub struct ScreenGame {
     /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
     /// the type-100 dismissal queue (#367).
     room_no_response: RoomNoResponseFuse,
+    /// Staged pass/membership state behind the FREEINFO lines. The
+    /// wire writer of the exe's `0x768b34` word stays OPEN.
+    myroom_pass: MyRoomPassInfo,
     /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
     /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
     /// bytes are exe-string pinned in [`MyRoomNotice`].
@@ -1270,6 +1273,7 @@ impl ScreenGame {
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
+            myroom_pass: MyRoomPassInfo::default(),
             myroom_notice: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1890,6 +1894,14 @@ impl ScreenGame {
     #[must_use]
     pub const fn myroom_notice(&self) -> Option<&MyRoomNotice> {
         self.myroom_notice.as_ref()
+    }
+
+    /// Stage the pass word, date string and skill-row names behind
+    /// the FREEINFO captions. Staging never moves the flow; without a
+    /// staged word the exe's blank case holds.
+    pub fn set_myroom_pass(&mut self, pass: MyRoomPassInfo) -> &mut Self {
+        self.myroom_pass = pass;
+        self
     }
 
     /// Post one exe-pinned MyRoom one-OK sheet. A new notice replaces
@@ -16187,6 +16199,43 @@ mod game_tests {
             .expect("staged")
             .inventory
             .contains(&13));
+    }
+
+    #[test]
+    fn myroom_staged_pass_inks_the_pinned_freeinfo_lines() {
+        // Live caller chain: staged pass word -> paint_at -> paint_side
+        // -> paint_myroom_overlay -> paint_myroom_data -> FREEINFO rect.
+        // The wire writer of pass word `0x768b34` is OPEN; this guard
+        // pins the presentation of a staged value (EV ev_bf4287e7…).
+        use super::super::side::{MyRoomPassInfo, MYROOM_FREEINFO_FIRST_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character(Vec::new()));
+        game.set_myroom_pass(MyRoomPassInfo {
+            word: Some(1),
+            until: "2026-12-31".to_owned(),
+            skills: Vec::new(),
+        });
+        game.show_myroom_panel(MyRoomPanel::Status);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_FREEINFO_FIRST_CODE, 200, 100)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (100..120).any(|y| (200..240).any(|x| buf[y * 800 + x] != 0)),
+            "the staged pass word inks FREEINFO1"
+        );
     }
 
     #[test]

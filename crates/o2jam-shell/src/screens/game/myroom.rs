@@ -14,10 +14,11 @@ use crate::screens::paint::{
     paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_screen,
 };
 use crate::screens::side::{
-    myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
-    myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
-    myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, myroom_worn_well_items,
-    MyRoomAction, MyRoomLowerTab, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen,
+    myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
+    myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
+    myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
+    myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab, MyRoomNotice,
+    MyRoomPanel, MyRoomState, SideScreen,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -316,6 +317,9 @@ impl ScreenGame {
         } else {
             Vec::new()
         };
+        // FREEINFO lines and skill rows come from the staged pass word
+        // (EV ev_bf4287e7…); its wire source stays OPEN.
+        captions.extend(myroom_freeinfo_captions(&self.myroom_pass));
         // Money paints from the single wallet (#202): the character
         // record fed it at staging, purchases refresh it after.
         captions.extend(myroom_wallet_captions(&self.wallet));
