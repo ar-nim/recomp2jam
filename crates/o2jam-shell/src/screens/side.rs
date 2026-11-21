@@ -1093,6 +1093,20 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
+/// Owned/download face tabs (`IDC_IMAGE_MSHOP_TABDOWN/TABDELETE`,
+/// `0x1A600076/77`): FUN_004c7d50 writes 0/1 to the face flag.
+pub const MSHOP_TAB_DOWN_CODE: u32 = 0x1A60_0076;
+pub const MSHOP_TAB_DELETE_CODE: u32 = 0x1A60_0077;
+/// Which face the two tab images select. The exe's two flag writes
+/// are pinned; naming the faces follows the tab control names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopFace {
+    /// Download face (tab `0x1A600076`).
+    #[default]
+    Download,
+    /// Cart/delete face (tab `0x1A600077`).
+    Cart,
+}
 /// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
 /// directions ASSUMED ascending (same named next step as lanking).
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
@@ -1230,6 +1244,8 @@ pub enum MusicShopAction {
     MsPrev,
     /// Shop-list pager stepped forward.
     MsNext,
+    /// One of the two owned face tabs was pressed.
+    Face(MusicShopFace),
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1274,6 +1290,8 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         return Some(MusicShopAction::Top100Chrome { code });
     }
     match code {
+        MSHOP_TAB_DOWN_CODE => Some(MusicShopAction::Face(MusicShopFace::Download)),
+        MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),

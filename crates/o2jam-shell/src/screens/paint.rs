@@ -47,12 +47,13 @@ use super::side::{
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, planet_action_for_code, planet_band_rect, planet_caption_for_code,
     planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots,
-    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow, PlanetAction, PlanetBand,
-    PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
-    MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
+    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopFace, MusicShopRow,
+    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow,
+    WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE,
+    MSHOP_TAB_DOWN_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
     PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
     SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
@@ -1528,6 +1529,43 @@ const MUSIC_SHOP_PICK_TONE: u32 = pack_xrgb(0x2E, 0xC4, 0xF2);
 /// so this inks no standing, sort, or wire claim. Ours-by-design tone,
 /// staged geometry only (ADR-0003).
 const MUSIC_SHOP_TOP100_TONE: u32 = pack_xrgb(0xE2, 0x8A, 0x3C);
+
+/// Own-by-design ink for the active owned-face tab: a band inside
+/// the tab's staged rect. The exe pins the tab codes and the flag
+/// writes, not the face pixel, so no control-visibility claim rides
+/// on this marker (#820).
+const MUSIC_SHOP_FACE_TONE: u32 = pack_xrgb(0xE2, 0xC8, 0x4A);
+
+/// Ink the selected owned-face tab inside its staged `.bnd` rect.
+/// An unstaged tab paints nothing (ADR-0003).
+pub fn paint_music_shop_face(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    face: MusicShopFace,
+) {
+    let code = match face {
+        MusicShopFace::Download => MSHOP_TAB_DOWN_CODE,
+        MusicShopFace::Cart => MSHOP_TAB_DELETE_CODE,
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    let band_height = 2_u32.min(rect.h);
+    if band_height == 0 {
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: rect.x,
+            y: rect.y + i32::try_from(rect.h - band_height).unwrap_or(0),
+            w: rect.w,
+            h: band_height,
+        },
+        MUSIC_SHOP_FACE_TONE,
+    );
+}
 
 /// Ink the pressed TOP100 board control (if any) at its staged rect.
 /// A missing rect or no press paints nothing.

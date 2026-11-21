@@ -8,8 +8,8 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, sort_lanking_songs,
-    LankingSong, LankingSort, MusicShopAction, MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS,
-    MSHOP_SONG_ROWS,
+    LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopPrice, MusicShopRow,
+    MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
 };
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
@@ -55,6 +55,10 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Owned face selected by the two tab images (`0x1A600076/77`).
+    /// The exe's two flag writes are pinned; the meaning of the flag
+    /// beyond the tab names stays OPEN (no visibility frame captured).
+    pub(crate) music_shop_face: MusicShopFace,
 }
 
 impl MusicShopState {
@@ -137,6 +141,11 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Owned face selected by the two tab images.
+    pub(crate) fn face(&self) -> MusicShopFace {
+        self.music_shop_face
     }
 
     /// Last pressed TOP100 board-chrome control code, if any.
@@ -226,6 +235,10 @@ impl MusicShopState {
             MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
+                false
+            }
+            MusicShopAction::Face(face) => {
+                self.music_shop_face = face;
                 false
             }
             MusicShopAction::Sort(sort) => {
