@@ -242,7 +242,6 @@ pub struct WaitingCaptions<'a> {
 /// the two bytes the exe's frame formula reads (`0x7789e7` difficulty,
 /// `0x7789e9` speed, struct `0x7789d8`) plus the catalog word its MX
 /// branch tests (record `+0x14`, `FUN_004b2e30`).
-
 /// Captions whose exe source is still OPEN (7.55 sha256
 /// `83a04541…72c823b`, `docs/caption-sources.md` OPEN 1/2). Keeping
 /// the codes and next evidence steps next to the painter records the
