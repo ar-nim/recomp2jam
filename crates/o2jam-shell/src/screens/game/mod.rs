@@ -43,10 +43,10 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_cash_charge_frame,
-    paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene, paint_information_message,
-    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_purchase_failure_notice, paint_music_shop_board,
+    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_billing_failure_notice,
+    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
+    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
     paint_music_shop_wallet, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
     paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
@@ -838,11 +838,13 @@ pub struct ScreenGame {
     /// a BACK-timed reply and no `C2S 5000` exists, so this surface
     /// owns the buy leg and the game socket stays quiet.
     shop_purchase_web_open: bool,
-    /// Native failed-purchase notice over the MusicShop board (#405).
-    /// SCRIPTED-GATEWAY verdicts post it; no server failure body or
-    /// 7.55 notice pixel is pinned (`E-W-5011`). Cleared on dismissal,
-    /// fresh buy, and side exit. No wire state lives here.
-    music_purchase_failure_notice: bool,
+    /// Native billing-refusal notice over the active side board
+    /// (#405 scripted 5011 failure, #468 rejected gift claim). The
+    /// verdict bodies are scripted; the notice copy is ASSUMED from an
+    /// older-version page and no 7.55 notice pixel is pinned
+    /// (`E-W-5011`, `E-PAYMENT2-5024`). Cleared on dismissal, a fresh
+    /// buy, and side exit. No wire state lives here.
+    billing_failure_notice: bool,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1188,7 +1190,7 @@ impl ScreenGame {
             tutorial_art: None,
             cash_charge_art: None,
             shop_purchase_web_open: false,
-            music_purchase_failure_notice: false,
+            billing_failure_notice: false,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -4902,6 +4904,12 @@ impl ScreenGame {
     /// bottom-right exit); every other side screen stays click-silent.
     /// Returns whether the click was consumed.
     fn click_side_screen(&mut self, x: i32, y: i32) -> bool {
+        if self.billing_failure_notice_open() {
+            // The native notice owns the next press on any side; no
+            // game opcode is invented for a dismissal (#397 stands).
+            self.dismiss_billing_failure_notice();
+            return true;
+        }
         if self.side == Some(SideScreen::Tutorial) {
             if self.tutorial_exit_hit(x, y) {
                 let _ = self.leave_side();
@@ -4925,13 +4933,7 @@ impl ScreenGame {
             return true;
         }
         if self.side == Some(SideScreen::MusicShop) {
-            if self.music_purchase_failure_notice_open() {
-                // The native notice owns the next press; no game
-                // opcode is invented for a dismissal (#397 stands).
-                self.dismiss_music_purchase_failure_notice();
-            } else {
-                self.click_music_shop(x, y);
-            }
+            self.click_music_shop(x, y);
             return true;
         }
         if self.side.is_some() {
@@ -5839,7 +5841,7 @@ impl ScreenGame {
         }
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
-        self.music_purchase_failure_notice = false;
+        self.billing_failure_notice = false;
         self.mount_staged_side_art(side);
         self.apply_bgm_cue(side.bgm_cue());
         if side == SideScreen::Tutorial {
@@ -5920,7 +5922,7 @@ impl ScreenGame {
         if side == SideScreen::Tutorial {
             self.tutorial_key_lights.clear();
         }
-        self.music_purchase_failure_notice = false;
+        self.billing_failure_notice = false;
         self.messenger_liveness_open = false;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
@@ -6536,20 +6538,28 @@ impl ScreenGame {
     /// calls this only for the SCRIPTED-GATEWAY four-byte body; the
     /// copy is the archived older-version stand-in, not an exe pin.
     pub fn post_music_purchase_failure_notice(&mut self) {
-        self.music_purchase_failure_notice = true;
+        self.billing_failure_notice = true;
     }
 
-    /// Whether the refused-purchase notice is over the shop board.
+    /// Post the same mcash-tone notice for a rejected gift claim
+    /// (#468). The scripted 5024 validity word opens it; the exe's
+    /// failure presentation stays OPEN (`E-PAYMENT2-5024`) and this
+    /// native copy is ASSUMED, never an exe pixel claim.
+    pub fn post_payment2_failure_notice(&mut self) {
+        self.billing_failure_notice = true;
+    }
+
+    /// Whether a scripted billing refusal currently owns the screen.
     #[must_use]
-    pub const fn music_purchase_failure_notice_open(&self) -> bool {
-        self.music_purchase_failure_notice
+    pub const fn billing_failure_notice_open(&self) -> bool {
+        self.billing_failure_notice
     }
 
     /// Dismiss the native notice with no game send. The next press
-    /// returns to the shop board; #397's web-surface re-scope stays
+    /// returns to the board; #397's web-surface re-scope stays
     /// untouched.
-    pub fn dismiss_music_purchase_failure_notice(&mut self) {
-        self.music_purchase_failure_notice = false;
+    pub fn dismiss_billing_failure_notice(&mut self) {
+        self.billing_failure_notice = false;
     }
 
     /// Song-shop click through the control-code dispatch
@@ -6574,7 +6584,7 @@ impl ScreenGame {
             return;
         }
         if self.music_shop.apply_action(action) {
-            self.music_purchase_failure_notice = false;
+            self.billing_failure_notice = false;
             self.outbox.pending_music_buy = Some(SyncMusicPurchase);
         }
     }
@@ -6812,9 +6822,6 @@ impl ScreenGame {
                 self.music_shop_cart_pages(),
             );
             paint_music_shop_wallet(frame, &self.side_placements, &self.wallet);
-            if self.music_purchase_failure_notice_open() {
-                paint_music_purchase_failure_notice(frame);
-            }
         }
         if self.side == Some(SideScreen::MyRoom) {
             paint_myroom_figure(
@@ -6824,6 +6831,9 @@ impl ScreenGame {
                 now_ms,
             );
             self.paint_myroom_overlay(frame, &self.side_placements, &self.side_figures);
+        }
+        if self.billing_failure_notice_open() {
+            paint_billing_failure_notice(frame);
         }
         if self.messenger_liveness_open {
             // Same staged Information sheet and Information origin as
@@ -21606,6 +21616,20 @@ mod game_tests {
         game
     }
 
+    /// One native frame with the shared billing notice painted.
+    fn painted_billing_notice_frame(game: &mut ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0_u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf
+    }
+
     fn music_shop_side_placements() -> Vec<ScenePlacement> {
         // Synthetic `STATE_MUSICSHOP` board: five MS_EX slots, the
         // row-local buy templates, sorts, the MSALL pager, the cart
@@ -21841,21 +21865,9 @@ mod game_tests {
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
 
         game.post_music_purchase_failure_notice();
-        let band = super::super::paint::MUSIC_PURCHASE_NOTICE_RECT;
+        let band = super::super::paint::BILLING_FAILURE_NOTICE_RECT;
         let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
-        let paint_notice_frame = |game: &mut ScreenGame| {
-            let mut buf = vec![0_u32; 800 * 600];
-            game.paint_at(
-                &mut Frame {
-                    buf: &mut buf,
-                    w: 800,
-                    h: 600,
-                },
-                0,
-            );
-            buf
-        };
-        let painted = paint_notice_frame(&mut game);
+        let painted = painted_billing_notice_frame(&mut game);
         assert_eq!(painted[band_pixel], pack_xrgb(0x67, 0xBA, 0xF0));
 
         // The first CP949 line inks black glyphs centered in the band.
@@ -21876,12 +21888,35 @@ mod game_tests {
         );
 
         game.click_side_screen(19, 105);
-        assert!(!game.music_purchase_failure_notice_open());
+        assert!(!game.billing_failure_notice_open());
         assert_eq!(game.take_music_buy(), None);
         assert_eq!(game.take_shop_buy(), None);
         assert_eq!(game.take_exit_shop(), None);
         assert_ne!(
-            paint_notice_frame(&mut game)[band_pixel],
+            painted_billing_notice_frame(&mut game)[band_pixel],
+            pack_xrgb(0x67, 0xBA, 0xF0)
+        );
+    }
+
+    #[test]
+    fn payment2_failure_notice_uses_the_mcash_tone_band_without_a_wire() {
+        // seam: our presentation is ASSUMED older-version mcash tone,
+        // not a 7.55 notice pixel (`E-PAYMENT2-5024` stays OPEN). The
+        // Tier 2 scripted-gateway guard in session.rs drives the 5024
+        // failure body through the live caller chain.
+        let mut game = open_music_shop_board(7);
+        game.post_payment2_failure_notice();
+        let band = super::super::paint::BILLING_FAILURE_NOTICE_RECT;
+        let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
+        let painted = painted_billing_notice_frame(&mut game);
+        assert_eq!(painted[band_pixel], pack_xrgb(0x67, 0xBA, 0xF0));
+
+        game.click_side_screen(19, 105);
+        assert!(!game.billing_failure_notice_open());
+        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_ne!(
+            painted_billing_notice_frame(&mut game)[band_pixel],
             pack_xrgb(0x67, 0xBA, 0xF0)
         );
     }

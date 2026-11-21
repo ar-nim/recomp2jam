@@ -143,7 +143,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
-use o2jam_net::gift::{ClaimGiftResponse, GetGiftMessageList, GetGiftMessageListResponse};
+use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
@@ -2976,16 +2976,24 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == 5024 => {
-                    match ClaimGiftResponse::decode_body(&frame.payload) {
-                        Ok(response) if !response.invalid => {
+                    match GiftClaimReply::decode_body(&frame.payload) {
+                        Ok(GiftClaimReply::Completed(response)) => {
                             tracing::debug!(
                                 verdict = response.result_code,
                                 "valid gift claim; verdict byte ignored like the exe"
                             );
                             self.game.apply_gift_claim_success(attempt.gift_id);
                         }
-                        Ok(_) => {
-                            tracing::debug!(id = frame.id, "gift claim rejected; staged box holds");
+                        Ok(GiftClaimReply::Rejected(response)) => {
+                            // SCRIPTED-GATEWAY validity word only. The
+                            // 7.55 failure presentation is OPEN
+                            // (`E-PAYMENT2-5024`); our mcash-tone
+                            // notice is ASSUMED and invents no wire.
+                            tracing::debug!(
+                                verdict = response.result_code,
+                                "rejected gift claim; staged box holds"
+                            );
+                            self.game.post_payment2_failure_notice();
                         }
                         Err(_) => {
                             tracing::debug!(id = frame.id, "dropping undecodable gift claim reply");
@@ -5407,7 +5415,7 @@ pub(super) mod session_tests {
 
         assert!(session.game.music_shop_cart().is_empty());
         assert!(
-            !session.game.music_purchase_failure_notice_open(),
+            !session.game.billing_failure_notice_open(),
             "a completed 5011 is a state sync, not a failure notice"
         );
         assert_eq!(session.game.shop_gem_caption(), "GEM 1000");
@@ -5521,7 +5529,7 @@ pub(super) mod session_tests {
         //   main.rs::run_play drives) -> flush_music_buy (empty 5010) ->
         //   poll_music_buy -> drain_music_buy -> MusicPurchaseReply::Failure
         //   -> ScreenGame::post_music_purchase_failure_notice ->
-        //   paint_side -> paint_music_purchase_failure_notice.
+        //   paint_side -> paint_billing_failure_notice.
         // Tier 2 scripted gateway; SCRIPTED-GATEWAY class, not a server
         // failure body (E-W-5011 stays OPEN). Synthetic catalog only.
         use o2jam_render::Rect;
@@ -5567,12 +5575,10 @@ pub(super) mod session_tests {
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
-        paint_until(&mut session, |s| {
-            s.game.music_purchase_failure_notice_open()
-        });
+        paint_until(&mut session, |s| s.game.billing_failure_notice_open());
         server.join().unwrap();
 
-        let band = o2jam_shell::screens::paint::MUSIC_PURCHASE_NOTICE_RECT;
+        let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;
         let outside_text = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
         assert_eq!(
             painted_game_frame(&mut session)[outside_text],
@@ -5592,8 +5598,8 @@ pub(super) mod session_tests {
                 .all(|row| !row.listed),
             "a refused buy must not mark the song owned"
         );
-        session.game.dismiss_music_purchase_failure_notice();
-        assert!(!session.game.music_purchase_failure_notice_open());
+        session.game.dismiss_billing_failure_notice();
+        assert!(!session.game.billing_failure_notice_open());
         assert!(session.game.take_music_buy().is_none());
         assert!(session.game.take_shop_buy().is_none());
         assert!(session.game.take_exit_shop().is_none());
@@ -5877,7 +5883,11 @@ pub(super) mod session_tests {
             stream
                 .write_all(&encode_frame(5018, &empty.encode_body()))
                 .unwrap();
-            assert_eq!(read_frame(&mut stream).id, 5023);
+            let claim_frame = read_frame(&mut stream);
+            assert_eq!(claim_frame.id, 5023);
+            // Pinned gift-completion request: type Item, gift 7, item 1,
+            // attributive flag 0. Both scripted arms send this body.
+            assert_eq!(claim_frame.payload, [0, 7, 0, 0, 0, 1, 0, 0, 0, 0]);
             stream.write_all(&encode_frame(5024, &reply_body)).unwrap();
         });
 
@@ -5936,6 +5946,36 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn payment2_completion_body_round_trip_proceeds_with_the_gift_claim() {
+        // Live caller chain:
+        //   OnlineSession::paint -> flush_gift_claim (5023 send) ->
+        //   poll_gift_claim -> drain_gift_claim (scripted 5024 body
+        //   `0000000004`) -> ScreenGame::apply_gift_claim_success.
+        // Payment2's completion arm is the pinned gift claim leg
+        // (`0cca888`); the four archived gift wizard pages are labels,
+        // not 7.55 frames. Tier 2 scripted gateway.
+        let (mut session, server) = gift_claim_reply_session([0, 0, 0, 0, 4]);
+        paint_until(&mut session, |s| {
+            s.gift_claim_attempt.is_none()
+                && s.game
+                    .myroom_character()
+                    .is_some_and(|hero| hero.inventory.contains(&1))
+        });
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert!(hero.item_gifts.is_empty(), "the claimed box row is gone");
+        assert!(
+            hero.inventory.contains(&1),
+            "the claim proceeds into the bag"
+        );
+        assert!(
+            !session.game.billing_failure_notice_open(),
+            "the completion body never posts a refusal notice"
+        );
+    }
+
+    #[test]
     fn valid_5024_with_memoryer_verdict_four_moves_the_gift_into_the_bag() {
         // Live caller chain:
         //   OnlineSession::paint -> flush_gift_claim (5023) ->
@@ -5959,6 +5999,43 @@ pub(super) mod session_tests {
             "valid claim empties the box row"
         );
         assert!(hero.inventory.contains(&1), "claimed item lands in the bag");
+    }
+
+    #[test]
+    fn payment2_failure_body_posts_the_mcash_tone_notice_and_keeps_the_gift_box() {
+        // Live caller chain:
+        //   OnlineSession::paint -> flush_gift_claim (5023 send) ->
+        //   poll_gift_claim -> drain_gift_claim (scripted 5024 body
+        //   `0100000004`) -> ScreenGame::post_payment2_failure_notice
+        //   -> paint_side -> paint_billing_failure_notice.
+        // The validity word is exe-pinned (file `0xa6135`); the verdict
+        // byte stays opaque and the failure presentation is ASSUMED
+        // older-version mcash tone (`E-PAYMENT2-5024` stays OPEN).
+        let (mut session, server) = gift_claim_reply_session([1, 0, 0, 0, 4]);
+        paint_until(&mut session, |s| {
+            s.gift_claim_attempt.is_none() && s.game.billing_failure_notice_open()
+        });
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert_eq!(
+            hero.item_gifts.len(),
+            1,
+            "the refused gift stays in the box"
+        );
+        assert!(!hero.inventory.contains(&1), "a refusal mints no item");
+        let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;
+        let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
+        assert_eq!(
+            painted_game_frame(&mut session)[band_pixel],
+            o2jam_render::pack_xrgb(0x67, 0xBA, 0xF0),
+            "the refusal paints the shared mcash-tone band"
+        );
+        session.game.dismiss_billing_failure_notice();
+        assert!(!session.game.billing_failure_notice_open());
+        assert!(session.game.take_gift_claim().is_none());
+        assert!(session.game.take_music_buy().is_none());
+        assert!(session.game.take_shop_buy().is_none());
     }
 
     #[test]
