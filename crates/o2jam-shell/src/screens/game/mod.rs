@@ -14216,6 +14216,52 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_screen_cluster_pins_clicks_captions_and_painted_pixels() {
+        // Live caller chain (feed):
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_myroom_items / set_myroom_character.
+        // Live caller chain (click):
+        //   window press -> OnlineSession::press -> ScreenGame::click_dispatch
+        //   -> click_side_screen -> click_myroom_side.
+        // Live caller chain (paint):
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_at
+        //   -> paint_side -> paint_myroom -> paint_myroom_overlay.
+        // Pure shell state plus a synthetic frame: no archives read.
+        let mut game = myroom_open_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
+        for (x, y) in [
+            (10, 10),
+            (100, 10),
+            (150, 10),
+            (200, 10),
+            (300, 10),
+            (400, 10),
+            (450, 10),
+            (10, 40),
+        ] {
+            game.click_myroom_side(x, y);
+        }
+        let selection = game.myroom();
+        let equip_send = game.take_equip_send();
+        let captions = game.myroom_money_captions();
+        let pixels = paint_myroom_panel(&mut game);
+
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        hash_str(&mut hash, game.screen_name());
+        hash_str(
+            &mut hash,
+            &format!("{selection:?}|{equip_send:?}|{captions:?}"),
+        );
+        for pixel in pixels {
+            hash_u64(&mut hash, u64::from(pixel));
+        }
+        assert_eq!(
+            hash, 0x570F_AD14_1C10_0CCB,
+            "MyRoom ScreenGame cluster output drifted"
+        );
+    }
+
+    #[test]
     fn myroom_info_plate_paints_win_rate_from_staged_battles() {
         // Live caller chain (feed):
         //   main.rs::run_play -> setup_online
