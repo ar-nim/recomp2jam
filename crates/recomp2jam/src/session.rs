@@ -4124,7 +4124,7 @@ pub(super) mod session_tests {
         UpdateGameStats, WaitingMusicChanged, WireMessage, HEADER_LEN,
     };
     use o2jam_shell::screens::game::{
-        LobbyChat, QuitConfirmOutcome, ResultMemberRecord, StartGateVerdict,
+        FuseClock, LobbyChat, QuitConfirmOutcome, ResultMemberRecord, StartGateVerdict,
     };
     use o2jam_shell::screens::side::RoomDialog;
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -13015,9 +13015,12 @@ pub(super) mod session_tests {
     /// node is tracked, so a 2003 room-list probe read by that drain
     /// is deferred. The overdue node then opens the one-OK sheet;
     /// the next paint must replay the deferred 2003 into the row
-    /// state even while that modal is up. Live caller chain:
-    /// boot relay gate -> `stage_channel_list_after_relay_gate` ->
-    /// Room -> `OnlineSession::paint` -> `poll_wire` ->
+    /// state even while that modal is up. The deadline is virtual and
+    /// moves only after the fake gateway confirms its write, so a
+    /// loaded scheduler cannot race the fuse against the frame (#743).
+    /// Live caller chain: boot relay gate ->
+    /// `stage_channel_list_after_relay_gate` -> Room ->
+    /// `OnlineSession::paint` -> `poll_wire` ->
     /// `poll_room_user_list_fuse` -> `drain_room_user_list_reply` ->
     /// `deferred_frames` -> `replay_deferred_frames` ->
     /// `apply_lobby_frame` -> `ScreenGame::set_rooms`. No qualified
@@ -13033,10 +13036,12 @@ pub(super) mod session_tests {
             rooms: vec![playing],
         };
         let body = list.encode_body();
+        let (reply_written, reply_written_rx) = mpsc::channel();
         let (port, server) = fake_gateway(move |mut stream| {
             stream
                 .write_all(&encode_frame(o2jam_net::RoomList::COMMAND, &body))
                 .unwrap();
+            reply_written.send(()).unwrap();
             assert_quiet(&mut stream);
         });
         let mut game = ScreenGame::new();
@@ -13046,25 +13051,32 @@ pub(super) mod session_tests {
         assert_eq!(game.screen(), Screen::Room);
         crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
         game.set_rooms(vec![waiting]);
-        let now = Instant::now();
-        assert!(game.track_room_user_list_send_at(
-            now.checked_sub(Duration::from_secs(21))
-                .expect("clock margin")
-        ));
+        let sent_at = Instant::now();
+        game.set_room_fuse_clock(FuseClock::virtual_at(sent_at));
+        assert!(game.track_room_user_list_send());
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
+        reply_written_rx.recv().unwrap();
 
         paint_frame(&mut session);
         assert!(
-            session.game.room_no_response_dialog_open(),
-            "the starved node opened the one-OK sheet"
+            !session.game.room_no_response_dialog_open(),
+            "the virtual deadline has not fired while the reply lands"
         );
         assert_eq!(
             session.game.listed_rooms()[0].state_code,
             1,
             "the fuse read defers the 2003 instead of dropping it"
         );
+
+        session
+            .game
+            .set_room_fuse_clock(FuseClock::virtual_at(sent_at + Duration::from_secs(21)));
         paint_frame(&mut session);
+        assert!(
+            session.game.room_no_response_dialog_open(),
+            "the starved node opened the one-OK sheet"
+        );
         assert_eq!(
             session.game.listed_rooms()[0].state_code,
             2,
