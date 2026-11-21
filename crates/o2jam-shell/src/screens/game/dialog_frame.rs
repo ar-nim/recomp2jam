@@ -70,6 +70,12 @@ impl DialogFrameState {
         self.pressed = Some((host, code));
     }
 
+    /// Held press, for the release-inside options dispatch.
+    #[must_use]
+    pub(super) const fn held(&self) -> Option<(DialogHost, u32)> {
+        self.pressed
+    }
+
     /// Drop the held press on release or dismissal.
     pub(super) fn release(&mut self) {
         self.pressed = None;

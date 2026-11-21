@@ -37,7 +37,7 @@ use super::super::avatar::{
     avatar_item_by_id, load_shop_portraits, load_worn_figure, ojn_cover_figure, AvatarFigure,
     ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
-use super::super::options::OptionsSettings;
+use super::super::options::{InSongMix, OptionsSettings};
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
@@ -1280,7 +1280,7 @@ impl ScreenGame {
     /// entry or audio rig stays silent — the cue is named OPEN there,
     /// never filled with a substitute sample.
     fn cue_ui_effect(&mut self, effect: UiEffectId) {
-        let gain = self.options_dialog.settings().effect_gain();
+        let gain = self.in_song_mix().ui_effect_gain();
         let slot = usize::from(effect.slot());
         let Some(pcm) = self.ui_effect_bank.get(slot).and_then(Option::as_ref) else {
             tracing::debug!(slot, "UI effect slot has no staged PCM; cue stays silent");
@@ -1303,6 +1303,8 @@ impl ScreenGame {
     /// share record 9, and a shared track must not restart from
     /// sample 0 on every emblem click.
     fn apply_bgm_cue(&mut self, cue: (i32, bool)) {
+        // Read the mix before borrowing the rig mutably below.
+        let gain = self.in_song_mix().scene_bgm_gain();
         let Some(rig) = self.audio.as_mut() else {
             return;
         };
@@ -1316,9 +1318,8 @@ impl ScreenGame {
         // The BGMusic volume (`Sound`/`GameBGVolume`, default 255 is
         // unity) scales the lobby cue: the Sound tab moves the live
         // scene mix (a gain change re-cues, the only path that
-        // carries the level to the mixer). The in-song mix path stays
-        // OPEN.
-        let gain = self.options_dialog.settings().bgm_gain();
+        // carries the level to the mixer). The in-song song-BGM path
+        // stays OPEN (`InSongMix::song_bgm_gain`).
         let request = SceneCue {
             id: cue_id,
             repeat: cue_repeat,
@@ -1389,7 +1390,7 @@ impl ScreenGame {
     /// the GameEffect volume (`Sound`/`NoteKeyVolume`, default 255
     /// is unity): the Sound tab moves the live key mix.
     fn pump_sounds(&mut self) {
-        let gain = self.options_dialog.settings().key_gain();
+        let gain = self.in_song_mix().note_key_gain();
         let Some(rig) = self.audio.as_mut() else {
             self.playing.drain_sounds();
             return;
@@ -5026,6 +5027,12 @@ impl ScreenGame {
         if let Some((host, code)) = self.dialog_control_at(x, y) {
             self.dialog_frames.arm_press(host, code);
         }
+        if self.planet_modal() == Some(PlanetModal::Options) {
+            // The options sheets stay open while held, so their pressed
+            // record must survive until release. A tab switch on down
+            // would swap the staged art under the held face.
+            return;
+        }
         if self.bare_planet_board() {
             // Pinned press feedback (#111): the planet board arms the
             // press on down and fires the action on release-inside.
@@ -5044,12 +5051,30 @@ impl ScreenGame {
         self.click_dispatch(x, y);
     }
 
+    /// An options-sheet release commits the press only when it lands
+    /// back on the same staged control. An unstaged sheet holds no
+    /// control code, so its fallback button keeps the old down-anywhere
+    /// gesture and simply fires on release.
+    fn options_release_commits(
+        held: Option<(DialogHost, u32)>,
+        released_on: Option<(DialogHost, u32)>,
+    ) -> bool {
+        held.is_none_or(|control| Some(control) == released_on)
+    }
+
     /// Apply one release edge at native frame pixels: the shared
     /// helper behind the snapshot release edge (release-inside
     /// fires, pinned #111 arm 3).
     fn apply_pointer_up(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        let held = self.dialog_frames.held();
         self.dialog_frames.release();
+        if self.planet_modal() == Some(PlanetModal::Options) {
+            if Self::options_release_commits(held, self.dialog_control_at(x, y)) {
+                self.click_dispatch(x, y);
+            }
+            return;
+        }
         if self.bare_planet_board() {
             self.planet_pointer_up(x, y);
         }
@@ -5197,6 +5222,12 @@ impl ScreenGame {
         self.options_dialog.settings_mut()
     }
 
+    /// Four pinned volume words as the running song's mix.
+    #[must_use]
+    pub fn in_song_mix(&self) -> InSongMix {
+        self.options_dialog.settings().in_song_mix()
+    }
+
     /// Lane armed for rebind by a Key-tab click (`None` idle).
     #[must_use]
     pub const fn option_rebind_armed(&self) -> Option<usize> {
@@ -5209,6 +5240,15 @@ impl ScreenGame {
     #[must_use]
     pub const fn play_longnote_mode(&self) -> Option<i32> {
         self.play_longnote
+    }
+
+    /// Effective long-note switch for the running song. The exe's one
+    /// consumer compares the play-object cache with 1 (file `0x16e372`);
+    /// the visual effect of that branch stays OPEN. Reading the snapshot
+    /// keeps a later options edit out of the running song.
+    #[must_use]
+    pub fn playing_longnote_used(&self) -> bool {
+        self.play_longnote == Some(1)
     }
 
     /// Load `option.ini` beside `install_root` at boot and remember
@@ -17156,6 +17196,92 @@ mod game_tests {
         );
     }
 
+    #[test]
+    fn options_sheets_paint_rest_hover_and_active_frames() {
+        // Spec #314 story 20. Live chain: boot -> gear disc -> tab sheet
+        // -> pointer snapshot -> dialog hover/press ->
+        // `paint_dialog_frame_states`. Per-sheet hover/press packs are
+        // OPEN (`docs/dialog-frame-states.md`); the two-record figure is
+        // a synthetic stand-in for the exe's button language.
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+
+        let cover = pack_xrgb(0xFF, 0, 0);
+        let hover = pack_xrgb(0, 0, 0xFF);
+        let active = pack_xrgb(0, 0xFF, 0);
+
+        for (tab, code) in [
+            (PlanetOptionTab::Key, 0x2510_0001_u32),
+            (PlanetOptionTab::Sound, 0x2610_0001_u32),
+            (PlanetOptionTab::Game, 0x2F10_0001_u32),
+        ] {
+            stage_option_frame_button(&mut game, tab, code);
+            game.switch_option_tab(tab);
+
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), cover),
+                "{tab:?} rest"
+            );
+            game.ingest_snapshot(&InputSnapshot::motion_to(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), hover),
+                "{tab:?} hover"
+            );
+            game.ingest_snapshot(&InputSnapshot::press_at(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), active),
+                "{tab:?} active"
+            );
+            game.ingest_snapshot(&InputSnapshot::release_at(285, 150));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), hover),
+                "{tab:?} release"
+            );
+            game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            assert!(
+                near_xrgb(option_frame_pixel(&mut game), cover),
+                "{tab:?} unhover"
+            );
+        }
+    }
+
+    #[test]
+    fn options_tab_press_holds_its_active_frame_until_release() {
+        // Spec #314 story 20. Same live chain as the per-sheet frame
+        // guard, with a tab-switch button: the held face must stay on
+        // the pressed tab until release, when the sheet flips. The
+        // down/up timing is a labeled stand-in (no exe A/B pack yet).
+        use super::super::side::{OPTION_KEY_SOUNDSET, OPTION_SOUND_GAMESET};
+        let mut game = ScreenGame::new();
+        stage_option_frame_button(&mut game, PlanetOptionTab::Key, OPTION_KEY_SOUNDSET);
+        stage_option_frame_button(&mut game, PlanetOptionTab::Sound, OPTION_SOUND_GAMESET);
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Key);
+
+        game.ingest_snapshot(&InputSnapshot::motion_to(285, 150));
+        assert!(near_xrgb(
+            option_frame_pixel(&mut game),
+            pack_xrgb(0, 0, 0xFF)
+        ));
+
+        game.ingest_snapshot(&InputSnapshot::press_at(285, 150));
+        assert!(
+            near_xrgb(option_frame_pixel(&mut game), pack_xrgb(0, 0xFF, 0)),
+            "the held tab must paint its active record"
+        );
+        assert_eq!(
+            game.planet_option_tab(),
+            PlanetOptionTab::Key,
+            "the sheet flips on release, not under the held press"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::release_at(285, 150));
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+    }
+
     /// Synthetic sheet body: one blue block at the parsed backdrop
     /// anchor. Real `Dialog_*` bodies carry their frame origin as the
     /// record anchor (dumped from installed `Interface1.opi`), and the
@@ -17561,6 +17687,68 @@ mod game_tests {
         );
     }
 
+    /// Stage one options tab with a two-record button under a later-
+    /// painted cover, for rest/hover/active frame guards.
+    fn stage_option_frame_button(game: &mut ScreenGame, tab: PlanetOptionTab, code: u32) {
+        use crate::avatar::FigureLayer;
+        let cover_figure = |word: u16| {
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(
+                    &word.to_le_bytes().repeat(40 * 20),
+                    40,
+                    20,
+                )
+                .expect("cover test face"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let placement = |id: &str, code: u32, sprite: Option<&str>| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: sprite.map(str::to_owned),
+            rect: Rect {
+                x: 60,
+                y: 100,
+                w: 40,
+                h: 20,
+            },
+        };
+        game.load_planet_option_tab(
+            tab,
+            vec![
+                coded_dialog_backdrop(0xAAAA_0001, 217, 42),
+                placement("button", code, Some("option-button.ojs")),
+                placement("cover", 0, Some("option-cover.ojs")),
+            ],
+            HashMap::from([
+                (
+                    "option-button.ojs".to_owned(),
+                    chrome_two_layer_figure(40, 20),
+                ),
+                ("option-cover.ojs".to_owned(), cover_figure(0x7C00)),
+            ]),
+        );
+    }
+
+    /// Ink at the staged options button's sample pixel after one paint.
+    fn option_frame_pixel(game: &mut ScreenGame) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[150 * 800 + 285]
+    }
+
     /// Open the options dialog on the planet board (gear disc
     /// fallback rect, no staged board art needed).
     fn open_options(game: &mut ScreenGame) {
@@ -17626,10 +17814,10 @@ mod game_tests {
         }
         // Re-based across both options lanes: #716 (Game DEFAULT
         // restores the exe's effective values after the pinned load
-        // rewrites) and the Sound slider step moving 8 -> the exe's 4
-        // (hash recomputed on the union of the two lanes).
+        // rewrites), the Sound slider step moving 8 -> the exe's 4,
+        // and #590's first-knob GameBGVolume/BGVolume coupling.
         assert_eq!(
-            hash, 0x4E3D_A8FB_D75E_1206,
+            hash, 0x529D_C34E_9757_FA02,
             "options outputs drifted: {observed}"
         );
     }
@@ -18303,6 +18491,79 @@ mod game_tests {
             game.play_longnote_mode(),
             Some(1),
             "later dialog edits never reach the running song"
+        );
+    }
+
+    #[test]
+    fn running_song_keeps_the_longnote_mode_from_the_options_tab() {
+        // Live chain: boot -> gear disc -> Game tab -> Longnote Used click
+        // -> EXIT -> Planet walk -> Playing entry -> song-setup snapshot.
+        // The exe caches `LongnoteMode` at play `+0x17d8` (file `0x16fb06`)
+        // and its one consumer compares it with 1 (file `0x16e372`).
+        use super::super::side::OPTION_GAME_LONGNOTE_USED;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[(OPTION_GAME_LONGNOTE_USED, 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        assert!(game.options().longnote_used());
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None);
+
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        stage_armed_loading_gate(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert!(game.playing_longnote_used());
+
+        game.options_mut().set_longnote_mode(0);
+        assert!(
+            game.playing_longnote_used(),
+            "a later options edit must not change the running song"
+        );
+        assert_eq!(game.play_longnote_mode(), Some(1));
+    }
+
+    #[test]
+    fn in_song_mix_follows_all_four_pinned_volume_words() {
+        // Live chain: boot -> gear disc -> Sound tab -> Down clicks
+        // -> `OptionsSettings::step_*` -> `InSongMix` -> the live
+        // scene/key/effect paths. The four words and their read sites
+        // come from `docs/options.md`; the NoteBG song PCM path has no
+        // exe trace and stays OPEN in the mix model.
+        let mut game = ScreenGame::new();
+        let full = game.in_song_mix();
+        assert_eq!(full.scene_bgm_gain(), 1.0);
+        assert_eq!(full.ui_effect_gain(), 1.0);
+        assert_eq!(full.song_bgm_gain(), 1.0);
+        assert_eq!(full.note_key_gain(), 1.0);
+
+        game.options_mut().step_bgm_music(false);
+        let stepped = 255.0 - f32::from(crate::options::SOUND_SLIDER_STEP);
+        let expected = stepped / 255.0;
+        let mixed = game.in_song_mix();
+        assert_eq!(mixed.scene_bgm_gain(), expected);
+        assert_eq!(mixed.ui_effect_gain(), expected);
+
+        game.options_mut().step_game_music(false);
+        assert_eq!(
+            game.in_song_mix().song_bgm_gain(),
+            expected,
+            "NoteBGVolume feeds the in-song song gain"
+        );
+
+        game.options_mut().step_game_effect(false);
+        assert_eq!(
+            game.in_song_mix().note_key_gain(),
+            expected,
+            "NoteKeyVolume feeds the in-song key gain"
         );
     }
 

@@ -402,8 +402,9 @@ fn crop_bar_figure(figure: &AvatarFigure, visible_width: usize) -> Option<Avatar
 }
 
 /// Volume word behind each staged knob (the shell's ours-by-design
-/// slider↔key map; the exe's first-knob BGVolume/GameBGVolume coupling
-/// stays OPEN — see `~/scratch/opt-sliders-findings.md`).
+/// slider↔key map). The exe's first-knob BGVolume/GameBGVolume
+/// coupling is applied in `OptionsSettings::step_bgm_music`; which
+/// caption owns that knob stays rig-OPEN.
 fn sound_knob_volumes(settings: &OptionsSettings) -> [u8; 4] {
     [
         settings.bgm_music(),
