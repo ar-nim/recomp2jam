@@ -11,8 +11,8 @@ use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
     sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
     MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
-    MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
-    MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
+    MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
+    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -117,6 +117,9 @@ pub(crate) struct MusicShopState {
     /// this seam holds the text and the painter owns presentation
     /// (#819).
     pub(crate) music_shop_tooltip_lines: Vec<String>,
+    /// Notice id posted by CASHFILLUP when no web path exists. The
+    /// exe's text for id `0x12` stays OPEN (#836).
+    pub(crate) music_shop_cashfillup_notice_id: Option<u16>,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -427,6 +430,11 @@ impl MusicShopState {
         self.music_shop_tooltip_lines = lines.iter().map(|line| (*line).to_owned()).collect();
     }
 
+    /// Standing CASHFILLUP notice id, if the button was pressed.
+    pub(crate) fn cashfillup_notice_id(&self) -> Option<u16> {
+        self.music_shop_cashfillup_notice_id
+    }
+
     /// Stage the search flag at the board seam. The SEARCH arm owns
     /// it once that arm lands (#815).
     pub(crate) fn stage_search_active(&mut self, active: bool) {
@@ -533,6 +541,7 @@ impl MusicShopState {
         // consume an armed confirmation.
         let armed_notice = self.music_shop_notice;
         self.music_shop_notice = None;
+        self.music_shop_cashfillup_notice_id = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
                 self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
@@ -620,6 +629,13 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
+                MusicShopEffect::None
+            }
+            MusicShopAction::CashFillup => {
+                // The exe calls its web helper with argument 0 and
+                // posts notice id 0x12 on an empty result. This client
+                // has no charge web path, so that is the only arm.
+                self.music_shop_cashfillup_notice_id = Some(MSHOP_CASHFILLUP_NOTICE_ID);
                 MusicShopEffect::None
             }
             MusicShopAction::Search => {

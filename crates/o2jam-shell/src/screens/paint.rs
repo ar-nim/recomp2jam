@@ -54,10 +54,11 @@ use super::side::{
     WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
     MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE,
-    MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE,
-    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT,
-    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
+    MSHOP_CASHFILLUP_FALLBACK_CAPTION, MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE,
+    MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_LIGHTBOARD_FALLBACK,
+    MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
+    MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE,
+    MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
     NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
     RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
     SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
@@ -1760,6 +1761,27 @@ pub fn paint_music_shop_tooltip(
             CP949_INK,
         );
     }
+}
+
+/// Ink the CASHFILLUP id-only notice inside its staged rect. The
+/// exe posts id `0x12` but its copy is OPEN; this caption is ours by
+/// design, never an exe-text claim (#836).
+pub fn paint_music_shop_cashfillup_notice(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    notice_id: Option<u16>,
+) {
+    let Some(id) = notice_id else {
+        return;
+    };
+    let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_CASH_FILLUP_CODE)
+    else {
+        return;
+    };
+    let caption = format!("{MSHOP_CASHFILLUP_FALLBACK_CAPTION} {id:#04x}");
+    paint_text_into_rect(frame, staged.rect, &caption, CP949_INK);
 }
 
 /// Ink a standing shop notice inside the staged rect of the control

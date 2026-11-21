@@ -52,24 +52,24 @@ use super::paint::{
     paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_face, paint_music_shop_genre_frames,
-    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_figure,
-    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
-    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
+    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
+    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
+    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
+    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
+    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -7122,6 +7122,12 @@ impl ScreenGame {
         self.music_shop.stage_tooltip_lines(lines);
     }
 
+    /// Notice id posted by the last CASHFILLUP press (#836).
+    #[must_use]
+    pub fn music_shop_cashfillup_notice_id(&self) -> Option<u16> {
+        self.music_shop.cashfillup_notice_id()
+    }
+
     /// Stage the search flag at the board seam for the filter guard.
     pub fn stage_music_shop_search_active(&mut self, active: bool) {
         self.music_shop.stage_search_active(active);
@@ -7477,6 +7483,11 @@ impl ScreenGame {
                 &self.music_shop.owned_rows(),
             );
             paint_music_shop_notice(frame, &self.side_placements, self.music_shop.notice());
+            paint_music_shop_cashfillup_notice(
+                frame,
+                &self.side_placements,
+                self.music_shop_cashfillup_notice_id(),
+            );
             paint_music_shop_progress(
                 frame,
                 &self.side_placements,
@@ -8817,10 +8828,10 @@ mod game_tests {
         LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE,
         MSHOP_ARTIST_CODE, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE,
         MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
-        MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE,
-        MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_DOWN_START_CODE, MSHOP_DOWN_TEXT_CODE,
-        MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE,
-        MSHOP_GENRE_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_ISBUY_CODE,
+        MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE,
+        MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_DOWN_START_CODE,
+        MSHOP_DOWN_TEXT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+        MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_ISBUY_CODE,
         MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
         MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE, MSHOP_MUSICDELETE_CODE,
         MSHOP_MYALL_LEFT_CODE, MSHOP_MYALL_RIGHT_CODE, MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
@@ -24320,6 +24331,55 @@ mod game_tests {
         placements.push(area(MSHOP_PAGE_TOT_TENS_CODE, 286, 534, 14, 17));
         placements.push(area(MSHOP_PAGE_TOT_ONES_CODE, 300, 534, 14, 17));
         placements
+    }
+
+    /// Music-shop board with CASHFILLUP and a second control staged.
+    fn open_music_shop_cashfillup_board() -> ScreenGame {
+        let mut game = open_music_shop_board(1);
+        for (code, x, y) in [
+            (MSHOP_CASH_FILLUP_CODE, 600, 20),
+            (MSHOP_MSALL_LEFT_CODE, 198, 532),
+        ] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect { x, y, w: 40, h: 20 },
+            });
+        }
+        game
+    }
+
+    #[test]
+    fn music_shop_cashfillup_posts_id_0x12_and_the_next_press_dismisses_it() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(CashFillup) -> notice id 0x12.
+        let mut game = open_music_shop_cashfillup_board();
+        game.click_music_shop(620, 30);
+        assert_eq!(game.music_shop_cashfillup_notice_id(), Some(0x12));
+        assert_eq!(game.take_music_buy(), None, "no purchase is queued");
+        game.click_music_shop(218, 542);
+        assert_eq!(game.music_shop_cashfillup_notice_id(), None);
+    }
+
+    #[test]
+    fn music_shop_cashfillup_inks_its_client_side_notice_caption() {
+        // The exe's id-0x12 copy is OPEN; this caption is ours-by-design
+        // presentation over the staged CASHFILLUP rect.
+        let mut game = open_music_shop_cashfillup_board();
+        game.click_music_shop(620, 30);
+        let mut buf = vec![0_u32; 800 * 600];
+        game.paint_side(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!((20..40).any(|row| (605..635).any(|col| buf[row * 800 + col] != 0)));
     }
 
     #[test]

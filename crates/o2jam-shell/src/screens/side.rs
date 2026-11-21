@@ -1461,6 +1461,11 @@ impl OwnedSort {
 pub const MSHOP_SEARCH_EDIT_CODE: u32 = 0x1A30_007B;
 pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
 pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
+/// The click posts notice id `0x12` when the web helper returns no
+/// path. The exe's notice copy is OPEN; our client uses a legible
+/// fallback caption, never an exe-text claim (#836).
+pub const MSHOP_CASHFILLUP_NOTICE_ID: u16 = 0x12;
+pub const MSHOP_CASHFILLUP_FALLBACK_CAPTION: &str = "WEB UNAVAILABLE (0x12)";
 /// Pinned CP949 copy for the search edit hint and its two notices.
 pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
 pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
@@ -1727,6 +1732,8 @@ pub enum MusicShopAction {
     DownCancel,
     /// SEARCH pressed with the current edit text.
     Search,
+    /// CASHFILLUP pressed; the web helper has no local path.
+    CashFillup,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -1797,6 +1804,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_TAB_DOWN_CODE => Some(MusicShopAction::Face(MusicShopFace::Download)),
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_SEARCH_CODE => Some(MusicShopAction::Search),
+        MSHOP_CASH_FILLUP_CODE => Some(MusicShopAction::CashFillup),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),
@@ -6887,16 +6895,20 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_search_button_dispatches_but_cash_fillup_stays_inert() {
+    fn music_shop_search_and_cashfillup_buttons_dispatch() {
         // SEARCH's lowercased substring arm is pinned from the exe
-        // (#815). The edit is a text target, not a click action; the
-        // CASHFILLUP web helper arm is still OPEN (#836).
+        // (#815). The edit is a text target, not a click action.
+        // CASHFILLUP posts notice id 0x12 on this web-less client
+        // (#836); its exe copy stays OPEN.
         assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_EDIT_CODE), None);
         assert_eq!(
             music_shop_action_for_code(MSHOP_SEARCH_CODE),
             Some(MusicShopAction::Search)
         );
-        assert_eq!(music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE), None);
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE),
+            Some(MusicShopAction::CashFillup)
+        );
     }
 
     #[test]
