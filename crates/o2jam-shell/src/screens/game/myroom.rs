@@ -34,6 +34,37 @@ pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯�
 /// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
 const MYROOM_COUNT_CAP: u32 = 999;
 
+/// Vacate notice at file `0x2491c0` (VA `0x6491c0`).
+pub(super) const VACATE_NO_SELECTION_NOTICE: &str = "선택된 아이템이 없습니다.";
+/// Vacate notice at file `0x248acc` (VA `0x648acc`).
+pub(super) const VACATE_DEFAULT_NOTICE: &str = "기본 아이템은 지울 수 없습니다.";
+/// Vacate confirm pattern at file `0x248a90` (VA `0x648a90`).
+pub(super) const VACATE_CONFIRM_PATTERN: &str =
+    "아이템 : {name}\n\n이 아이템을 비우시면 보상 받을 수 없습니다.";
+
+/// Which local edit an OK on a MyRoom confirm sheet commits. Every
+/// arm is own-side: the exe's wire shape for vacate stays OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MyRoomConfirmAction {
+    /// Clear the named worn item from one equipment slot.
+    VacateSlot {
+        /// Equipment array index
+        slot: usize,
+        /// Item id the confirm named; a changed slot is left alone.
+        item_id: i32,
+    },
+}
+
+/// One MyRoom confirm sheet: the exe's exact caption plus the local
+/// edit its OK commits. CANCEL only closes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MyRoomConfirm {
+    /// Caption inked into the staged TEXT rect
+    pub(crate) text: String,
+    /// Local edit queued behind the OK press
+    pub(crate) action: MyRoomConfirmAction,
+}
+
 impl ScreenGame {
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
     /// and gift name source. Staging never moves the flow.
@@ -285,23 +316,47 @@ impl ScreenGame {
         });
     }
 
-    /// Vacate the selected slot: the same-ordinal equipment cell
-    /// clears to 0 and the worn figure restages through the #193 hook.
-    /// The button-ordinal to equipment-slot identity is ours-by-design
-    /// (the 11 staged buttons name no equipment slot in the block dump;
-    /// equip slots 11..16 have no button) — next step: rig walk of the
-    /// vacate gesture naming the slot and any wire send. Queues nothing:
-    /// the vacate send shape is unpinned (OPEN, `docs/myroom.md`).
+    /// Vacate the selected slot per exe case `0x15200004`: an empty
+    /// cell posts the file `0x2491c0` notice, ids `0x23/0x24` the file
+    /// `0x248acc` refusal, and any other item opens the file `0x248a90`
+    /// no-compensation confirm. Only its OK clears the same-ordinal
+    /// equipment cell and restages through the #193 hook. The
+    /// button-ordinal to equipment-slot identity is ours-by-design;
+    /// no vacate wire shape is pinned (OPEN, `docs/myroom.md`).
     fn apply_myroom_vacate(&mut self) {
         let slot = usize::from(self.myroom.selected_slot());
-        if let Some(cell) = self
+        let Some(item_id) = self
             .myroom_character
-            .as_mut()
-            .and_then(|character| character.equipment.get_mut(slot))
-        {
-            *cell = 0;
+            .as_ref()
+            .and_then(|character| character.equipment.get(slot))
+            .copied()
+        else {
+            return;
+        };
+        if item_id == 0 {
+            self.myroom_notice = Some(VACATE_NO_SELECTION_NOTICE.to_owned());
+            self.myroom_confirm = None;
+            return;
         }
-        self.restage_worn_figure();
+        if item_id == 0x23 || item_id == 0x24 {
+            self.myroom_notice = Some(VACATE_DEFAULT_NOTICE.to_owned());
+            self.myroom_confirm = None;
+            return;
+        }
+        let item_name = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| {
+                u32::try_from(item_id)
+                    .ok()
+                    .and_then(|id| avatar_item_by_id(table, id))
+            })
+            .map_or_else(|| item_id.to_string(), |row| row.name.clone());
+        self.myroom_notice = None;
+        self.myroom_confirm = Some(MyRoomConfirm {
+            text: VACATE_CONFIRM_PATTERN.replace("{name}", &item_name),
+            action: MyRoomConfirmAction::VacateSlot { slot, item_id },
+        });
     }
 
     /// Claim the selected gift cell: the 5023 body queues for the

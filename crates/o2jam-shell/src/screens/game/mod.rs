@@ -27,6 +27,7 @@ pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
+use self::myroom::{MyRoomConfirm, MyRoomConfirmAction};
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
@@ -47,12 +48,13 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_billing_failure_notice,
-    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
-    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
-    paint_music_shop_wallet, paint_myroom_figure, paint_myroom_information, paint_planet_options,
+    information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit, paint_avi_scene,
+    paint_billing_failure_notice, paint_cash_charge_frame, paint_channel_chat,
+    paint_dialog_frame_record, paint_dialog_scene, paint_information_message, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
+    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_myroom_information, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
     paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
@@ -880,6 +882,9 @@ pub struct ScreenGame {
     /// the worn-well miss at file `0x2491f4`). It owns clicks until
     /// OK like the other Information sheets.
     myroom_notice: Option<String>,
+    /// One-OK/CANCEL MyRoom confirm sheet, with the local edit its OK
+    /// commits (first arm: the vacate no-compensation warning).
+    myroom_confirm: Option<MyRoomConfirm>,
     /// Per-slot MyRoom count vector advanced by a successful 5005
     /// reply (capped at 999 by the exe's reply handler).
     myroom_counts: [u32; 17],
@@ -1272,6 +1277,7 @@ impl ScreenGame {
             room_no_response: RoomNoResponseFuse::default(),
             messenger_liveness_open: false,
             myroom_notice: None,
+            myroom_confirm: None,
             myroom_counts: [0; 17],
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1902,6 +1908,37 @@ impl ScreenGame {
     #[must_use]
     pub const fn myroom_counts(&self) -> [u32; 17] {
         self.myroom_counts
+    }
+
+    /// Caption of the open MyRoom confirm sheet, if any.
+    #[must_use]
+    pub fn myroom_confirm_text(&self) -> Option<&str> {
+        self.myroom_confirm
+            .as_ref()
+            .map(|confirm| confirm.text.as_str())
+    }
+
+    /// Commit the open MyRoom confirm's local arm and close the sheet.
+    /// No send belongs to any arm today: the exe's vacate wire shape
+    /// stays OPEN, so this only mirrors the confirmed own-side edit.
+    fn confirm_myroom_action(&mut self) {
+        let Some(confirm) = self.myroom_confirm.take() else {
+            return;
+        };
+        match confirm.action {
+            MyRoomConfirmAction::VacateSlot { slot, item_id } => {
+                let cell = self
+                    .myroom_character
+                    .as_mut()
+                    .and_then(|character| character.equipment.get_mut(slot));
+                if let Some(worn) = cell {
+                    if *worn == item_id {
+                        *worn = 0;
+                    }
+                }
+                self.restage_worn_figure();
+            }
+        }
     }
 
     /// The fuse paints the same staged `Dialog_Information` sheet the
@@ -3491,6 +3528,7 @@ impl ScreenGame {
     pub fn dialog_owns_input(&self) -> bool {
         self.messenger_liveness_open
             || self.myroom_notice.is_some()
+            || self.myroom_confirm.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
             || self.room_dialog.is_some()
@@ -5426,6 +5464,15 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.myroom_confirm.is_some() {
+            let (ok_hit, cancel_hit) = self.myroom_confirm_button_hits(x, y);
+            if ok_hit {
+                self.confirm_myroom_action();
+            } else if cancel_hit {
+                self.myroom_confirm = None;
+            }
+            return;
+        }
         if self.myroom_notice.is_some() {
             // The exe's one-OK Information sheet consumes the click;
             // no wire is queued by the notice or its dismissal.
@@ -5985,6 +6032,21 @@ impl ScreenGame {
         }
     }
 
+    /// MyRoom confirm OK/CANCEL hits: the staged dialog's `.bnd` rects
+    /// when art is staged, the native fallback boxes otherwise. Both
+    /// buttons are needed because CANCEL leaves the worn set alone.
+    fn myroom_confirm_button_hits(&self, x: i32, y: i32) -> (bool, bool) {
+        let staged_ok = self
+            .relay_down_art
+            .as_ref()
+            .filter(|art| art.has_figures())
+            .is_some_and(|art| dialog_rect_hit(&art.placements, INFORMATION_OK_CODE, x, y));
+        (
+            staged_ok || rect_hit(&information_ok_fallback_rect(), x, y),
+            rect_hit(&information_cancel_fallback_rect(), x, y),
+        )
+    }
+
     /// One-OK Information sheet hit for `0X21200002`: its staged
     /// `.bnd` rect when art is staged, else the archive-less fallback
     /// plate. Shared by the relay notice and the Room fuse (#367).
@@ -6371,6 +6433,7 @@ impl ScreenGame {
         self.billing_failure_notice = false;
         self.messenger_liveness_open = false;
         self.myroom_notice = None;
+        self.myroom_confirm = None;
         if side == SideScreen::Shop {
             // A preview never sticks past the shop: leaving reverts
             // to the equipped avatar (ticket #196).
@@ -7286,6 +7349,9 @@ impl ScreenGame {
         }
         if let Some(notice) = self.myroom_notice.as_deref() {
             paint_myroom_information(frame, self.relay_down_art.as_ref(), notice);
+        }
+        if let Some(confirm) = self.myroom_confirm.as_ref() {
+            paint_myroom_confirm(frame, self.relay_down_art.as_ref(), &confirm.text);
         }
         self.paint_dialog_frame_states(frame);
     }
@@ -15332,8 +15398,11 @@ mod game_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
-        // Slot 0 is selected by default and wears item 1.
+        // Slot 0 is selected by default and wears item 1. The exe
+        // asks for confirmation first; only OK clears the slot.
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.myroom_confirm_text().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         let hero = game.myroom_character.as_ref().expect("staged character");
         assert_eq!(hero.equipment[0], 0, "the selected slot clears");
         assert_eq!(hero.equipment[1], 2, "only the selected slot clears");
@@ -15342,6 +15411,71 @@ mod game_tests {
             figure.len(),
             1,
             "the portrait loses the vacated part, never pins it stale"
+        );
+    }
+
+    #[test]
+    fn myroom_vacate_refuses_empty_and_default_items_before_confirming() {
+        // Live caller chain: boot -> MyRoom side -> staged VACATE ->
+        // click_myroom_side -> exe case `0x15200004` notice/confirm
+        // arms. File `0x2491c0` (no selection), `0x248acc` (default id)
+        // and `0x248a90` (no-compensation confirm).
+        use super::super::side::MYROOM_VACATE_CODE;
+        let mut game = myroom_open_overlay();
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_VACATE_CODE, 10, 40)],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "empty slot posts a notice");
+        assert_eq!(
+            game.myroom_notice(),
+            Some("선택된 아이템이 없습니다."),
+            "exe file 0x2491c0 copy"
+        );
+        assert_eq!(game.take_equip_send(), None, "no vacate wire is invented");
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert!(!game.dialog_owns_input(), "OK dismisses the notice");
+
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 0x23;
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "a default item cannot be cleared");
+        assert_eq!(
+            game.myroom_notice(),
+            Some("기본 아이템은 지울 수 없습니다."),
+            "exe file 0x248acc copy"
+        );
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            0x23,
+            "the default item survives the refusal"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .equipment[0] = 1;
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert!(game.dialog_owns_input(), "a named item asks first");
+        assert_eq!(
+            game.myroom_confirm_text(),
+            Some("아이템 : Gear1\n\n이 아이템을 비우시면 보상 받을 수 없습니다."),
+            "exe file 0x248a90 pattern with the staged item name"
+        );
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            1,
+            "OK must be pressed before the clear"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
+        assert_eq!(
+            game.myroom_character.as_ref().expect("hero").equipment[0],
+            0,
+            "OK clears the confirmed slot"
         );
     }
 
@@ -15945,8 +16079,11 @@ mod game_tests {
         for pixel in pixels {
             hash_u64(&mut hash, u64::from(pixel));
         }
+        // #797 re-pin: the VACATE press now opens the exe's
+        // no-selection notice, which inks the Information sheet over
+        // the same staged rects; one screen, no wire.
         assert_eq!(
-            hash, 0x570F_AD14_1C10_0CCB,
+            hash, 0x8174_B6A9_75A2_9977,
             "MyRoom ScreenGame cluster output drifted"
         );
     }
@@ -24690,6 +24827,10 @@ mod game_tests {
             "no picked gift claims nothing"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        // An empty slot is refused with the exe's no-selection notice;
+        // dismissing it costs no wire.
+        assert!(game.myroom_notice().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);

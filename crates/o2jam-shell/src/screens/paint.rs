@@ -49,14 +49,14 @@ use super::side::{
     planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots,
     wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopRow, PlanetAction, PlanetBand,
     PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
-    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
-    MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
-    MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE, MSHOP_GEM_PRICE_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
     SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
     SHOP_MGASH_CODE,
 };
@@ -2611,6 +2611,20 @@ pub(crate) fn information_ok_fallback_rect() -> Rect {
     }
 }
 
+/// Archive-less CANCEL box beside the one-OK Information sheet's
+/// button. Same sheet family, so the confirm sheet keeps the OK
+/// hit rect the qualified Information packs pin (#244).
+#[must_use]
+pub(crate) fn information_cancel_fallback_rect() -> Rect {
+    let ok = information_ok_fallback_rect();
+    Rect {
+        x: ok.x + i32::try_from(ok.w).unwrap_or(0) + 10,
+        y: ok.y,
+        w: ok.w,
+        h: ok.h,
+    }
+}
+
 /// Frame-centered quit-fallback boxes (native 800x600 space): used
 /// only while no dialog art is staged, so the popup still shows
 /// and clicks without archives. Returns (message, OK, CANCEL)
@@ -2748,6 +2762,64 @@ pub fn paint_myroom_information(frame: &mut Frame<'_>, art: Option<&SceneArt>, m
     let ok = scale_rect_to_frame(&information_ok_fallback_rect(), frame.w, frame.h);
     fill_rect(frame, &ok, CHANNEL_ENTER_TONE);
     draw_text(frame, ok.x + 8, ok.y + 8, "OK", art_title_ink());
+}
+
+/// One MyRoom confirm sheet (OK/CANCEL): the staged dialog's `.bnd`
+/// rects for text and buttons, or the archive-less fallback boxes.
+/// The caller owns the UTF-8 caption; no geometry or copy is invented
+/// by the painter.
+pub fn paint_myroom_confirm(frame: &mut Frame<'_>, art: Option<&SceneArt>, message: &str) {
+    if let Some(art) = art.filter(|art| art.has_figures()) {
+        paint_dialog_scene(frame, art);
+        let (origin_x, origin_y) = dialog_origin(&art.placements);
+        for placed in &art.placements {
+            let rect = Rect {
+                x: placed.rect.x + origin_x,
+                y: placed.rect.y + origin_y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            };
+            match placed.code {
+                INFORMATION_MESSAGE_CODE => {
+                    paint_text_into_rect(frame, rect, message, CP949_INK);
+                }
+                INFORMATION_OK_CODE => {
+                    draw_text(frame, rect.x + 8, rect.y + 8, "OK", art_title_ink());
+                }
+                _ => {}
+            }
+        }
+        // The Information sheet stamps CANCEL nowhere; the fallback
+        // box stays the only archive-less geometry for the second arm.
+        draw_text(
+            frame,
+            information_cancel_fallback_rect().x + 8,
+            information_cancel_fallback_rect().y + 8,
+            "CANCEL",
+            art_title_ink(),
+        );
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: frame.h as u32,
+        },
+        scrim_color(),
+    );
+    let (text, _, _) = quit_fallback_rects();
+    paint_text_into_rect(frame, text, message, CP949_INK);
+    for (rect, word) in [
+        (information_ok_fallback_rect(), "OK"),
+        (information_cancel_fallback_rect(), "CANCEL"),
+    ] {
+        let scaled = scale_rect_to_frame(&rect, frame.w, frame.h);
+        fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
+        draw_text(frame, scaled.x + 8, scaled.y + 8, word, art_title_ink());
+    }
 }
 
 /// One-OK sheet painter shared by the relay notice, the Room fuse, and
