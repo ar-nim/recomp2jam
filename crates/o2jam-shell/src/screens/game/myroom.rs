@@ -32,7 +32,7 @@ use o2jam_render::Frame;
 pub(super) const WORN_WELL_MISS_NOTICE: &str = "최소한 하나의 빈 슬롯이 필요합니다.";
 
 /// Ceiling on the MyRoom per-slot count vector after a 5005 reply.
-const MYROOM_COUNT_CAP: u32 = 999;
+pub(super) const MYROOM_COUNT_CAP: u32 = 999;
 
 /// Nickname-item confirm, exact bytes read at file `0x2487f8`.
 pub(super) const NICKNAME_ITEM_CONFIRM: &str = "\n현재 사용중이신 닉네임을 \n변경할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
@@ -42,6 +42,20 @@ pub(super) const PENALTY_ITEM_CONFIRM: &str =
 /// Slot-expansion-item confirm, exact bytes at file `0x248718`.
 pub(super) const EXPANSION_ITEM_CONFIRM: &str =
     "\n현재 사용중이신 슬롯을 \n확장할 수 있는 아이템입니다.\n\n사용 후 아이템은 사라집니다.\n\n아이템을 사용하시겠습니까?";
+
+/// Successful item-gift 5024 caption, file `0x249218`.
+pub(super) const GIFT_ITEM_SUCCESS: &str = "선물이 마이백으로 이동 되었습니다.";
+/// Successful music-gift 5024 caption, file `0x249240`.
+pub(super) const GIFT_MUSIC_SUCCESS: &str = "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다.";
+/// Failed item-gift 5024 caption, file `0x2492dc`.
+pub(super) const GIFT_ITEM_FAILURE: &str = "[운영자에게 문의바람]선물받은 아이템 넣기 실패";
+/// Failed music-gift 5024 caption, file `0x2492ac`.
+pub(super) const GIFT_MUSIC_FAILURE: &str = "[운영자에게 문의바람]선물받은 뮤직 넣기 실패";
+/// Follow-up request the exe sends on the music arm of 5024. The
+/// numeric opcode is `0x1392`; our table names 5010 SyncMusicPurchase
+/// (the enrichment gloss called it 5026, which is `0x13a2`). The
+/// game meaning on this arm stays OPEN with a live gifted-account tap.
+pub(super) const GIFT_MUSIC_FOLLOWUP_COMMAND: u16 = 0x1392;
 
 /// BAGSORT failure notice, exact cp949 string decoded from the
 /// oracle at file `0x248f40` (VA `0x648f40`).

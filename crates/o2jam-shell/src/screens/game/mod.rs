@@ -29,7 +29,8 @@ use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::myroom::{
     MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
-    BAG_SORT_FAILURE_NOTICE,
+    BAG_SORT_FAILURE_NOTICE, GIFT_ITEM_FAILURE, GIFT_ITEM_SUCCESS, GIFT_MUSIC_FAILURE,
+    GIFT_MUSIC_FOLLOWUP_COMMAND, GIFT_MUSIC_SUCCESS, MYROOM_COUNT_CAP,
 };
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
@@ -1977,6 +1978,45 @@ impl ScreenGame {
     pub fn apply_myroom_reply(&mut self, reply_command: u16) {
         if reply_command == 5039 {
             self.myroom.pick_bag_cell(None);
+        }
+    }
+
+    /// Ink the exe's 5024 outcome caption and take its music arm's
+    /// follow-up request. The success path also drops the gift cursor
+    /// and advances the item's per-slot count when its equip slot can
+    /// be derived (the count-slot join on this arm stays OPEN; only
+    /// the cap and the notices are exe-pinned).
+    pub fn apply_gift_claim_reply(&mut self, is_music: bool, accepted: bool, resource_id: i32) {
+        self.myroom_notice = Some(
+            match (is_music, accepted) {
+                (true, true) => GIFT_MUSIC_SUCCESS,
+                (false, true) => GIFT_ITEM_SUCCESS,
+                (true, false) => GIFT_MUSIC_FAILURE,
+                (false, false) => GIFT_ITEM_FAILURE,
+            }
+            .to_owned(),
+        );
+        self.myroom.pick_gift_cell(None);
+        if !accepted {
+            return;
+        }
+        if is_music {
+            self.outbox
+                .queue_myroom_send(GIFT_MUSIC_FOLLOWUP_COMMAND, Vec::new());
+            return;
+        }
+        let slot = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| {
+                u32::try_from(resource_id)
+                    .ok()
+                    .and_then(|id| avatar_item_by_id(table, id))
+            })
+            .and_then(|row| myroom_equip_slot(row.item_type, myroom_record_slot(row)));
+        let slot = usize::from(slot.unwrap_or(0));
+        if let Some(count) = self.myroom_counts.get_mut(slot) {
+            *count = count.saturating_add(1).min(MYROOM_COUNT_CAP);
         }
     }
 
@@ -15727,6 +15767,50 @@ mod game_tests {
         assert_eq!(
             paint_first_pixel(&after),
             o2jam_render::pack_xrgb(255, 0, 0)
+        );
+    }
+
+    #[test]
+    fn myroom_5024_reply_inks_item_and_music_outcomes() {
+        // Live caller chain: OnlineSession::drain_gift_claim (scripted
+        // 5024) -> ScreenGame::apply_gift_claim_success +
+        // apply_gift_claim_reply -> one-OK notice / 0x1392 follow-up.
+        // Captions are the exact exe byte tables at files `0x249218`,
+        // `0x249240`, `0x2492dc`, `0x2492ac` (EV `ev_c1ed8832…`).
+        let mut game = myroom_open_overlay();
+        game.apply_gift_claim_reply(false, true, 1);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("선물이 마이백으로 이동 되었습니다.")
+        );
+        assert_eq!(game.myroom_counts()[0], 1, "item claim count");
+        assert!(game.take_myroom_sends().is_empty(), "item arm sends none");
+
+        game.apply_gift_claim_reply(true, true, 42);
+        assert_eq!(
+            game.myroom_notice(),
+            Some(
+                "선물이 성공적으로 이동 되었습니다.\n\n이동 되어진 곡 확인은 뮤직샾 오른쪽 리스트에서 확인 하실 수 있습니다."
+            )
+        );
+        let sends = game.take_myroom_sends();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].command, 0x1392);
+        assert!(sends[0].body.is_empty());
+
+        game.apply_gift_claim_reply(false, false, 1);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
+        );
+        game.apply_gift_claim_reply(true, false, 42);
+        assert_eq!(
+            game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 뮤직 넣기 실패")
+        );
+        assert!(
+            game.take_myroom_sends().is_empty(),
+            "failure arms send none"
         );
     }
 

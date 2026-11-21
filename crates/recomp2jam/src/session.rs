@@ -143,7 +143,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
-use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply};
+use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply, GiftType};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
@@ -491,6 +491,10 @@ struct GiftListAttempt {
 struct GiftClaimAttempt {
     /// Claimed gift id for the 5024 success fold.
     gift_id: i32,
+    /// Gift kind, which picks the exe's 5024 notice and music send.
+    gift_type: GiftType,
+    /// Claimed item/music id, used for the item count update.
+    resource_id: i32,
     /// When the silent server stops getting the benefit of the doubt.
     deadline: Instant,
 }
@@ -3055,6 +3059,8 @@ impl OnlineSession {
         }
         if let Some(claim) = self.game.take_gift_claim() {
             let gift_id = claim.gift_id;
+            let gift_type = claim.gift_type;
+            let resource_id = claim.resource_id;
             if let Err(source) = self
                 .gateway
                 .send_frame(o2jam_net::gift::ClaimGift::COMMAND, &claim.encode_body())
@@ -3063,6 +3069,8 @@ impl OnlineSession {
             } else {
                 self.gift_claim_attempt = Some(GiftClaimAttempt {
                     gift_id,
+                    gift_type,
+                    resource_id,
                     deadline: Instant::now() + PENDING_WIRE_WINDOW,
                 });
             }
@@ -3110,17 +3118,23 @@ impl OnlineSession {
                                 "valid gift claim; verdict byte ignored like the exe"
                             );
                             self.game.apply_gift_claim_success(attempt.gift_id);
+                            self.game.apply_gift_claim_reply(
+                                attempt.gift_type == GiftType::Music,
+                                true,
+                                attempt.resource_id,
+                            );
                         }
                         Ok(GiftClaimReply::Rejected(response)) => {
-                            // SCRIPTED-GATEWAY validity word only. The
-                            // 7.55 failure presentation is OPEN
-                            // (`E-PAYMENT2-5024`); our mcash-tone
-                            // notice is ASSUMED and invents no wire.
                             tracing::debug!(
                                 verdict = response.result_code,
                                 "rejected gift claim; staged box holds"
                             );
                             self.game.post_payment2_failure_notice();
+                            self.game.apply_gift_claim_reply(
+                                attempt.gift_type == GiftType::Music,
+                                false,
+                                attempt.resource_id,
+                            );
                         }
                         Err(_) => {
                             tracing::debug!(id = frame.id, "dropping undecodable gift claim reply");
@@ -6383,6 +6397,11 @@ pub(super) mod session_tests {
             !session.game.billing_failure_notice_open(),
             "the completion body never posts a refusal notice"
         );
+        // #812: the live drain also posts the exe's item-success copy.
+        assert_eq!(
+            session.game.myroom_notice(),
+            Some("선물이 마이백으로 이동 되었습니다.")
+        );
     }
 
     #[test]
@@ -6434,6 +6453,13 @@ pub(super) mod session_tests {
             "the refused gift stays in the box"
         );
         assert!(!hero.inventory.contains(&1), "a refusal mints no item");
+        // #812 re-pin: the exe's exact item-failure caption now owns
+        // the one-OK sheet; the older mcash band stays behind it.
+        assert_eq!(
+            session.game.myroom_notice(),
+            Some("[운영자에게 문의바람]선물받은 아이템 넣기 실패")
+        );
+        session.game.dismiss_myroom_notice();
         let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;
         let band_pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
         assert_eq!(
