@@ -24,6 +24,8 @@ mod menu_trace_replay;
 mod relay_gate;
 mod session;
 mod session_walk;
+#[cfg(test)]
+mod shop_open_bench;
 mod shots;
 mod trace;
 
