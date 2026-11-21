@@ -54,18 +54,18 @@ use super::paint::{
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_face, paint_music_shop_genre_frames,
     paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_top100_chrome,
+    paint_music_shop_wallet, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
     WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
     WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
@@ -7088,6 +7088,28 @@ impl ScreenGame {
         self.music_shop.search_active()
     }
 
+    /// Text in the song-shop search edit (#815).
+    #[must_use]
+    pub fn music_shop_search_draft(&self) -> &str {
+        self.music_shop.search_draft()
+    }
+
+    /// Marked title hits from the last successful song search.
+    #[must_use]
+    pub fn music_shop_search_hits(&self) -> &[u32] {
+        self.music_shop.search_hits()
+    }
+
+    /// Type one character into the open song-shop search edit.
+    pub fn push_music_shop_search_char(&mut self, typed: char) {
+        self.music_shop.push_search_char(typed);
+    }
+
+    /// Erase one character from the song-shop search edit.
+    pub fn delete_music_shop_search_char(&mut self) {
+        self.music_shop.delete_search_char();
+    }
+
     /// Stage the search flag at the board seam for the filter guard.
     pub fn stage_music_shop_search_active(&mut self, active: bool) {
         self.music_shop.stage_search_active(active);
@@ -7445,6 +7467,14 @@ impl ScreenGame {
                 &self.side_placements,
                 self.music_shop.selected_row(),
             );
+            let visible_rows = self.music_shop_visible_rows();
+            paint_music_shop_search(
+                frame,
+                &self.side_placements,
+                self.music_shop_search_draft(),
+                self.music_shop_search_hits(),
+                &visible_rows,
+            );
             paint_music_shop_top100_chrome(
                 frame,
                 &self.side_placements,
@@ -7453,7 +7483,7 @@ impl ScreenGame {
             paint_music_shop_board(
                 frame,
                 &self.side_placements,
-                &self.music_shop_visible_rows(),
+                &visible_rows,
                 self.music_shop_page(),
                 self.music_shop_list_pages(),
             );
@@ -8441,6 +8471,8 @@ impl GameLoop for ScreenGame {
         for typed in text.chars() {
             if self.select_music_dialog_open() {
                 self.push_select_search_char(typed);
+            } else if self.side == Some(SideScreen::MusicShop) {
+                self.push_music_shop_search_char(typed);
             } else if self.flow.current() == Screen::Waiting {
                 self.push_chat_char(typed);
             } else {
@@ -8452,6 +8484,8 @@ impl GameLoop for ScreenGame {
     fn delete_text(&mut self) {
         if self.select_music_dialog_open() {
             self.delete_select_search_char();
+        } else if self.side == Some(SideScreen::MusicShop) {
+            self.delete_music_shop_search_char();
         } else if self.flow.current() == Screen::Waiting {
             self.delete_chat_char();
         } else {
@@ -8766,22 +8800,23 @@ mod game_tests {
         MSHOP_OWNED_DOWNSTATUS_SORT_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_PLAYTIME_SORT_CODE,
         MSHOP_OWNED_ROWS, MSHOP_OWNED_TITLE_SORT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
-        MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
-        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE,
-        MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE,
-        ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
-        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
-        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
-        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
-        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
-        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
-        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
-        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
-        SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
+        MSHOP_SEARCH_CODE, MSHOP_SEARCH_EDIT_CODE, MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE,
+        MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
+        MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE,
+        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE,
+        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
+        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
+        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
+        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
+        SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
+        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_BUTTONS,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -24547,6 +24582,100 @@ mod game_tests {
         assert!(game.music_shop_download_readout().is_some());
         game.click_music_shop(218, 542);
         assert_eq!(game.music_shop_owned_page(), 0, "pager gated");
+    }
+
+    /// Music-shop board with the search edit and button staged.
+    fn open_music_shop_search_board() -> ScreenGame {
+        let mut game = open_music_shop_board(7);
+        for (code, x) in [(MSHOP_SEARCH_EDIT_CODE, 500), (MSHOP_SEARCH_CODE, 600)] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 20,
+                    w: 80,
+                    h: 20,
+                },
+            });
+        }
+        game
+    }
+
+    #[test]
+    fn music_shop_search_uses_a_lowercased_substring_and_marks_hits() {
+        // Live caller chain: main.rs::run_play -> GameLoop::text_input
+        // -> ScreenGame::push_music_shop_search_char -> SEARCH click
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(Search) -> visible_rows.
+        let mut game = open_music_shop_search_board();
+        game.text_input("TuN");
+        game.click_music_shop(640, 30);
+        assert_eq!(game.music_shop_search_draft(), "TuN");
+        assert!(game.music_shop_search_active());
+        assert_eq!(game.music_shop_search_hits().len(), 7);
+        assert_eq!(game.music_shop_visible_rows().len(), 5);
+        assert!(game.music_shop_visible_rows().iter().all(|row| row
+            .song
+            .title
+            .to_lowercase()
+            .contains("tun")));
+        assert_eq!(game.music_shop_notice(), None);
+    }
+
+    #[test]
+    fn music_shop_search_reports_empty_text_repeated_queries_and_no_hits() {
+        // The exe compares the edit text with its stored query and
+        // posts the pinned prompt on empty or unchanged input and on
+        // a matched-nothing search.
+        let mut game = open_music_shop_search_board();
+        game.click_music_shop(640, 30);
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((MusicShopNotice::EmptySearch, MSHOP_SEARCH_CODE))
+        );
+        game.text_input("tun");
+        game.click_music_shop(640, 30);
+        assert!(game.music_shop_search_active());
+        game.click_music_shop(640, 30);
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((MusicShopNotice::EmptySearch, MSHOP_SEARCH_CODE))
+        );
+        game.text_input("zzz");
+        game.click_music_shop(640, 30);
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((MusicShopNotice::NoSearchHits, MSHOP_SEARCH_CODE))
+        );
+    }
+
+    #[test]
+    fn music_shop_search_edit_inks_its_hint_until_text_is_typed() {
+        // Live caller chain: ScreenGame::paint_side ->
+        // paint_music_shop_search -> staged edit rect. The hint and
+        // the draft are pinned/presentational, not a wire claim.
+        let mut game = open_music_shop_search_board();
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0_u32; 800 * 600];
+            game.paint_side(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let hint_frame = paint(&mut game);
+        assert!((520..580).any(|col| hint_frame[30 * 800 + col] != 0));
+        game.text_input("tun");
+        let draft_frame = paint(&mut game);
+        assert!((520..580).any(|col| draft_frame[30 * 800 + col] != 0));
+        assert_ne!(hint_frame, draft_frame, "the draft replaces the hint");
     }
 
     #[test]

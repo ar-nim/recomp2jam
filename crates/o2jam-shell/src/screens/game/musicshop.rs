@@ -12,7 +12,7 @@ use super::super::side::{
     sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
     MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
     MSHOP_CART_ROWS, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
-    MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
+    MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -104,6 +104,14 @@ pub(crate) struct MusicShopState {
     /// Search-result flag (exe state `+0x88`). A filter press clears
     /// it; the SEARCH arm sets it on a successful match (#815).
     pub(crate) music_shop_search_active: bool,
+    /// Text in the staged `0x1A30007B` edit. Typed characters go
+    /// here while the music-shop side owns the keyboard (#815).
+    pub(crate) music_shop_search_draft: String,
+    /// Last committed query (exe state `+0x95`); an empty or equal
+    /// draft posts the prompt instead of searching again.
+    pub(crate) music_shop_search_query: Option<String>,
+    /// Catalog song ids whose lowercased title contains the query.
+    pub(crate) music_shop_search_hits: Vec<u32>,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -151,6 +159,8 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+        self.music_shop_search_active = false;
+        self.music_shop_search_hits.clear();
     }
 
     /// Stage the local `Music\` scan (§1) behind the shop. The
@@ -379,6 +389,28 @@ impl MusicShopState {
         self.music_shop_search_active
     }
 
+    /// Current edit text.
+    pub(crate) fn search_draft(&self) -> &str {
+        &self.music_shop_search_draft
+    }
+
+    /// Marked title hits from the last successful search.
+    pub(crate) fn search_hits(&self) -> &[u32] {
+        &self.music_shop_search_hits
+    }
+
+    /// Type one non-control character into the search edit.
+    pub(crate) fn push_search_char(&mut self, typed: char) {
+        if !typed.is_control() {
+            self.music_shop_search_draft.push(typed);
+        }
+    }
+
+    /// Erase one character from the search edit.
+    pub(crate) fn delete_search_char(&mut self) {
+        self.music_shop_search_draft.pop();
+    }
+
     /// Stage the search flag at the board seam. The SEARCH arm owns
     /// it once that arm lands (#815).
     pub(crate) fn stage_search_active(&mut self, active: bool) {
@@ -453,7 +485,15 @@ impl MusicShopState {
     /// Sorted song-shop rows with live flags on the current page
     /// (owned page: small, five rows at most).
     pub(crate) fn visible_rows(&self) -> Vec<MusicShopRow> {
-        let mut songs = self.music_shop_songs.clone();
+        let mut songs: Vec<LankingSong> = if self.music_shop_search_active {
+            self.music_shop_songs
+                .iter()
+                .filter(|song| self.music_shop_search_hits.contains(&song.song_id))
+                .cloned()
+                .collect()
+        } else {
+            self.music_shop_songs.clone()
+        };
         if let Some(sort) = self.music_shop_sort {
             sort_lanking_songs(&mut songs, sort);
         }
@@ -564,6 +604,32 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
+                MusicShopEffect::None
+            }
+            MusicShopAction::Search => {
+                let draft = self.music_shop_search_draft.clone();
+                if draft.is_empty()
+                    || self.music_shop_search_query.as_deref() == Some(draft.as_str())
+                {
+                    self.post_notice(MusicShopNotice::EmptySearch, MSHOP_SEARCH_CODE);
+                    return MusicShopEffect::None;
+                }
+                let needle = draft.to_lowercase();
+                let hits: Vec<u32> = self
+                    .music_shop_songs
+                    .iter()
+                    .filter(|song| song.title.to_lowercase().contains(&needle))
+                    .map(|song| song.song_id)
+                    .collect();
+                if hits.is_empty() {
+                    self.post_notice(MusicShopNotice::NoSearchHits, MSHOP_SEARCH_CODE);
+                    return MusicShopEffect::None;
+                }
+                self.music_shop_search_query = Some(draft);
+                self.music_shop_search_hits = hits;
+                self.music_shop_search_active = true;
+                self.music_shop_page = 0;
+                self.clear_page_plates();
                 MusicShopEffect::None
             }
             MusicShopAction::OwnedSort(sort) => {

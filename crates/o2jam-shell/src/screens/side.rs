@@ -1453,13 +1453,18 @@ impl OwnedSort {
         }
     }
 }
-/// Music-shop SEARCH edit/button (`0x1A30007B`/`0x1A20007C`) and
-/// CASHFILLUP (`0x1A200009`). Their rects stage, but no qualified
-/// exe press frame names a result (matrix `E-T`), so they stay
-/// inert until a capture pins the behavior (#413).
+/// Music-shop SEARCH edit and button (`0x1A30007B`/`0x1A20007C`).
+/// The init stages the Korean hint; the SEARCH arm lowercases the
+/// edit text and every catalog title through `FUN_005f7310`
+/// (#815). CASHFILLUP (`0x1A200009`) stays inert until its web
+/// helper arm lands (#836).
 pub const MSHOP_SEARCH_EDIT_CODE: u32 = 0x1A30_007B;
 pub const MSHOP_SEARCH_CODE: u32 = 0x1A20_007C;
 pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
+/// Pinned CP949 copy for the search edit hint and its two notices.
+pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
+pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
+pub const MSHOP_NO_SEARCH_HITS_NOTICE: &str = "검색된 곡이 없습니다.";
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
 /// return is pinned by the bnd arm; the shared 5007 ExitShop send is
@@ -1513,6 +1518,10 @@ pub enum MusicShopNotice {
     DeleteFiles,
     /// DOWN_CANCEL asked before cancelling an active transfer.
     CancelDownload,
+    /// SEARCH pressed with empty or unchanged edit text.
+    EmptySearch,
+    /// SEARCH found no catalog title containing the query.
+    NoSearchHits,
 }
 
 impl MusicShopNotice {
@@ -1523,6 +1532,8 @@ impl MusicShopNotice {
             Self::FiveSongCap => MSHOP_FIVE_SONG_CAP_NOTICE,
             Self::DeleteFiles => MSHOP_MUSICDELETE_NOTICE,
             Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
+            Self::EmptySearch => MSHOP_EMPTY_SEARCH_NOTICE,
+            Self::NoSearchHits => MSHOP_NO_SEARCH_HITS_NOTICE,
         }
     }
 }
@@ -1690,6 +1701,8 @@ pub enum MusicShopAction {
     DownStart,
     /// DOWN_CANCEL pressed: confirm, then drop the active queue.
     DownCancel,
+    /// SEARCH pressed with the current edit text.
+    Search,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -1759,6 +1772,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     match code {
         MSHOP_TAB_DOWN_CODE => Some(MusicShopAction::Face(MusicShopFace::Download)),
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
+        MSHOP_SEARCH_CODE => Some(MusicShopAction::Search),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),
@@ -6758,13 +6772,15 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_search_and_cash_fillup_stay_inert_until_press_frames_exist() {
-        // The search edit/button and CASHFILLUP rects are visible in
-        // the qualified entry frame, but no press result was captured
-        // (`E-T`). No sort, buy, or navigation may be guessed for
-        // them; the Item Shop charge plate is a different spec.
+    fn music_shop_search_button_dispatches_but_cash_fillup_stays_inert() {
+        // SEARCH's lowercased substring arm is pinned from the exe
+        // (#815). The edit is a text target, not a click action; the
+        // CASHFILLUP web helper arm is still OPEN (#836).
         assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_EDIT_CODE), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_SEARCH_CODE), None);
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_SEARCH_CODE),
+            Some(MusicShopAction::Search)
+        );
         assert_eq!(music_shop_action_for_code(MSHOP_CASH_FILLUP_CODE), None);
     }
 

@@ -55,13 +55,13 @@ use super::side::{
     LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CURRENT_PROGRESS_CODE,
     MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE,
-    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
-    MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE,
+    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT,
+    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1558,6 +1558,53 @@ const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
 /// Own-by-design band behind a pinned Korean shop notice. The text
 /// and the host control code are pinned; the band is presentation.
 const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
+
+/// Own-by-design marker for a title-search hit. The exe calls its
+/// hit-marking helper on each match; the band is presentation over
+/// the staged `MS_EX` rect (#815).
+const MUSIC_SHOP_SEARCH_HIT_TONE: u32 = pack_xrgb(0xC0, 0xD0, 0x40);
+
+/// Ink the search edit's Korean hint or typed draft, and mark the
+/// matching song rows. Unstaged edit/rows paint nothing.
+pub fn paint_music_shop_search(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    draft: &str,
+    hits: &[u32],
+    visible_rows: &[MusicShopRow],
+) {
+    if let Some(edit) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_SEARCH_EDIT_CODE)
+    {
+        let text = if draft.is_empty() {
+            MSHOP_SEARCH_HINT
+        } else {
+            draft
+        };
+        paint_text_into_rect(frame, edit.rect, text, CP949_INK);
+    }
+    for (row, slot) in visible_rows.iter().zip(music_shop_slots(placements)) {
+        if !hits.contains(&row.song.song_id) {
+            continue;
+        }
+        let rect = scale_rect_to_frame(&slot, frame.w, frame.h);
+        let band_height = 2_u32.min(rect.h);
+        if band_height == 0 {
+            continue;
+        }
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.w,
+                h: band_height,
+            },
+            MUSIC_SHOP_SEARCH_HIT_TONE,
+        );
+    }
+}
 
 /// Own-by-design marker for the active box-line frame. The exe stages
 /// sprite frame `filter index + 1` into four controls; our shell has no
