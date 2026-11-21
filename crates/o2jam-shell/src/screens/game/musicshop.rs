@@ -7,10 +7,26 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
-    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, sort_lanking_songs,
-    LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopPrice, MusicShopRow,
-    MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
+    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
+    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopPrice,
+    MusicShopRow, MSHOP_CART_ROWS, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
+
+/// One owned-list row: a 4031 song id, its catalog title, the local
+/// chart bit, and this page's check mark. The two per-row properties
+/// are pinned; their exact sprite faces stay OPEN (no mixed-state
+/// capture yet), so the shell names them by control role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedRow {
+    /// Song id from the fetched 4031 list.
+    pub song_id: u16,
+    /// Catalog title, or the bare id when no catalog row joined.
+    pub title: String,
+    /// Local `o2ma<id>.ojn` chart present (bit `0x8`, §1).
+    pub installed: bool,
+    /// This row's check mark on the visible owned page.
+    pub marked: bool,
+}
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
 /// the music-shop side screen (#139 cluster 4: the Data Clump of all
@@ -62,6 +78,10 @@ pub(crate) struct MusicShopState {
     /// Local `Music\` scan (§1); `None` means no local knowledge, so
     /// no installed mark is invented from the 4031 flag list.
     pub(crate) music_shop_installed: Option<InstalledMusic>,
+    /// Check marks of the twelve owned rows on this page. The exe
+    /// keeps a twelve-column per-page mark table; presses toggle one
+    /// cell (`FUN_004cdca0`).
+    pub(crate) music_shop_owned_marks: [bool; MSHOP_OWNED_ROWS],
 }
 
 impl MusicShopState {
@@ -151,6 +171,30 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Owned rows from the fetched 4031 ids joined to the catalog
+    /// titles and the local chart scan, twelve at most.
+    pub(crate) fn owned_rows(&self) -> Vec<OwnedRow> {
+        let Some(board) = self.music_shop_board.as_ref() else {
+            return Vec::new();
+        };
+        board
+            .entries
+            .iter()
+            .take(MSHOP_OWNED_ROWS)
+            .enumerate()
+            .map(|(slot, entry)| OwnedRow {
+                song_id: entry.id,
+                title: self
+                    .music_shop_songs
+                    .iter()
+                    .find(|song| song.song_id == u32::from(entry.id))
+                    .map_or_else(|| entry.id.to_string(), |song| song.title.clone()),
+                installed: song_installed(u32::from(entry.id), self.music_shop_installed.as_ref()),
+                marked: self.music_shop_owned_marks[slot],
+            })
+            .collect()
     }
 
     /// Owned face selected by the two tab images.
@@ -250,6 +294,13 @@ impl MusicShopState {
             }
             MusicShopAction::Face(face) => {
                 self.music_shop_face = face;
+                false
+            }
+            MusicShopAction::OwnedRow(slot) => {
+                if slot < self.music_shop_owned_marks.len() && self.owned_rows().get(slot).is_some()
+                {
+                    self.music_shop_owned_marks[slot] = !self.music_shop_owned_marks[slot];
+                }
                 false
             }
             MusicShopAction::Sort(sort) => {

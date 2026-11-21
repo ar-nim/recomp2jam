@@ -1115,6 +1115,11 @@ pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
 /// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
 pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
 pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
+/// First owned-row hit area (`IDC_BUTTON_MY_EX1`); twelve run
+/// contiguously through `+0x0B` (block walk + staged dump).
+pub const MSHOP_OWNED_FIRST_CODE: u32 = 0x1A01_9047;
+/// Visible owned rows (twelve `MY_EX` hit areas).
+pub const MSHOP_OWNED_ROWS: usize = 12;
 /// First cart-row hit area (`IDC_BUTTON_MSHOP_CART_EX1`); five run
 /// contiguously through `+4` (block walk + staged dump).
 pub const MSHOP_CART_TOGGLE_FIRST_CODE: u32 = 0x1A01_B060;
@@ -1253,6 +1258,8 @@ pub enum MusicShopAction {
     MsNext,
     /// One of the two owned face tabs was pressed.
     Face(MusicShopFace),
+    /// Owned `MY_EX` row picked (0-based on the owned list).
+    OwnedRow(usize),
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1305,7 +1312,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
         MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),
-        _ => music_shop_row(code),
+        _ => music_shop_owned_row(code).or_else(|| music_shop_row(code)),
     }
 }
 
@@ -1318,6 +1325,13 @@ fn music_shop_sort_for_code(code: u32) -> Option<LankingSort> {
         MSHOP_BPM_SORT_CODE => Some(LankingSort::Bpm),
         _ => None,
     }
+}
+
+/// Row pick behind one `MY_EX` owned-list code (`None` outside 12).
+fn music_shop_owned_row(code: u32) -> Option<MusicShopAction> {
+    let slot = code.checked_sub(MSHOP_OWNED_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < MSHOP_OWNED_ROWS).then_some(MusicShopAction::OwnedRow(slot))
 }
 
 /// Row pick behind one `MS_EX` hit-area code (`None` outside the five).
@@ -1416,6 +1430,24 @@ pub fn music_shop_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rec
         rect_union(cur_tens, cur_ones),
         rect_union(tot_tens, tot_ones),
     ))
+}
+
+/// Staged owned-row hit areas in code order (the twelve `MY_EX`
+/// rects, top to bottom). Empty when the block is unstaged.
+#[must_use]
+pub fn music_shop_owned_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut slots: Vec<(u32, Rect)> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(MSHOP_OWNED_FIRST_CODE)
+                .is_some_and(|slot| (slot as usize) < MSHOP_OWNED_ROWS)
+        })
+        .map(|placed| (placed.code, placed.rect))
+        .collect();
+    slots.sort_by_key(|(code, _)| *code);
+    slots.into_iter().map(|(_, rect)| rect).collect()
 }
 
 /// Staged music-cart row hit areas in top-to-bottom order (the five
