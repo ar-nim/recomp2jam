@@ -34,3 +34,14 @@ host or from a filename.
 - Capture: Room frame immediately before the press, frame after it, the
   input log, and the manifest naming the board and press point.
 - Contrast: `j02-messenger-room.png` is a Playing scene and is not a pin.
+
+## #648 (M6) — Item Shop host press
+
+- Evidence id: `N-HOST`; host state: qualified exe boot on the Item Shop
+  board, peer role, NORMAL-mode popup dismissed before the click.
+- Press: `SendInput` at the centre of the staged rect for code `0x142000B8`
+  in the Item Shop board; take the point from that board's parsed placement,
+  not from the Room or MyRoom rect.
+- Capture: Item Shop frame immediately before the press, frame after it,
+  the input log, and the manifest naming the board and press point. The
+  log must show no popup dismissal between the press and the response.
