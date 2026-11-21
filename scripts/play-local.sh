@@ -115,7 +115,12 @@ case "$PROFILE" in
   *) echo "play-local: PLAY_LOCAL_PROFILE must be release|debug (got '$PROFILE')" >&2; exit 2 ;;
 esac
 BIN="$REPO_ROOT/target/$PROFILE/recomp2jam"
-HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct -- crates/ Cargo.toml Cargo.lock 2>/dev/null || echo 0)"
+# Test-only changes must not mark the BINARY stale: cargo build does not
+# rebuild the release binary for test files, so a commit touching only
+# crates/*/tests would demand a rebuild that is a no-op (owner report
+# 2026-11-21: "rebuilt and nothing gets rebuilt"). The timestamp scope
+# excludes every tests/ tree.
+HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct -- crates/ Cargo.toml Cargo.lock ':(exclude,glob)**/tests/**' 2>/dev/null || echo 0)"
 if [ -x "$BIN" ] && [ "${HEAD_TS:-0}" -gt 0 ]; then
   BIN_TS="$(stat -c %Y "$BIN" 2>/dev/null || echo 0)"
   if [ "${BIN_TS:-0}" -lt "$HEAD_TS" ]; then
