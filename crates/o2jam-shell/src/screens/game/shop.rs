@@ -427,6 +427,13 @@ impl ShopState {
         self.bag_notice
     }
 
+    /// Clear the exe's selected-row word (`DAT_0077ccc0 = -1`) and
+    /// the notice that selection posted.
+    fn clear_bag_selection(&mut self) {
+        self.bag_selection = None;
+        self.bag_notice = None;
+    }
+
     /// Stage one owned item's category byte. The file→entry join is
     /// not pinned, so callers stage it explicitly.
     pub(crate) fn stage_bag_item_category(&mut self, item_id: u32, category: u8) {
@@ -664,10 +671,20 @@ impl ShopState {
                 false
             }
             ShopAction::BagPrev => {
-                self.bag_page = self.bag_page.saturating_sub(1);
+                // Exe `0x1420004c`: `(page - 1 + count) % count`
+                // wraps at the first page; both pager arms then clear
+                // the selection word and refresh.
+                let count = shop_page_count(owned.len(), SHOP_BAG_CELLS);
+                if self.bag_page != 0 {
+                    self.bag_page = (self.bag_page - 1) % count;
+                } else if count > 1 {
+                    self.bag_page = count - 1;
+                }
+                self.clear_bag_selection();
                 false
             }
             ShopAction::BagNext => {
+                // Exe `0x1420004d`: hold at the last page, never wrap.
                 if self
                     .bag_page
                     .saturating_add(1)
@@ -676,6 +693,7 @@ impl ShopState {
                 {
                     self.bag_page = self.bag_page.saturating_add(1);
                 }
+                self.clear_bag_selection();
                 false
             }
             // Sorting changes no staged board state: the exe's sort

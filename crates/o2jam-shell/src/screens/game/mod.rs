@@ -23094,8 +23094,9 @@ mod game_tests {
         //   -> ShopState::set_catalog (+ set_myroom_character on
         //   fetched boots for the owned ids), then click_shop on the
         //   staged BAGLEFT/RIGHT pager. The pager turns over owned
-        //   goods in inventory order (zero/unknown ids skip) and holds
-        //   at both ends; it never queues a send.
+        //   goods in inventory order (zero/unknown ids skip); RIGHT
+        //   holds at the end and LEFT wraps at the start (#784, static
+        //   `0x1420004c/4d`). It never queues a send.
         let mut game = open_shop_board(25);
         game.set_myroom_character(myroom_test_character(vec![
             0, 3, 999, 1, 2, 5, 7, 9, 11, 13, 15, 17, 19, 21,
@@ -23120,7 +23121,7 @@ mod game_tests {
         game.click_shop(291, 576);
         assert_eq!(game.shop_bag_page(), 0);
         game.click_shop(291, 576);
-        assert_eq!(game.shop_bag_page(), 0, "bag PREV holds at the start");
+        assert_eq!(game.shop_bag_page(), 1, "bag PREV wraps to the last page");
         assert_eq!(game.take_shop_buy(), None);
     }
 
@@ -24009,6 +24010,33 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_bag_pager_wraps_left_and_clears_the_selected_row() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MYBAGITEM / BAGLEFT / BAGRIGHT) ->
+        //   ShopState::apply_action -> bag page + selection word.
+        // Static pins `ev_f3ad15be…`: `0x1420004c` computes
+        // `(page - 1 + count) % count` (wrap at the first page),
+        // `0x1420004d` increments only while `page+1 < count` (hold at
+        // the last), and both clear `DAT_0077ccc0` and refresh.
+        // OPEN (next step): a page-boundary frame pair on a multi-page
+        // bag. Synthetic placement, hidden-arm safe.
+        let mut game = bag_cell_board();
+        assert_eq!(game.shop_bag_pages(), 2);
+        game.click_shop(15, 35);
+        assert_eq!(game.shop_bag_selection(), Some(0));
+
+        game.click_shop(291, 576);
+        assert_eq!(game.shop_bag_page(), 1, "BAGLEFT wraps to the last page");
+        assert_eq!(game.shop_bag_selection(), None, "the stale pick is cleared");
+        assert_eq!(game.shop_bag_notice(), None);
+
+        game.click_shop(410, 576);
+        assert_eq!(game.shop_bag_page(), 1, "BAGRIGHT holds at the last page");
+        assert_eq!(game.shop_bag_selection(), None);
     }
 
     #[test]

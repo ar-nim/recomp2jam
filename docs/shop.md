@@ -442,6 +442,21 @@ instead of just its length (same five callers). Guards:
 placements, hidden-arm safe). **OPEN (next step):** one selected-cell
 frame with the notice ink.
 
+## #178 enrichment — bag pager wrap and clear (#784)
+
+The static arms `0x1420004c/4d` (`ev_f3ad15be…`) differ at the ends:
+BAGLEFT applies `(page - 1 + count) % count` (wrap from page 0 to the
+last), BAGRIGHT increments only while `page+1 < count` (hold). Both
+write `DAT_0077ccc0 = -1`, clear the highlight and refresh. Our board
+now wraps LEFT, holds RIGHT, and clears the selected row and its notice
+on either press. CONTRADICTION recorded: #195 above said "holds at
+both ends" from the live sweep; the exe arm pins wrap on LEFT, so the
+earlier note stays as history and the #784 guard owns the behavior.
+Guards: `shop_bag_pager_wraps_left_and_clears_the_selected_row` and
+the updated `shop_bag_pager_turns_over_staged_owned_inventory`
+(synthetic placements, hidden-arm safe). **OPEN (next step):** a
+page-boundary frame pair on a multi-page bag.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
@@ -463,7 +478,8 @@ frame with the notice ink.
    PARTIAL: scroll pager steps and holds (origin-offset
    read ASSUMED); bag pager steps and holds over staged owned
    inventory (L/R readout pairing ASSUMED), and a cell press selects
-   the owned row with its category notice (#783); planet pager now turns
+   the owned row with its category notice (#783); LEFT wraps and both
+   pager arms clear the pick (#784); planet pager now turns
    the index with wrap and reseeds (#777), but the arrows and filters
    still never stage live (absence, ticket #195). Ext-menu toggle
    remains OPEN (#788).
