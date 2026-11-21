@@ -6456,6 +6456,27 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Notice posted by the last ITEMVACATE/CONFERENCE press.
+    #[must_use]
+    pub fn shop_chrome_notice(&self) -> Option<super::side::ShopChromeNotice> {
+        self.shop.chrome_notice()
+    }
+
+    /// Stage the vacate confirmation pair result.
+    pub fn stage_shop_vacate_confirmed(&mut self, confirmed: bool) {
+        self.shop.stage_vacate_confirmed(confirmed);
+    }
+
+    /// Stage the vacate item code.
+    pub fn stage_shop_vacate_item_code(&mut self, code: u32) {
+        self.shop.stage_vacate_item_code(code);
+    }
+
+    /// Stage the vacate item word inked by the type-2 notice.
+    pub fn stage_shop_vacate_item_word(&mut self, word: u32) {
+        self.shop.stage_vacate_item_word(word);
+    }
+
     /// Selected owned row (global index across bag pages).
     #[must_use]
     pub fn shop_bag_selection(&self) -> Option<usize> {
@@ -8734,32 +8755,33 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MyRoomLowerTab, MyRoomPanel, ShopBagNotice, ShopGender, ShopRefresh, ShopRefreshContext,
-        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
-        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
-        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
-        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE,
-        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE,
-        MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
-        MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
-        MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
-        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
-        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
-        MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_CELLS,
-        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
-        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
-        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
-        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
-        SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
-        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
-        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
-        SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
+        MyRoomLowerTab, MyRoomPanel, ShopBagNotice, ShopChromeNotice, ShopGender, ShopRefresh,
+        ShopRefreshContext, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
+        LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE,
+        LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
+        MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
+        MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE,
+        MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE,
+        MSHOP_MSALL_RIGHT_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
+        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE,
+        ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
+        SHOP_BAGSORT_CODE, SHOP_BAG_CELLS, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
+        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
+        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
+        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
+        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
+        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+        SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE,
+        SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE,
+        SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
+        SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -22662,6 +22684,39 @@ mod game_tests {
         game
     }
 
+    /// Add one staged control to a synthetic shop board.
+    fn stage_shop_control(game: &mut ScreenGame, code: u32, x: i32) {
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+    }
+
+    /// Board with the two chrome arms and the two bag-face switches.
+    fn shop_chrome_board() -> ScreenGame {
+        use super::super::side::{
+            SHOP_CONFERENCE_CODE, SHOP_ITEMVACATE_CODE, SHOP_MYBACK_POS_CODE, SHOP_MYCART_POS_CODE,
+        };
+        let mut game = open_shop_board(10);
+        for (code, x) in [
+            (SHOP_ITEMVACATE_CODE, 500),
+            (SHOP_MYCART_POS_CODE, 540),
+            (SHOP_MYBACK_POS_CODE, 580),
+            (SHOP_CONFERENCE_CODE, 640),
+        ] {
+            stage_shop_control(&mut game, code, x);
+        }
+        game
+    }
+
     /// Shop board with two pages of owned goods and ten staged bag
     /// cells (synthetic placements; no install-root data).
     fn bag_cell_board() -> ScreenGame {
@@ -24010,6 +24065,81 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_itemvacate_notice_needs_the_owned_bag_face_closed() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(ITEMVACATE 0x14200005 / MYCART_POS / MYBACK_POS)
+        //   -> ShopState::apply_action -> notice record.
+        // Static pin `ev_f3ad15be…`: the arm runs only while cart flag
+        // `0x8cd == 0`, which our panel face carries. OPEN (next step):
+        // a qualified press frame with the notice text source.
+        // Synthetic placement, hidden-arm safe.
+        let mut game = shop_chrome_board();
+        game.stage_shop_vacate_confirmed(true);
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateConfirmed)
+        );
+        assert_eq!(game.shop_chrome_notice().map(|n| n.notice_type()), Some(1));
+
+        game.click_shop(560, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        game.click_shop(510, 40);
+        assert_eq!(game.shop_chrome_notice(), None, "cart face blocks vacate");
+
+        game.click_shop(590, 40);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateConfirmed)
+        );
+    }
+
+    #[test]
+    fn shop_itemvacate_notice_uses_the_special_item_and_item_word_branches() {
+        // Same arm: an unconfirmed pair with item code `0x23`/`0x24`
+        // posts the type-1 special-item string; any other code posts
+        // type 2 with the item word. Synthetic, hidden-arm safe.
+        let mut game = shop_chrome_board();
+        game.stage_shop_vacate_item_code(0x23);
+
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateSpecialItem)
+        );
+
+        game.stage_shop_vacate_item_code(5);
+        game.stage_shop_vacate_item_word(4500);
+        game.click_shop(510, 40);
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::VacateItem(4500))
+        );
+        assert_eq!(game.shop_chrome_notice().map(|n| n.notice_type()), Some(2));
+    }
+
+    #[test]
+    fn shop_conference_posts_the_type_twenty_notice() {
+        // Static arm `0x142000b6` posts notice type `0x14` with no
+        // text (`ev_f3ad15be…`). Synthetic, hidden-arm safe.
+        let mut game = shop_chrome_board();
+
+        game.click_shop(660, 40);
+
+        assert_eq!(
+            game.shop_chrome_notice(),
+            Some(ShopChromeNotice::Conference)
+        );
+        assert_eq!(
+            game.shop_chrome_notice().map(|n| n.notice_type()),
+            Some(0x14)
+        );
     }
 
     #[test]

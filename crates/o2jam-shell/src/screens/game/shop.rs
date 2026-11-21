@@ -4,10 +4,10 @@
 use super::super::side::{
     lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
     shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
-    CheckoutNotice, ShopAction, ShopBagNotice, ShopGender, ShopGood, ShopPanel, ShopRefresh,
-    ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS,
-    SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
-    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
+    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood, ShopPanel,
+    ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
+    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX,
+    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -128,6 +128,14 @@ pub(crate) struct ShopState {
     bag_selection: Option<usize>,
     /// Notice posted by the last bag-cell press.
     bag_notice: Option<ShopBagNotice>,
+    /// Notice posted by ITEMVACATE or CONFERENCE.
+    chrome_notice: Option<ShopChromeNotice>,
+    /// Staged confirmation-pair result for the vacate ladder.
+    vacate_confirmed: bool,
+    /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
+    vacate_item_code: u32,
+    /// Staged item word inked into the type-2 vacate string.
+    vacate_item_word: u32,
     /// Staged category bytes for owned items (`+4` of the exe entry).
     bag_item_categories: HashMap<u32, u8>,
     /// Staged worn-slot occupancy for owned items.
@@ -150,6 +158,7 @@ impl ShopState {
         self.shop_category = None;
         self.bag_selection = None;
         self.bag_notice = None;
+        self.chrome_notice = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -417,6 +426,26 @@ impl ShopState {
         self.preview = None;
     }
 
+    /// Notice posted by the last ITEMVACATE/CONFERENCE press.
+    pub(crate) fn chrome_notice(&self) -> Option<ShopChromeNotice> {
+        self.chrome_notice
+    }
+
+    /// Stage the confirmation-pair result for the vacate ladder.
+    pub(crate) fn stage_vacate_confirmed(&mut self, confirmed: bool) {
+        self.vacate_confirmed = confirmed;
+    }
+
+    /// Stage the item code the vacate ladder branches on.
+    pub(crate) fn stage_vacate_item_code(&mut self, code: u32) {
+        self.vacate_item_code = code;
+    }
+
+    /// Stage the item word the type-2 vacate notice inks.
+    pub(crate) fn stage_vacate_item_word(&mut self, word: u32) {
+        self.vacate_item_word = word;
+    }
+
     /// Selected owned row (global index across all bag pages).
     pub(crate) fn bag_selection(&self) -> Option<usize> {
         self.bag_selection
@@ -560,6 +589,27 @@ impl ShopState {
             }
             ShopAction::RevertTryOn => {
                 self.clear_try_on();
+                false
+            }
+            ShopAction::VacateItem => {
+                // Static arm `0x14200005` (`ev_f3ad15be…`): no arm at
+                // all while the cart face is open (`0x8cd` set);
+                // otherwise a confirmation pair, a special item code,
+                // or the item word selects the notice.
+                self.chrome_notice = if self.cart_face_open() {
+                    None
+                } else if self.vacate_confirmed {
+                    Some(ShopChromeNotice::VacateConfirmed)
+                } else if matches!(self.vacate_item_code, 0x23 | 0x24) {
+                    Some(ShopChromeNotice::VacateSpecialItem)
+                } else {
+                    Some(ShopChromeNotice::VacateItem(self.vacate_item_word))
+                };
+                false
+            }
+            ShopAction::Conference => {
+                // Static arm `0x142000b6`: type `0x14`, no text.
+                self.chrome_notice = Some(ShopChromeNotice::Conference);
                 false
             }
             ShopAction::SelectBagItem(slot) => {

@@ -70,6 +70,38 @@ pub const CASH_CHARGE_DIALOG_BLOCK: &str = "DIALOG_CHARGECASH";
 /// `State_ItemShop.bnd` rect 4 `(56,340)-(147,364)` covers the
 /// qualified b8 click at `(92,355)`.
 pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
+/// ITEMVACATE (`0x14200005`) and CONFERENCE (`0x142000b6`) chrome
+/// arms. The vacate arm only runs with the cart flag `0x8cd` clear,
+/// then chooses a notice from a confirmation pair and the item code;
+/// CONFERENCE posts notice type `0x14` with no text.
+pub const SHOP_ITEMVACATE_CODE: u32 = 0x1420_0005;
+pub const SHOP_CONFERENCE_CODE: u32 = 0x1420_00B6;
+
+/// Notice posted by one of the two shop chrome arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopChromeNotice {
+    /// Confirmed vacate: type 1, exe string at VA `0x648af0`.
+    VacateConfirmed,
+    /// Special item code `0x23`/`0x24`: type 1, string `0x648acc`.
+    VacateSpecialItem,
+    /// Ordinary vacate: type 2, formatted string `0x648a90`
+    /// carrying the staged item word.
+    VacateItem(u32),
+    /// CONFERENCE: type `0x14`, no text.
+    Conference,
+}
+
+impl ShopChromeNotice {
+    /// Exe notice type (`FUN_00478c90` first argument).
+    #[must_use]
+    pub const fn notice_type(self) -> u8 {
+        match self {
+            Self::VacateConfirmed | Self::VacateSpecialItem => 1,
+            Self::VacateItem(_) => 2,
+            Self::Conference => 0x14,
+        }
+    }
+}
 /// Web client control inside the Cash Charge dialog
 /// (`IDC_IMAGE_CHARGECASH_WEB`, 0x83500002); its parent-relative
 /// `.bnd` rect stages the exe-pinned client area.
@@ -1219,6 +1251,10 @@ pub enum ShopAction {
     GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// ITEMVACATE (`0x14200005`): confirmation and item-code ladder.
+    VacateItem,
+    /// CONFERENCE (`0x142000b6`): notice type `0x14`.
+    Conference,
     /// Owned bag cell (`0x1460003d..46`): select the paged index
     /// and post the category notice.
     SelectBagItem(usize),
@@ -1325,6 +1361,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
         SHOP_BACK_CODE | SHOP_STATIC_BACK_CODE => Some(ShopAction::BackToLobby),
         SHOP_GOMYROOM_CODE => Some(ShopAction::GoMyRoom),
+        SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
+        SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
         SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
         SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),

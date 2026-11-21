@@ -457,6 +457,26 @@ the updated `shop_bag_pager_turns_over_staged_owned_inventory`
 (synthetic placements, hidden-arm safe). **OPEN (next step):** a
 page-boundary frame pair on a multi-page bag.
 
+## #178 enrichment — vacate and conference notices (#786)
+
+`FUN_00499760` (`ev_f3ad15be…`) answers ITEMVACATE `0x14200005` only
+while the cart flag `0x8cd` is clear. A staged confirmation pair posts
+notice type 1 with string `0x648af0`; item codes `0x23`/`0x24` post
+type 1 with `0x648acc`; any other item posts type 2 with a formatted
+`0x648a90` string. CONFERENCE `0x142000b6` posts type `0x14` with no
+text. Our board stages the confirmation pair, item code and item word
+(the value sources are unpinned) and records the resolved notice.
+CONTRADICTION recorded: spec #178's enrichment row assigns notice type
+`0x12` to ITEMVACATE; the exe arm uses 1/2 and type `0x12` belongs to
+CHARGEMONEY `0x14200004` on a busy web gate. The live CHARGEMONEY press
+still opens the Cash Charge view (#397); the notice-type claim is not
+silently moved. Guards:
+`shop_itemvacate_notice_needs_the_owned_bag_face_closed`,
+`shop_itemvacate_notice_uses_the_special_item_and_item_word_branches`,
+`shop_conference_posts_the_type_twenty_notice` (synthetic placements,
+hidden-arm safe). **OPEN (next step):** qualified press frames with the
+notice text source.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
