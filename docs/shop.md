@@ -112,7 +112,13 @@ in the live dump (203 placements, verified 2026-11-13 — the
 those clicks land nowhere by absence; `BAGSORT`, the planet
 pager, `ITEMGIFT1..8`/`GIFTITEM`, cart `CHECKGEM`/`CHECKMONEY`
 totals, and the `ITEMGEM1..8` cells (gem-price join still
-unpinned) stage but record nothing. No search chrome exists in
+unpinned) stage but record nothing. Ticket #515 guardable remainder:
+`shop_cart_total_uses_staged_prices_after_the_pinned_5001_wallet_fold`
+pins that the live 5001 wallet words (gem `626`) never become a cart
+total — `CHECKMONEY` still sums staged `ITEMWON` rows and `CHECKGEM`
+stays `--`. The exe's own total ink stays OPEN (`E-T`): next step is a
+qualified cart-pick frame with a lit `CHECKMONEY` cell plus REA of the
+cart-to-total writer. No search chrome exists in
 `State_ItemShop.bnd` (#178 story 8 has no control to wire).
 TOP100 is music-shop-only per the #181 verdict and owns no
 item-shop arm (`MSHOP_TOP100_CODE` never dispatches here).
