@@ -1465,6 +1465,30 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
 pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
 pub const MSHOP_NO_SEARCH_HITS_NOTICE: &str = "검색된 곡이 없습니다.";
+
+/// Lightboard tooltip (`0x1A50006E`). The exe writes its lines with
+/// `굴림체` and falls back to the banner below. The font name is
+/// evidence only: our rasterizer uses the owner's cross-platform
+/// system font; the pinned copy and control geometry are the claim
+/// (#819).
+pub const MSHOP_LIGHTBOARD_TOOLTIP_CODE: u32 = 0x1A50_006E;
+pub const MSHOP_LIGHTBOARD_FONT: &str = "굴림체";
+pub const MSHOP_LIGHTBOARD_FALLBACK: &str = "신나는 음악게임 오투잼";
+
+/// Whether a lightboard figure stays painted at a hover point.
+#[must_use]
+pub fn music_shop_tooltip_kept(placed: &ScenePlacement, hovered: bool) -> bool {
+    placed.code != MSHOP_LIGHTBOARD_TOOLTIP_CODE || hovered
+}
+
+/// Whether the pointer sits in the staged lightboard tooltip rect.
+#[must_use]
+pub fn music_shop_tooltip_hovered(placements: &[ScenePlacement], x: i32, y: i32) -> bool {
+    placements
+        .iter()
+        .filter(|placed| placed.code == MSHOP_LIGHTBOARD_TOOLTIP_CODE)
+        .any(|placed| super::paint::rect_hit(&placed.rect, x, y))
+}
 /// Music-shop EXIT/BACK plate (`0x1A200008`, bnd rect
 /// `(711,569)-(794,593)`): the visible BACK button. The local
 /// return is pinned by the bnd arm; the shared 5007 ExitShop send is

@@ -112,6 +112,11 @@ pub(crate) struct MusicShopState {
     pub(crate) music_shop_search_query: Option<String>,
     /// Catalog song ids whose lowercased title contains the query.
     pub(crate) music_shop_search_hits: Vec<u32>,
+    /// Lines staged for the lightboard tooltip. The exe takes a
+    /// vector of 0x1C-byte line records; their source is OPEN, so
+    /// this seam holds the text and the painter owns presentation
+    /// (#819).
+    pub(crate) music_shop_tooltip_lines: Vec<String>,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -409,6 +414,17 @@ impl MusicShopState {
     /// Erase one character from the search edit.
     pub(crate) fn delete_search_char(&mut self) {
         self.music_shop_search_draft.pop();
+    }
+
+    /// Lines staged for the lightboard tooltip.
+    pub(crate) fn tooltip_lines(&self) -> &[String] {
+        &self.music_shop_tooltip_lines
+    }
+
+    /// Stage tooltip lines at the board seam; an empty slice keeps
+    /// the exe's fallback banner.
+    pub(crate) fn stage_tooltip_lines(&mut self, lines: &[&str]) {
+        self.music_shop_tooltip_lines = lines.iter().map(|line| (*line).to_owned()).collect();
     }
 
     /// Stage the search flag at the board seam. The SEARCH arm owns

@@ -55,14 +55,14 @@ use super::side::{
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
     MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
     MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE,
-    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE,
-    MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE,
-    MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE,
+    MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE,
+    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT,
+    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1703,6 +1703,62 @@ pub fn paint_music_shop_progress(
     if let Some(native_rect) = music_shop_caption_rect(placements, MSHOP_DOWN_TEXT_CODE) {
         let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
         paint_text_into_rect(frame, rect, &format!("{completed}/{total}"), CP949_INK);
+    }
+}
+
+/// Ink the lightboard tooltip's lines inside its staged rect while
+/// the pointer hovers. An empty line vector uses the exe's pinned
+/// fallback banner. The exe's `굴림체` face is presentation here:
+/// the owner's cross-platform rasterizer supplies the glyphs.
+pub fn paint_music_shop_tooltip(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    pointer: Option<(i32, i32)>,
+    lines: &[String],
+) {
+    let Some((x, y)) = pointer else {
+        return;
+    };
+    let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_LIGHTBOARD_TOOLTIP_CODE)
+    else {
+        return;
+    };
+    if !rect_hit(&staged.rect, x, y) {
+        return;
+    }
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    if rect.h == 0 || rect.w == 0 {
+        return;
+    }
+    let fallback = [MSHOP_LIGHTBOARD_FALLBACK.to_owned()];
+    let shown: &[String] = if lines.is_empty() { &fallback } else { lines };
+    let Ok(count) = u32::try_from(shown.len()) else {
+        return;
+    };
+    let line_height = (rect.h / count).max(1);
+    for (index, line) in shown.iter().enumerate() {
+        let Ok(offset) = u32::try_from(index) else {
+            continue;
+        };
+        let Some(top) = rect
+            .y
+            .checked_add(i32::try_from(offset.saturating_mul(line_height)).unwrap_or(i32::MAX))
+        else {
+            continue;
+        };
+        paint_text_into_rect(
+            frame,
+            Rect {
+                x: rect.x,
+                y: top,
+                w: rect.w,
+                h: line_height,
+            },
+            line,
+            CP949_INK,
+        );
     }
 }
 
