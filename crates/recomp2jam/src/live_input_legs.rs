@@ -11,9 +11,8 @@
 mod live_input_leg_tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
-    use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+    use std::sync::mpsc::{self, Receiver};
     use std::thread::JoinHandle;
-    use std::time::Duration;
 
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{
@@ -82,13 +81,23 @@ mod live_input_leg_tests {
         }
     }
 
+    /// Handles of a live-leg gateway: its port, recorded client frames,
+    /// 3003 write signal, and server thread (#754).
+    struct LiveLegGateway {
+        port: u16,
+        reports: Receiver<Frame>,
+        join_answer_written: Receiver<()>,
+        server: JoinHandle<()>,
+    }
+
     /// Drive the 1000/1001/1002/1003 boot exchange, then record every
     /// later client frame until the socket goes quiet. The channel and
-    /// room rows come back on the wire, not from a test-side list.
-    fn spawn_live_leg_gateway(
-        joined: o2jam_net::JoinedRoom,
-    ) -> (u16, Receiver<Frame>, JoinHandle<()>) {
+    /// room rows come back on the wire, not from a test-side list. The
+    /// 3003 write is signalled so a Waiting click never races the
+    /// gateway thread's scheduling under fleet load.
+    fn spawn_live_leg_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
         let (reported, reports) = mpsc::channel();
+        let (join_written_tx, join_answer_written) = mpsc::channel();
         let (port, server) = fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             stream
@@ -143,11 +152,17 @@ mod live_input_leg_tests {
                             .encode(),
                         )
                         .unwrap();
+                    join_written_tx.send(()).unwrap();
                 }
                 reported.send(frame).unwrap();
             }
         });
-        (port, reports, server)
+        LiveLegGateway {
+            port,
+            reports,
+            join_answer_written,
+            server,
+        }
     }
 
     /// One whole frame, or `None` at client close.
@@ -285,18 +300,20 @@ mod live_input_leg_tests {
         (rect.x + half_width, rect.y + half_height)
     }
 
+    /// Paint budget for a screen change already driven by input or a
+    /// gateway signal. Counting paints, not wall time, keeps a loaded
+    /// scheduler out of the assertion (#754).
+    const MAX_SCREEN_PAINTS: usize = 64;
+
     /// Paint until the boot-driven action reaches its next screen.
     fn paint_until_screen(session: &mut OnlineSession, want: Screen) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while session.screen() != want {
+        for _ in 0..MAX_SCREEN_PAINTS {
+            if session.screen() == want {
+                return;
+            }
             paint(session);
-            assert!(
-                std::time::Instant::now() < deadline,
-                "live click never reached {want:?} (at {:?})",
-                session.screen()
-            );
-            std::thread::sleep(Duration::from_millis(2));
         }
+        assert_eq!(session.screen(), want, "live click never reached {want:?}");
     }
 
     fn paint(session: &mut OnlineSession) {
@@ -320,9 +337,16 @@ mod live_input_leg_tests {
     }
 
     /// Click path to Waiting: the room row press queues 3002 and the
-    /// 3003 answer replays the same press into the shell.
-    fn join_waiting_by_click(session: &mut OnlineSession) {
+    /// 3003 answer replays the same press into the shell. Waiting on
+    /// the gateway's write signal removes the wall-clock race (#754).
+    fn join_waiting_by_click(session: &mut OnlineSession, join_answer_written: &Receiver<()>) {
         click_staged(session, Screen::Room, "IDC_BUTTON_SROOM_EXBUTTON1");
+        // Paint first: this frame posts 3002. The gateway writes 3003
+        // only after it reads that frame, then signals the write.
+        paint(session);
+        join_answer_written
+            .recv()
+            .expect("the gateway wrote the 3003 join answer");
         paint_until_screen(session, Screen::Waiting);
     }
 
@@ -335,20 +359,14 @@ mod live_input_leg_tests {
 
     /// Wait for one opcode after a paint: the gateway thread records
     /// frames as it reads them, so an immediate `try_iter` can outrun
-    /// the socket (#52). Bound the wait so a missing send fails.
+    /// the socket (#52). The channel is the signal; a closed channel
+    /// means the gateway died before the frame reached it (#754).
     fn wait_for_opcode(reports: &Receiver<Frame>, want: u16) -> Vec<u8> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
-            match reports.recv_timeout(Duration::from_millis(5)) {
+            match reports.recv() {
                 Ok(frame) if frame.id == want => return frame.payload,
                 Ok(_) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    panic!("gateway closed before opcode {want}")
-                }
-                Err(RecvTimeoutError::Timeout) => assert!(
-                    std::time::Instant::now() < deadline,
-                    "opcode {want} never reached the gateway"
-                ),
+                Err(_) => panic!("gateway closed before opcode {want}"),
             }
         }
     }
@@ -378,12 +396,12 @@ mod live_input_leg_tests {
             println!("skip: missing install-root interface archive");
             return;
         }
-        let (port, reports, server) = spawn_live_leg_gateway(joined_room(0, true));
-        let mut session = boot_live_leg(port, false);
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
         enter_room_by_clicks(&mut session);
-        join_waiting_by_click(&mut session);
-        let before = observed(&reports);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        let before = observed(&gateway.reports);
         assert_eq!(
             before.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![Request::JoinWaiting.id()],
@@ -398,18 +416,18 @@ mod live_input_leg_tests {
         );
         paint(&mut session);
 
-        let leave_body = wait_for_opcode(&reports, Request::ExitWaiting.id());
+        let leave_body = wait_for_opcode(&gateway.reports, Request::ExitWaiting.id());
         assert_eq!(
             leave_body,
             vec![0, 0],
             "the clicked BACK sent the pinned 3005 Normal-exit body"
         );
-        let extra_leaves = observed(&reports)
+        let extra_leaves = observed(&gateway.reports)
             .iter()
             .filter(|(id, _)| *id == Request::ExitWaiting.id())
             .count();
         assert_eq!(extra_leaves, 0, "one BACK click posts one leave");
-        finish(session, server);
+        finish(session, gateway.server);
     }
 
     /// Rejoin after an exit. A resident-room heuristic must not treat
@@ -432,24 +450,30 @@ mod live_input_leg_tests {
             println!("skip: missing install-root interface archive");
             return;
         }
-        let (port, reports, server) = spawn_live_leg_gateway(joined_room(0, true));
-        let mut session = boot_live_leg(port, false);
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
         enter_room_by_clicks(&mut session);
 
-        join_waiting_by_click(&mut session);
-        let first = JoinRoom::decode_body(&wait_for_opcode(&reports, Request::JoinWaiting.id()))
-            .expect("first join body decodes");
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        let first = JoinRoom::decode_body(&wait_for_opcode(
+            &gateway.reports,
+            Request::JoinWaiting.id(),
+        ))
+        .expect("first join body decodes");
         assert_eq!(first.number, 3, "the first click joined the listed row");
 
         click_staged(&mut session, Screen::Waiting, "IDC_BUTTON_SWAIT_BACK");
         assert_eq!(session.screen(), Screen::Room, "BACK left Waiting");
         paint(&mut session);
-        wait_for_opcode(&reports, Request::ExitWaiting.id());
+        wait_for_opcode(&gateway.reports, Request::ExitWaiting.id());
 
-        join_waiting_by_click(&mut session);
-        let second = JoinRoom::decode_body(&wait_for_opcode(&reports, Request::JoinWaiting.id()))
-            .expect("rejoin body decodes");
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        let second = JoinRoom::decode_body(&wait_for_opcode(
+            &gateway.reports,
+            Request::JoinWaiting.id(),
+        ))
+        .expect("rejoin body decodes");
         assert_eq!(
             second.number, first.number,
             "the rejoin joined the same row"
@@ -463,7 +487,7 @@ mod live_input_leg_tests {
             Screen::Waiting,
             "the rejoin entered Waiting"
         );
-        finish(session, server);
+        finish(session, gateway.server);
     }
 
     /// Family 2 — dialog OK/dismiss. The relay-down sheet owns the
@@ -485,8 +509,8 @@ mod live_input_leg_tests {
             println!("skip: missing install-root interface archive");
             return;
         }
-        let (port, _reports, server) = spawn_live_leg_gateway(joined_room(0, true));
-        let mut session = boot_live_leg(port, true);
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, true);
         dismiss_splash(&mut session);
 
         session.ingest_snapshot(&InputSnapshot::click_at(136, 88));
@@ -515,7 +539,7 @@ mod live_input_leg_tests {
 
         session.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         paint_until_screen(&mut session, Screen::Room);
-        finish(session, server);
+        finish(session, gateway.server);
     }
 
     /// Family 3 — Waiting lifecycle. The join is itself a room-row
@@ -543,12 +567,12 @@ mod live_input_leg_tests {
             return;
         }
         let joined = joined_room(member_id, peer_ready);
-        let (port, reports, server) = spawn_live_leg_gateway(joined);
-        let mut session = boot_live_leg(port, false);
+        let gateway = spawn_live_leg_gateway(joined);
+        let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
         enter_room_by_clicks(&mut session);
-        join_waiting_by_click(&mut session);
-        let before = observed(&reports);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        let before = observed(&gateway.reports);
         assert_eq!(
             before.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![Request::JoinWaiting.id()],
@@ -557,7 +581,7 @@ mod live_input_leg_tests {
 
         click_staged(&mut session, Screen::Waiting, confirm_id);
         paint(&mut session);
-        wait_for_opcode(&reports, expect_id);
+        wait_for_opcode(&gateway.reports, expect_id);
         assert_eq!(
             session.screen(),
             Screen::Waiting,
@@ -566,14 +590,14 @@ mod live_input_leg_tests {
 
         click_staged(&mut session, Screen::Waiting, "IDC_BUTTON_SWAIT_BACK");
         paint(&mut session);
-        wait_for_opcode(&reports, Request::ExitWaiting.id());
-        let extra_leaves = observed(&reports)
+        wait_for_opcode(&gateway.reports, Request::ExitWaiting.id());
+        let extra_leaves = observed(&gateway.reports)
             .iter()
             .filter(|(id, _)| *id == Request::ExitWaiting.id())
             .count();
         assert_eq!(extra_leaves, 0, "one BACK click posts one leave");
         assert_eq!(session.screen(), Screen::Room, "BACK returns to Room");
-        finish(session, server);
+        finish(session, gateway.server);
     }
 
     #[test]
