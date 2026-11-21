@@ -1489,6 +1489,7 @@ impl ScreenGame {
         {
             return false;
         }
+        let previous = self.flow.current();
         let entered = self.flow.go(next).is_ok();
         if entered {
             // A scene change drops the Waiting confirm's armed face, the
@@ -1502,6 +1503,9 @@ impl ScreenGame {
             }
             if next == Screen::Room {
                 self.room_dialog = None;
+                if previous == Screen::Waiting {
+                    self.disband_waiting_room();
+                }
             } else {
                 // The fuse owns the Room visit only; leaving Room
                 // drops its node, sheet, and queued dismissal (#348).
@@ -1534,6 +1538,17 @@ impl ScreenGame {
             self.apply_scene_bgm();
         }
         entered
+    }
+
+    /// Drop the state that belongs to a Waiting room being left. The
+    /// exe's master BACK is a room leave (3005) that destroys the room
+    /// (2007, W8 #268), so a queued 4000 and the open select sheet cannot
+    /// follow into another room. The room-song echo stays: it is wire
+    /// state, repainted by the next room's 4001, not a staged pick.
+    fn disband_waiting_room(&mut self) {
+        self.outbox.discard_music_send();
+        self.select_music_art = None;
+        self.select_music_notice = None;
     }
 
     /// Strike a lane at an explicit song clock, playing its key
@@ -8760,6 +8775,105 @@ mod game_tests {
             "OK with no pick leaves the dialog open"
         );
         assert!(!game.has_pending_music_send(), "no pick is queued");
+    }
+
+    /// Waiting game with a pick staged through the real MUSELECT row
+    /// click: `ScreenGame::ingest_snapshot` -> `click_waiting` ->
+    /// `click_select_music` -> `pick_select_music_row` ->
+    /// `PendingOutbox::pending_music_send`. Synthetic catalog only: no
+    /// install-root read, so the guard also runs with game data hidden.
+    fn waiting_game_with_a_staged_row_pick() -> ScreenGame {
+        use crate::avatar::ScenePlacement;
+        use o2jam_render::Rect;
+
+        let ok = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
+            code: 0x2720_0002,
+            sprite: None,
+            rect: Rect {
+                x: 326,
+                y: 497,
+                w: 126,
+                h: 45,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(vec![ok], HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages a pick");
+        game
+    }
+
+    #[test]
+    fn waiting_back_disbands_the_staged_pick_before_a_new_room_can_flush_it() {
+        // Ticket #732, exe pin #268 (W8 `wa-pick-okback2`): the master's
+        // BACK from Waiting sends 3005 and the server destroys the room
+        // with 2007, so no staged pick crosses an exit. Live caller
+        // chain: `OnlineSession::menu_key(Back)` -> `ExitWaiting` 3005 ->
+        // `ScreenGame::menu_key` -> `ScreenGame::enter` ->
+        // `ScreenGame::enter_screen(Waiting -> Room)` ->
+        // `ScreenGame::disband_waiting_room` ->
+        // `PendingOutbox::discard_music_send`. A later
+        // `OnlineSession::flush_music_send` must find no stale body.
+        let mut game = waiting_game_with_a_staged_row_pick();
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(!game.select_music_dialog_open(), "OK closes the sheet");
+
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(
+            !game.has_pending_music_send(),
+            "the exited room's queued 4000 dies with the room"
+        );
+        assert!(
+            !game.select_music_dialog_open(),
+            "the exited room's select sheet dies with the room"
+        );
+
+        game.set_joined_room(waiting_room());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(
+            game.select_music_dialog_open(),
+            "OK without a fresh pick leaves the reopened sheet open"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "re-entry without a fresh pick queues no stale 4000"
+        );
+    }
+
+    #[test]
+    fn a_fresh_row_pick_after_waiting_reentry_requeues_the_4000() {
+        // Ticket #732: the exit clear must not disable the pinned
+        // fresh-pick path. Same live chain as the stale-pick guard up
+        // to `enter_screen`, then a new row click through
+        // `ScreenGame::pick_select_music_row` restages the body that
+        // `OnlineSession::flush_music_send` converts to 4000.
+        let mut game = waiting_game_with_a_staged_row_pick();
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Room);
+
+        game.set_joined_room(waiting_room());
+        game.menu_key(MenuKey::Confirm, true);
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert_eq!(
+            game.take_music_send().map(|pick| pick.music_id),
+            Some(757),
+            "a fresh pick still queues the pinned SetRoomMusic body"
+        );
     }
 
     #[test]
@@ -23320,6 +23434,15 @@ mod game_tests {
         game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Planet);
         game.ingest_snapshot(&InputSnapshot::press_at(366, 523));
+
+        // #732: the Waiting exit now disbands its staged pick. This
+        // hash characterization still needs a pick in the final
+        // outbox, so restage one through the same row-click arm after
+        // the walk has left Waiting (synthetic catalog, no install
+        // data read).
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game.click_select_music(400, 150 + 23 + 11);
+        assert!(game.has_pending_music_send());
 
         // Every arm queued without a drain so far.
         assert!(game.has_pending_team_send());

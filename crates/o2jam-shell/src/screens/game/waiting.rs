@@ -100,6 +100,12 @@ impl PendingOutbox {
     pub(crate) fn take_music_send(&mut self) -> Option<SetRoomMusic> {
         self.pending_music_send.take()
     }
+    /// Discard a staged pick because its room no longer exists. The
+    /// master's Waiting exit destroys the room (exe 3005 -> 2007, #268),
+    /// so the queued 4000 must not reach another room's session flush.
+    pub(crate) fn discard_music_send(&mut self) {
+        self.pending_music_send = None;
+    }
     /// Whether a dialog row pick is queued for the session bridge.
     #[must_use]
     pub(crate) fn has_pending_music_send(&self) -> bool {
