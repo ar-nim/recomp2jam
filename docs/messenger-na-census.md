@@ -27,7 +27,19 @@ skips cleanly when `install-root` is absent. It pins the parsed count and
 placement presence, and refuses a mount pin without a capture. No sheet
 opens on a host press; the B8 one-OK sheet is a different liveness notice.
 
+## M11 — friend and note scroll clamps (#658)
+
+| Field | Value |
+| --- | --- |
+| Verdict | NA-CENSUS — no mounted list has an observed end |
+| Guard | `messenger_scroll_clamps_stay_na_without_a_mounted_list` |
+| Scope | Seam suffices: no qualified pack mounts a friend or note column, so no live list exists whose ends a clamp could bound. The channel scroll guards pin `Screen::Channel`, not this family. |
+| Pin | `MESSENGER_SCROLL_EXE_PIN = None`; no scroll opcode or page state is claimed |
+| Activation | `MESSENGER_SCROLL_CLAMP_NEXT_STEP`: `N-FRAMES` — one qualified exe pack scrolling a mounted friend and note column to both ends, with the clamped frame at each end |
+
 ## Guards
 
 - `messenger_main_sheet_stays_a_seventy_seven_rect_park_without_a_mount` —
   live chain above; NA marker keeps the mount verdict honest.
+- `messenger_scroll_clamps_stay_na_without_a_mounted_list` — seam suffices:
+  with no mounted list, the NA label is the complete scroll claim.

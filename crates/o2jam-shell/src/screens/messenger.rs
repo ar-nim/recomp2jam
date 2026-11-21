@@ -87,6 +87,17 @@ pub const MESSENGER_MAIN_MOUNT_NEXT_STEP: &str = concat!(
     "N-FRAMES plus N-BACKEND: one qualified exe frame with the main sheet ",
     "mounted, naming the friend, note and four chat tabs at its 77 rects"
 );
+
+/// No qualified exe frame shows a friend or note scroll column reaching
+/// either end. Channel scroll clamps are a different control family.
+pub const MESSENGER_SCROLL_EXE_PIN: Option<&'static str> = None;
+
+/// Next evidence before a Messenger scroll clamp can be claimed (spec
+/// #315 M11). The absent backend and absent mount leave no live list.
+pub const MESSENGER_SCROLL_CLAMP_NEXT_STEP: &str = concat!(
+    "N-FRAMES: one qualified exe pack scrolling a mounted friend and note ",
+    "column to both ends, with the clamped frame at each end"
+);
 /// `DIALOG_MESSENGER_FRIENDADD` block: 6 parsed rects.
 pub const MESSENGER_FRIENDADD_BLOCK: &str = "DIALOG_MESSENGER_FRIENDADD";
 /// `DIALOG_MESSENGER_QUESTION` block: 7 parsed rects.
@@ -274,5 +285,29 @@ mod tests {
             None,
             "the B8 pack replaced the host P0 arm; the sheet family P0 stays"
         );
+    }
+
+    #[test]
+    fn messenger_scroll_clamps_stay_na_without_a_mounted_list() {
+        // seam: the whole claim is the NA label. No qualified pack mounts a
+        // friend or note column, so there is no live list whose ends a
+        // clamp could bound; the channel clamp guards pin a different
+        // screen. No scroll opcode or page state is claimed (#315 M11).
+        assert_eq!(
+            MESSENGER_SCROLL_EXE_PIN, None,
+            "no exe frame pins a Messenger scroll end"
+        );
+        assert!(
+            MESSENGER_SCROLL_CLAMP_NEXT_STEP.contains("N-FRAMES"),
+            "activation step names the missing capture: {}",
+            MESSENGER_SCROLL_CLAMP_NEXT_STEP
+        );
+        for code in POPUP_MENU_CODES {
+            assert_eq!(
+                messenger_p0_send_pin(code),
+                None,
+                "an unpinned menu button cannot carry a scroll send: {code:#x}"
+            );
+        }
     }
 }
