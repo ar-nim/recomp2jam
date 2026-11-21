@@ -394,17 +394,28 @@ impl MusicShopState {
                 false
             }
             MusicShopAction::CartBuy => true,
+            MusicShopAction::CartRemove(slot) => {
+                if let Some(song) = self.visible_cart().get(slot) {
+                    let song_id = song.song_id;
+                    self.music_shop_cart.retain(|id| *id != song_id);
+                    let last_page = self.cart_pages().saturating_sub(1);
+                    if self.music_shop_cart_page > last_page {
+                        self.music_shop_cart_page = last_page;
+                    }
+                }
+                false
+            }
             MusicShopAction::CartPrev => {
-                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
+                // Exe state +0x13B wraps modulo +0x13C at the first
+                // page; the empty cart still parks the index at zero.
+                let pages = self.cart_pages();
+                if pages > 0 {
+                    self.music_shop_cart_page = (self.music_shop_cart_page + pages - 1) % pages;
+                }
                 false
             }
             MusicShopAction::CartNext => {
-                if self
-                    .music_shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_CART_ROWS)
-                    < self.music_shop_cart.len()
-                {
+                if self.music_shop_cart_page.saturating_add(1) < self.cart_pages() {
                     self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
                 }
                 false

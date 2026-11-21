@@ -1298,6 +1298,8 @@ pub enum MusicShopAction {
     SelectAll,
     /// MUSICDELETE pressed (confirmation, then the marked-row clear).
     MusicDelete,
+    /// One music-cart row removed (0-based on the cart page).
+    CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart-list pager stepped back.
@@ -1344,6 +1346,9 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     if code == MSHOP_MUSICDELETE_CODE {
         return Some(MusicShopAction::MusicDelete);
     }
+    if let Some(slot) = music_shop_cart_row(code) {
+        return Some(MusicShopAction::CartRemove(slot));
+    }
     if (MSHOP_TOP100_CODE..=MSHOP_TOP100_LAST_CODE).contains(&code) {
         return Some(MusicShopAction::Top100Chrome { code });
     }
@@ -1369,6 +1374,13 @@ fn music_shop_sort_for_code(code: u32) -> Option<LankingSort> {
         MSHOP_BPM_SORT_CODE => Some(LankingSort::Bpm),
         _ => None,
     }
+}
+
+/// Removal slot behind one `CART_EX` hit-area code (`None` outside five).
+fn music_shop_cart_row(code: u32) -> Option<usize> {
+    let slot = code.checked_sub(MSHOP_CART_TOGGLE_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < MSHOP_CART_ROWS).then_some(slot)
 }
 
 /// Row pick behind one `MY_EX` owned-list code (`None` outside 12).

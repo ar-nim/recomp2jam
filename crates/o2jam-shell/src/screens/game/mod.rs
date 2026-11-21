@@ -8553,23 +8553,23 @@ mod game_tests {
         LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
         LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
         MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
-        MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EDITOR_CODE,
-        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE,
-        MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE,
-        MSHOP_MSALL_RIGHT_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
-        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
-        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE,
-        MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE,
-        MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE,
-        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
-        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
-        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
-        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
-        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
-        SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
-        SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        MSHOP_CART_RIGHT_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE,
+        MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE,
+        MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
+        MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE, MSHOP_MUSICDELETE_CODE,
+        MSHOP_OWNED_FIRST_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
+        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_SELECT_ALL_CODE,
+        MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE,
+        MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE,
+        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE,
+        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
+        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
+        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
+        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
+        SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
         SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
         SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
         SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
@@ -24099,6 +24099,65 @@ mod game_tests {
     }
 
     #[test]
+    fn cart_rows_remove_a_pick_and_the_cart_pager_wraps_at_the_first_page() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // visit_side(MusicShop) -> GameLoop::mouse_click ->
+        // click_music_shop -> music_shop_action_at ->
+        // MusicShopState::apply_action(CartRemove / CartPrev / CartNext).
+        // The five cart codes and the +0x13B/+0x13C pager words are
+        // pinned (FUN_004c7f70); the bag-writer called on remove is
+        // OPEN, so only the local cart list is claimed.
+        let mut game = open_music_shop_board(7);
+        for id in 757..764u32 {
+            game.music_shop_cart_push(id);
+        }
+        let mut placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: MSHOP_CART_TOGGLE_FIRST_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 481,
+                y: 429,
+                w: 282,
+                h: 15,
+            },
+        }];
+        for (code, x) in [(MSHOP_CART_LEFT_CODE, 543), (MSHOP_CART_RIGHT_CODE, 662)] {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 530,
+                    w: 47,
+                    h: 22,
+                },
+            });
+        }
+        game.load_side_scene(placements, HashMap::new());
+
+        game.click_music_shop(600, 436);
+        assert_eq!(
+            game.music_shop_cart(),
+            (758..764).collect::<Vec<u32>>(),
+            "the tapped cart row is dropped"
+        );
+        game.click_music_shop(685, 540);
+        assert_eq!(game.music_shop_cart_page(), 1);
+        game.click_music_shop(566, 540);
+        assert_eq!(game.music_shop_cart_page(), 0);
+        game.click_music_shop(566, 540);
+        assert_eq!(
+            game.music_shop_cart_page(),
+            1,
+            "left from the first page wraps"
+        );
+    }
+
+    #[test]
     fn music_delete_asks_before_clearing_the_marked_rows_from_boot() {
         // Live caller chain: main.rs::run_play -> stage_live_art ->
         // visit_side(MusicShop) -> GameLoop::mouse_click ->
@@ -24941,7 +25000,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(560, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(560, 535));
-        assert_eq!(game.music_shop_visible_cart().len(), 5, "cart PREV holds");
+        assert_eq!(
+            game.music_shop_visible_cart().len(),
+            1,
+            "cart PREV wraps to the last page"
+        );
         let pinned = (
             game.music_shop_cart(),
             game.music_shop_page(),
