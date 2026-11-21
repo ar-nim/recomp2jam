@@ -23,3 +23,14 @@ host or from a filename.
   it, the input log, and the session/role line that proves master role.
 - Contrast: the B8 package `f9d4a695...f8b` / frame `946e5033...d917` /
   log `1e3911b9...b11` is a **peer** pin; never transfer it to master.
+
+## #646 (M5) — Room host press
+
+- Evidence id: `N-HOST`; host state: qualified exe boot on the Room board,
+  NORMAL-mode popup dismissed before the click.
+- Press: `SendInput` at the centre of the staged rect for
+  `IDC_BUTTON_SROOM_MESSENGER`, code `0x13200048` (pinned rest/hover rect
+  `627,571-662,590`, centre `(644,580)`).
+- Capture: Room frame immediately before the press, frame after it, the
+  input log, and the manifest naming the board and press point.
+- Contrast: `j02-messenger-room.png` is a Playing scene and is not a pin.
