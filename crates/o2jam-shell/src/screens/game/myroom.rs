@@ -16,8 +16,8 @@ use crate::screens::paint::{
 use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot, myroom_gift_captions,
     myroom_gift_page, myroom_gift_pages, myroom_gift_views, myroom_identity_captions,
-    myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, MyRoomAction, MyRoomLowerTab,
-    MyRoomPanel, MyRoomState, SideScreen,
+    myroom_panel_kept, myroom_record_slot, myroom_wallet_captions, myroom_worn_well_items,
+    MyRoomAction, MyRoomLowerTab, MyRoomPanel, MyRoomState, SideScreen,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -304,7 +304,7 @@ impl ScreenGame {
         paint_myroom_slot_icons(
             frame,
             placements,
-            &character.equipment,
+            &myroom_worn_well_items(table, &character.equipment),
             &self.shop_item_portraits,
         );
         // Identity fields belong to the status face; the exe's default

@@ -15713,9 +15713,25 @@ mod game_tests {
 
         let mut character = myroom_test_character(Vec::new());
         character.equipment[JACKET_SLOT] = JACKET_ITEM_ID;
+        let mut table = myroom_test_table();
+        table.rows.push(o2jam_file::AvatarItemRow {
+            item_id: u32::try_from(JACKET_ITEM_ID).expect("fixture id"),
+            item_type: 2,
+            price: 100,
+            params: [
+                0,
+                0,
+                u32::try_from(JACKET_SLOT).expect("fixture slot") << 24,
+                0,
+            ],
+            flags: (0, 0),
+            name: "FixtureJacket".to_owned(),
+            description: String::new(),
+            sprites: Vec::new(),
+        });
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Room);
-        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_items(table);
         game.set_myroom_character(character);
         Arc::make_mut(&mut game.shop_item_portraits).insert(
             u32::try_from(JACKET_ITEM_ID).unwrap_or(0),
@@ -15750,6 +15766,74 @@ mod game_tests {
             (60..108).any(|y| (120..168).any(|x| buf[y * 800 + x] != 0)),
             "the jacket's staged shop icon inks its 2001 equipment well"
         );
+    }
+
+    /// Ticket #794: the item record's `+0x18` byte names the well,
+    /// not the equipment word's ordinal. A non-sequential byte must
+    /// ink its own well and leave the ordinal well blank.
+    #[test]
+    fn myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal() {
+        // Live caller chain: S2C 2001 equipment -> set_myroom_character
+        // -> paint_at -> paint_side -> paint_myroom_overlay ->
+        // paint_myroom_slot_icons. The join is the pinned state-entry
+        // rule (FUN_004a3730, EV ev_004adf63…), not a UI guess.
+        use super::super::side::MYROOM_SLOT_IMAGE_FIRST_CODE;
+        const WELL: u8 = 3;
+        const ITEM_ID: i32 = 401;
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: u32::try_from(ITEM_ID).expect("fixture id"),
+                item_type: 2,
+                price: 100,
+                params: [0, 0, u32::from(WELL) << 24, 0],
+                flags: (0, 0),
+                name: "NonSequentialGear".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        };
+        let mut character = myroom_test_character(Vec::new());
+        character.equipment[0] = ITEM_ID;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.set_myroom_items(table);
+        game.set_myroom_character(character);
+        Arc::make_mut(&mut game.shop_item_portraits).insert(
+            u32::try_from(ITEM_ID).expect("fixture id"),
+            solid_test_figure([0x00, 0x7C]),
+        );
+        let well_placement = |well: u8| ScenePlacement {
+            role: PlacementRole::Single,
+            id: format!("IDC_IMAGE_SMYROOM_WELL{well}"),
+            code: MYROOM_SLOT_IMAGE_FIRST_CODE + u32::from(well),
+            sprite: None,
+            rect: Rect {
+                x: 40 + i32::from(well) * 60,
+                y: 60,
+                w: 48,
+                h: 48,
+            },
+        };
+        game.load_side_scene(
+            vec![well_placement(0), well_placement(WELL)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let inked = |well: u8| {
+            let x0 = 40 + i32::from(well) * 60;
+            (60..108).any(|y| (x0..x0 + 48).any(|x| buf[y * 800 + x as usize] != 0))
+        };
+        assert!(inked(WELL), "the record slot byte inks its own well");
+        assert!(!inked(0), "the equipment ordinal no longer picks the well");
     }
 
     /// Ticket #199 breathe leg: the staged MyRoom figure must idle-

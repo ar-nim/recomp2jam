@@ -185,12 +185,13 @@ pub const MYROOM_GIFT_ITEMNAME_CODE: u32 = 0x1540_0051;
 /// Gift sender caption (`IDC_TEXT_GIFT_SENDER`).
 pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
 /// First equipment-well image (`0X15600013..22`, 16 Korean-labelled
-/// slot images in the `STATE_MYROOM` block, `docs/myroom.md`). The
-/// first eleven names match the eleven slot-selector buttons in code
-/// order, so well ordinal `0..11` pairs with the same `ItemType`
-/// ordinal in the 2001 equipment array (`docs/net-protocol.md`).
+/// slot images in the `STATE_MYROOM` block, `docs/myroom.md`).
 pub const MYROOM_SLOT_IMAGE_FIRST_CODE: u32 = 0x1560_0013;
-/// Selector buttons that pair with a labelled equipment well.
+/// Count of bound equipment wells (`0X15600013..22`).
+pub const MYROOM_EQUIPMENT_WELLS: usize = 16;
+/// Selector buttons that pair with a labelled equipment well (the
+/// first eleven wells). Selection is still button-only; the well
+/// join itself uses the item record byte, see [`myroom_worn_well_items`].
 pub const MYROOM_SLOT_WELLS: usize = MYROOM_SLOT_BUTTONS;
 
 /// Large upper-right panel: `IDC_IMAGE_SMYROOM_SLOTCOVER`
@@ -394,6 +395,39 @@ pub const fn myroom_equip_slot(item_type: u32, record_slot: u8) -> Option<u8> {
 pub fn myroom_record_slot(row: &AvatarItemRow) -> u8 {
     let word = row.params[2];
     u8::try_from((word >> 24) & 0xFF).unwrap_or(0)
+}
+
+/// Well number and item id for each worn 2001 word. The exe's
+/// state entry (`FUN_004a3730`, file `0xa3730`, EV `ev_004adf63…`)
+/// scans equipment words and stores each at the index named by its
+/// item record byte `+0x18` when that byte is below 17; a later word
+/// naming the same well wins. This CONTRADICTS the earlier ordinal
+/// join (`ee8aa26`, only correct for sequential record bytes): the
+/// 7.55 behavior oracle is the record-byte join. OPEN next step: a
+/// live non-sequential account with paired wells and 2001 body.
+#[must_use]
+pub fn myroom_worn_well_items(table: &AvatarItemTable, equipment: &[i32]) -> Vec<(u8, u32)> {
+    let mut wells: [Option<u32>; MYROOM_EQUIPMENT_WELLS] = [None; MYROOM_EQUIPMENT_WELLS];
+    for word in equipment {
+        let Some(item_id) = u32::try_from(*word).ok() else {
+            continue;
+        };
+        let Some(row) = avatar_item_by_id(table, item_id) else {
+            continue;
+        };
+        let well = usize::from(myroom_record_slot(row));
+        if let Some(well_item) = wells.get_mut(well) {
+            *well_item = Some(item_id);
+        }
+    }
+    wells
+        .into_iter()
+        .enumerate()
+        .filter_map(|(well, item)| {
+            let well = u8::try_from(well).ok()?;
+            item.map(|item_id| (well, item_id))
+        })
+        .collect()
 }
 
 /// Live avatar-room selection: slot pick, bag page/cursor, gift

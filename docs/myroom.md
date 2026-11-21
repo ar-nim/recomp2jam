@@ -174,6 +174,21 @@ serves the wells, so equip/vacate restages update both figure and well.
 Guard: `myroom_worn_item_inks_its_staged_equipment_well` with a synthetic
 portrait and jacket slot 5; no ink before the painter was wired.
 
+### Well join contradiction (ticket #794, 2026-11-22)
+
+The ordinal join above (`ee8aa26`) assumes the equipment array ordinal
+equals the well number. State entry `FUN_004a3730` (VA `0x4a3730`, file
+`0xa3730`, EV `ev_004adf63036fbbdbfa97bf4a5f5cae816abb3c74e1179576408f93df669735e9`)
+instead scans 29 equipment words and stores each in a 17-entry worn array
+indexed by that item record's byte `+0x18` when it is below 17; the 16 wells
+read that array. The exe is the behavior oracle, so the join now resolves
+`(well, item id)` from the record byte, with last writer winning on a
+duplicate well. The older ordinal join was only correct for sequential
+record bytes and is kept here as the documented contradiction, not as a
+silent fallback. OPEN next step: a live non-sequential account, capture the
+wells and pair them with the 2001 body. Guard:
+`myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal`.
+
 ## Live boot data path (ticket #199 diagnose leg)
 
 Three sources, three stagings — a blank MyRoom panel traces to
