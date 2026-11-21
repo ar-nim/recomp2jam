@@ -409,14 +409,32 @@ is pinned but not modeled in the UI-effect layer. Guards:
 (synthetic placements, hidden-arm safe). **OPEN (next step):** a
 qualified press frame pair for both directions; no readout pin exists.
 
+## #178 enrichment — gender-indexed captions (#782)
+
+`FUN_004a0660` (`ev_3e020a4a…`) resolves the six submenu captions
+`0x14208012..17` from a word table at VA `0x648530` (REA
+`ev_37bbdf86…`): row stride is the gender byte `+0x58`, six 4-byte
+words per row; `-1` hides the caption, any other word keeps the
+control's own text template. The BOY row inks all six; the GIRL row
+hides slots 5 and 6. Our painter applies that rule once a GIRL/BOY
+press stages the byte (before a press the entry byte is unpinned, so
+nothing is hidden by guesswork). Category tab presses keep the
+live-pinned local highlight only; the cart-state enable gate on the
+row-control family belongs to the #787 work already landed. Guard:
+`shop_girl_press_hides_the_last_two_submenu_captions` (synthetic
+placements, hidden-arm safe). **OPEN (next step):** read the six
+caption strings on a qualified frame in both gender states.
+
 ## OPEN
 
 1. Entry/exit dispatch call sites — PARTIAL: the static BACK and GO
    MYROOM arms now dispatch; the GO MYROOM destination frame is OPEN.
-2. TEXT caption and icon staging sources (row GEM cells now ink the
+2. TEXT caption and icon staging sources — PARTIAL: submenu
+   visibility is pinned by the gender table (#782); the six caption
+   strings and the row GEM cells now ink the
    exe's observed `0` per #722; the table→entry `+0x18` map is still
    unpinned. `MGASH`→`o2_cash` join OPEN — rig capture at known
-   balances still names the cell).
+   balances still names the cell). Submenu string text stays OPEN.
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
    checks the cart, `BUYITEM` opens the web surface with no game-socket
    opcode (W-a NULL, #397),

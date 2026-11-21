@@ -584,6 +584,12 @@ impl ShopGender {
         }
     }
 
+    /// Row of the submenu caption table (`+0x58` stride `0x18`).
+    #[must_use]
+    pub const fn table_row(self) -> usize {
+        self.byte() as usize
+    }
+
     /// The button the press hides (the "other" button).
     #[must_use]
     pub const fn hidden_button(self) -> u32 {
@@ -645,6 +651,35 @@ pub const SHOP_CATEGORY_BUTTONS: usize = 5;
 pub const SHOP_SUBMENU_FIRST_CODE: u32 = 0x1420_8012;
 /// Submenu buttons in the row (six `Shop_SubMenu` buttons).
 pub const SHOP_SUBMENU_BUTTONS: usize = 6;
+/// Six caption words per gender from `DAT_00648530` (VA `0x648530`,
+/// 4-byte words, read via REA `ev_37bbdf86…`). The layout helper
+/// `FUN_004a0660` (`ev_3e020a4a…`) indexes this table by submenu slot
+/// and gender byte `+0x58`; word `-1` hides the caption, any other
+/// word keeps the control's own text template. The word values are
+/// resource ids, not caption text; the strings themselves need one
+/// qualified frame in both gender states.
+pub const SHOP_SUBMENU_CAPTION_WORDS: [[i32; SHOP_SUBMENU_BUTTONS]; 2] = [
+    [0x1d, 0x1c, 0x1e, 0x14, 0x16, 0x18],
+    [0x13, 0x0d, 0x0a, 0x0e, -1, -1],
+];
+
+/// Whether one staged submenu caption paints for the staged gender.
+/// Non-submenu placements always paint; before a gender press the
+/// entry byte is unpinned, so no caption is hidden by guesswork.
+#[must_use]
+pub fn shop_submenu_caption_kept(code: u32, gender: Option<ShopGender>) -> bool {
+    let Some(slot) = code
+        .checked_sub(SHOP_SUBMENU_FIRST_CODE)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return true;
+    };
+    let Some(gender) = gender else {
+        return true;
+    };
+    slot >= SHOP_SUBMENU_BUTTONS || SHOP_SUBMENU_CAPTION_WORDS[gender.table_row()][slot] != -1
+}
+
 /// First per-row gift button (`IDC_BUTTON_SSHOP_ITEMGIFT1`); eight
 /// run contiguously through `+7` (gifting is out of scope: stories
 /// 20-21 need exe pins, so all eight land nowhere).

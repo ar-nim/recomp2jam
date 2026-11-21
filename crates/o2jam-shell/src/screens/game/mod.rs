@@ -75,10 +75,10 @@ use super::side::{
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
     select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
-    shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
-    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
+    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
+    LankingSort, MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
     SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
     SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
     ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
@@ -6502,6 +6502,13 @@ impl ScreenGame {
         self.shop.stage_planet_caption_armed(armed);
     }
 
+    /// Whether one staged submenu caption inks for the current
+    /// gender (the exe table hides two slots in one gender).
+    #[must_use]
+    pub fn shop_submenu_caption_visible(&self, code: u32) -> bool {
+        shop_submenu_caption_kept(code, self.shop.gender())
+    }
+
     /// Gender byte `+0x18` staged by the last GIRL/BOY press.
     #[must_use]
     pub fn shop_gender(&self) -> Option<super::side::ShopGender> {
@@ -7304,8 +7311,11 @@ impl ScreenGame {
             // until a staged shelf cell is hovered (audit D4/D5).
             let panel = self.shop_panel();
             let shelf_hovered = self.hovered_item_show_slot().is_some();
+            let gender = self.shop.gender();
             paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
-                shop_panel_kept(placed, panel) && shop_tooltip_kept(placed, shelf_hovered)
+                shop_panel_kept(placed, panel)
+                    && shop_tooltip_kept(placed, shelf_hovered)
+                    && shop_submenu_caption_kept(placed.code, gender)
             });
             // The purchase page is a web surface over the shop board;
             // its content is not captured, so only the staged client
@@ -23947,6 +23957,54 @@ mod game_tests {
             "GOMYROOM sends no 5007 ExitShop"
         );
         assert!(game.take_shop_buy().is_none());
+    }
+
+    #[test]
+    fn shop_girl_press_hides_the_last_two_submenu_captions() {
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(GIRL) -> shop gender byte -> paint_side ->
+        //   shop_submenu_caption_kept on six staged submenu captions.
+        // Static pin `ev_3e020a4a…`: table `0x648530` is indexed by
+        // submenu slot and gender byte `+0x58`; word -1 hides, any
+        // other word keeps the caption. OPEN (next step): read the six
+        // caption strings on a qualified frame in both gender states.
+        // Synthetic placement: no install-root data (hidden-arm safe).
+        let mut game = open_shop_board(10);
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_GIRL_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 30,
+                h: 20,
+            },
+        });
+        let codes: Vec<u32> = (0..SHOP_SUBMENU_BUTTONS as u32)
+            .map(|slot| SHOP_SUBMENU_FIRST_CODE + slot)
+            .collect();
+        assert!(
+            codes
+                .iter()
+                .all(|code| game.shop_submenu_caption_visible(*code)),
+            "before a press every caption paints"
+        );
+
+        game.click_shop(510, 40);
+
+        assert_eq!(game.shop_gender(), Some(ShopGender::Girl));
+        assert!(codes[..4]
+            .iter()
+            .all(|code| game.shop_submenu_caption_visible(*code)));
+        assert!(
+            codes[4..]
+                .iter()
+                .all(|code| !game.shop_submenu_caption_visible(*code)),
+            "the two -1 table words hide their captions"
+        );
     }
 
     #[test]
