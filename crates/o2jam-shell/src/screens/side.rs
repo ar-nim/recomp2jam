@@ -1298,6 +1298,8 @@ pub enum MusicShopAction {
     SelectAll,
     /// MUSICDELETE pressed (confirmation, then the marked-row clear).
     MusicDelete,
+    /// DOWN_START pressed: queue the marked owned songs.
+    DownStart,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -1345,6 +1347,9 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
     }
     if code == MSHOP_MUSICDELETE_CODE {
         return Some(MusicShopAction::MusicDelete);
+    }
+    if code == MSHOP_DOWN_START_CODE {
+        return Some(MusicShopAction::DownStart);
     }
     if let Some(slot) = music_shop_cart_row(code) {
         return Some(MusicShopAction::CartRemove(slot));
@@ -6358,10 +6363,10 @@ mod side_tests {
     }
 
     #[test]
-    fn music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned() {
-        // The bnd rects for START/CANCEL stage, but no shop-side
-        // 5012 send site is pinned (`docs/musicshop.md`), so a click
-        // on either control must dispatch nothing and queue no wire.
+    fn music_shop_down_start_dispatches_while_cancel_stays_inert() {
+        // START now queues the marked songs through the staged
+        // worker (#830); no 5012 opcode is invented. CANCEL still
+        // waits for its confirmation arm (#831).
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
             role: PlacementRole::Single,
             id: String::new(),
@@ -6373,9 +6378,15 @@ mod side_tests {
             area(MSHOP_DOWN_START_CODE, 699, 312, 82, 24),
             area(MSHOP_DOWN_CANCEL_CODE, 721, 529, 54, 22),
         ];
-        assert_eq!(music_shop_action_at(&placements, 740, 324), None);
+        assert_eq!(
+            music_shop_action_at(&placements, 740, 324),
+            Some(MusicShopAction::DownStart)
+        );
         assert_eq!(music_shop_action_at(&placements, 748, 540), None);
-        assert_eq!(music_shop_action_for_code(MSHOP_DOWN_START_CODE), None);
+        assert_eq!(
+            music_shop_action_for_code(MSHOP_DOWN_START_CODE),
+            Some(MusicShopAction::DownStart)
+        );
         assert_eq!(music_shop_action_for_code(MSHOP_DOWN_CANCEL_CODE), None);
     }
 

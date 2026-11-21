@@ -26,8 +26,8 @@ use self::chat::ChatState;
 pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
-use self::musicshop::MusicShopState;
 pub(crate) use self::musicshop::OwnedRow;
+use self::musicshop::{MusicShopEffect, MusicShopState};
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
@@ -7013,7 +7013,9 @@ impl ScreenGame {
         };
         if matches!(
             action,
-            MusicShopAction::OwnedRow(_) | MusicShopAction::MusicDelete
+            MusicShopAction::OwnedRow(_)
+                | MusicShopAction::MusicDelete
+                | MusicShopAction::DownStart
         ) && self.music_download.is_running()
         {
             return;
@@ -7025,9 +7027,17 @@ impl ScreenGame {
             self.leave_side();
             return;
         }
-        if self.music_shop.apply_action(action) {
-            self.billing_failure_notice = false;
-            self.outbox.pending_music_buy = Some(SyncMusicPurchase);
+        match self.music_shop.apply_action(action) {
+            MusicShopEffect::Buy => {
+                self.billing_failure_notice = false;
+                self.outbox.pending_music_buy = Some(SyncMusicPurchase);
+            }
+            MusicShopEffect::StartDownloads(song_ids) => {
+                for song_id in song_ids {
+                    self.begin_music_download(song_id);
+                }
+            }
+            MusicShopEffect::None => {}
         }
     }
 
@@ -8554,27 +8564,27 @@ mod game_tests {
         LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
         MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
         MSHOP_CART_RIGHT_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE,
-        MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE,
-        MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
-        MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE, MSHOP_MUSICDELETE_CODE,
-        MSHOP_OWNED_FIRST_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
-        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_SELECT_ALL_CODE,
-        MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE,
-        MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE,
-        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE,
-        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
-        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
-        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
-        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
-        SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
-        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
-        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_BUTTONS,
-        SHOP_SUBMENU_FIRST_CODE,
+        MSHOP_DOWN_START_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+        MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
+        MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
+        MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
+        MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE,
+        ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
+        SHOP_BAGSORT_CODE, SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
+        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
+        SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE,
+        SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE,
+        SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
+        SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE,
+        SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
     };
     use super::super::side::{
         OPTION_GAME_BLEND_NO, OPTION_GAME_EFFECT_LOW, OPTION_GAME_GUIDE_LONG,
@@ -24096,6 +24106,81 @@ mod game_tests {
         assert_ne!(before[band], after[band], "press inks the staged band");
         let outside = 20 * 800 + 400;
         assert_eq!(before[outside], after[outside], "no chrome outside");
+    }
+
+    #[test]
+    fn down_start_queues_the_marked_songs_through_the_staged_worker() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // visit_side(MusicShop) -> GameLoop::mouse_click ->
+        // click_music_shop -> music_shop_action_at ->
+        // MusicShopState::apply_action(DownStart) ->
+        // ScreenGame::begin_music_download -> MusicDownload::enqueue.
+        // The START gate, the worker's temp→final promote and the
+        // per-song notify are pinned (VA 0x4f9410 / 0x4f8b80); the
+        // 5012 send and the tapped panel frames stay OPEN (#830).
+        let root = std::env::temp_dir().join("recomp2jam-mshop-downstart");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture root");
+        let mut game = open_music_shop_board(2);
+        game.set_music_download_dirs(root.join("Music"), None);
+        game.stage_music_shop_board(MusicListAnswer {
+            entries: vec![
+                MusicListEntry {
+                    id: 757,
+                    notes_ex: 3,
+                    notes_nx: 7,
+                    notes_hx: 10,
+                },
+                MusicListEntry {
+                    id: 758,
+                    notes_ex: 3,
+                    notes_nx: 7,
+                    notes_hx: 10,
+                },
+            ],
+            free_music: false,
+        });
+        let mut placements: Vec<ScenePlacement> = (0..12u32)
+            .map(|slot| ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MSHOP_OWNED_FIRST_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 20 + slot as i32 * 30,
+                    w: 20,
+                    h: 20,
+                },
+            })
+            .collect();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: MSHOP_DOWN_START_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 699,
+                y: 312,
+                w: 82,
+                h: 24,
+            },
+        });
+        game.load_side_scene(placements, HashMap::new());
+        game.click_music_shop(20, 30);
+        game.click_music_shop(740, 324);
+
+        assert!(game.music_download().is_running());
+        assert_eq!(game.music_download().requests().len(), 1);
+        assert_eq!(game.music_download().requests()[0].song_id, 757);
+        assert!(game.take_music_buy().is_none(), "no purchase is queued");
+        game.click_music_shop(740, 324);
+        assert_eq!(
+            game.music_download().requests().len(),
+            1,
+            "a running transfer gates another START"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

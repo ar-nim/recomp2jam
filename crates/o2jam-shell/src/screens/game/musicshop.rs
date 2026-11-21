@@ -13,6 +13,19 @@ use super::super::side::{
     MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
 };
 
+/// One result of a music-shop control press. The board owns the
+/// state change; the caller owns the side effects (the 5010 outbox
+/// and the staged download queue).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MusicShopEffect {
+    /// No caller-side effect.
+    None,
+    /// Queue the pinned 5010 music purchase.
+    Buy,
+    /// Hand these owned song ids to the staged download engine.
+    StartDownloads(Vec<u16>),
+}
+
 /// One owned-list row: a 4031 song id, its catalog title, the local
 /// chart bit, and this page's check mark. The two per-row properties
 /// are pinned; their exact sprite faces stay OPEN (no mixed-state
@@ -299,11 +312,10 @@ impl MusicShopState {
 
     /// Board action through the control-code dispatch: row picks
     /// stage the cart, sorts resort and reset the page, and the
-    /// pagers step and hold at the ends. Reports whether the action
-    /// queues the pinned 5010 send (a row buy on a visible row, or
-    /// the cart `BUYITEM`): the caller queues it on the outbox, so
-    /// this board state never touches the wire.
-    pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> bool {
+    /// pagers step and wrap. Reports the caller-side effect — a
+    /// pinned 5010 buy or the marked song ids for the staged worker
+    /// — so this board state never touches the wire or the queue.
+    pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> MusicShopEffect {
         // A notice owns only the next board press: any control that
         // follows dismisses it, and the arm may post a fresh one or
         // consume an armed confirmation.
@@ -318,16 +330,35 @@ impl MusicShopState {
                         self.music_shop_cart.push(song_id);
                     }
                 }
-                false
+                MusicShopEffect::None
             }
-            MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
+            MusicShopAction::BuyRow { slot, gem: _ } => {
+                if self.visible_rows().get(slot).is_some() {
+                    MusicShopEffect::Buy
+                } else {
+                    MusicShopEffect::None
+                }
+            }
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::Face(face) => {
                 self.music_shop_face = face;
-                false
+                MusicShopEffect::None
+            }
+            MusicShopAction::DownStart => {
+                let song_ids: Vec<u16> = self
+                    .owned_rows()
+                    .iter()
+                    .filter(|row| row.marked)
+                    .map(|row| row.song_id)
+                    .collect();
+                if song_ids.is_empty() {
+                    MusicShopEffect::None
+                } else {
+                    MusicShopEffect::StartDownloads(song_ids)
+                }
             }
             MusicShopAction::MusicDelete => {
                 let confirmation = Some((MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE));
@@ -339,13 +370,13 @@ impl MusicShopState {
                 } else if self.owned_rows().iter().any(|row| row.marked) {
                     self.post_notice(MusicShopNotice::DeleteFiles, MSHOP_MUSICDELETE_CODE);
                 }
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::SelectAll => {
                 let select_all = !self.music_shop_select_all.unwrap_or(false);
                 self.music_shop_select_all = Some(select_all);
                 self.music_shop_owned_marks = [select_all; MSHOP_OWNED_ROWS];
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::OwnedRow(slot) => {
                 if slot < self.music_shop_owned_marks.len() && self.owned_rows().get(slot).is_some()
@@ -365,20 +396,20 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
                 self.music_shop_page = 0;
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::MsPrev => {
                 self.music_shop_page = self.music_shop_page.saturating_sub(1);
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::MsNext => {
                 if self
@@ -391,9 +422,9 @@ impl MusicShopState {
                     self.music_shop_selected_row = None;
                     self.music_shop_top100_pressed = None;
                 }
-                false
+                MusicShopEffect::None
             }
-            MusicShopAction::CartBuy => true,
+            MusicShopAction::CartBuy => MusicShopEffect::Buy,
             MusicShopAction::CartRemove(slot) => {
                 if let Some(song) = self.visible_cart().get(slot) {
                     let song_id = song.song_id;
@@ -403,7 +434,7 @@ impl MusicShopState {
                         self.music_shop_cart_page = last_page;
                     }
                 }
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::CartPrev => {
                 // Exe state +0x13B wraps modulo +0x13C at the first
@@ -412,17 +443,17 @@ impl MusicShopState {
                 if pages > 0 {
                     self.music_shop_cart_page = (self.music_shop_cart_page + pages - 1) % pages;
                 }
-                false
+                MusicShopEffect::None
             }
             MusicShopAction::CartNext => {
                 if self.music_shop_cart_page.saturating_add(1) < self.cart_pages() {
                     self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
                 }
-                false
+                MusicShopEffect::None
             }
             // BACK is a side leave: `click_music_shop` owns the
             // transition, so the board state never changes here.
-            MusicShopAction::BackToLobby => false,
+            MusicShopAction::BackToLobby => MusicShopEffect::None,
         }
     }
 }
