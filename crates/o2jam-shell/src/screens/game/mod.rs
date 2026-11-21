@@ -7026,6 +7026,12 @@ impl ScreenGame {
         self.music_shop.owned_rows()
     }
 
+    /// Visible owned-list page (twelve ids per page).
+    #[must_use]
+    pub fn music_shop_owned_page(&self) -> usize {
+        self.music_shop.owned_page()
+    }
+
     /// Owned/download face selected by the two tab images (#820).
     #[must_use]
     pub fn music_shop_face(&self) -> MusicShopFace {
@@ -7165,6 +7171,8 @@ impl ScreenGame {
             action,
             MusicShopAction::OwnedRow(_)
                 | MusicShopAction::MusicDelete
+                | MusicShopAction::MyPrev
+                | MusicShopAction::MyNext
                 | MusicShopAction::DownStart
         ) && self.music_download.is_running()
         {
@@ -8742,7 +8750,8 @@ mod game_tests {
         MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE,
         MSHOP_GENRE_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_ISBUY_CODE, MSHOP_MONEY_GEM_CODE,
         MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
-        MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_MUSICDELETE_CODE, MSHOP_MYALL_LEFT_CODE, MSHOP_MYALL_RIGHT_CODE,
+        MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
         MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
         MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE,
@@ -24336,6 +24345,117 @@ mod game_tests {
         game.click_music_shop(341, 156);
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    /// Synthetic owned list with two pages and its MYALL pager.
+    fn open_music_shop_owned_board(entry_count: usize) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut blob = Vec::new();
+        for index in 0..entry_count {
+            let song_id = 757 + u32::try_from(index).unwrap_or(0);
+            blob.extend_from_slice(&lanking_record(
+                song_id,
+                120.0,
+                &format!("Owned{index:03}"),
+                "Band",
+            ));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.stage_music_shop_board(MusicListAnswer {
+            entries: (0..entry_count)
+                .map(|index| MusicListEntry {
+                    id: u16::try_from(757 + index).unwrap_or(757),
+                    notes_ex: 3,
+                    notes_nx: 7,
+                    notes_hx: 10,
+                })
+                .collect(),
+            free_music: false,
+        });
+        let mut placements: Vec<ScenePlacement> = (0..MSHOP_OWNED_ROWS)
+            .map(|slot| ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MSHOP_OWNED_FIRST_CODE + u32::try_from(slot).unwrap_or(0),
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 20 + i32::try_from(slot).unwrap_or(0) * 30,
+                    w: 20,
+                    h: 20,
+                },
+            })
+            .collect();
+        for (code, x) in [
+            (MSHOP_MYALL_LEFT_CODE, 198),
+            (MSHOP_MYALL_RIGHT_CODE, 317),
+            (MSHOP_DOWN_START_CODE, 740),
+        ] {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 532,
+                    w: 40,
+                    h: 20,
+                },
+            });
+        }
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game
+    }
+
+    #[test]
+    fn music_shop_myall_left_wraps_and_right_clamps_across_owned_pages() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop -> music_shop_action_at
+        // -> MusicShopState::apply_action(MyPrev/MyNext) -> owned_rows.
+        let mut game = open_music_shop_owned_board(14);
+        assert_eq!(game.music_shop_owned_rows()[0].song_id, 757);
+        game.click_music_shop(218, 542);
+        assert_eq!(game.music_shop_owned_page(), 1, "left wraps to the last");
+        assert_eq!(game.music_shop_owned_rows()[0].song_id, 769);
+        game.click_music_shop(337, 542);
+        assert_eq!(game.music_shop_owned_page(), 1, "right clamps at the last");
+    }
+
+    #[test]
+    fn music_shop_myall_turn_refreshes_the_twelve_owned_marks() {
+        // Live caller chain: same click seam; the exe re-stamps the
+        // per-row marks on each owned refresh (FUN_004cbdd0).
+        let mut game = open_music_shop_owned_board(14);
+        game.click_music_shop(20, 30);
+        assert!(game.music_shop_owned_rows()[0].marked);
+        game.click_music_shop(218, 542);
+        assert_eq!(game.music_shop_owned_page(), 1);
+        assert!(
+            game.music_shop_owned_rows().iter().all(|row| !row.marked),
+            "the new page has its own marks"
+        );
+        game.click_music_shop(337, 542);
+        assert!(
+            game.music_shop_owned_rows().iter().all(|row| !row.marked),
+            "returning to page one does not revive old marks"
+        );
+    }
+
+    #[test]
+    fn music_shop_myall_pager_is_gated_while_a_download_runs() {
+        // Live caller chain: click_music_shop(DownStart) ->
+        // apply_action -> begin_music_download, then a MYALL press
+        // reaches the +0x112 download gate before apply_action.
+        let mut game = open_music_shop_owned_board(14);
+        game.click_music_shop(20, 30);
+        game.click_music_shop(760, 542);
+        assert!(game.music_shop_download_readout().is_some());
+        game.click_music_shop(218, 542);
+        assert_eq!(game.music_shop_owned_page(), 0, "pager gated");
     }
 
     #[test]

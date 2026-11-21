@@ -114,6 +114,10 @@ pub(crate) struct MusicShopState {
     /// keeps a twelve-column per-page mark table; presses toggle one
     /// cell (`FUN_004cdca0`).
     pub(crate) music_shop_owned_marks: [bool; MSHOP_OWNED_ROWS],
+    /// Visible owned-list page (twelve ids per page, exe state
+    /// `+0x25`). The MYALL pager wraps left, clamps right, and is
+    /// gated while a download stands (#817).
+    pub(crate) music_shop_owned_page: usize,
     /// Standing notice and the staged control code whose rect hosts
     /// it. The exe posts these strings through its notice helper;
     /// the host rect is ours-by-design chrome over the bnd layout.
@@ -156,6 +160,8 @@ impl MusicShopState {
     pub(crate) fn stage_board(&mut self, answer: MusicListAnswer) {
         self.music_shop_board = Some(answer);
         self.music_shop_page = 0;
+        self.music_shop_owned_page = 0;
+        self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
     }
 
     /// Stage the per-song price words from `OJNList.dat` table 3.
@@ -254,14 +260,30 @@ impl MusicShopState {
         self.music_shop_notice = Some((notice, code));
     }
 
+    /// Owned-list page count (at least one, like the song pager).
+    pub(crate) fn owned_pages(&self) -> usize {
+        self.music_shop_board.as_ref().map_or(1, |board| {
+            shop_page_count(board.entries.len(), MSHOP_OWNED_ROWS)
+        })
+    }
+
+    /// Visible owned-list page index.
+    pub(crate) fn owned_page(&self) -> usize {
+        self.music_shop_owned_page
+    }
+
     /// Owned rows from the fetched 4031 ids joined to the catalog
-    /// titles and the local chart scan, twelve at most.
+    /// titles and the local chart scan, twelve at most on this page.
     pub(crate) fn owned_rows(&self) -> Vec<OwnedRow> {
         let Some(board) = self.music_shop_board.as_ref() else {
             return Vec::new();
         };
-        board
-            .entries
+        let (start, end) = lanking_page_window(
+            board.entries.len(),
+            MSHOP_OWNED_ROWS,
+            self.music_shop_owned_page,
+        );
+        board.entries[start..end]
             .iter()
             .take(MSHOP_OWNED_ROWS)
             .enumerate()
@@ -518,6 +540,27 @@ impl MusicShopState {
                 if next < self.list_pages() {
                     self.music_shop_page = next;
                     self.clear_page_plates();
+                }
+                MusicShopEffect::None
+            }
+            MusicShopAction::MyPrev => {
+                if !self.music_shop_download_active {
+                    let pages = self.owned_pages();
+                    self.music_shop_owned_page = self
+                        .music_shop_owned_page
+                        .checked_sub(1)
+                        .unwrap_or_else(|| pages.saturating_sub(1));
+                    self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                }
+                MusicShopEffect::None
+            }
+            MusicShopAction::MyNext => {
+                if !self.music_shop_download_active {
+                    let next = self.music_shop_owned_page.saturating_add(1);
+                    if next < self.owned_pages() {
+                        self.music_shop_owned_page = next;
+                        self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
+                    }
                 }
                 MusicShopEffect::None
             }

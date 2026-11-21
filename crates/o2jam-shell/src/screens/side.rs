@@ -1333,6 +1333,11 @@ pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
 /// next step as lanking).
 pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
 pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Owned-list pager (`IDC_BUTTON_MSHOP_MYALL_LEFT/RIGHT`): the exe
+/// wraps left, clamps right, and only answers outside a download
+/// (`FUN_004c7f70` cases `0x1A20000C/0x0D`, #817).
+pub const MSHOP_MYALL_LEFT_CODE: u32 = 0x1A20_000C;
+pub const MSHOP_MYALL_RIGHT_CODE: u32 = 0x1A20_000D;
 /// Six color filters (`IDC_BUTTON_MSHOP_MS_NEW..SILVER`) and the four
 /// box-line frames they stage (`0x1A500004..07`). The filter arm
 /// writes index + 1 into the frame setter (`FUN_004c7f70`, #813).
@@ -1622,6 +1627,10 @@ pub enum MusicShopAction {
     MsPrev,
     /// Shop-list pager stepped forward.
     MsNext,
+    /// Owned-list pager stepped back.
+    MyPrev,
+    /// Owned-list pager stepped forward.
+    MyNext,
     /// One of the two owned face tabs was pressed.
     Face(MusicShopFace),
     /// Owned `MY_EX` row picked (0-based on the owned list).
@@ -1702,6 +1711,8 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
+        MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),
+        MSHOP_MYALL_RIGHT_CODE => Some(MusicShopAction::MyNext),
         MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
