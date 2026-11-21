@@ -55,3 +55,14 @@ host or from a filename.
 - Capture: Waiting frame immediately before the press, frame after it, the
   input log, and the manifest naming the board and press point. The popup
   dismissal must precede the press and appear in the log.
+
+## #652 (M8) — Music Shop host press
+
+- Evidence id: `N-HOST`; host state: qualified exe boot on the Music Shop
+  board, peer role, NORMAL-mode popup dismissed before the click.
+- Press: `SendInput` at the centre of the staged rect for code `0x1A200088`
+  in the Music Shop board.
+- Capture: Music Shop frame immediately before the press, frame after it,
+  the input log, and the manifest naming the board and press point. This is
+  the fifth host arm; no response is copied from Room, Shop, MyRoom, or
+  Waiting.
