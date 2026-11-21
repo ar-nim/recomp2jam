@@ -324,6 +324,14 @@ behavior also live in spec #178's enrichment rows.
   ours-by-design (#515); the exe's total-ink writer is still OPEN
   (qualified cart-pick frame, then writer REA). Guard:
   `cart_total_cells_ink_only_when_the_cart_count_gate_is_open`.
+- ITEMBACK `0x1420006c` calls FUN_00540500, copies `0x2190` bytes
+  from global `0x77cd00` over the local block at object `+0x65`, then
+  repaints (`ev_f3ad15be…`). Our shell snapshots the equipped slice on
+  character staging and overwrites every slot on ITEMBACK, so a later
+  slot edit cannot leak into the revert; the rest of the exe block
+  (wallet/inventory) stays server-authoritative, not minted locally.
+  Guard: `itemback_restores_the_full_equipped_block_not_one_slot`.
+  Live before/after figure frames OPEN.
 
 ## OPEN
 

@@ -32,7 +32,7 @@ use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
 pub use self::room_fuse::FuseClock;
 use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
-use self::shop::ShopState;
+use self::shop::{EquippedAvatarBlock, ShopState};
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
@@ -978,6 +978,11 @@ pub struct ScreenGame {
     /// inventory, gifts, identity and cash captions (`None` until the
     /// session stages it).
     myroom_character: Option<CharacterInfo>,
+    /// Equipped block snapshotted on character staging. ITEMBACK
+    /// copies it back wholesale (exe `0x2190` bytes from `0x77cd00`,
+    /// `ev_f3ad15be…`), so later slot edits cannot leak into a
+    /// preview revert.
+    equipped_block: Option<EquippedAvatarBlock>,
     /// Staged worn figure per waiting seat (seat 0 self, seats 1..7
     /// wire peers): the same `avatar.opa` stack the Result banner and
     /// the Room panel paint, keyed by seat so each occupied slot
@@ -1297,6 +1302,7 @@ impl ScreenGame {
             myroom: MyRoomState::new(),
             myroom_items: None,
             myroom_character: None,
+            equipped_block: None,
             waiting_figures: std::array::from_fn(|_| None),
             avatar_source: None,
             room_avatar: None,
@@ -6719,8 +6725,17 @@ impl ScreenGame {
                 self.restage_shop_avatar();
             }
             ShopAction::RevertTryOn => {
+                // Exe arm `0x1420006c`: FUN_00540500, then a full
+                // 0x2190-byte copy from global `0x77cd00` into the
+                // local avatar block and a repaint. The snapshot was
+                // taken on character staging, so every slot reverts.
                 self.shop.apply_action(action, owned_len);
                 self.shop.clear_preview();
+                if let (Some(block), Some(character)) =
+                    (self.equipped_block.as_ref(), self.myroom_character.as_mut())
+                {
+                    block.restore_equipment(character);
+                }
                 self.restage_shop_avatar();
             }
             ShopAction::CartBuy => {
@@ -23424,6 +23439,42 @@ mod game_tests {
         // The synthetic archive stacks, so the pane holds the
         // preview figure on the fly.
         assert!(game.shop_avatar_staged());
+    }
+
+    #[test]
+    fn itemback_restores_the_full_equipped_block_not_one_slot() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_online_identity ->
+        //   ScreenGame::set_myroom_character (block snapshot) ->
+        //   visit_side(Shop) -> click_shop(ITEMBACK) ->
+        //   EquippedAvatarBlock::restore -> restage_shop_avatar.
+        // Static pin: `0x1420006c` calls FUN_00540500 then copies
+        // 0x2190 bytes from global `0x77cd00` into object `+0x65`
+        // (ev_f3ad15be…): a full block revert, not a per-part undo.
+        // Live before/after figure frames stay OPEN.
+        let mut game = open_shop_preview_board();
+        assert_eq!(
+            super::super::side::SHOP_EQUIPPED_BLOCK_BYTES,
+            0x2190,
+            "the copied block width stays pinned"
+        );
+        let equipped_at_entry = game.myroom_character().expect("hero staged").equipment;
+        {
+            let hero = game.myroom_character.as_mut().expect("hero staged");
+            hero.equipment[0] = 7;
+            hero.equipment[1] = 8;
+        }
+        game.click_shop(362, 208);
+        assert_eq!(game.shop_try_on(), Some(2));
+
+        game.click_shop(140, 574);
+
+        assert_eq!(game.shop_try_on(), None);
+        assert_eq!(
+            game.myroom_character().expect("hero staged").equipment,
+            equipped_at_entry,
+            "ITEMBACK restores every slot from the equipped block"
+        );
     }
 
     #[test]

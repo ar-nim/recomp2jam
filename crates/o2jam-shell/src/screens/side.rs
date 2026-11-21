@@ -515,6 +515,11 @@ pub const SHOP_BAG_PAGE_TOT_ONES_CODE: u32 = 0x1450_0051;
 pub const SHOP_ITEMPRE_FIRST_CODE: u32 = 0x1420_0064;
 /// Preview clear (`IDC_BUTTON_SSHOP_ITEMBACK`).
 pub const SHOP_ITEMBACK_CODE: u32 = 0x1420_006C;
+/// Byte width of the equipped block ITEMBACK copies from global
+/// `0x77cd00` over object `+0x65` (`ev_f3ad15be…`). The original is a
+/// whole-block revert; our model snapshots the worn-equipment slice
+/// because the rest of the block is server-authoritative.
+pub const SHOP_EQUIPPED_BLOCK_BYTES: usize = 0x2190;
 /// Preview comment text (`IDC_TEXT_SSHOP_ITEMCOMMENT`): the tooltip
 /// panel the preview name inks (pairing ASSUMED — `ITEMCOMMENT2`
 /// mirrors it; next step: rig capture of a preview press).

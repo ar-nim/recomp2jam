@@ -5,6 +5,33 @@ use super::super::side::{
     lanking_page_window, shop_goods, shop_page_count, ShopAction, ShopGood, ShopPanel,
     SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
+use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
+
+/// Equipped block the ITEMBACK arm restores. The exe takes `0x2190`
+/// bytes from global `0x77cd00` and writes them over the local copy at
+/// object `+0x65` before repainting (`ev_f3ad15be…`, arm
+/// `0x1420006c`): a whole-block revert, never a per-part undo. Only
+/// the worn-equipment slice is modeled here — the rest of that block
+/// (wallet, inventory) belongs to server-authoritative state and is
+/// never minted locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EquippedAvatarBlock {
+    equipment: [i32; EQUIPMENT_SLOTS],
+}
+
+impl EquippedAvatarBlock {
+    /// Snapshot the equipped slice when a character stages.
+    pub(crate) fn from_character(character: &CharacterInfo) -> Self {
+        Self {
+            equipment: character.equipment,
+        }
+    }
+
+    /// Overwrite every equipped slot from the snapshot.
+    pub(crate) fn restore_equipment(&self, character: &mut CharacterInfo) {
+        character.equipment = self.equipment;
+    }
+}
 
 /// Item-shop goods, pages, and the checked cart behind the shop
 /// side screen (#139 cluster 3: the Data Clump of all four
