@@ -15,9 +15,8 @@
 set -euo pipefail
 
 RIG_E_DISPLAY="${RIG_E_DISPLAY:-10}"
-# Rig Xvfb displays are three digits (:150-:199 by default). The owner's
-# session is :0; one- and two-digit displays are never rig boots.
-RIG_RUST_DISPLAY_PATTERN=':[1-9][0-9][0-9]'
+# shellcheck source=rig-run-class.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rig-run-class.sh"
 
 rig_requested_client_display() {
   printf '%s' "${RIG_DISPLAY:-${DISPLAY:-}}"
@@ -25,8 +24,13 @@ rig_requested_client_display() {
 
 # Query: prints the validated rig display, or refuses before any client boot.
 rig_validated_client_display() {
-  local requested caller_note=""
+  local requested caller_note="" run_class
+  run_class="$(rig_run_class)"
   requested="$(rig_requested_client_display)"
+  if [ "$run_class" = "$RIG_RUN_CLASS_OWNER" ]; then
+    echo "rig-client-display: REFUSED: no rig display: owner-session boot (RIG_DISPLAY=${RIG_DISPLAY:-<unset>}, DISPLAY=${DISPLAY:-<unset>})" >&2
+    return "$RIG_E_DISPLAY"
+  fi
   case "$requested" in
     $RIG_RUST_DISPLAY_PATTERN) ;;
     *)
@@ -73,7 +77,10 @@ rig_client_is_native() {
 # Command: inherited Wine state is meaningless for a native client and makes
 # rig-run.sh's rig_check_prefix claim a prefix owned by an earlier Wine leg.
 rig_clear_inherited_wine_prefix() {
-  local client="${1:-}"
+  local client="${1:-}" run_class="${2:-}"
+  # The caller may already have queried the class; never derive it twice.
+  [ -n "$run_class" ] || run_class="$(rig_run_class "$client")"
+  [ "$run_class" = "$RIG_RUN_CLASS_WINE" ] && return 0
   rig_client_is_native "$client" || return 0
   if [ -n "${WINEPREFIX:-}" ] || [ -n "${RIG_WINEPREFIX:-}" ]; then
     echo "rig-client-display: native client ${client##*/}: clearing inherited WINEPREFIX=${WINEPREFIX:-<unset>} RIG_WINEPREFIX=${RIG_WINEPREFIX:-<unset>}" >&2
@@ -113,6 +120,15 @@ selftest_refuses_owner_display() {
   echo "rig-client-display: PASS refuses-owner-display-before-boot"
 }
 
+selftest_rig_wine_boot_keeps_prefix() {
+  local output
+  output="$(env -u RIG_CLIENT_KIND -u RIG_WINEPREFIX \
+    DISPLAY=:181 WINEPREFIX=/tmp/wine-leg \
+    bash "$0" clear-prefix -- scripts/rig-wine.sh 2>&1)"
+  grep -qF 'WINEPREFIX=/tmp/wine-leg' <<<"$output" || { echo "$output"; return 1; }
+  echo "rig-client-display: PASS rig-wine-boot-keeps-prefix"
+}
+
 selftest_native_clears_inherited_prefix() {
   local output
   output="$(RIG_CLIENT_KIND=native WINEPREFIX=/tmp/wine-leg \
@@ -145,6 +161,7 @@ main() {
     selftest)
       selftest_pin_strips_owner_session
       selftest_refuses_owner_display
+      selftest_rig_wine_boot_keeps_prefix
       selftest_native_clears_inherited_prefix
       echo "rig-client-display: selftest OK" ;;
     *) echo "usage: rig-client-display.sh {probe|clear-prefix -- CLIENT|selftest}" >&2; return 2 ;;

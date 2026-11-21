@@ -27,6 +27,8 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-display.sh"
 # shellcheck source=lib/rig-client-identity.sh
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-identity.sh"
+# shellcheck source=lib/play-local-seams.sh
+. "$(cd "$(dirname "$0")/lib" && pwd)/play-local-seams.sh"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEMORYER_DIR="${MEMORYER_DIR:-$HOME/memoryer-local}"
@@ -39,7 +41,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --user-id) USER_ID="$2"; shift 2 ;;
     --check-only) CHECK_ONLY=1; shift ;;
-    --rig) RIG_RUN=1; shift ;;
+    --rig) export RIG_RUN=1; shift ;;
     *) EXTRA+=("$1"); shift ;;
   esac
 done
@@ -52,16 +54,16 @@ export RIG_INSTALL_ROOT
 # reaches the 1000 frame as a distinct O2JAM_CLIENT_ID.
 rig_export_client_identity "$USER_ID"
 
-# 0. Display pin (#719): a RIG boot must name its :NNN Xvfb display -
-# pass --rig, preset RIG_DISPLAY, or run with DISPLAY already :NNN.
+# 0. Display pin (#719, #745): one class query, reused by the flock below.
 # Owner-session interactive runs (Wayland + :0) skip the pin; the pin
 # refusing :0 was a regression (owner report 2026-11-20). The hostile
 # case the pin exists for - a rig script accidentally on the owner
 # display - always passes --rig, so the refusal still fires there.
-if [ "$RIG_RUN" -eq 1 ] || [ -n "${RIG_DISPLAY:-}" ] || [[ "${DISPLAY:-}" =~ ^:[1-9][0-9][0-9]$ ]]; then
+RUN_CLASS="$(rig_run_class)"
+if play_local_needs_display_pin "$RUN_CLASS"; then
   rig_pin_rust_client_display || exit "$?"
 else
-  echo "play-local: owner-session run (DISPLAY=${DISPLAY:-unset}); display pin skipped - rig boots pass --rig or preset RIG_DISPLAY" >&2
+  echo "play-local: owner-session run (class $RUN_CLASS, DISPLAY=${DISPLAY:-unset}); display pin skipped - rig boots pass --rig or preset RIG_DISPLAY" >&2
 fi
 
 # 1. Game data: the client stages art from install-root (git-ignored).
@@ -116,14 +118,12 @@ case "$PROFILE" in
 esac
 BIN="$REPO_ROOT/target/$PROFILE/recomp2jam"
 # Test-only changes must not mark the BINARY stale: cargo build does not
-# rebuild the release binary for test files, so a commit touching only
-# crates/*/tests would demand a rebuild that is a no-op (owner report
-# 2026-11-21: "rebuilt and nothing gets rebuilt"). The timestamp scope
-# excludes every tests/ tree.
-HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct -- crates/ Cargo.toml Cargo.lock ':(exclude,glob)**/tests/**' 2>/dev/null || echo 0)"
-if [ -x "$BIN" ] && [ "${HEAD_TS:-0}" -gt 0 ]; then
-  BIN_TS="$(stat -c %Y "$BIN" 2>/dev/null || echo 0)"
-  if [ "${BIN_TS:-0}" -lt "$HEAD_TS" ]; then
+# rebuild the release binary for test files, so the seam's timestamp query
+# excludes every tests/ tree (owner report 2026-11-21).
+HEAD_TS="$(play_local_head_commit_timestamp "$REPO_ROOT")"
+if [ -x "$BIN" ]; then
+  BIN_TS="$(play_local_binary_timestamp "$BIN")"
+  if play_local_binary_is_stale "$HEAD_TS" "$BIN_TS"; then
     echo "play-local: $PROFILE binary is stale (built before checkout HEAD ${HEAD_TS})" >&2
     echo "play-local: rebuild first: cargo build --profile $PROFILE --manifest-path \"$REPO_ROOT/Cargo.toml\"" >&2
     exit 1
@@ -134,18 +134,9 @@ fi
 
 # 5. Fresh token for the account (t_o2jam_login holds the session guids;
 #    tokens expire server-side, so always read the current one).
-TOKEN=$(python3 - "$MEMORYER_DIR/O2JAM.db" "$USER_ID" <<'PY'
-import sqlite3, sys
-db = sqlite3.connect(sys.argv[1])
-uid = sys.argv[2]
-row = db.execute(
-    "select TUSER_ID from t_o2jam_login where USER_INDEX_ID=? "
-    "order by LOGIN_TIME desc limit 1", (uid,)).fetchone()
-if not row:
-    sys.exit(f"no login row for USER_INDEX_ID={uid} in {sys.argv[1]}")
-print(row[0])
-PY
-) || { echo "play-local: token lookup failed ($TOKEN)" >&2; exit 1; }
+TOKEN="$(play_local_read_session_token "$MEMORYER_DIR/O2JAM.db" "$USER_ID")" || {
+  echo "play-local: token lookup failed ($TOKEN)" >&2; exit 1;
+}
 
 # 6. Build once, then run. Sound on by default (#120); pass
 # --no-sound in EXTRA for a silent rig.
@@ -163,7 +154,7 @@ CLIENT_CMD=(
   --user-id "$USER_ID" --token "$TOKEN"
   "${EXTRA[@]}"
 )
-if [ "$RIG_RUN" -eq 1 ] || [ -n "${RIG_DISPLAY:-}" ] || [[ "${DISPLAY:-}" =~ ^:[1-9][0-9][0-9]$ ]]; then
+if play_local_needs_live_lock "$RUN_CLASS"; then
   exec bash "$REPO_ROOT/scripts/lib/rig-live-lock.sh" \
     run --owner "play-local:uid=$USER_ID pid=$$" -- \
     "${CLIENT_CMD[@]}"
