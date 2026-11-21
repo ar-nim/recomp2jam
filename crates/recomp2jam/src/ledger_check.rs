@@ -868,6 +868,46 @@ mod tests {
         );
     }
 
+    /// Story #534 of #313: the channel observer cannot see a private
+    /// Tutorial visit. The matrix is the evidence record for that verdict;
+    /// every action row's channel cell stays NA-DESIGN unless a future
+    /// qualified tap names a state frame (then the story needs `N-WIRE`).
+    #[test]
+    fn tutorial_channel_observer_rows_stay_na_design_in_the_story_matrix() {
+        let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let matrix = std::fs::read_to_string(
+            docs_root.join("captures/journey-audit/313-tutorial-story-matrix.md"),
+        )
+        .expect("tutorial story matrix");
+        let section = matrix
+            .split("## 2. Matrix")
+            .nth(1)
+            .and_then(|rest| rest.split("## 3.").next())
+            .expect("matrix section 2");
+        let cells: Vec<&str> = section
+            .lines()
+            .filter(|line| line.starts_with('|'))
+            .filter(|line| !line.contains("---"))
+            .filter_map(|line| line.split('|').nth(5))
+            .map(str::trim)
+            .skip(1) // header row
+            .collect();
+        assert!(
+            cells.len() >= 26,
+            "the 26-action channel column must be intact, got {}",
+            cells.len()
+        );
+        let claimed: Vec<&str> = cells
+            .iter()
+            .copied()
+            .filter(|cell| !cell.starts_with("NA-DESIGN"))
+            .collect();
+        assert!(
+            claimed.is_empty(),
+            "only a qualified wire tap may claim a channel cell: {claimed:#?}"
+        );
+    }
+
     #[test]
     fn parity_index_links_every_section_file() {
         let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
