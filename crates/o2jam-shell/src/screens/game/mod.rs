@@ -23,7 +23,7 @@ use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::ChatState;
-pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
+pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
@@ -969,6 +969,16 @@ fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> 
     placements.iter().find_map(|placed| {
         waiting_team_for_code(placed.code).filter(|_| rect_hit(&placed.rect, x, y))
     })
+}
+
+/// Control code of the first staged rect covering native pixel (`x`,
+/// `y`). Used only by toggle groups whose codes form a contiguous run.
+#[must_use]
+fn staged_code_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u32> {
+    placements
+        .iter()
+        .find(|placed| rect_hit(&placed.rect, x, y))
+        .map(|placed| placed.code)
 }
 /// Stage word behind one room arena value (the Playing applier's
 /// seeding rule, exe `0x4e78db`, `docs/stage-bga.md`): the low 16
@@ -3111,6 +3121,26 @@ impl ScreenGame {
         self.waiting_effect
     }
 
+    /// Waiting chat tab selected by the four staged `CHAT_*` buttons.
+    #[must_use]
+    pub const fn waiting_chat_channel(&self) -> WaitingChatChannel {
+        self.chat.waiting_channel()
+    }
+
+    /// True while the two messenger lamps show their 800 ms alert.
+    #[must_use]
+    pub fn messenger_lamp_lit_at(&self, now_ms: u64) -> bool {
+        self.chat.messenger_lamp_lit_at(now_ms)
+    }
+
+    /// Start the messenger lamp alert (named seam: the exe's alert
+    /// source lives in messenger dialogs, which the shell has no
+    /// backend for). Only the reset is wired to a staged press.
+    pub fn pulse_messenger_lamp(&mut self, now_ms: u64) -> &mut Self {
+        self.chat.pulse_messenger_lamp(now_ms);
+        self
+    }
+
     /// Commit one staged effect toggle. Only the two authored codes
     /// `0x16201020/21` reach the flag; every other code is ignored.
     fn press_waiting_effect(&mut self, code: u32) {
@@ -3975,6 +4005,22 @@ impl ScreenGame {
             return;
         };
         let placements = &art.placements;
+        // The MESSENGER press resets both lamps before it opens its
+        // sheet (`FUN_004b81e0` case `0x1620006a` calls
+        // `FUN_004c0690(0)`); the shell has no messenger sheet to open.
+        if staged_code_hit(placements, 0x1620_006A, x, y) {
+            self.chat.clear_messenger_lamp();
+            return;
+        }
+        // The four chat tabs are the exe's four-control toggle group:
+        // one active frame, history-word clear, and a draft clear on
+        // the whisper arm (`FUN_004b7c60` files `0xb7d5d`-`0xb7e29`).
+        if let Some(code) = staged_code_at(placements, x, y)
+            .filter(|code| WaitingChatChannel::from_code(*code).is_some())
+        {
+            self.chat.select_waiting_channel(code);
+            return;
+        }
         // The two effect plates are an exclusive pair: the exe writes
         // flag 0/1 and lights the pressed frame (`FUN_004b7c60` files
         // `0xb7e2e`-`0xb7e5a`, `FUN_0048c810`). Only staged rects answer.
@@ -7040,6 +7086,8 @@ impl ScreenGame {
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
             effect: self.waiting_effect,
+            chat_channel: self.waiting_chat_channel(),
+            messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -11473,6 +11521,121 @@ mod game_tests {
 
         game.ingest_snapshot(&InputSnapshot::click_at(720, 517));
         assert_eq!(game.waiting_effect(), WaitingEffect::Bottom);
+    }
+
+    fn waiting_chat_chrome_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let controls = [
+            ("IDC_BUTTON_SWAIT_CHAT_ALL", 0x1620_100E, (415, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_FRIEND", 0x1620_100F, (441, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_GUILD", 0x1620_1010, (467, 562)),
+            ("IDC_BUTTON_SWAIT_CHAT_WHISPER", 0x1620_1011, (493, 562)),
+            ("IDC_BUTTON_SWAIT_MESSENGER", 0x1620_006A, (668, 569)),
+            ("IDC_IMAGE_SWAIT_MESSENGER_ALRAM", 0x1650_006B, (700, 560)),
+            ("IDC_IMAGE_SWAIT_MESSENGER_ALRAM1", 0x1650_006C, (730, 560)),
+        ];
+        let mut placements: Vec<ScenePlacement> = controls
+            .into_iter()
+            .map(|(id, code, (x, y))| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some("Wait_ChatChrome.ojs".to_owned()),
+                rect: Rect { x, y, w: 8, h: 8 },
+            })
+            .collect();
+        // One staged cover selects the file-traced paint path.
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x1650_003D,
+            sprite: None,
+            rect: Rect {
+                x: 28,
+                y: 53,
+                w: 141,
+                h: 175,
+            },
+        });
+        let mut figure = AvatarFigure::default();
+        for word in [[0x1F, 0x00], [0x00, 0x7C]] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_ChatChrome.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    #[test]
+    fn chat_tab_clicks_switch_the_waiting_feed_and_clear_its_buffers() {
+        // Live chain: boot -> Waiting -> staged tab rect -> click ->
+        // ChatState -> paint. `FUN_004b7c60` handles the four tab codes
+        // `0x1620100E..11` through `FUN_0048c810(base, 4)`, lighting
+        // exactly the pressed control, and writes zero to dialog `+0x298`
+        // on every tab; the whisper arm also zeroes the 0x100-byte input
+        // buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+        let mut game = waiting_chat_chrome_game();
+        game.push_waiting_user_message(&chat_user("peer", "hello"));
+        game.set_chat_input("draft");
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
+        assert_eq!(game.waiting_chat().len(), 1);
+        assert_eq!(game.chat_input(), "draft");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(442, 563));
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Friend);
+        assert!(game.waiting_chat().is_empty());
+        assert_eq!(game.chat_input(), "draft");
+
+        game.set_chat_input("whisper me");
+        game.ingest_snapshot(&InputSnapshot::click_at(494, 563));
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Whisper);
+        assert_eq!(game.chat_input(), "");
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[562 * 800 + 415], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[562 * 800 + 493], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn messenger_lamp_alert_fades_and_the_messenger_button_resets_it() {
+        // `FUN_004c0690` stores its argument at dialog `+0x50c` and
+        // starts an 800 ms lamp animation on both `0x1650006B/6C` when
+        // it is non-zero and the lamp is idle (files `0xc06a0`-`0xc071a`,
+        // evidence `ev_21ff56de...`). The MESSENGER press calls it with 0
+        // (file `0xb81e0` case `0x1620006a`). No shell messenger alert
+        // backend exists, so the on-edge rides the named seam; the
+        // reset rides the live staged-button click.
+        let mut game = waiting_chat_chrome_game();
+        assert!(!game.messenger_lamp_lit_at(0));
+        game.pulse_messenger_lamp(1_000);
+        assert!(game.messenger_lamp_lit_at(1_000));
+        assert!(game.messenger_lamp_lit_at(1_799));
+        assert!(!game.messenger_lamp_lit_at(1_800));
+
+        game.set_chat_input("payload");
+        game.pulse_messenger_lamp(2_000);
+        game.ingest_snapshot(&InputSnapshot::click_at(670, 571));
+        assert!(!game.messenger_lamp_lit_at(2_001));
+        assert_eq!(game.chat_input(), "payload");
+        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
     }
 
     #[test]

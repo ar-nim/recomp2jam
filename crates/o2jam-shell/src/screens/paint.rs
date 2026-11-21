@@ -3426,8 +3426,8 @@ pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
     waiting_confirm_control_id, waiting_map_name, waiting_skillcount_text, WaitingCaptions,
-    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingSong, WAIT_BOTTOM_EFFECT_CODE,
-    WAIT_TOP_EFFECT_CODE,
+    WaitingChatChannel, WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingSong,
+    WAIT_BOTTOM_EFFECT_CODE, WAIT_TOP_EFFECT_CODE,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.

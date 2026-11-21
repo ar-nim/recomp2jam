@@ -219,6 +219,10 @@ pub struct WaitingCaptions<'a> {
     pub room_number: Option<i32>,
     /// Selected decorative effect layer (exe global `0x7789e0`).
     pub effect: WaitingEffect,
+    /// Selected Waiting chat tab (exe toggle group `0x1620100E..11`).
+    pub chat_channel: WaitingChatChannel,
+    /// Whether either authored messenger lamp shows its alert frame.
+    pub messenger_lamp_lit: bool,
     /// Local nickname from 2001, used on the self cover when the 3003
     /// slot list does not carry the guest's own member.
     pub local_name: Option<&'a str>,
@@ -282,6 +286,50 @@ const WAIT_EFFECT_IDS: [&str; 2] = [
     "IDC_BUTTON_SWAIT_TOPEFFECT",
     "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
 ];
+
+/// Waiting chat tab selected by the four `STATE_WAITING` buttons
+/// `IDC_BUTTON_SWAIT_CHAT_ALL/FRIEND/GUILD/WHISPER` (`0x1620100E..11`).
+/// `FUN_004b7c60` arms them as one four-control toggle group
+/// (`FUN_0048c810` with base `0x1620100e`, count 4) and writes zero to
+/// the dialog's `+0x298` word on every tab; the WHISPER arm also zeroes
+/// the 256-byte draft buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitingChatChannel {
+    /// Room chat (`0x1620100E`), also the Waiting setup default.
+    #[default]
+    All,
+    /// Friend chat (`0x1620100F`).
+    Friend,
+    /// Guild chat (`0x16201010`).
+    Guild,
+    /// Whisper chat (`0x16201011`); additionally clears the draft.
+    Whisper,
+}
+
+impl WaitingChatChannel {
+    /// Tab selected by one staged control code (`None` for other codes).
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0x1620_100E => Some(Self::All),
+            0x1620_100F => Some(Self::Friend),
+            0x1620_1010 => Some(Self::Guild),
+            0x1620_1011 => Some(Self::Whisper),
+            _ => None,
+        }
+    }
+
+    /// Staged control code of this tab.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::All => 0x1620_100E,
+            Self::Friend => 0x1620_100F,
+            Self::Guild => 0x1620_1010,
+            Self::Whisper => 0x1620_1011,
+        }
+    }
+}
 
 /// Difficulty and speed behind the `LEVEL` badge: the two bytes the
 /// exe's frame formula reads (`0x7789e7` difficulty, `0x7789e9`
@@ -453,6 +501,8 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || WAITING_CHANNEL_NUMBER_IDS.contains(&id)
         || WAITING_ROOM_NUMBER_IDS.contains(&id)
         || WAIT_EFFECT_IDS.contains(&id)
+        || WAIT_CHAT_TAB_IDS.contains(&id)
+        || WAIT_MESSENGER_LAMP_IDS.contains(&id)
 }
 
 /// Header class chips have no staged wire source. The p343 matched exe
@@ -1157,6 +1207,8 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_effect_toggle(frame, art, captions.effect);
+    paint_waiting_chat_tabs(frame, art, captions.chat_channel);
+    paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed(frame, speed, placements);
@@ -1385,18 +1437,58 @@ pub(crate) fn paint_waiting_team_highlight(
 /// setup repeats the same selection from global `0x7789e0`
 /// (`FUN_004ba6c0`, files `0x4ba929`-`0x4ba94b`).
 fn paint_waiting_effect_toggle(frame: &mut Frame<'_>, art: &SceneArt, effect: WaitingEffect) {
+    paint_waiting_toggle_group(frame, art, &WAIT_EFFECT_IDS, effect.code());
+}
+
+/// Chat-tab ids and messenger-lamp ids from the `STATE_WAITING` block
+/// (`ControlList` codes `0x1620100E..11` and `0x1650006B/6C`).
+const WAIT_CHAT_TAB_IDS: [&str; 4] = [
+    "IDC_BUTTON_SWAIT_CHAT_ALL",
+    "IDC_BUTTON_SWAIT_CHAT_FRIEND",
+    "IDC_BUTTON_SWAIT_CHAT_GUILD",
+    "IDC_BUTTON_SWAIT_CHAT_WHISPER",
+];
+const WAIT_MESSENGER_LAMP_IDS: [&str; 2] = [
+    "IDC_IMAGE_SWAIT_MESSENGER_ALRAM",
+    "IDC_IMAGE_SWAIT_MESSENGER_ALRAM1",
+];
+
+/// Paint one exclusive toggle group: record 1 on the selected code,
+/// record 0 on every sibling. Both the effect pair and the four chat
+/// tabs are staged through `FUN_0048c810`.
+fn paint_waiting_toggle_group(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    ids: &[&str],
+    active_code: u32,
+) {
     let shared = shared_sprite_names(&art.placements);
-    for id in WAIT_EFFECT_IDS {
-        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+    for id in ids {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == *id) else {
             continue;
         };
         let shares_body = placed
             .sprite
             .as_deref()
             .is_some_and(|sprite| shared.contains(sprite));
-        let record = usize::from(placed.code == effect.code());
+        let record = usize::from(placed.code == active_code);
         paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
     }
+}
+
+/// Paint the four chat tabs: the exe's toggle mapper lights only the
+/// selected tab (`FUN_0048c810` with base `0x1620100e`, count 4).
+fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, channel: WaitingChatChannel) {
+    paint_waiting_toggle_group(frame, art, &WAIT_CHAT_TAB_IDS, channel.code());
+}
+
+/// Paint the two messenger lamps from one alert word. The exe starts
+/// an 800 ms animation on both controls (`FUN_004c0690`, file
+/// `0xc06e5`); the shell pins the ON interval but not the individual
+/// animation frames (OPEN: one qualified messenger-alert capture).
+fn paint_waiting_messenger_lamps(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
+    let alert_code = if lit { 0x1650_006B } else { 0 };
+    paint_waiting_toggle_group(frame, art, &WAIT_MESSENGER_LAMP_IDS, alert_code);
 }
 
 /// Champion win count at the `WINNERSCORE` rect (rect 108, the Wins

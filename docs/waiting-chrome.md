@@ -36,10 +36,40 @@ qualified capture, it stays OPEN with a named next step.
   layer selects stays OPEN (next step: one matched note-effect capture
   per toggle state).
 
+## Chat tabs and messenger lamp (#770) — PINNED buttons, OPEN alert source
+
+- `FUN_004b7c60` handles the four `CHAT_ALL/FRIEND/GUILD/WHISPER`
+  buttons (`0x1620100E..11`) as one four-control group through
+  `FUN_0048c810` (base `0x1620100e`, count 4): exactly one tab lights.
+  Every arm writes zero to dialog `+0x298`, and the WHISPER arm zeroes
+  a 256-byte buffer at `+0x18c` and posts the literal at `0x647d70`
+  (instructions `0xb7d5d`-`0xb7e29`). The shell models the first two
+  words as a tab switch plus history/draft clears; the literal is a
+  presentation detail, not a wire source.
+- The two messenger lamps `0x1650006B/6C` are written together by
+  `FUN_004c0690` (evidence
+  `ev_21ff56de7431c8573df8bfc6011e0873031bd986430c5b4dce71425ea753bfe8`
+  for its callers): a non-zero argument starts an 800 ms animation on
+  each idle lamp, zero resets both to their rest frame. Its direct
+  callers are one Waiting dispatcher case — MESSENGER `0x1620006a`
+  calls it with 0 (file `0xb81e0`) — and six messenger-dialog callbacks
+  at files `0x97df0`/`0x980b0`/`0x98870`/`0x99130`/`0x99780`/`0x9a280`.
+  No live notification reaches the shell, so the ON edge is a named
+  seam; the OFF edge is wired to the staged MESSENGER press.
+- Which wire rows belong to which tab is still OPEN: no row-filter use
+  of the `+0x298` word was resolved statically. Next step: one tapped
+  tab-switch capture with two differently addressed chat rows.
+
 ## Shell rule
 
 `WaitingEffect` in `screens/paint/waiting.rs` carries the two codes,
-the default (BOTTOM), and the layer pin. `ScreenGame::press_waiting_effect`
+the default (BOTTOM), and the layer pin. `ChatState` carries the selected tab and the lamp pulse; tab codes
+come only from staged rects, and the MESSENGER press resets the lamps.
+The tab painter lights one authored record and clears the history (and
+the whisper draft) on the same click. No row is invented or hidden by
+a tab until the filter source is pinned.
+
+`ScreenGame::press_waiting_effect`
 commits only staged `0x16201020/21` rects from the live click chain;
 `paint_waiting_effect_toggle` paints record 1 on the selected control
 and record 0 on the other. No decorative layer is invented, and the
