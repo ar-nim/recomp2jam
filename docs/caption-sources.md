@@ -138,6 +138,17 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   rides the same `JoinedRoom.speed` the `SPEED_NUM` caption paints, so
   both name one local speed; a per-member speed distinct from the room
   echo is not staged yet.
+  Speed selector (#756, PINNED): `FUN_004b7c60` (file `0xb7c60`, EV
+  `ev_75d1bc10…`) handles `IDC_BUTTON_SWAIT_SPEED_LEFT/RIGHT`
+  (`0x16200064/65`): step the speed 0..=11, mirror it into the room-speed
+  byte (`0x7789e9`), and repaint this badge frame through setter VA
+  `0x42f870`; the handler sends no wire frame. `ScreenGame::step_waiting_speed`
+  mirrors the visible speed into the joined room and a staged pick, so the
+  badge and `SPEED_NUM` repaint from the same byte. Guards:
+  `speed_button_steps_the_mirrored_speed_and_repaints_the_badge`,
+  `speed_buttons_clamp_the_mirror_at_both_ends`. A captured click leg with
+  every C2S frame and a before/after badge pair stays OPEN (the ticket's
+  next step); the static pin does not assert exe local-only wire behavior.
   Two arithmetic branches stay OPEN and never paint in the shell:
   (a) an EX chart whose music-record EX level word (`+0x14`) exceeds 3
   shifts the family by `0x30` into the MX block (files

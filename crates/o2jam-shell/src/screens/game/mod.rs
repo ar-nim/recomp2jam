@@ -105,8 +105,8 @@ use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicP
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
-    Gender, JoinRoom, JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam,
-    StartGame, EQUIPMENT_SLOTS,
+    GameSpeed, Gender, JoinRoom, JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged,
+    SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -3708,6 +3708,34 @@ impl ScreenGame {
             speed: self.staged_pick_speed()?,
         })
     }
+    /// Highest speed code the Waiting selector can stage (`XR`, code
+    /// 11), the ceiling of `FUN_004b7c60` (file `0xb7c60`).
+    const WAITING_SPEED_MAX: u8 = GameSpeed::Xr as u8;
+
+    /// One Waiting speed-button press: step the visible speed within
+    /// 0..=11 and mirror it into the room-speed byte and a staged pick
+    /// (the exe's globals `0x779808` and `0x7789e9`). No `4000` send:
+    /// the selector handler only stages art (EV `ev_75d1bc10…`).
+    fn step_waiting_speed(&mut self, delta: i8) {
+        let current = self
+            .selected_music
+            .map(|pick| pick.speed)
+            .or_else(|| self.waiting.as_ref().map(|room| room.speed));
+        let Some(current) = current else {
+            return;
+        };
+        let next = current
+            .min(Self::WAITING_SPEED_MAX)
+            .saturating_add_signed(delta)
+            .min(Self::WAITING_SPEED_MAX);
+        if let Some(room) = self.waiting.as_mut() {
+            room.speed = next;
+        }
+        if let Some(pick) = self.selected_music.as_mut() {
+            pick.speed = next;
+        }
+    }
+
     /// Speed surviving a dialog pick: the staged selection's speed
     /// first, else the joined room's. `None` with no source.
     fn staged_pick_speed(&self) -> Option<u8> {
@@ -3962,6 +3990,21 @@ impl ScreenGame {
         // the 4004+4008 send pair through `select_team`.
         if let Some(team) = waiting_team_at(placements, x, y) {
             self.select_team(team);
+            return;
+        }
+        // Speed selector: the two staged `SWAIT_SPEED` buttons step
+        // and mirror the speed without sending 4000 (#756,
+        // `FUN_004b7c60`). Both captions and the LEVEL badge read the
+        // mirrored bytes on the next paint.
+        let speed_step = if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_SPEED_LEFT", x, y) {
+            Some(-1)
+        } else if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_SPEED_RIGHT", x, y) {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(delta) = speed_step {
+            self.step_waiting_speed(delta);
             return;
         }
         // Song-select open trigger: the room master's MUSELECT button
@@ -12214,6 +12257,126 @@ mod game_tests {
             level_badge_ink(&game, &frame),
             Vec::<u32>::new(),
             "a room with no song paints no badge"
+        );
+    }
+
+    /// Waiting game with the bound `LEVEL` badge and the two staged
+    /// speed buttons (`STATE_WAITING` lines 735-736): the speed-click
+    /// stage for #756.
+    fn speed_button_game(pick: Option<SetRoomMusic>) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 757;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        if let Some(pick) = pick {
+            game.set_selected_music(pick);
+        }
+        let (mut placements, figures) = level_badge_scene();
+        placements.extend([
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_SPEED_LEFT".to_owned(),
+                code: 0x1620_0064,
+                sprite: None,
+                rect: Rect {
+                    x: 647,
+                    y: 378,
+                    w: 33,
+                    h: 36,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_SPEED_RIGHT".to_owned(),
+                code: 0x1620_0065,
+                sprite: None,
+                rect: Rect {
+                    x: 736,
+                    y: 378,
+                    w: 33,
+                    h: 36,
+                },
+            },
+        ]);
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn speed_button_steps_the_mirrored_speed_and_repaints_the_badge() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::ingest_snapshot -> apply_pointer_down ->
+        //   click_dispatch -> click_waiting -> click_waiting_button ->
+        //   (new) step_waiting_speed -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #756, FUN_004b7c60: the RIGHT button increments the
+        // speed (0..11), mirrors it into the room's speed byte, and the
+        // LEVEL badge repaints its `12*difficulty + speed` frame.
+        let mut game = speed_button_game(Some(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 3,
+        }));
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            game.room_music_selection().unwrap().speed,
+            4,
+            "the room-speed byte mirrors the selected speed"
+        );
+        assert_eq!(
+            game.waiting_level().unwrap().speed,
+            4,
+            "the staged pick mirrors the selected speed"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "the speed handler stages art without sending 4000"
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(16)],
+            "the badge repaints the frame for difficulty 1, speed 4"
+        );
+    }
+
+    #[test]
+    fn speed_buttons_clamp_the_mirror_at_both_ends() {
+        // Same live chain as `speed_button_steps_the_mirrored_speed...`;
+        // FUN_004b7c60 floors the decrement at 0 and ceilings the
+        // increment at 11, so no out-of-range cell is ever staged.
+        let mut low = speed_button_game(None);
+        low.waiting.as_mut().unwrap().speed = 1;
+        low.ingest_snapshot(&InputSnapshot::click_at(663, 396));
+        assert_eq!(
+            low.room_music_selection().unwrap().speed,
+            0,
+            "LEFT steps down to speed 0"
+        );
+        low.ingest_snapshot(&InputSnapshot::click_at(663, 396));
+        assert_eq!(
+            low.room_music_selection().unwrap().speed,
+            0,
+            "LEFT at the floor stays at speed 0"
+        );
+
+        let mut high = speed_button_game(None);
+        high.waiting.as_mut().unwrap().speed = 10;
+        high.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            high.room_music_selection().unwrap().speed,
+            11,
+            "RIGHT steps up to speed 11"
+        );
+        high.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            high.room_music_selection().unwrap().speed,
+            11,
+            "RIGHT at the ceiling stays at speed 11"
         );
     }
 
