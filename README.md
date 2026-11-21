@@ -113,6 +113,8 @@ See [`docs/architecture.md`](docs/architecture.md) for the crate map and
 ```sh
 bash scripts/worktree-setup.sh     # claim a data slot + symlink install-root/
 bash scripts/gate-check.sh         # fmt + clippy + tests (both data arms) + push
+bash scripts/gate-check.sh --arm quick   # CI's fast arm
+bash scripts/gate-check.sh --arm hidden  # CI's no-data arm
 cargo run -p recomp2jam -- --help  # client CLI (headless walks, shots, windowed)
 scripts/play-local.sh              # windowed client against local Memoryer
 ```

@@ -1,0 +1,16 @@
+# Per-merge sample of the shipped 7.55 chart pack (issue #737).
+# Hash-pinned subset of the full-pack sweep: Tutorial is the old-format
+# chart with BGM bit-26 hits; the rest span new-format chart ids.
+# Names and SHA-256 values only — no copyrighted game data is committed.
+Tutorial.ojn bfabcb9a99e444758b84b25bd4ea837c9440ab122aef557706f6259f477b3316
+o2ma100.ojn 8ad2cee3301480db1aabfa2e315f47821ce3775ba3a59c4cdfcf698c2d537da9
+o2ma102.ojn cd293a792ee2292d5ce7c435673011c9a93d1d8917065e41b9d0ce84ca6a74a2
+o2ma110.ojn c56fbfdfc547d2500617106e1bb377e7ca15e1bf10dfdaca504c018956bf7da6
+o2ma120.ojn d705934044c9d5cc60b35d8e43f9642f2667dbdb9aad52f938282233a1c1557c
+o2ma200.ojn dc66c8a61b22cc3c138c89d715cfd52654f765645254c76dc6759bc6c03cbfbb
+o2ma300.ojn b167173d234517638ddc4286db1806add964f16d5441311c8222afa598477388
+o2ma350.ojn 4561c2f10c48a43a08c602313122e169107a404c45ca006b9fa0b61192b624c6
+o2ma450.ojn 49abac891b0a5c7c96feb067c72a1bca2e52cb9954b71ad172c2c2003a6b3802
+o2ma800.ojn 24dd63f43d840fa78616ce6a0f3ba107db5bf31302822b6747e8a2a5575a7ee6
+o2ma876.ojn e1c4df850fc254f07a2199b97d76f2c2415d2538c299edc7b44131fae73f2753
+o2ma887.ojn e76a097229da16781faaf9722f8ee568b4170d7bfd5d9ac998813d2d52d8d837

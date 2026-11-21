@@ -496,6 +496,22 @@ target; use the recorded PIDs, never a pattern, for rig processes.
   `--frame-dump`; audio from the run's virtual sink through the monitor
   tap described below (`<out-dir>/audio/`, #279).
 
+## Real-window input proof (#738)
+
+The real X11 click proof is a rig-lane run, not a per-merge test:
+
+```bash
+bash scripts/rig-x11-click-proof.sh --timeout 120
+bash scripts/rig-x11-click-proof.sh --dry-run   # plan only, no rig access
+```
+
+The script checks `install-root` and the shared Memoryer (`rig-preflight.sh`),
+then holds the live-lane flock (`rig-live-lock.sh`, owner `x11-click-proof`)
+around `cargo test -p input-drive x11_arm_routes_click_through_real_game`.
+The merge-gate suite excludes that test; no gate verdict depends on a
+display or a server. The test itself still skips cleanly when Xvfb or game
+data is absent. Its `--no-sound` fence keeps all audio on null sinks.
+
 ## Boot-failure taxonomy (retro #490)
 
 One live lane at a time is now enforced, not volunteered: every client

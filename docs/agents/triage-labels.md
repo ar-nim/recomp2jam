@@ -114,15 +114,23 @@ state or one cross-cutting domain. Rules:
 
 ## Gate tiers (owner 2026-11-20)
 
-`scripts/gate-check.sh` is tiered so the expensive suite runs where it
-catches things, not everywhere:
+`scripts/gate-check.sh` is the single check script: CI calls `--arm quick`
+and `--arm hidden`; the merge gate calls `--arm full` (the default). It
+owns fmt, clippy, both test arms, build, and push policy; no caller repeats
+its command list (issue #741). The expensive suite runs where it catches
+things, not everywhere:
 
 - **Per ticket (lanes):** `gate-check.sh --no-push --quick [-- <crates>]` —
   fmt + clippy + the affected crates' tests. Seconds, run after every commit.
 - **Per merge (senior):** full mode (default) — the whole workspace suite,
   present arm, plus the hidden install-root arm. This is the tier that
   catches semantic-merge breaks and missing hidden-arm skips; it is
-  mandatory before every push.
+  mandatory before every push. The 515-chart sweeps are excluded from the
+  suite; a hash-pinned dozen-chart sample is checked every merge, and the
+  full pack sweep runs when `.gate-full-sweep-stamp` is absent or older
+  than seven days (issue #737; no scheduler). The real-window X11 proof
+  is excluded too; run it from the rig lane with
+  `scripts/rig-x11-click-proof.sh` (issue #738).
 - **Hidden arm on demand:** `--hidden` when a diff touches data-dependent
   guards but the run is not a merge; the hidden arm also runs nightly.
 

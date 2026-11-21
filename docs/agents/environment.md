@@ -38,6 +38,17 @@ touch. Lessons are pruned for staleness, never for merely duplicating a doc.
   because the slots share one data dir. Only one agent runs the hidden arm
   at a time; seniors re-run before believing a single failure
   (`docs/agents/delegation.md`, parallel-lane section).
+
+## Gate data root (issue #736)
+
+`scripts/lib/data-root.sh` is the one runtime contract for data-dependent
+arms. `O2JAM_INSTALL_ROOT` names the archive root; without it the fallback
+is this checkout's `install-root`. `scripts/gate-check.sh` exports the
+variable for every test arm and asserts, before the hidden arm, that both
+the named root and the fallback are unreachable. A binary built in another
+worktree cannot make a hidden arm pass with borrowed data. The probe seam
+tests live in `scripts/tests/test_gate_data_root.py`. A dangling
+`install-root` symlink is a valid no-data state, not a gate failure.
 - Every git commit uses the owner identity Arif Rahman Ibrahim. Never
   override `git user.name/email` or pass `-c user.name` — including when a
   subagent commits.
