@@ -1991,6 +1991,38 @@ impl OnlineSession {
         self.begin_song_select(choice);
     }
 
+    /// Drain one queued Waiting team toggle: the shell's team button
+    /// stages `SetRoomTeam` 4004 followed by `Ready` 4008 (CP33 wire:
+    /// `C2S 4004 team=0` then `C2S 4008 ready`), and this bridge sends
+    /// them in that order on the next wire poll. A failed 4004 keeps the
+    /// pair staged for the next poll; a failed 4008 leaves readiness to
+    /// the guest's next Confirm, which owns the toggle retry.
+    fn flush_team_send(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            return;
+        }
+        let Some(team) = self.game.take_room_team() else {
+            return;
+        };
+        let Some(ready) = self.game.take_team_ready() else {
+            return;
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::SetRoomTeam.id(), &team.encode_body())
+        {
+            tracing::warn!(%source, "team send failed; the pair is requeued");
+            self.game.select_team(team.team);
+            return;
+        }
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::Ready.id(), &ready.encode_body())
+        {
+            tracing::warn!(%source, "team-ready send failed; Confirm retries readiness");
+        }
+    }
+
     /// Drain one queued song pick (ticket #232): once the select-music
     /// dialog has closed, convert the shell's `pending_music_send`
     /// into a `SongChoice` (arena from the joined room) and hand it to
@@ -3521,6 +3553,17 @@ impl OnlineSession {
         };
         self.ready_echoes[usize::from(echo.member_id)] = Some(echo.ready);
         self.game.set_member_ready(echo.member_id, echo.ready);
+        if let Some(room) = self.joined_room.as_mut() {
+            if let Some(slot) = room
+                .slots
+                .iter_mut()
+                .find(|slot| slot.index == echo.member_id)
+            {
+                if let Some(member) = slot.member.as_mut() {
+                    member.ready = echo.ready;
+                }
+            }
+        }
     }
 
     /// Fold one 3004 join broadcast into the staged seats. Memoryer
@@ -3556,6 +3599,11 @@ impl OnlineSession {
         self.game.promote_waiting_master(left.new_master_id);
         if let Some(room) = self.joined_room.as_mut() {
             room.clear_member(left.member_id);
+            for slot in &mut room.slots {
+                if let Some(member) = slot.member.as_mut() {
+                    member.master = slot.index == left.new_master_id;
+                }
+            }
         }
     }
 
@@ -3858,6 +3906,7 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.replay_deferred_frames();
         self.flush_waiting_exit();
+        self.flush_team_send();
         self.flush_channel_logout();
         self.flush_exit_shop();
         self.poll_attempts();
@@ -10273,6 +10322,87 @@ pub(super) mod session_tests {
         );
     }
 
+    /// #556 two-client wire leg (CP33): the peer's READY click sends
+    /// 4004/4008, the server echoes 4009 to the master, and only that
+    /// echo opens the master's gate. Pin:
+    /// `~/scratch/close-wr/wire-only/peer.log` CP33 `C2S 4004` +
+    /// `C2S 4008` -> `S2C 4009 len=2 hex=0101`. Live caller chain:
+    /// `OnlineSession::menu_key` (guest Confirm) -> `confirm_guest_ready`
+    /// -> `Ready` 4008 -> `OnlineSession::paint` (master) ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` -> `apply_ready_echo`
+    /// -> `ScreenGame::set_member_ready` -> `start_gate_verdict` ->
+    /// `confirm_master_start` -> `StartGame` 4010. The channel-readable
+    /// 2009/2003 half stays OPEN per #291.
+    #[test]
+    fn peer_ready_click_echo_opens_the_master_gate_and_mirror() {
+        let (ready_sent, ready_received) = mpsc::channel();
+        let mut master_room = room_with_peer("tester2");
+        let peer_seat = master_room.slots[1].member.as_mut().expect("seated peer");
+        peer_seat.ready = false;
+        peer_seat.team = 1;
+        let (mut master, master_server) = joined_waiting_session(master_room, move |mut stream| {
+            ready_received
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the peer never sent READY");
+            stream.write_all(&encode_frame(4009, &[1, 1])).unwrap();
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, Request::StartGame.id());
+            assert!(start.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        assert_eq!(
+            master.game.start_gate_verdict(),
+            StartGateVerdict::PeerNotReady,
+            "the gate stays closed before the echo"
+        );
+
+        let (mut peer, peer_server) =
+            joined_waiting_session(guest_snapshot(), move |mut stream| {
+                let team = read_frame(&mut stream);
+                assert_eq!(team.id, Request::SetRoomTeam.id());
+                assert_eq!(team.payload, vec![1]);
+                let ready = read_frame(&mut stream);
+                assert_eq!(ready.id, Request::Ready.id());
+                assert!(ready.payload.is_empty());
+                ready_sent.send(()).unwrap();
+                assert_quiet(&mut stream);
+            });
+        // The pinned pair is queued by the guest's team toggle, which
+        // is the 4004/4008 order in the CP33 wire log. The session must
+        // drain that queue on the next paint; the shell alone only stages it.
+        peer.game.select_team(1);
+        paint_frame(&mut peer);
+        assert_eq!(peer.game.screen(), Screen::Waiting);
+
+        paint_until(&mut master, |session| {
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.ready)
+        });
+        peer_server.join().unwrap();
+        assert_eq!(
+            master.member_ready(1),
+            Some(true),
+            "the echo reaches the master's ready mirror"
+        );
+        assert_eq!(
+            master
+                .joined_room
+                .as_ref()
+                .and_then(|room| room.slots[1].member.as_ref())
+                .map(|member| member.ready),
+            Some(true),
+            "the joined-room readout follows the echo too"
+        );
+        assert_eq!(
+            master.game.start_gate_verdict(),
+            StartGateVerdict::Startable
+        );
+        master.menu_key(MenuKey::Confirm, true);
+        master_server.join().unwrap();
+    }
+
     #[test]
     fn master_chat_send_lands_as_a_waiting_row_from_the_3012_echo() {
         // Ticket #567 live chain (docs/live-path-reachability.md):
@@ -10770,6 +10900,40 @@ pub(super) mod session_tests {
         );
     }
 
+    /// #576 CP37 wire half: the 3007 handoff moves the master flag in
+    /// the session's joined-room readout as well as the staged seat.
+    /// Without the mirror write, a later re-stage from that snapshot
+    /// (`note_arena_selected` after a 4003) would put the departed
+    /// master back and drop the promoted seat's role.
+    ///
+    /// Live chain: `OnlineSession::paint` (Waiting) ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` -> `apply_user_left`
+    /// -> `JoinedRoom::clear_member` / promoted-seat master flag ->
+    /// `ScreenGame::promote_waiting_master`. CP38's final 2007 branch
+    /// is pinned by `evidence_room_3007_keeps_the_row_and_2007_removes_it`.
+    #[test]
+    fn leave_handoff_updates_the_joined_room_master_readout() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream
+                .write_all(&encode_frame(3007, &hex_bytes("0001000000000000")))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.staged_waiting_member(0).is_none() && session.game.is_room_master()
+        });
+        server.join().unwrap();
+
+        let room = session.joined_room.as_ref().expect("joined room");
+        assert!(room.slots[0].member.is_none(), "departed seat cleared");
+        assert_eq!(room.user_count, 1, "headcount follows the seat");
+        assert_eq!(
+            room.slots[1].member.as_ref().map(|member| member.master),
+            Some(true),
+            "the announced seat is master in the readout too"
+        );
+    }
+
     /// #606 arm-2 wire with the #733 rejoin in front of it: the peer
     /// leaves (3005), rejoins the same row (3002/3003), and only then
     /// sees the master's leave promoted as 3007 — never a 2007
@@ -11091,6 +11255,60 @@ pub(super) mod session_tests {
             session.game.start_gate_verdict(),
             StartGateVerdict::MusicDownloading,
             "the exe's -4 verdict keeps START closed"
+        );
+    }
+
+    /// #559 guardable remainder: the 4037 Ready arm must clear the
+    /// seat's 4039 percentage as it clears the DOWNLOADING badge, so
+    /// the readouts and the START verdict agree. The equal-07E8-slice
+    /// exe/Rust A/B is still a separate capture task (docs/parity/
+    /// waiting.md).
+    ///
+    /// Live chain: `OnlineSession::paint` -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_download_progress` (4039) /
+    /// `apply_member_music_state` (4037) ->
+    /// `ScreenGame::set_member_music_state` -> `start_gate_verdict`.
+    #[test]
+    fn ready_state_clears_the_seats_download_progress_and_opens_start() {
+        use o2jam_net::SyncMemberMusicStateEvent;
+        let mut room = joined_snapshot();
+        room.music_id = 757;
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        let ready = SyncMemberMusicStateEvent {
+            member_id: 1,
+            state: MusicState::Ready,
+        };
+        let progress = DownloadProgressChanged {
+            percentage: 42,
+            member_id: 1,
+        };
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&progress.encode()).unwrap();
+            stream.write_all(&ready.encode()).unwrap();
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, Request::StartGame.id());
+            assert_quiet(&mut stream);
+        });
+        session
+            .game
+            .set_member_music_state(1, MusicState::Downloading.code());
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::MusicDownloading
+        );
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.member_music_state(1) == Some(MusicState::Ready.code())
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.member_download_progress(1),
+            None,
+            "the ready arm clears the seat's 4039 percentage with the badge"
+        );
+        assert_eq!(
+            session.game.start_gate_verdict(),
+            StartGateVerdict::Startable
         );
     }
 

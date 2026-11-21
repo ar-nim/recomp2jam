@@ -351,8 +351,9 @@ source the engine stays idle.
   the pinned notice arms otherwise), kicks the room song's download when
   the 4035 answer marks our own state non-Ready, retries `4010` from the
   4035/4037 ready arms, and keeps Waiting when a 4011 arrives with a
-  non-zero result. 4039 decodes and traces only — the percentage has no
-  staged seat field until the download bar lands (OPEN).
+  non-zero result. 4039 stages its percentage in the seat's progress
+  mirror and the 4037 Ready arm clears it with the badge; the bar's
+  frame/fill mapping stays OPEN, so no synthetic fill is painted.
   `configure_music_source` points the engine at the optional
   `O2JAM_MUSIC_SOURCE` local mirror (our adapter, not an exe setting;
   the WinInet FTP client stays OPEN). Each Waiting paint runs

@@ -54,13 +54,13 @@ use super::paint::{
     paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
     paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
     paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
+    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
     paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
     room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
     BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
     ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WaitingChatMessage, WaitingConfirmState, WaitingLevel, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -7247,12 +7247,15 @@ impl ScreenGame {
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
-                paint_waiting_scene(
+                paint_waiting_scene_with_confirm(
                     frame,
                     room,
                     art,
                     &captions,
-                    self.waiting_confirm_armed(),
+                    WaitingConfirmState::new(
+                        self.announced_room_master_id.unwrap_or(0),
+                        self.waiting_confirm_armed(),
+                    ),
                     self.has_staged_waiting_figure(),
                     self.waiting_member_role,
                 );
@@ -9752,6 +9755,138 @@ mod game_tests {
             0,
         );
         buf[10 * 800 + 10]
+    }
+
+    /// Solo room whose only seat is not 0, announced as master by a
+    /// 3007 handoff. Both role-owned controls carry three synthetic
+    /// records (rest red, hover green, armed blue) at distinct rects.
+    fn waiting_solo_promoted_master_game() -> ScreenGame {
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::Rgb555Image;
+        let record = |word: [u8; 2]| {
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let mut body = record([0x00, 0x7C]);
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0xE0, 0x03], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x00], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let mut room = waiting_room();
+        room.member_id = 1;
+        room.team = 1;
+        room.user_count = 1;
+        let mut local = room.slots[0].member.clone().expect("staged member");
+        local.master = true;
+        room.slots = vec![RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(local),
+        }];
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        game.promote_waiting_master(1);
+        walk_to_waiting(&mut game);
+        let placement = |id: &str, sprite: &str, x: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect {
+                x,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        };
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                placement("IDC_BUTTON_SWAIT_START", "Wait_Start.ojs", 10),
+                placement("IDC_BUTTON_SWAIT_READY", "Wait_Ready.ojs", 20),
+            ],
+            HashMap::from([
+                ("Wait_Start.ojs".to_owned(), body.clone()),
+                ("Wait_Ready.ojs".to_owned(), body),
+            ]),
+        );
+        game
+    }
+
+    /// Ticket #561: a solo master's START face must follow the same
+    /// role the session uses for the START send. The exe's `+0x30` role
+    /// flag (files `0xae38e`/`0xae805`) picks the control, not the seat
+    /// index: a room handed over to seat 1 still enables START.
+    ///
+    /// Live chain: `main.rs::run_play` -> `OnlineSession::paint` (3007
+    /// promotion) -> `ScreenGame::promote_waiting_master` ->
+    /// `ScreenGame::paint` -> `paint_waiting_scene_with_master_seat` ->
+    /// `paint_waiting_confirm_face`. Seam: the synthetic three-record
+    /// art is the whole face contract; archives absent -> N/A.
+    #[test]
+    fn solo_promoted_master_paints_the_start_face_not_the_guest_ready_face() {
+        let mut game = waiting_solo_promoted_master_game();
+        assert!(game.is_room_master());
+        assert_eq!(game.start_gate_verdict(), StartGateVerdict::Startable);
+        assert_eq!(game.press_start(), StartRequest::StartGame);
+        assert!(game.waiting_confirm_armed());
+
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[10 * 800 + 10],
+            pack_xrgb(0, 0, 255),
+            "the promoted solo master paints the armed START record"
+        );
+        assert_eq!(
+            frame[10 * 800 + 20],
+            0,
+            "the guest READY control stays out of the master's face"
+        );
+    }
+
+    /// Ticket #561: the -1/-2/-3/-4/-5 verdict arms (VA `0x4b5560`)
+    /// all read an occupied *peer* seat. A solo room has none, so its
+    /// own unready byte, missing chart byte, or lone team cannot close
+    /// START; the server's 4011 answer owns the local-song refusal.
+    ///
+    /// Live chain: `main.rs::run_play` -> `OnlineSession::menu_key`
+    /// (Waiting Confirm) -> `confirm_master_start` ->
+    /// `ScreenGame::press_start` -> `start_gate_verdict`.
+    /// Seam suffices: the verdict is a pure function of the staged
+    /// room; the paint face is pinned by the guard above.
+    #[test]
+    fn solo_master_gate_has_no_peer_only_verdict_arm() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        for state in [
+            o2jam_net::MusicState::NoMusic.code(),
+            o2jam_net::MusicState::NoAccess.code(),
+            o2jam_net::MusicState::Downloading.code(),
+        ] {
+            let room = game.waiting.as_mut().expect("joined room");
+            room.team = 1;
+            let seat = room.slots[0].member.as_mut().expect("solo seat");
+            seat.ready = false;
+            seat.music_state = state;
+            assert_eq!(game.start_gate_verdict(), StartGateVerdict::Startable);
+            assert_eq!(game.press_start(), StartRequest::StartGame);
+            assert!(game.waiting_confirm_armed());
+        }
     }
 
     #[test]

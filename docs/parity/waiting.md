@@ -221,3 +221,101 @@ Guards in `session.rs`:
 RED proofs: removing the `4009` arm in `apply_waiting_frame` makes the
 ready guard time out; removing the `3012` arm makes the chat guard time
 out; restoring both passes. No install-root read (synthetic gateway).
+
+## #556 peer READY pair on the wire and the master's readout (2026-11-21)
+
+CP33 (`~/scratch/close-wr/wire-only/peer.log` 15:51:32) sends peer
+`C2S 4004 team=0` then `C2S 4008 ready`, followed by `S2C 4009
+len=2 hex=0101` on the master (CP33 `master.log`, same instant). The
+shell staged the 4004/4008 pair on a team press but no session caller
+drained that outbox, so the pair never reached the gateway. The next
+wire poll now sends it, and the 4009 echo updates the staged seat, the
+session ready mirror, and the joined-room readout before the master's
+START gate runs.
+
+Guard `peer_ready_click_echo_opens_the_master_gate_and_mirror` — live
+chain: `OnlineSession::paint` → `poll_wire` → `flush_team_send` →
+`SetRoomTeam` 4004 + `Ready` 4008 (peer) → `drain_waiting_chat` →
+`apply_ready_echo` → `ScreenGame::set_member_ready` /
+`joined_room` mirror → `start_gate_verdict` → `confirm_master_start`
+→ `StartGame` 4010. The channel-readable 2009/2003 half stays OPEN
+with the next step named in #291.
+
+RED proofs: without `flush_team_send`, the guard's peer gateway never
+reads 4004 and the master times out waiting for the echo; without the
+mirror write, the guard fails on the joined-room readout assertion.
+Restoring both passes. Synthetic gateway; hidden install-root is N/A.
+
+## #561 solo START face and solo verdict arms (2026-11-21)
+
+The SOLO-IDLE cell pins a solo master's START face at (680,143)
+(`~/scratch/solo-playing/s1-master-ui/waiting-master.png`,
+`85decf32…`, manifest `4bd221b8…`). The avatar's bare-arm half is
+already pinned by #375 (`face_only_wire_kit_stages_the_default_bare_arms`
+and the waiting-seat pixel guard, commit `8de4d28`). The remaining face
+gap was the role source: the painter used the local seat id, while the
+session's START send uses the announced master id. A solo room handed
+over to seat 1 painted READY and sent START. The painter now takes the
+announced seat from `ScreenGame`.
+
+Guards:
+`solo_promoted_master_paints_the_start_face_not_the_guest_ready_face` —
+live chain: `OnlineSession::paint` (3007 promotion) →
+`ScreenGame::promote_waiting_master` → `ScreenGame::paint` →
+`paint_waiting_scene_with_confirm` → `paint_waiting_confirm_face`.
+`solo_master_gate_has_no_peer_only_verdict_arm` — live chain:
+`OnlineSession::menu_key` (Waiting Confirm) → `confirm_master_start` →
+`ScreenGame::press_start` → `start_gate_verdict` (the -1/-2/-3/-4/-5
+arms all read an occupied peer; a solo room has none).
+
+RED proofs: forcing the painter's master seat to 0 fails the face guard
+on the armed START record; counting the local seat as a peer fails the
+verdict guard on the first NoMusic scenario. Restoring both passes.
+Synthetic three-record art and gateway; hidden install-root is N/A.
+
+## #576 member removal, promotion, and final disband (2026-11-21)
+
+Wire pins CP35/CP37/CP38 in
+`~/scratch/close-wr/wire-only/{master,peer,observer}.log`: peer exit
+`3007 body=0100000000000000` keeps the row; master exit with a resident
+peer `3007 body=0001000000000000` promotes seat 1 without 2007; last
+exit `2007 body=00000000` removes it. The CP35/CP38 branch is pinned by
+`evidence_room_3007_keeps_the_row_and_2007_removes_it`; the CP37 seat
+and role swap by `master_leave_promotes_the_resident_peer_to_room_master`
+plus the new readout guard. The session's joined-room mirror cleared the
+departed seat but left the old master flag on it, so a later re-stage
+from that snapshot (a 4003 arena echo) restored the departed master.
+The 3007 arm now moves the master flag in the mirror too.
+
+Guard `leave_handoff_updates_the_joined_room_master_readout` — live
+chain: `OnlineSession::paint` (Waiting) → `poll_waiting_chat` →
+`drain_waiting_chat` → `apply_user_left` → `JoinedRoom::clear_member`
+and the promoted-seat master flag → `ScreenGame::promote_waiting_master`.
+RED proof: removing the mirror's promotion loop leaves the seat clear
+but fails on the promoted member's master flag; restoring passes.
+Synthetic gateway; hidden install-root is N/A.
+
+## #559 DOWNLOAD badges — guardable arm landed, A/B still BLOCKED (2026-11-21)
+
+Wire pins in `docs/music-availability.md` §2 and the #291 DOWNLOAD
+cell: matched-ab-339 `4037 0004` proof `0580bc8d…`, p343 proof
+`20fbe170…`, plus 4026/4037/3009 and 4039. The staged seat badge and
+bar are guarded by `downloading_state_and_progress_from_the_gateway_stage_the_seat`
+and `start_stays_closed_while_a_peer_reports_downloading` (commit
+`16c2b9a`). The remaining guardable readouts are now pinned by
+`ready_state_clears_the_seats_download_progress_and_opens_start`: 4039
+progress must clear when the same seat's 4037 reports Ready, so the
+badge mirror and the START verdict do not disagree. RED proof: removing
+the clear in `ScreenGame::set_member_music_state` leaves the stale 42 %
+on the ready seat and the guard fails; restoring passes.
+
+BLOCKED: the player-visible A/B claim still needs one qualified
+two-client capture — exe 7.55 (sha256 `83a04541…72c823b`) and Rust
+frames of the *same* Waiting room with the *same* 07E8 badge slice lit
+by a 4037 `0004` on the same peer seat, before either client's START
+verdict, with the matched `~/scratch/p559-badge-ab/{exe,rust}/`
+manifest plus a gateway tap showing 4037/4039. The existing matched
+packs (`0580bc8d…`, `20fbe170…`) pin the wire and the badge art, but
+do not carry equal 07E8 slices in a verdict window. Until that pair
+exists, no pixel-equality claim is made and the #291 story row stays
+unchecked.
