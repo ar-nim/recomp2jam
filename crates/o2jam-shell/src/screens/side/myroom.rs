@@ -601,13 +601,20 @@ impl MyRoomState {
         }
     }
 
-    /// Turn the gift page one step, clamped like the bag pager.
-    /// Turning clears the gift cursor.
+    /// Turn the gift page: LEFT wraps from the first page to the last,
+    /// RIGHT clamps at the last (the gift pager differs from the bag
+    /// pager here — `FUN_004a3ee0` cases `0x15200048/49`, file `0xa3ee0`,
+    /// EV `ev_aa875251…`). Turning clears the gift cursor. A one-page
+    /// box never moves.
     pub fn turn_gift_page(&mut self, step: MyRoomStep, pages: usize) {
         let last = pages.saturating_sub(1);
         match step {
             MyRoomStep::Previous => {
-                self.gift_page = self.gift_page.saturating_sub(1);
+                self.gift_page = if self.gift_page == 0 {
+                    last
+                } else {
+                    self.gift_page - 1
+                };
             }
             MyRoomStep::Next => {
                 self.gift_page = self.gift_page.saturating_add(1).min(last);

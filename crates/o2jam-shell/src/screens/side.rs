@@ -6804,6 +6804,28 @@ mod side_tests {
     }
 
     #[test]
+    fn myroom_gift_pager_wraps_left_clamps_right_and_clears_selection() {
+        // Live caller chain: click_myroom_side -> myroom_action_at
+        // (GIFT_LEFT/RIGHT) -> apply_myroom_action -> MyRoomState::
+        // turn_gift_page -> painter + gift captions. Static pin:
+        // FUN_004a3ee0 cases 0x15200048/49 (file 0xa3ee0,
+        // EV ev_aa875251…); page count = gift-vector length / 5
+        // rounded up by FUN_004a8dc0.
+        let mut state = MyRoomState::new();
+        state.pick_gift_cell(Some(2));
+        state.turn_gift_page(MyRoomStep::Previous, 3);
+        assert_eq!(state.gift_page(), 2, "LEFT wraps to the last page");
+        assert_eq!(state.gift_cell(), None, "turning clears the selection");
+
+        state.turn_gift_page(MyRoomStep::Next, 3);
+        assert_eq!(state.gift_page(), 2, "RIGHT clamps at the last page");
+        state.turn_gift_page(MyRoomStep::Next, 1);
+        assert_eq!(state.gift_page(), 0, "a one-page box does not move");
+        state.turn_gift_page(MyRoomStep::Previous, 1);
+        assert_eq!(state.gift_page(), 0, "a one-page box does not wrap");
+    }
+
+    #[test]
     fn myroom_identity_captions_carry_character_fields() {
         // Cash wallets moved to the single wallet (#202): identity
         // carries nickname/level/exp/penalties only, money paints

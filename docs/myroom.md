@@ -214,6 +214,19 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## Gift pager wrap/clamp (ticket #806, 2026-11-22)
+
+`FUN_004a3ee0` cases `0x15200048/49` (file `0xa3ee0`,
+EV `ev_aa8752511eb19d9d34701592a529586e5808751c2b8169e2b5009cdeb3b66c20`)
+read the dialog's page/count words at `+0xac/+0xb0`: LEFT wraps from page
+0 to the last page, RIGHT clamps at the last page, and both clear the
+gift selection. `FUN_004a8dc0` derives the count as gift-vector length / 5
+rounded up. The bag pager still clamps both ends — the two pagers differ.
+Guards: `myroom_gift_pager_wraps_left_clamps_right_and_clears_selection`
+and `myroom_gift_left_click_wraps_to_the_last_staged_page` (staged rects,
+6 gifts → 2 pages). No exe account with >5 gifts was captured; that live
+pixel leg stays OPEN.
+
 ## WEBAVATAR outcome (ticket #804, 2026-11-22)
 
 `FUN_004a3eb0` (VA `0x4a3eb0`, file `0xa3eb0`,

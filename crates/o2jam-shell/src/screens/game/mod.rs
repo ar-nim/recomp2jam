@@ -16335,6 +16335,42 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_gift_left_click_wraps_to_the_last_staged_page() {
+        // Live caller chain: boot -> Waiting -> MyRoom side -> staged
+        // GIFT_LEFT rect -> click_myroom_side -> apply_myroom_action ->
+        // MyRoomState::turn_gift_page -> painter shows last-page rows.
+        // Page count comes from 6 gifts / 5 cells rounded up (= 2).
+        use super::super::side::{MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE};
+        use o2jam_net::GiftItemInfo;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        let mut character = myroom_test_character(Vec::new());
+        for gift_id in 1..=6 {
+            character.item_gifts.push(GiftItemInfo {
+                gift_id,
+                item_id: gift_id,
+                sender: "Sender".to_owned(),
+            });
+        }
+        game.set_myroom_character(character);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_GIFT_LEFT_CODE, 100, 10),
+                myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 200, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.ingest_snapshot(&InputSnapshot::click_at(210, 20));
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(110, 20));
+        assert_eq!(game.myroom().gift_page(), 1, "LEFT wraps on the click path");
+        assert_eq!(game.myroom().gift_cell(), None, "selection was cleared");
+    }
+
+    #[test]
     fn myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim() {
         // Live caller chain: click_myroom_side -> myroom_action_at
         // (WEBAVATAR) -> one-OK sheet with the pinned file `0x2491e0`
