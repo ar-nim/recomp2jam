@@ -877,6 +877,9 @@ pub struct ScreenGame {
     /// Staged pass/membership state behind the FREEINFO lines. The
     /// wire writer of the exe's `0x768b34` word stays OPEN.
     myroom_pass: MyRoomPassInfo,
+    /// NOTICE_TEXT caption value. The exe's writer is untraced, so
+    /// nothing paints until a caller stages content here.
+    myroom_notice_text: Option<String>,
     /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
     /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
     /// bytes are exe-string pinned in [`MyRoomNotice`].
@@ -1274,6 +1277,7 @@ impl ScreenGame {
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
             myroom_pass: MyRoomPassInfo::default(),
+            myroom_notice_text: None,
             myroom_notice: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1901,6 +1905,13 @@ impl ScreenGame {
     /// staged word the exe's blank case holds.
     pub fn set_myroom_pass(&mut self, pass: MyRoomPassInfo) -> &mut Self {
         self.myroom_pass = pass;
+        self
+    }
+
+    /// Stage the NOTICE_TEXT control value. Content has no pinned
+    /// writer; staging never invents a caption.
+    pub fn set_myroom_notice_text(&mut self, text: String) -> &mut Self {
+        self.myroom_notice_text = Some(text);
         self
     }
 
@@ -16199,6 +16210,83 @@ mod game_tests {
             .expect("staged")
             .inventory
             .contains(&13));
+    }
+
+    #[test]
+    fn myroom_staged_notice_text_inks_its_bnd_rect() {
+        // Live caller chain: staged NOTICE control value -> paint_at
+        // -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
+        // Static pin: FUN_004a9890 (file 0xa9890, EV ev_f3b4a8b0…)
+        // inks 0x15500068 in white with the Korean face. The content
+        // writer stays OPEN, so the value is staged explicitly.
+        use super::super::side::MYROOM_NOTICE_TEXT_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character(Vec::new()));
+        game.set_myroom_notice_text("공지사항".to_owned());
+        game.show_myroom_panel(MyRoomPanel::Status);
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_NOTICE_TEXT_CODE, 200, 100)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            (100..120).any(|y| (200..240).any(|x| buf[y * 800 + x] != 0)),
+            "the staged notice value inks NOTICE_TEXT"
+        );
+    }
+
+    #[test]
+    fn myroom_notice_board_selects_frame_two_when_the_body_has_it() {
+        // Static pin: FUN_004a9890 stages NOTICEBOARD (0x15500069)
+        // frame 2. Frame choice is pure; geometry stays in the .bnd.
+        use super::super::paint::myroom_notice_board_frame;
+        use super::super::side::MYROOM_NOTICEBOARD_CODE;
+        use crate::avatar::{FigureLayer, PlacementRole};
+        let figure = |word: u16| {
+            let pixels = word.to_le_bytes().repeat(4 * 4);
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).expect("solid frame"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let mut board = figure(0x7C00);
+        for word in [0x03E0, 0x001F] {
+            let extra = figure(word);
+            for layer in 0..extra.len() {
+                board.push_layer(extra.layer(layer).expect("frame").clone());
+            }
+        }
+        let placement = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "NOTICEBOARD".to_owned(),
+            code: MYROOM_NOTICEBOARD_CODE,
+            sprite: Some("Notice.ojs".to_owned()),
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        };
+        let figures = HashMap::from([("Notice.ojs".to_owned(), board)]);
+        assert_eq!(myroom_notice_board_frame(&placement, &figures), Some(2));
+        let two_frames = HashMap::from([("Notice.ojs".to_owned(), figure(0x7C00))]);
+        assert_eq!(myroom_notice_board_frame(&placement, &two_frames), None);
     }
 
     #[test]

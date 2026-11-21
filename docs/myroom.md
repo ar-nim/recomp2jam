@@ -214,6 +214,20 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+## NOTICE board path (ticket #801, 2026-11-22)
+
+`FUN_004a9890` (VA `0x4a9890`, file `0xa9890`,
+EV `ev_f3b4a8b0b0524f7d3f59ab7f07ca6466c22dca32e557b313529527925e8d26f6`)
+inks `NOTICE_TEXT 0x15500068` from the control value with the Korean face
+at file `0x24407c`, colour `0xffffff`, and stages `NOTICEBOARD 0x15500069`
+frame 2. Our painter selects frame 2 when the staged body carries it;
+white ink uses the owner-approved modern font rasterizer (glyph
+rasterization is presentation, not gameplay). The control-value writer is
+still untraced: `ScreenGame::set_myroom_notice_text` stages content
+without inventing a caption. Guards:
+`myroom_staged_notice_text_inks_its_bnd_rect` and
+`myroom_notice_board_selects_frame_two_when_the_body_has_it`.
+
 ## FREEINFO lines and skill rows (ticket #800, 2026-11-22)
 
 `FUN_004a8010` (VA `0x4a8010`, file `0xa8010`,

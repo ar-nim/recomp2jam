@@ -10,10 +10,26 @@ use crate::avatar::{paint_placement_layer, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::side::{
     myroom_action_for_code, MyRoomAction, MyRoomLowerTab, MyRoomState, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_SELECT_CODE,
     MYROOM_SLOT_IMAGE_FIRST_CODE,
 };
 use o2jam_render::{scale_rect_to_frame, Frame, Rect};
+
+/// NOTICEBOARD frame selected by the exe's notice writer
+/// (`FUN_004a9890`, file `0xa9890`, EV `ev_f3b4a8b0…`): frame 2 when
+/// the staged body carries it, otherwise the normal all-layer stack.
+/// No geometry lives here — the `.bnd` placement still owns the rect.
+#[must_use]
+pub fn myroom_notice_board_frame(
+    placed: &ScenePlacement,
+    figures: &HashMap<String, AvatarFigure>,
+) -> Option<usize> {
+    if placed.code != MYROOM_NOTICEBOARD_CODE {
+        return None;
+    }
+    let sprite = placed.sprite.as_deref()?;
+    figures.get(sprite)?.layer(2).map(|_| 2)
+}
 
 /// Avatar room: staged bound art, flat card fallback.
 /// Slot images name no bodies and captions join nowhere, so figures

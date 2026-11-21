@@ -11,14 +11,15 @@ use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::paint::{
-    paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons, paint_screen,
+    myroom_notice_board_frame, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_screen,
 };
 use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
     myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
     myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab, MyRoomNotice,
-    MyRoomPanel, MyRoomState, SideScreen,
+    MyRoomPanel, MyRoomState, SideScreen, MYROOM_NOTICE_TEXT_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -262,9 +263,12 @@ impl ScreenGame {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
                 let panel = self.myroom.panel();
-                art.paint_backdrop_live(frame, Screen::Myroom, |placed| {
-                    myroom_panel_kept(placed, panel)
-                });
+                art.paint_backdrop_live_selected(
+                    frame,
+                    Screen::Myroom,
+                    |placed| myroom_panel_kept(placed, panel),
+                    |placed| myroom_notice_board_frame(placed, &art.figures),
+                );
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
                 self.paint_myroom_overlay(frame, &art.placements, &art.figures);
             }
@@ -328,6 +332,9 @@ impl ScreenGame {
             self.myroom.gift_page(),
             self.myroom.gift_cell(),
         ));
+        if let Some(text) = self.myroom_notice_text.as_ref() {
+            captions.push((MYROOM_NOTICE_TEXT_CODE, text.clone()));
+        }
         paint_myroom_data(
             frame,
             placements,
