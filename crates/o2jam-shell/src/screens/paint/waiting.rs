@@ -306,10 +306,53 @@ pub fn paint_waiting_scene(
     worn_figures_staged: bool,
     member_role: MemberRole,
 ) {
+    paint_waiting_scene_with_confirm(
+        frame,
+        room,
+        art,
+        captions,
+        WaitingConfirmState::new(0, confirm_armed),
+        worn_figures_staged,
+        member_role,
+    );
+}
+
+/// Role and press state of the local seat's Waiting confirm control.
+///
+/// `master_seat_id` is the `+0x30` role word's source: the creator is
+/// seat 0 until a 3007 leave names another seat (docs/relay.md §10).
+/// `armed` is the request standing behind the pressed record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingConfirmState {
+    master_seat_id: u8,
+    armed: bool,
+}
+
+impl WaitingConfirmState {
+    /// Pair the announced master seat with the local request's face.
+    #[must_use]
+    pub const fn new(master_seat_id: u8, armed: bool) -> Self {
+        Self {
+            master_seat_id,
+            armed,
+        }
+    }
+}
+
+/// Paint one Waiting frame with the exe's announced master seat.
+/// Callers without a live room use [`paint_waiting_scene`] and its
+/// seat-0 default.
+pub fn paint_waiting_scene_with_confirm(
+    frame: &mut Frame<'_>,
+    room: &JoinedRoom,
+    art: &SceneArt,
+    captions: &WaitingCaptions<'_>,
+    confirm: WaitingConfirmState,
+    worn_figures_staged: bool,
+    member_role: MemberRole,
+) {
     let seats = staged_seats(room, captions.local_name);
-    // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
-    // `room.member_id == 0`. See [`waiting_control_armed_for_role`].
-    let is_room_master = room.member_id == 0;
+    let is_room_master = room.member_id == confirm.master_seat_id;
     paint_waiting_backdrop(frame, art, member_role);
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
         placed.sprite.as_deref() != Some(WAITING_BACKDROP_SPRITE)
@@ -323,7 +366,7 @@ pub fn paint_waiting_scene(
     });
     // The confirm face keeps the backdrop's stacking slot: it painted in
     // the backdrop pass before it selected its own record.
-    paint_waiting_confirm_face(frame, art, is_room_master, confirm_armed);
+    paint_waiting_confirm_face(frame, art, is_room_master, confirm.armed);
     paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, art, captions);

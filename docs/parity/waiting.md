@@ -245,3 +245,30 @@ RED proofs: without `flush_team_send`, the guard's peer gateway never
 reads 4004 and the master times out waiting for the echo; without the
 mirror write, the guard fails on the joined-room readout assertion.
 Restoring both passes. Synthetic gateway; hidden install-root is N/A.
+
+## #561 solo START face and solo verdict arms (2026-11-21)
+
+The SOLO-IDLE cell pins a solo master's START face at (680,143)
+(`~/scratch/solo-playing/s1-master-ui/waiting-master.png`,
+`85decf32…`, manifest `4bd221b8…`). The avatar's bare-arm half is
+already pinned by #375 (`face_only_wire_kit_stages_the_default_bare_arms`
+and the waiting-seat pixel guard, commit `8de4d28`). The remaining face
+gap was the role source: the painter used the local seat id, while the
+session's START send uses the announced master id. A solo room handed
+over to seat 1 painted READY and sent START. The painter now takes the
+announced seat from `ScreenGame`.
+
+Guards:
+`solo_promoted_master_paints_the_start_face_not_the_guest_ready_face` —
+live chain: `OnlineSession::paint` (3007 promotion) →
+`ScreenGame::promote_waiting_master` → `ScreenGame::paint` →
+`paint_waiting_scene_with_confirm` → `paint_waiting_confirm_face`.
+`solo_master_gate_has_no_peer_only_verdict_arm` — live chain:
+`OnlineSession::menu_key` (Waiting Confirm) → `confirm_master_start` →
+`ScreenGame::press_start` → `start_gate_verdict` (the -1/-2/-3/-4/-5
+arms all read an occupied peer; a solo room has none).
+
+RED proofs: forcing the painter's master seat to 0 fails the face guard
+on the armed START record; counting the local seat as a peer fails the
+verdict guard on the first NoMusic scenario. Restoring both passes.
+Synthetic three-record art and gateway; hidden install-root is N/A.

@@ -3529,9 +3529,10 @@ pub use self::room::{
 };
 pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
 pub use self::waiting::{
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, waiting_bpm_caption, waiting_confirm_control_id, waiting_map_name,
-    waiting_skillcount_text, WaitingCaptions, WaitingLevel, WaitingSong,
+    paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
+    waiting_confirm_control_id, waiting_map_name, waiting_skillcount_text, WaitingCaptions,
+    WaitingConfirmState, WaitingLevel, WaitingSong,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
