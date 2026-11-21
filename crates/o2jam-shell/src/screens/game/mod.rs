@@ -28,6 +28,7 @@ use self::musicshop::MusicShopState;
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
+pub use self::room_fuse::FuseClock;
 use self::room_fuse::{DialogLayer, RoomNoResponseFuse};
 use self::shop::ShopState;
 pub use self::ui_effect::{UiEffectId, UI_EFFECT_SLOT_COUNT};
@@ -1721,15 +1722,25 @@ impl ScreenGame {
         self.room_no_response.poll_tracked()
     }
 
-    /// Stamp a tracked 07DA send at `now`.
-    pub fn track_room_user_list_send_at(&mut self, now: Instant) -> bool {
-        let in_room = self.flow.current() == Screen::Room;
-        self.room_no_response.track_send(in_room, now)
+    /// Test affordance: install the fuse's clock. Production keeps
+    /// [`FuseClock::Wall`]; guards advance a virtual instant so a wire
+    /// write cannot race the 20 s deadline (#743).
+    pub fn set_room_fuse_clock(&mut self, clock: FuseClock) -> &mut Self {
+        self.room_no_response.set_clock(clock);
+        self
     }
 
-    /// Stamp a tracked 07DA send at the current wall clock.
+    /// Stamp a tracked 07DA send at `now` on a virtual fuse clock.
+    pub fn track_room_user_list_send_at(&mut self, now: Instant) -> bool {
+        self.set_room_fuse_clock(FuseClock::virtual_at(now));
+        let in_room = self.flow.current() == Screen::Room;
+        self.room_no_response.track_send(in_room)
+    }
+
+    /// Stamp a tracked 07DA send on the installed clock.
     pub fn track_room_user_list_send(&mut self) -> bool {
-        self.track_room_user_list_send_at(Instant::now())
+        let in_room = self.flow.current() == Screen::Room;
+        self.room_no_response.track_send(in_room)
     }
 
     /// Process our 07DB answer: erase the node.
@@ -1737,12 +1748,12 @@ impl ScreenGame {
         self.room_no_response.track_reply()
     }
 
-    /// Walk the overdue-node watchdog at `now`; `true` means one
-    /// sheet was staged. No timer sleeps, and no sheet outside Room.
+    /// Walk the overdue-node watchdog at `now` on a virtual fuse
+    /// clock; `true` means one sheet was staged. No timer sleeps, and
+    /// no sheet outside Room.
     pub fn pump_room_user_list_fuse_at(&mut self, now: Instant) -> bool {
-        let in_room = self.flow.current() == Screen::Room;
-        let covered = self.open_dialog_layers();
-        self.room_no_response.pump(in_room, now, &covered)
+        self.set_room_fuse_clock(FuseClock::virtual_at(now));
+        self.pump_room_user_list_fuse()
     }
 
     /// Sheets already under a new fuse sheet, bottom first. The
@@ -1756,9 +1767,11 @@ impl ScreenGame {
         layers
     }
 
-    /// Watchdog pass at the current wall clock.
+    /// Watchdog pass on the installed clock (wall in production).
     pub fn pump_room_user_list_fuse(&mut self) -> bool {
-        self.pump_room_user_list_fuse_at(Instant::now())
+        let in_room = self.flow.current() == Screen::Room;
+        let covered = self.open_dialog_layers();
+        self.room_no_response.pump(in_room, &covered)
     }
 
     #[must_use]
