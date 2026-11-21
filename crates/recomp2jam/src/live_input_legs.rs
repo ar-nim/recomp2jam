@@ -20,6 +20,7 @@ mod live_input_leg_tests {
         JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+    use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
     use o2jam_shell::screens::side::INFORMATION_OK_CODE;
     use o2jam_shell::staging::{read_install_archives, stage_dialog, Dialog, StageContext};
@@ -371,10 +372,77 @@ mod live_input_leg_tests {
         }
     }
 
+    /// Click a staged placement by code, not by a guessed coordinate.
+    fn staged_code_centre(session: &mut OnlineSession, screen: Screen, code: u32) -> (i32, i32) {
+        let placement = session
+            .game_mut()
+            .scene_placements(screen)
+            .iter()
+            .find(|placed| placed.code == code)
+            .unwrap_or_else(|| panic!("no staged placement for {code:#x} on {screen:?}"));
+        rect_centre(placement.rect)
+    }
+
     /// Closing the client ends the recorder thread's read loop.
     fn finish(session: OnlineSession, server: JoinHandle<()>) {
         drop(session);
         server.join().unwrap();
+    }
+
+    /// Messenger tier-1 leg (spec #315 story 17): one live caller chain
+    /// from boot into a Messenger-family P0. The Room board's MESSENGER
+    /// control stages from the installed `.bnd`, and the click goes
+    /// through the same pointer snapshot a window queues. It ends at
+    /// the labeled `unwired` arm: no side screen, no sheet, no wire.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> Screen::Planet -> staged emblem click -> Screen::Channel
+    ///   -> staged room-row click -> Screen::Room
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_room_row
+    ///   -> ScreenGame::click_room_control -> ScreenGame::room_control_at
+    ///   -> RoomControlAction::Unwired (IDC_BUTTON_SROOM_MESSENGER)
+    ///   -> ScreenGame::last_room_control_noop.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_messenger_press_reaches_its_labeled_p0_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let code = MessengerHost::Room.control_code();
+        let (x, y) = staged_code_centre(&mut session, Screen::Room, code);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        paint(&mut session);
+
+        let noop = session
+            .game_mut()
+            .room_control_noop()
+            .expect("the MESSENGER press reached the labeled P0");
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_MESSENGER");
+        assert!(
+            noop.next_step.contains("CStateRoom click dispatch"),
+            "next step names the host capture: {}",
+            noop.next_step
+        );
+        assert_eq!(session.screen(), Screen::Room, "no sheet replaces the host");
+        assert_eq!(session.game_mut().side(), None, "no side screen opens");
+        assert!(
+            !session.game_mut().messenger_liveness_open(),
+            "the liveness sheet is a different pinned arm"
+        );
+        assert!(
+            observed(&gateway.reports).is_empty(),
+            "a P0 press invents no Messenger wire: {:?}",
+            observed(&gateway.reports)
+        );
+        finish(session, gateway.server);
     }
 
     /// Family 1 — scene BACK/exits (#734 class). The complete leg:
