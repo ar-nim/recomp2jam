@@ -222,15 +222,28 @@ pub struct WaitingCaptions<'a> {
     pub local_name: Option<&'a str>,
 }
 
-/// Difficulty and speed behind the `LEVEL` badge: the two bytes the
-/// exe's frame formula reads (`0x7789e7` difficulty, `0x7789e9`
-/// speed, struct `0x7789d8`).
+/// Difficulty, speed and EX chart level behind the `LEVEL` badge:
+/// the two bytes the exe's frame formula reads (`0x7789e7` difficulty,
+/// `0x7789e9` speed, struct `0x7789d8`) plus the catalog word its MX
+/// branch tests (record `+0x14`, `FUN_004b2e30`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitingLevel {
     /// Difficulty code (`Difficulty::from_code`).
     pub difficulty: u8,
     /// Speed code (`GameSpeed::from_code`).
     pub speed: u8,
+    /// EX chart level of the named song, when the catalog stages one.
+    pub ex_chart_level: Option<u16>,
+}
+
+impl WaitingLevel {
+    /// Whether the named chart selects the MX family: the exe adds
+    /// `0x30` only for difficulty 0 (EX) with a level word above 3
+    /// (files `0x4b3372`-`0x4b33b7`). Other charts keep their family.
+    #[must_use]
+    pub fn uses_mx_family(self) -> bool {
+        self.difficulty == 0 && self.ex_chart_level.is_some_and(|level| level > 3)
+    }
 }
 
 /// Full-canvas sheet behind the Waiting seats. `State_Waiting.ojs`
@@ -1200,18 +1213,22 @@ fn paint_waiting_top_line(frame: &mut Frame<'_>, text: &str, placements: &[Scene
 /// 60-frame body (5 families x 12 cells).
 const WAITING_LEVEL_SPEEDS: usize = 12;
 
-/// `Wait_Level.ojs` frame the badge paints: `12*difficulty + speed`.
+/// `Wait_Level.ojs` frame the badge paints: `12*difficulty + speed`,
+/// plus the `0x30` MX family shift for an EX chart above level 3.
 /// The exe stages `index + 1` and setter VA `0x42f870` subtracts the
 /// one before its image lookup, so the staged layer is the plain
-/// product (files `0x4b33f4`-`0x4b3442`, `0x4b805a`-`0x4b80a0`).
+/// sum (files `0x4b33f4`-`0x4b3442`, `0x4b805a`-`0x4b80a0`).
 /// A speed code past the 12 cells names no cell: `None` paints
-/// nothing rather than a neighbouring speed, and a difficulty family
-/// past the staged body stays empty for the same reason.
+/// nothing rather than a neighbouring speed, and a family past the
+/// staged body stays empty for the same reason.
 #[must_use]
 pub(crate) fn waiting_level_layer(level: WaitingLevel) -> Option<usize> {
     let cell = usize::from(level.speed);
-    (cell < WAITING_LEVEL_SPEEDS)
-        .then(|| usize::from(level.difficulty) * WAITING_LEVEL_SPEEDS + cell)
+    (cell < WAITING_LEVEL_SPEEDS).then(|| {
+        let family = usize::from(level.difficulty) * WAITING_LEVEL_SPEEDS;
+        let mx_shift = if level.uses_mx_family() { 0x30 } else { 0 };
+        family + cell + mx_shift
+    })
 }
 
 /// Difficulty/speed badge at the `LEVEL` rect (rect 26
@@ -1223,11 +1240,11 @@ pub(crate) fn waiting_level_layer(level: WaitingLevel) -> Option<usize> {
 /// level source paints nothing; `INSTNAME`-style stand-ins never
 /// reach this rect.
 ///
-/// Two exe rules stay OPEN and never paint here: the MX family shift
-/// for an EX chart above level 3 (`0x4b3372`-`0x4b33b7`, `+0x30`;
-/// the shell stages no per-chart level) and the AX family for a
-/// flagged song id (`0x7789d8 & 0xf0000000`, writer untraced). Both
-/// are recorded in `docs/caption-sources.md`.
+/// The MX family shift for an EX chart above level 3 rides the catalog
+/// word (`0x4b3372`-`0x4b33b7`, `+0x30`; #761). The AX family for a
+/// flagged song id (`0x7789d8 & 0xf0000000`, writer untraced) stays
+/// OPEN: the shell stages no such flag. Both are recorded in
+/// `docs/caption-sources.md`.
 fn paint_waiting_level_badge(frame: &mut Frame<'_>, level: Option<WaitingLevel>, art: &SceneArt) {
     let Some(level) = level else {
         return;

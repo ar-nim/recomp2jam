@@ -46,6 +46,15 @@ back; #285 makes them paint-gated families instead of absent art.
   (`dialog+0x6b8`), so they clamp at the ends. On the result tab UP/
   DOWN are disabled (VA `0x43e52d`/`0x43e550`). Keyboard keys 11/12
   forward to LEFT/RIGHT (table VA `0x4419bc`).
+- **Result/playlist tabs** — `0x2760002F`/`0x27600030` are handled in
+  `FUN_0043e1f0` (VA `0x43e1f0`, file `0x43e1f0`, evidence
+  `ev_43aeb5c6877e6ecee0652442d5da1ad0ea1adb44655479a2f7702a27f1890500`).
+  Both clear the page (`+0x6b4`) and selected row (`+0x6b0`), then
+  rebuild their own list; the result tab keeps the search rows and
+  disables UP/DOWN, the playlist tab enables them and clears the
+  status caption `0x27400042`. #763 stages this tab word and the
+  page reset; the picked-list vector has no source in this client, so
+  the playlist tab stages no rows and UP/DOWN stay inert.
 - **Search** — `SEARCH_TITLE 0x27201049` sets the dialog search field
   to 0 (VA `0x43e92f`), `SEARCH_ARTIST 0x2720104A` to 1 (VA
   `0x43e957`); `SERACH 0x2720004C` runs the search (key-forward arm
@@ -55,16 +64,31 @@ back; #285 makes them paint-gated families instead of absent art.
   call VA `0x5f3f0c`), decoded in `docs/xtd-table.md`.
 - **Chosung grid** — `SERACH_INDEX0..41 0x27200058..0x27200081`
   (42 buttons) and the two special buttons `0x2720B082`/`0x2720B083`
-  are filter inputs. The indexed keyed rebuild is VA `0x444630`:
-  `code - 0x27200058` selects a key-name arm, row stride `0x238`.
-  Wiring the grid is a separate slice; this leg inventories it only.
+  are filter inputs. `FUN_00444630` (VA `0x444630`, file `0x44630`,
+  evidence `ev_e2707958704b39082183d3a41ad02ce2f9c3a4c5ebb40a0caf84443f77b1620b`)
+  takes `code - 0x27200058` as a key index and keeps the keyed rows
+  (stride `0x238`) whose title or artist starts with that key. The
+  key-name strings read from VAs `0x64541c..0x6454d0` are 19 jamo
+  (ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎㄲㄸㅃㅆㅉ), then 전체/최고/고급/중급/초급,
+  then A..R; keys 0/2/5/6/8 also accept their doubled jamo (VA
+  `0x645498` and neighbours). #762 wires all 42 buttons into the
+  `select_rows` keyed filter: a press keeps only rows whose selected
+  search column (title by default) starts with the key and restarts
+  the pager. The two special buttons stay OPEN: a full-image byte
+  search found no code immediate for their control codes, so no
+  behavior is invented for them.
 - **Rows and filters** — `EXTEND1..10` are the ten visible row hit
   bands (ticket #15). `STEP1_*` bands, `STEP2_*` buckets and `STEP3_*`
   genres are the three wired filter columns (ticket #273). OK is
-  ticket #232. Other playlist-family controls (sort, check-all,
-  remove-all, tabs, download/hear/info/rank) are display-only on the
-  result tab this client stages; their playlist-tab behavior stays
-  OPEN with the exe jump table above as the next evidence step.
+  ticket #232. The level cell now inks the row's per-chart catalog
+  level (`entry+0x212` from record words `+24` low/high and `+28`, file
+  `0x44268`; #761), with a dash for a zeroed word. The note and grade
+  icon frames are still staged art only; no personal score table is
+  available to stage a grade (#761 stays OPEN on that half). Other
+  playlist-family controls (sort, check-all, remove-all, tabs,
+  download/hear/info/rank) are display-only on the result tab this
+  client stages; their playlist-tab behavior stays OPEN with the exe
+  jump table above as the next evidence step.
 
 ## Full inventory (134 controls, block order)
 
@@ -223,6 +247,12 @@ song-dialog tests and name the live chain from boot staging to
   LEFT/RIGHT clamp, pager caption ink.
 - `a_search_submit_narrows_the_table_by_title_or_artist` — edit-box
   typing, field radios, SERACH submit, status banner.
+- `a_chosung_index_click_keeps_only_songs_with_that_korean_initial` —
+  an INDEX rect click through `click_select_chrome` into the keyed
+  row rebuild and pager caption (#762).
+- `a_playlist_tab_click_switches_the_row_source_and_resets_the_pager` —
+  a tab image click through the same dispatcher into `select_rows`,
+  the pager caption and the status line (#763).
 
 All four wired-family guards were red-proved by disabling the
 `click_select_chrome` call in `ScreenGame::click_select_music`. The
@@ -254,8 +284,10 @@ still OPEN. This note pins geometry, not a qualified exe frame.
 
 ## OPEN after this leg
 
-The chosung INDEX grid, its two special buttons, the result/playlist
-tab switch, the playlist sort/selection family and the UP/DOWN reorder
-(not offered on the result tab) are inventoried but not wired. The
-next evidence step is a static walk of the keyed rebuild at VA
-`0x444630` plus a rig sweep of the playlist tab.
+The 42-button chosung INDEX grid (#762) and the result/playlist tab
+state (#763) are wired. The two special buttons, the playlist
+sort/selection family and the UP/DOWN reorder stay OPEN: no picked
+list is staged, so there is no row to select or reorder. The next
+evidence step is a static walk of the special-button handler (no code
+immediate found), the sort/select handlers and a rig sweep of the
+playlist tab.

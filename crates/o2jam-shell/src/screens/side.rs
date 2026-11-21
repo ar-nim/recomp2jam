@@ -2071,12 +2071,14 @@ impl SelectMusicRow<'_> {
         SELECT_DIFFICULTY_LETTERS[self.slot]
     }
 
-    /// Per-chart level: never staged. The catalog's level word is
-    /// range-shaped (`level_flags`, both halves 1..38), not per-chart,
-    /// so the cell draws blank rather than an invented number.
+    /// Per-chart level from this row's catalog record (`entry+0x212`
+    /// in the exe's select entry, file `0x44268`). A zeroed word names
+    /// no chart, so the cell keeps its dash rather than printing zero.
     #[must_use]
     pub fn level(self) -> Option<u8> {
-        None
+        u8::try_from(self.song.chart_level(self.slot))
+            .ok()
+            .filter(|level| *level > 0)
     }
 
     /// Personal grade: never staged (no score table ships with the
@@ -2260,6 +2262,15 @@ pub enum SelectSearchField {
     Artist,
 }
 
+/// Text of the column a search or chosung key reads.
+#[must_use]
+pub fn select_row_column_text<'a>(row: SelectMusicRow<'a>, field: SelectSearchField) -> &'a str {
+    match field {
+        SelectSearchField::Title => row.song.title.as_str(),
+        SelectSearchField::Artist => row.song.artist.as_str(),
+    }
+}
+
 /// Direction of one pager or playlist-reorder press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectPagerStep {
@@ -2269,9 +2280,22 @@ pub enum SelectPagerStep {
     Next,
 }
 
+/// Which result list the song dialog shows (`dialog+0x1a0` in the
+/// exe; tab handlers `0x2760002F`/`0x27600030`, file `0x43e1f0`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectDialogTab {
+    /// Search-result rows (the opening tab).
+    #[default]
+    Result,
+    /// Picked-playlist rows. No picked-list source is staged yet.
+    Playlist,
+}
+
 /// One actionable song-dialog chrome press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectChromeAction {
+    /// Switch the result/playlist tab.
+    Tab(SelectDialogTab),
     /// Switch between the song and random panels.
     Mode(SelectMusicMode),
     /// Show one help sheet.
@@ -2288,6 +2312,10 @@ pub enum SelectChromeAction {
     SearchIndex(u8),
 }
 
+const SELECT_TAB_IMAGES: [(&str, SelectDialogTab); 2] = [
+    ("IDC_IMAGE_DSMUSIC_TABRESULT", SelectDialogTab::Result),
+    ("IDC_IMAGE_DSMUSIC_TABPLAYLIST", SelectDialogTab::Playlist),
+];
 const SELECT_MODE_BUTTONS: [(&str, SelectMusicMode); 2] = [
     (
         "IDC_BUTTON_DSMUSIC_MUISCSELECT",
@@ -2316,10 +2344,84 @@ const SELECT_SEARCH_BUTTONS: [(&str, SelectSearchField); 2] = [
 /// Count of chosung INDEX buttons (`0x27200058..=0x27200081`).
 pub const SELECT_SEARCH_INDEX_COUNT: u8 = 42;
 
+/// Key-name strings of the 42 INDEX buttons, in code order. The first
+/// 19 are compatibility jamo (`ㄱ..ㅎ` then the five doubled forms),
+/// then five Korean level/ALL words and the ASCII letters A..R. Read
+/// from the exe's key table at VA `0x6454d8` (file `0x254d8`), whose
+/// own strings sit at VAs `0x64541c..0x6454d0`.
+const SELECT_INDEX_KEYS: [&str; SELECT_SEARCH_INDEX_COUNT as usize] = [
+    "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ", "ㄲ", "ㄸ",
+    "ㅃ", "ㅆ", "ㅉ", "전체", "최고", "고급", "중급", "초급", "A", "B", "C", "D", "E", "F", "G",
+    "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+];
+
+/// Hangul syllable leading consonants in Unicode order: the key
+/// names of the first 19 INDEX buttons.
+const CHOSEONG: [&str; 19] = [
+    "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ",
+    "ㅌ", "ㅍ", "ㅎ",
+];
+
+const HANGUL_SYLLABLE_FIRST: u32 = 0xAC00;
+const HANGUL_SYLLABLE_LAST: u32 = 0xD7A3;
+const SYLLABLES_PER_INITIAL: u32 = 588;
+
 /// One INDEX button's staged placement id (ordinal `0x27200058 + n`).
 #[must_use]
 pub fn select_index_button_id(index: u8) -> String {
     format!("IDC_BUTTON_DSMUSIC_SERACH_INDEX{index}")
+}
+
+/// Key name of one INDEX button (`None` outside 0..=41).
+#[must_use]
+pub fn select_index_key(index: u8) -> Option<&'static str> {
+    SELECT_INDEX_KEYS.get(usize::from(index)).copied()
+}
+
+/// Leading consonant of a Hangul syllable, `None` for other letters.
+#[must_use]
+fn hangul_initial(character: char) -> Option<&'static str> {
+    let code = u32::from(character);
+    (HANGUL_SYLLABLE_FIRST..=HANGUL_SYLLABLE_LAST)
+        .contains(&code)
+        .then(|| {
+            let position = ((code - HANGUL_SYLLABLE_FIRST) / SYLLABLES_PER_INITIAL) as usize;
+            CHOSEONG.get(position).copied()
+        })
+        .flatten()
+}
+
+/// Whether one keyed row survives an INDEX press. The exe compares the
+/// first two CP949 bytes of the title/artist against the key name
+/// (`FUN_00444630`, file `0x44630`): a jamo key matches the song's
+/// leading Hangul consonant, the five words match a literal prefix,
+/// and the ASCII keys match the first letter. The doubled jamo also
+/// match keys 0/2/5/6/8 (VA `0x645498` and neighbours).
+#[must_use]
+pub fn select_index_matches(index: u8, text: &str) -> bool {
+    let Some(key) = select_index_key(index) else {
+        return false;
+    };
+    let Some(first) = text.chars().next() else {
+        return false;
+    };
+    let position = usize::from(index);
+    if position < 19 {
+        let Some(initial) = hangul_initial(first) else {
+            return false;
+        };
+        return initial == key
+            || matches!(
+                (position, initial),
+                (0, "ㄲ") | (2, "ㄸ") | (5, "ㅃ") | (6, "ㅆ") | (8, "ㅉ")
+            );
+    }
+    if position < 24 {
+        return key.starts_with(first);
+    }
+    key.chars()
+        .next()
+        .is_some_and(|letter| first.eq_ignore_ascii_case(&letter))
 }
 
 /// Chrome action under a staged-dialog click (`None` on a display-only
@@ -2330,8 +2432,11 @@ pub fn select_chrome_action_at(
     x: i32,
     y: i32,
 ) -> Option<SelectChromeAction> {
-    button_choice_at(placements, &SELECT_MODE_BUTTONS, x, y)
-        .map(SelectChromeAction::Mode)
+    tab_action_at(placements, x, y)
+        .map(SelectChromeAction::Tab)
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_MODE_BUTTONS, x, y).map(SelectChromeAction::Mode)
+        })
         .or_else(|| {
             button_choice_at(placements, &SELECT_HELP_BUTTONS, x, y).map(SelectChromeAction::Help)
         })
@@ -2345,6 +2450,11 @@ pub fn select_chrome_action_at(
                 .then_some(SelectChromeAction::Search)
         })
         .or_else(|| index_action_at(placements, x, y))
+}
+
+/// Tab image under a staged-dialog click (`None` outside both rects).
+fn tab_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<SelectDialogTab> {
+    button_choice_at(placements, &SELECT_TAB_IMAGES, x, y)
 }
 
 /// Pager press at a staged button: UP/DOWN reorder, LEFT/RIGHT page.
@@ -6602,12 +6712,53 @@ mod side_tests {
     }
 
     #[test]
+    fn index_keys_match_korean_initials_and_doubled_forms() {
+        // `FUN_00444630` compares the key name's first two bytes with
+        // the title/artist's first two bytes; jamo keys name the
+        // leading consonant, and keys 0/2/5/6/8 also take the doubled
+        // form (VA `0x645498` and neighbours).
+        assert_eq!(select_index_key(0), Some("ㄱ"));
+        assert_eq!(select_index_key(18), Some("ㅉ"));
+        assert_eq!(select_index_key(41), Some("R"));
+        assert_eq!(select_index_key(42), None);
+        assert!(select_index_matches(0, "가나다"));
+        assert!(select_index_matches(0, "까다"));
+        assert!(select_index_matches(2, "따다"));
+        assert!(select_index_matches(6, "싸다"));
+        assert!(!select_index_matches(0, "나다"));
+        assert!(!select_index_matches(0, "Alpha"));
+        assert!(select_index_matches(19, "전체 노래"));
+        assert!(select_index_matches(24, "Alpha"));
+        assert!(select_index_matches(41, "rock"));
+        assert!(!select_index_matches(41, "Band"));
+    }
+
+    #[test]
     fn select_rows_leave_levels_and_grades_undrawn() {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         let songs = select_music_songs(&entries, None);
         let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert!(rows.iter().all(|row| row.level().is_none()));
+        assert!(rows.iter().all(|row| row.grade().is_none()));
+    }
+
+    #[test]
+    fn select_rows_name_each_chart_level_from_the_catalog_record() {
+        // The select-entry builder reads the level as `u16[difficulty]`
+        // over the catalog record words (file `0x44268`): easy = low
+        // half of `+24`, normal = high half, hard = `+28`. A row must
+        // ink that chart's level, not a shared dash.
+        let mut blob = side_song_record(757, 124.0, "First", "o2ma757.ojm");
+        blob[24..28].copy_from_slice(&((14u32 << 16) | 5u32).to_le_bytes());
+        blob[28..32].copy_from_slice(&20u32.to_le_bytes());
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let songs = select_music_songs(&entries, None);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
+        assert_eq!(
+            rows.iter().map(|row| row.level()).collect::<Vec<_>>(),
+            vec![Some(5), Some(14), Some(20)]
+        );
         assert!(rows.iter().all(|row| row.grade().is_none()));
     }
 

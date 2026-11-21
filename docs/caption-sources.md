@@ -42,16 +42,25 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   `0x4b9ab0`, table-3 slot 9 of the handler tables pinned under
   `ev_aba36a3a…` per `channel-fill.md`; file `0xb9b72`, `0x50f6f0`
   color `0x191919`).
-- **BPM — PINNED** (catalog column). Lookup through `0x48bcf0` (file
-  `0xbdfd9`). No song stores the empty string through `0x50f520`
-  (file `0xbe000`). Otherwise the song-record vector (base `0x779528`,
-  stride `0x1b4`, files `0xbe0b6`–`0xbe0e4`) is scanned for the record
-  whose id matches global `0x7789d8`, and the float at record `+0x10`
-  (the `OJNList.dat` row `+20` BPM column per `file-formats/ojn.md`)
-  formats with `%0.f` (rdata file `0x24a1d4`) and stores through
-  `0x50f520` (file `0xbe1d5`; font setup `0x50f6a0` file `0xbe1c9`).
-  Mismatch default `-0-` (file `0x24a1d0`) through `0x50f520` (file
-  `0xbe1e4`).
+- **BPM — PINNED** (catalog column). `FUN_004bdfa0` (VA `0x4bdfa0`,
+  file `0x4bdfa0`, evidence
+  `ev_d8682673c3e62ae8b60a8238f8cd4d8cef6cb4deefe69af769235d1dfac683b8`)
+  looks the control up through `0x48bcf0` (file `0xbdfd9`). No song
+  stores the empty string through `0x50f520` (file `0xbe000`).
+  Otherwise the song-record vector (base `0x779528`, stride `0x1b4`,
+  files `0xbe0b6`–`0xbe0e4`) is scanned from the first record for the
+  row whose id matches global `0x7789d8` — the first match wins, so a
+  later duplicate row cannot replace its tempo. The float at record
+  `+0x10` (the `OJNList.dat` row `+20` BPM column per
+  `file-formats/ojn.md`) formats with `%0.f` (rdata file `0x24a1d4`)
+  and stores through `0x50f520` (file `0xbe1d5`; font setup `0x50f6a0`
+  file `0xbe1c9`). Mismatch default `-0-` (file `0x24a1d0`) through
+  `0x50f520` (file `0xbe1e4`; xref
+  `ev_41299e9889b379aca304f1426a93583235338514bf56b61f90ce77d303441672`).
+  #760 pins the ordered catalog-to-caption lookup and both mismatch
+  arms with `the_first_catalog_row_for_the_room_song_names_the_bpm_caption`
+  and `a_song_id_absent_from_the_catalog_paints_the_bpm_mismatch_default`;
+  the separate pick-echo timing row stays as above.
 - **SKILLCOUNT — PINNED** (inventory word). Three button handlers
   cycle dialog selection words (`1SKILLLEFT/RIGHT` `0x16200050/51`
   adjust `+0x35c`; `2SKILL` `0x16200052/53` adjust `+0x360`; `3SKILL`
@@ -138,15 +147,18 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   rides the same `JoinedRoom.speed` the `SPEED_NUM` caption paints, so
   both name one local speed; a per-member speed distinct from the room
   echo is not staged yet.
-  Two arithmetic branches stay OPEN and never paint in the shell:
-  (a) an EX chart whose music-record EX level word (`+0x14`) exceeds 3
-  shifts the family by `0x30` into the MX block (files
-  `0x4b3372`-`0x4b33b7`) — the shell stages no per-chart level, so the
-  next evidence step is a per-chart level source; (b) a selected-song
-  dword with a set top nibble (`0x7789d8 & 0xf0000000`) always paints
-  the AX family at `speed + 0x25` regardless of the difficulty byte
-  (files `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is
-  untraced (OPEN 5 states the global, not the flag).
+  The MX branch (a) is wired (#761): an EX chart (difficulty byte 0)
+  whose record level word at `+0x14` exceeds 3 shifts the family by
+  `0x30` into the MX block (files `0x4b3372`-`0x4b33b7`). The level
+  word is the catalog's `OJNList.dat` `+24` low half (file `0x44268`),
+  staged on `SelectMusicSong::levels[0]`; `WaitingLevel` carries it and
+  `waiting_level_layer` adds the shift. Guard
+  `an_ex_chart_above_level_three_paints_the_mx_badge_family` names the
+  live paint chain. Branch (b) stays OPEN: a selected-song dword with
+  a set top nibble (`0x7789d8 & 0xf0000000`) always paints the AX family
+  at `speed + 0x25` regardless of the difficulty byte (files
+  `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is untraced
+  (OPEN 5 states the global, not the flag).
   Guards: `staged_pick_badge_paints_the_level_frame_the_pick_names` and
   `room_without_a_song_paints_no_level_badge` (Tier 0 seam, synthetic
   cells), `live_waiting_badge_paints_the_bound_level_frame` (real

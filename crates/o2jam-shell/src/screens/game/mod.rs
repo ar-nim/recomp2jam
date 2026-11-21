@@ -71,19 +71,19 @@ use super::side::{
     default_room_title, lanking_action_at, music_shop_action_at, myroom_equip_slot,
     myroom_panel_kept, myroom_record_slot, paint_side_scene, paint_side_scene_live,
     paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
-    select_filter_button_id, select_filter_choice_at, select_music_rows,
-    select_music_songs_with_labels, select_row_hit, shop_action_at, shop_panel_kept,
-    shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
-    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
-    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
-    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
-    TutorialKeyLights, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
-    TUTORIAL_EXIT_SPRITE,
+    select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
+    select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
+    shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
+    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
+    MusicShopAction, MusicShopRow, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
+    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
+    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
+    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -742,10 +742,11 @@ pub struct ScreenGame {
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
-    /// Staged catalog tempos by song id (`OJNList.dat` row +20 BPM
-    /// column, the waiting `BPM` caption source; the title table
-    /// above drops the column).
-    catalog_bpm: HashMap<u32, f32>,
+    /// Staged catalog tempos in `OJNList.dat` order (`+20` BPM column,
+    /// the waiting `BPM` caption source; the title table above drops
+    /// the column). The exe's lookup stops at the first row whose id
+    /// matches, so a later duplicate cannot overwrite it.
+    catalog_bpm: Vec<(u32, f32)>,
     /// Staged catalog container tokens by song id (`OJNList.dat` row
     /// +240 filename, e.g. `o2ma757.ojm`): the album-cover path source
     /// (see [`Self::resolve_song_cover`]).
@@ -783,6 +784,9 @@ pub struct ScreenGame {
     /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
     /// ctor sentinels.
     select_filter: SelectMusicFilter,
+    /// Which result list the song dialog shows (`dialog+0x1a0`; tab
+    /// handlers `0x2760002F`/`0x27600030`, file `0x43e1f0`).
+    select_tab: SelectDialogTab,
     /// Which selection panel the song dialog paints (#285). The
     /// opening frame uses the song panel (VA `0x44f8a0`).
     select_mode: SelectMusicMode,
@@ -797,6 +801,9 @@ pub struct ScreenGame {
     /// Applied search query: the field and text the last SERACH press
     /// submitted. `None` until then, so typing alone never narrows.
     select_search_query: Option<(SelectSearchField, String)>,
+    /// Chosung INDEX key held after a keyed rebuild (`FUN_00444630`,
+    /// file `0x44630`). `None` until an INDEX button is pressed.
+    select_search_index: Option<u8>,
     /// Local music seat from the install's `Music` folder scan
     /// (`docs/music-availability.md` §1): which catalog songs have a
     /// chart file on disk. `None` while no scan ran (no local
@@ -1159,7 +1166,7 @@ impl ScreenGame {
             relay_down_notice_pending: false,
             member_download_progress: [None; 8],
             catalog_songs: Vec::new(),
-            catalog_bpm: HashMap::new(),
+            catalog_bpm: Vec::new(),
             catalog_chart_files: HashMap::new(),
             song_cover: None,
             skill_counts: [0, 0, 0],
@@ -1169,12 +1176,14 @@ impl ScreenGame {
             announced_room_master_id: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
+            select_tab: SelectDialogTab::Result,
             select_mode: SelectMusicMode::SongSelect,
             select_help: SelectHelpSheet::None,
             select_page: 0,
             select_search_field: SelectSearchField::Title,
             select_search_draft: String::new(),
             select_search_query: None,
+            select_search_index: None,
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
@@ -3788,11 +3797,21 @@ impl ScreenGame {
     }
 
     /// Search-result rows the dialog currently shows: the three
-    /// filter columns first (#273), then the submitted search query
-    /// (#285). Typing alone never narrows the table — the SERACH
-    /// button submits the draft, as in the exe's search arm.
+    /// filter columns first (#273), the chosung INDEX key (#762), then
+    /// the submitted search query (#285). Typing alone never narrows
+    /// the table — the SERACH button submits the draft, as in the
+    /// exe's search arm.
     fn select_rows(&self) -> Vec<SelectMusicRow<'_>> {
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        // The playlist tab rebuilds its own picked-list vector; this
+        // client has no picked-list source, so it stages no rows.
+        if self.select_tab == SelectDialogTab::Playlist {
+            return Vec::new();
+        }
+        let mut rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        if let Some(index) = self.select_search_index {
+            let field = self.select_search_field;
+            rows.retain(|row| select_index_matches(index, select_row_column_text(*row, field)));
+        }
         let Some((field, query)) = self.select_search_query.as_ref() else {
             return rows;
         };
@@ -3802,11 +3821,9 @@ impl ScreenGame {
         let needle = query.trim().to_lowercase();
         rows.into_iter()
             .filter(|row| {
-                let text = match field {
-                    SelectSearchField::Title => &row.song.title,
-                    SelectSearchField::Artist => &row.song.artist,
-                };
-                text.to_lowercase().contains(&needle)
+                select_row_column_text(*row, *field)
+                    .to_lowercase()
+                    .contains(&needle)
             })
             .collect()
     }
@@ -3823,6 +3840,13 @@ impl ScreenGame {
             return false;
         };
         match action {
+            SelectChromeAction::Tab(tab) => {
+                // Both tab handlers clear the page and the selected
+                // row before rebuilding their active list (files
+                // `0x43e3f7`/`0x43e415` and `0x43e4c9`/`0x43e4e6`).
+                self.select_tab = tab;
+                self.select_page = 0;
+            }
             SelectChromeAction::Mode(mode) => {
                 self.select_mode = mode;
                 self.select_help = SelectHelpSheet::None;
@@ -3851,12 +3875,12 @@ impl ScreenGame {
                     (!query.is_empty()).then_some((self.select_search_field, query));
                 self.select_page = 0;
             }
-            SelectChromeAction::SearchIndex(_index) => {
-                // Chosung key grid: the `+0x680` keyed filter rebuild
-                // (VA `0x444630`, key names at VA `0x6454d8`) is its own
-                // slice; the inventory pins every button in
-                // `docs/select-chrome.md`. No invented key here.
-                return false;
+            SelectChromeAction::SearchIndex(index) => {
+                // Keyed rebuild (`FUN_00444630`, file `0x44630`): the
+                // search column's keyed rows are rebuilt and the pager
+                // restarts at its first page.
+                self.select_search_index = Some(index);
+                self.select_page = 0;
             }
         }
         true
@@ -3885,6 +3909,12 @@ impl ScreenGame {
     #[must_use]
     pub fn select_filter(&self) -> SelectMusicFilter {
         self.select_filter
+    }
+
+    /// Active result list (`Result` on open).
+    #[must_use]
+    pub fn select_tab(&self) -> SelectDialogTab {
+        self.select_tab
     }
 
     /// Live selection panel (`SongSelect` on open).
@@ -4382,12 +4412,14 @@ impl ScreenGame {
     /// `0x43d324`/`0x43d331`/`0x43d33e` plus the empty edit box).
     fn reset_select_chrome(&mut self) {
         self.select_filter = SelectMusicFilter::ALL;
+        self.select_tab = SelectDialogTab::Result;
         self.select_mode = SelectMusicMode::SongSelect;
         self.select_help = SelectHelpSheet::None;
         self.select_page = 0;
         self.select_search_field = SelectSearchField::Title;
         self.select_search_draft.clear();
         self.select_search_query = None;
+        self.select_search_index = None;
     }
 
     /// Staged select-music catalog songs (catalog order, dead slots
@@ -4440,22 +4472,38 @@ impl ScreenGame {
     /// that names no song paints no badge: the exe resets the control to
     /// no image (file `0x4ba88d`, setter arg 0).
     fn waiting_level(&self) -> Option<WaitingLevel> {
-        if let Some(pick) = self.selected_music {
-            return (pick.music_id != 0).then_some(WaitingLevel {
-                difficulty: pick.difficulty,
-                speed: pick.speed,
-            });
-        }
-        let room = self.waiting.as_ref()?;
-        (room.music_id != 0).then_some(WaitingLevel {
-            difficulty: room.difficulty,
-            speed: room.speed,
+        let (music_id, difficulty, speed) = match self.selected_music {
+            Some(pick) => (pick.music_id, pick.difficulty, pick.speed),
+            None => {
+                let room = self.waiting.as_ref()?;
+                (room.music_id, room.difficulty, room.speed)
+            }
+        };
+        (music_id != 0).then(|| WaitingLevel {
+            difficulty,
+            speed,
+            ex_chart_level: self.catalog_ex_chart_level(music_id),
         })
+    }
+
+    /// EX chart level of one catalog song (`entry+0x212` slot 0, the
+    /// `+24` low word of the `OJNList.dat` row; file `0x44268`). The
+    /// MX branch of the badge frame tests this word (files
+    /// `0x4b3372`-`0x4b33b7`); no catalog row leaves it unstaged.
+    fn catalog_ex_chart_level(&self, music_id: u16) -> Option<u16> {
+        self.catalog_songs
+            .iter()
+            .find(|song| song.song_id == u32::from(music_id))
+            .and_then(|song| song.levels.first().copied())
+            .filter(|level| *level > 0)
     }
 
     /// Catalog BPM for one song id, if a live song record stages it.
     fn catalog_song_bpm(&self, music_id: u16) -> Option<f32> {
-        self.catalog_bpm.get(&u32::from(music_id)).copied()
+        self.catalog_bpm
+            .iter()
+            .find(|(song_id, _)| *song_id == u32::from(music_id))
+            .map(|(_, bpm)| *bpm)
     }
 
     /// Catalog BPM for the song the `BPM` caption names: the staged
@@ -7099,7 +7147,14 @@ impl ScreenGame {
             .select_search_query
             .as_ref()
             .map(|(field, query)| super::side::select_search_status(*field, query));
-        let status = self.select_music_notice.or(search_banner.as_deref());
+        // The playlist tab clears the status caption (the exe writes
+        // the empty string into control `0x27400042`); the result tab
+        // keeps its notice or search banner.
+        let status = if self.select_tab == SelectDialogTab::Playlist {
+            Some("")
+        } else {
+            self.select_music_notice.or(search_banner.as_deref())
+        };
         let live = SelectTextLive {
             page: self.select_page,
             status,
@@ -12072,9 +12127,9 @@ mod game_tests {
         );
     }
 
-    /// Cell count of the synthetic `Wait_Level.ojs` body: the three
-    /// standard difficulty families at their 12 speed cells.
-    const LEVEL_BADGE_CELLS: u8 = 36;
+    /// Cell count of the synthetic `Wait_Level.ojs` body: five 12-cell
+    /// families (EX/NX/HX/AX/MX), matching the 60-frame shipped body.
+    const LEVEL_BADGE_CELLS: u8 = 60;
 
     /// RGB555 body pixel of one synthetic badge cell: full red plus the
     /// cell's own code in green, so the painted frame names itself and
@@ -12195,6 +12250,36 @@ mod game_tests {
             level_badge_ink(&game, &frame),
             vec![level_badge_cell_ink(27)],
             "the badge must paint the pick's single frame (HX at speed 3)"
+        );
+    }
+
+    #[test]
+    fn an_ex_chart_above_level_three_paints_the_mx_badge_family() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // `FUN_004b2e30` shifts the badge into the MX family only for
+        // difficulty 0 (EX) when the record's level word at `+0x14`
+        // exceeds 3 (files `0x4b3372`-`0x4b33b7`). Speed 3 must ink
+        // cell `0x30 + 3`, not the EX cell 3.
+        let mut game = level_badge_game(
+            757,
+            Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 0,
+                speed: 3,
+            }),
+        );
+        let mut blob = waiting_song_catalog_blob();
+        blob[24..28].copy_from_slice(&5u32.to_le_bytes());
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(0x30 + 3)],
+            "an EX level above three must paint the MX family cell"
         );
     }
 
@@ -12376,6 +12461,93 @@ mod game_tests {
         assert_eq!(game.catalog_song_bpm(757), Some(124.0));
         assert_eq!(game.catalog_song_bpm(999), None);
         assert_eq!(game.skill_counts(), [7, 42, 1500]);
+    }
+
+    #[test]
+    fn the_first_catalog_row_for_the_room_song_names_the_bpm_caption() {
+        // Live chain: stage_session_catalog ->
+        //   ScreenGame::set_song_catalog -> catalog_bpm ->
+        //   waiting_song_bpm -> paint_waiting -> paint_waiting_bpm
+        // The exe scans the song vector from its first record and stops
+        // at the first row whose dword id matches the selected song
+        // (`FUN_004bdfa0`, file `0x4bdfa0`, evidence
+        // `ev_d8682673c3e62ae8b60a8238f8cd4d8cef6cb4deefe69af769235d1dfac683b8`).
+        // A duplicate id must not let a later row overwrite its tempo.
+        let first = waiting_song_catalog_blob();
+        let mut duplicate = waiting_song_catalog_blob();
+        duplicate[20..24].copy_from_slice(&180.0f32.to_le_bytes());
+        let mut both = first.clone();
+        both.extend_from_slice(&duplicate);
+
+        let staged = |blob: &[u8]| {
+            let mut game = waiting_game_with_song(757, 2);
+            let entries = o2jam_file::parse_ojn_list(blob).unwrap();
+            game.set_song_catalog(&entries);
+            game.load_scene(
+                Screen::Waiting,
+                bpm_and_speed_caption_placements(),
+                HashMap::new(),
+            );
+            let frame = paint_waiting_frame(&mut game, 800, 600);
+            (game.waiting_song_bpm(), frame)
+        };
+        let (first_bpm, first_frame) = staged(&first);
+        let (both_bpm, both_frame) = staged(&both);
+        assert_eq!(first_bpm, Some(124.0));
+        assert_eq!(both_bpm, Some(124.0), "the first matching row wins");
+        let bpm_rect = Rect {
+            x: 620,
+            y: 60,
+            w: 60,
+            h: 20,
+        };
+        assert_eq!(
+            o2jam_render::pixels_in_rect(&both_frame, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&first_frame, 800, bpm_rect),
+            "the BPM caption must ink the first row's tempo"
+        );
+    }
+
+    #[test]
+    fn a_song_id_absent_from_the_catalog_paints_the_bpm_mismatch_default() {
+        // Same live catalog-to-BPM chain, mismatch arm: the exe stores
+        // the pinned `-0-` string when no record matches the selected
+        // dword (file `0xbe1e4`, string `0x24a1d0`). The caption rect
+        // must ink a different frame from a catalog that carries the
+        // room song's tempo.
+        let staged = |music_id: u16, with_catalog: bool| {
+            let mut game = waiting_game_with_song(music_id, 2);
+            if with_catalog {
+                let blob = waiting_song_catalog_blob();
+                let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+                game.set_song_catalog(&entries);
+            }
+            game.load_scene(
+                Screen::Waiting,
+                bpm_and_speed_caption_placements(),
+                HashMap::new(),
+            );
+            paint_waiting_frame(&mut game, 800, 600)
+        };
+        let bpm_rect = Rect {
+            x: 620,
+            y: 60,
+            w: 60,
+            h: 20,
+        };
+        let matched = staged(757, true);
+        let mismatched = staged(999, true);
+        let no_catalog = staged(757, false);
+        assert_eq!(
+            o2jam_render::pixels_in_rect(&mismatched, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&no_catalog, 800, bpm_rect),
+            "a missing row and a missing catalog both paint `-0-`"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&matched, 800, bpm_rect),
+            o2jam_render::pixels_in_rect(&mismatched, 800, bpm_rect),
+            "a catalog tempo must differ from the mismatch default"
+        );
     }
 
     /// Staged scene for the #535 caption guards: one seat cover opens
@@ -12661,6 +12833,47 @@ mod game_tests {
                 },
             ),
         ]
+    }
+
+    #[test]
+    fn a_catalog_level_inks_the_row_level_cell_instead_of_the_dash() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at ->
+        //   paint_select_music_text -> paint_select_text ->
+        //   paint_select_row -> SelectMusicRow::level
+        // The catalog's per-chart level word (file `0x44268`) inks the
+        // first row's level cell; a zeroed word keeps the dash. Only
+        // that cell may change between the two staged catalogs.
+        let painted = |level_word: u32| {
+            let mut game = select_structure_game();
+            let mut blob = waiting_song_catalog_blob();
+            blob[24..28].copy_from_slice(&level_word.to_le_bytes());
+            let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+            game.set_song_catalog(&entries);
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        let level_cell = Rect {
+            x: 331 + 309,
+            y: 150 + 6,
+            w: 15,
+            h: 12,
+        };
+        let with_level = painted(5);
+        let without_level = painted(0);
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&with_level, 800, level_cell),
+            o2jam_render::pixels_in_rect(&without_level, 800, level_cell),
+            "the row level cell must name the catalog's per-chart level"
+        );
     }
 
     #[test]
@@ -18728,6 +18941,75 @@ mod game_tests {
     }
 
     #[test]
+    fn a_chosung_index_click_keeps_only_songs_with_that_korean_initial() {
+        // Live chain: main.rs::run_play -> stage_session_catalog ->
+        //   MUSELECT -> load_select_music_scene -> click_waiting ->
+        //   click_select_music -> click_select_chrome -> select_rows ->
+        //   paint_select_music_text -> select_pager_caption
+        // `FUN_00444630` (file `0x44630`) takes `code - 0x27200058`
+        // as a key index and keeps only keyed rows whose first two
+        // title bytes name that Korean initial. Index 0 is ㄱ.
+        let mut blob = super::super::side::select_chrome_catalog_blob();
+        let titles: [[u8; 6]; 3] = [
+            [0xB0, 0xA1, 0xB3, 0xAA, 0xB4, 0xD9], // 가나다 (ㄱ)
+            [0xBA, 0xF1, 0, 0, 0, 0],             // 비 (ㅂ)
+            [0xC7, 0xCF, 0xB3, 0xAA, 0, 0],       // 하나 (ㅎ)
+        ];
+        for (index, title) in titles.iter().enumerate() {
+            let start = 112 + index * 300;
+            blob[start..start + title.len()].copy_from_slice(title);
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.set_song_catalog(&entries);
+        let mut placements = select_chrome_placements();
+        placements.extend(select_sheet_placements());
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_DSMUSIC_SERACH_INDEX0".to_owned(),
+            code: 0x2720_0058,
+            sprite: None,
+            rect: Rect {
+                x: 200,
+                y: 20,
+                w: 30,
+                h: 20,
+            },
+        });
+        game.load_select_music_scene(placements, HashMap::new());
+        assert_eq!(game.select_rows().len(), 45);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(215, 30));
+
+        let ids: Vec<u32> = game
+            .select_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(ids, vec![200, 200, 200], "only the ㄱ song's rows survive");
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (669, 390),
+            (54, 13),
+            crate::screens::select_paint::select_ink()
+        ));
+    }
+
+    #[test]
     fn a_mode_switch_click_paints_the_random_panel_instead_of_the_level_buttons() {
         // docs/select-chrome.md, live chain: `main.rs::run_play` ->
         // `stage_session_catalog` -> MUSELECT -> `load_select_music_scene`
@@ -18826,6 +19108,77 @@ mod game_tests {
             (12, 12),
             pack_xrgb(0x00, 56, 192)
         ));
+    }
+
+    /// The two tab images from `Dialog_SelectMusic.bnd` (`0x2760002F`
+    /// result, `0x27600030` playlist), staged at unique rects for the
+    /// click guard.
+    fn select_tab_placements() -> Vec<ScenePlacement> {
+        [
+            ("IDC_IMAGE_DSMUSIC_TABRESULT", 500),
+            ("IDC_IMAGE_DSMUSIC_TABPLAYLIST", 560),
+        ]
+        .into_iter()
+        .map(|(id, x)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x,
+                y: 20,
+                w: 40,
+                h: 20,
+            },
+        })
+        .collect()
+    }
+
+    #[test]
+    fn a_playlist_tab_click_switches_the_row_source_and_resets_the_pager() {
+        // Live chain: MUSELECT -> `load_select_music_scene` ->
+        // `click_select_music` -> `click_select_chrome` -> `select_rows`
+        // -> `paint_select_music_text` -> `select_pager_caption`.
+        // `FUN_0043e1f0` (file `0x43e1f0`) clears the page and selected
+        // row and rebuilds the active list on both tab presses: the
+        // result tab keeps the search rows, the playlist tab names the
+        // picked rows (no picked list is staged in this client).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        placements.extend(select_tab_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+
+        click_chrome(&mut game, 5);
+        assert_eq!(game.select_page(), 1);
+        let result_frame = paint_waiting_frame(&mut game, 800, 600);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(580, 30));
+        assert_eq!(game.select_tab(), SelectDialogTab::Playlist);
+        assert!(game.select_rows().is_empty(), "the playlist has no rows");
+        assert_eq!(game.select_page(), 0, "a tab press restarts the pager");
+        let playlist_frame = paint_waiting_frame(&mut game, 800, 600);
+        let pager = Rect {
+            x: 669,
+            y: 390,
+            w: 54,
+            h: 13,
+        };
+        assert_ne!(
+            rect_pixels(&result_frame, 800, pager),
+            rect_pixels(&playlist_frame, 800, pager),
+            "the pager caption must name the active tab's list"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(520, 30));
+        assert_eq!(game.select_tab(), SelectDialogTab::Result);
+        assert_eq!(game.select_rows().len(), 45);
+        assert_eq!(game.select_page(), 0);
     }
 
     #[test]

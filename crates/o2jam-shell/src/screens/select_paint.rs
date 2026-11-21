@@ -47,8 +47,8 @@ pub(crate) fn select_ink() -> u32 {
     pack_xrgb(0xFF, 0xFF, 0xFF)
 }
 
-/// Ink for an unknown cell (the per-chart level and personal grade
-/// columns carry no staged source yet; they draw the unknown dash).
+/// Ink for a cell without a staged source (a personal grade or a
+/// catalog row with no level word; they draw the unknown dash).
 pub(crate) fn select_dim_ink() -> u32 {
     pack_xrgb(0x90, 0x90, 0x90)
 }
@@ -190,10 +190,11 @@ pub(crate) fn paint_select_text(
     }
 }
 
-/// One search-result row: the catalog title and artist at their `SET`
-/// slots plus the unknown level dash. The note and grade icons are
-/// staged art (their bodies carry the letter stamps), so the layer inks
-/// no letters; the picked row's title takes the active-tab orange.
+/// One search-result row: the catalog title, artist and per-chart level
+/// at their `SET` slots (a zeroed level keeps the dash). The note and
+/// grade icons are staged art (their bodies carry the letter stamps),
+/// so the layer inks no letters; the picked row's title takes the
+/// active-tab orange.
 fn paint_select_row(
     frame: &mut Frame<'_>,
     slot: &SelectRowSlots,
@@ -215,8 +216,8 @@ fn paint_select_row(
     );
 }
 
-/// Unknown-column text: a level or grade without a staged source draws
-/// the dash, never an invented number.
+/// Unstaged-column text: a level or grade without a source draws the
+/// dash, never an invented number.
 fn unknown_cell(value: Option<u8>) -> String {
     value.map_or_else(|| "-".to_owned(), |number| number.to_string())
 }
