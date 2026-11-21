@@ -8419,6 +8419,47 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn waiting_music_change_stages_the_random_flag_from_the_4001_id() {
+        // Ticket #759, live chain: OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat ->
+        //   apply_waiting_frame (4001 / `WaitingMusicChanged`) ->
+        //   ScreenGame::set_room_music -> variant nibble read by
+        //   paint_waiting -> paint_waiting_staged ->
+        //   paint_waiting_music / paint_waiting_level_badge.
+        // The 4001 handler (file `0x15f2d0`) lifts the id's high nibble
+        // into global `0x7789d8`; the shell mirrors that nibble here.
+        let (port, server) = fake_gateway(|mut stream| {
+            let state = read_frame(&mut stream);
+            assert_eq!(state.id, Request::UpdateMusicState.id());
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(joined_snapshot());
+        session.joined_waiting = true;
+        let event = WaitingMusicChanged {
+            music_id: 0xF757,
+            difficulty: 1,
+            speed: 2,
+        };
+        session.apply_waiting_frame(Frame {
+            id: WaitingMusicChanged::COMMAND,
+            payload: event.encode_body(),
+        });
+        assert_eq!(
+            session.game.room_song_variant_nibble(),
+            0xF,
+            "the 4001 id's variant nibble is staged for the painters"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn key_mode_change_requeues_the_room_song_after_clearing_rows() {
         // Ticket #758, live chain: OnlineSession::paint (Waiting) ->
         //   poll_waiting_chat -> drain_waiting_chat ->

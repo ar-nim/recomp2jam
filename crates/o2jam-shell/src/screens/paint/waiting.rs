@@ -207,6 +207,10 @@ pub struct WaitingCaptions<'a> {
     /// Difficulty and speed behind the `LEVEL` badge, from the same
     /// pick-or-room source as `song`.
     pub level: Option<WaitingLevel>,
+    /// Whether the staged song id carries the exe's variant flag
+    /// (`0x7789d8 & 0xf0000000`): yellow random caption plus AX badge
+    /// family (`FUN_004b2e30`).
+    pub random: bool,
     /// Pinned notice standing over the top-bar room line (the exe's
     /// notice box above the START control,
     /// `docs/music-availability.md` §4); `None` paints the room title.
@@ -1039,8 +1043,20 @@ fn paint_waiting_bare_caption(
     id: &str,
     text: &str,
 ) {
+    paint_waiting_bare_caption_ink(frame, placements, id, text, art_title_ink());
+}
+
+/// Ink one staged caption in an explicit tone (the random flag's
+/// yellow), with no shell plate or other glyph decoration.
+fn paint_waiting_bare_caption_ink(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    id: &str,
+    text: &str,
+    ink: u32,
+) {
     if let Some((x, y)) = waiting_caption_ink_origin(placements, id, frame) {
-        draw_text(frame, x, y, text, art_title_ink());
+        draw_text(frame, x, y, text, ink);
     }
 }
 
@@ -1091,7 +1107,7 @@ pub(crate) fn paint_waiting_staged(
         None => paint_waiting_title(frame, room, placements),
     }
     paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
-    paint_waiting_level_badge(frame, captions.level, art);
+    paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_wins(frame, room, placements);
@@ -1101,7 +1117,7 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
     paint_waiting_mapname(frame, room, placements);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
-    paint_waiting_music(frame, placements, captions.song);
+    paint_waiting_music(frame, placements, captions.song, captions.random);
 }
 
 /// Top-bar digit wells: `IDC_IMAGE_SWAIT_CHNUM_10/01` show the one-
@@ -1214,6 +1230,24 @@ pub(crate) fn waiting_level_layer(level: WaitingLevel) -> Option<usize> {
         .then(|| usize::from(level.difficulty) * WAITING_LEVEL_SPEEDS + cell)
 }
 
+/// `Wait_Level.ojs` AX-family base frame (`speed + 0x25`, files
+/// `0x4b33d4`-`0x4b33e9` in `FUN_004b2e30`). A variant-flagged song
+/// drops the difficulty family entirely: even the MX shift is reset to
+/// zero when the flag stands.
+const WAITING_LEVEL_AX_BASE: usize = 0x25;
+
+/// Frame the badge paints for one level plus the song's random flag.
+#[must_use]
+pub(crate) fn waiting_badge_layer(level: WaitingLevel, random: bool) -> Option<usize> {
+    if random {
+        usize::from(level.speed)
+            .checked_add(WAITING_LEVEL_AX_BASE)
+            .filter(|cell| *cell < WAITING_LEVEL_AX_BASE + WAITING_LEVEL_SPEEDS)
+    } else {
+        waiting_level_layer(level)
+    }
+}
+
 /// Difficulty/speed badge at the `LEVEL` rect (rect 26
 /// `(218,12)-(273,40)`, immediately left of the room title): one
 /// `Wait_Level.ojs` frame carrying the family letter and the speed
@@ -1228,11 +1262,16 @@ pub(crate) fn waiting_level_layer(level: WaitingLevel) -> Option<usize> {
 /// the shell stages no per-chart level) and the AX family for a
 /// flagged song id (`0x7789d8 & 0xf0000000`, writer untraced). Both
 /// are recorded in `docs/caption-sources.md`.
-fn paint_waiting_level_badge(frame: &mut Frame<'_>, level: Option<WaitingLevel>, art: &SceneArt) {
+fn paint_waiting_level_badge(
+    frame: &mut Frame<'_>,
+    level: Option<WaitingLevel>,
+    random: bool,
+    art: &SceneArt,
+) {
     let Some(level) = level else {
         return;
     };
-    let Some(layer) = waiting_level_layer(level) else {
+    let Some(layer) = waiting_badge_layer(level, random) else {
         return;
     };
     let Some(placed) = art
@@ -1495,20 +1534,40 @@ pub(crate) fn paint_waiting_skillcounts(
 ///   `SelectMusic_Random*.ojs` bodies belong to `DAILOG_SELECTMUSIC`
 ///   filter buttons, not to waiting cards, and no wire struct carries
 ///   card picks — so the painter stages art only.
+///
+/// Yellow caption text at VA `0x649848` (EV `ev_46c80b83…`); the
+/// exe sets colour `0xffff00` (`0x4b30b2`) and stores this string in
+/// place of the catalog title when the song id's top nibble stands.
+const WAITING_RANDOM_CAPTION: &str = "<< Random 선택 >>";
+const WAITING_RANDOM_INK: u32 = pack_xrgb(0xFF, 0xFF, 0x00);
+
+/// Ink the staged `MUSICNAME` caption: the catalog title for a plain
+/// song, or the yellow random caption when the variant flag stands.
 pub(crate) fn paint_waiting_music(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     song: Option<WaitingSong<'_>>,
+    random: bool,
 ) {
     let Some(song) = song else {
         return;
     };
-    paint_waiting_bare_caption(
-        frame,
-        placements,
-        WAITING_MUSICNAME_ID,
-        &waiting_music_caption(song.music_id, song.title),
-    );
+    if random {
+        paint_waiting_bare_caption_ink(
+            frame,
+            placements,
+            WAITING_MUSICNAME_ID,
+            WAITING_RANDOM_CAPTION,
+            WAITING_RANDOM_INK,
+        );
+    } else {
+        paint_waiting_bare_caption(
+            frame,
+            placements,
+            WAITING_MUSICNAME_ID,
+            &waiting_music_caption(song.music_id, song.title),
+        );
+    }
 }
 
 /// `MUSICNAME` caption for one room song: the staged catalog title

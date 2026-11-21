@@ -10473,6 +10473,7 @@ mod paint_tests {
                 music_id: 757,
                 title: None,
             }),
+            false,
         );
         assert_eq!(buf[13 * 800 + 569], 0, "the plate has no shell scrim");
         let mut expected = vec![0u32; 800 * 600];
@@ -10527,6 +10528,7 @@ mod paint_tests {
                 music_id: 757,
                 title: Some("First"),
             }),
+            false,
         );
         assert!(!buf.contains(&scrim_color()));
         assert!(has_ink_near(&buf, art_title_ink()));
@@ -10551,6 +10553,7 @@ mod paint_tests {
             },
             &placements,
             None,
+            false,
         );
         assert!(!has_ink_near(&buf, art_title_ink()));
         assert_eq!(buf[13 * 800 + 569], 0);

@@ -3142,12 +3142,33 @@ impl ScreenGame {
     /// song `0x7789d8`, handler VA `0x55f2d0`): the 4025 announcement
     /// and the waiting captions follow it.
     pub fn set_room_music(&mut self, music_id: u16, difficulty: u8, speed: u8) -> &mut Self {
+        // The 4001 handler lifts the id's variant nibble into the top
+        // nibble of global `0x7789d8` (file `0x15f2d0`); the waiting
+        // painters read that flag for the random caption and AX badge.
+        self.room_song_variant_nibble =
+            u8::try_from((u32::from(music_id) >> 12) & 0xF).unwrap_or(0);
         if let Some(room) = self.waiting.as_mut() {
             room.music_id = music_id;
             room.difficulty = difficulty;
             room.speed = speed;
         }
         self
+    }
+
+    /// Whether the staged room song carries the variant flag the exe
+    /// reads as `0x7789d8 & 0xf0000000`. `set_room_music` mirrors the
+    /// 4001 nibble; a direct staged song id with its own high nibble
+    /// names the same flag.
+    #[must_use]
+    fn waiting_random_song(&self) -> bool {
+        self.room_song_variant_nibble != 0
+            || self
+                .waiting
+                .as_ref()
+                .is_some_and(|room| room.music_id & 0xF000 != 0)
+            || self
+                .selected_music
+                .is_some_and(|pick| pick.music_id & 0xF000 != 0)
     }
 
     /// The room song a 4025 announcement is computed for: the joined
@@ -7252,6 +7273,7 @@ impl ScreenGame {
             song_bpm: self.waiting_song_bpm(),
             skill_counts: self.skill_counts,
             level: self.waiting_level(),
+            random: self.waiting_random_song(),
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
@@ -12442,6 +12464,93 @@ mod game_tests {
             level_badge_ink(&game, &frame),
             vec![level_badge_cell_ink(27)],
             "the badge must paint the pick's single frame (HX at speed 3)"
+        );
+    }
+
+    /// Waiting game with the `LEVEL` badge body extended through the
+    /// AX family (`speed + 0x25`) and a `MUSICNAME` caption well. Song
+    /// id `0xF757` carries the variant nibble the exe lifts from the
+    /// 4001 id into `0x7789d8`'s top nibble.
+    fn random_badge_game() -> ScreenGame {
+        let mut body = AvatarFigure::default();
+        for cell in 0..=0x25u8 + 11 {
+            body.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&level_badge_cell_word(cell).to_le_bytes(), 1, 1)
+                    .unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        let (mut placements, _) = level_badge_scene();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_TEXT_SWAIT_MUSICNAME".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 573,
+                y: 15,
+                w: 200,
+                h: 23,
+            },
+        });
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 0xF757;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Level.ojs".to_owned(), body)]),
+        );
+        game
+    }
+
+    #[test]
+    fn random_song_paints_the_ax_badge_frame() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #759, FUN_004b2e30 files `0x4b33d4`-`0x4b33e9`: a
+        // variant-flagged song ignores the difficulty family and stages
+        // `speed + 0x25`, so speed 2 paints cell 0x27 alone.
+        let mut game = random_badge_game();
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(0x25 + 2)],
+            "the AX family frame is staged for a random song"
+        );
+    }
+
+    #[test]
+    fn random_song_inks_the_caption_in_yellow() {
+        // Same live chain as `random_song_paints_the_ax_badge_frame`,
+        // ending at `paint_waiting_music`. The variant flag at
+        // `0x4b30a2`-`0x4b30cd` selects colour `0xffff00` and the
+        // string at VA `0x649848` (`<< Random 선택 >>`, EV
+        // `ev_46c80b83…`) instead of the catalog title.
+        let mut game = random_badge_game();
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        let rect = game
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_TEXT_SWAIT_MUSICNAME")
+            .map(|placed| placed.rect)
+            .expect("staged MUSICNAME placement");
+        let ink = o2jam_render::pixels_in_rect(&frame, 800, rect);
+        assert!(
+            ink.contains(&pack_xrgb(0xFF, 0xFF, 0x00)),
+            "the random caption is yellow"
+        );
+        assert!(
+            !ink.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "the random caption does not ink the plain title"
         );
     }
 

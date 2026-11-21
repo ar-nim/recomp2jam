@@ -149,15 +149,24 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   `speed_buttons_clamp_the_mirror_at_both_ends`. A captured click leg with
   every C2S frame and a before/after badge pair stays OPEN (the ticket's
   next step); the static pin does not assert exe local-only wire behavior.
-  Two arithmetic branches stay OPEN and never paint in the shell:
-  (a) an EX chart whose music-record EX level word (`+0x14`) exceeds 3
-  shifts the family by `0x30` into the MX block (files
-  `0x4b3372`-`0x4b33b7`) — the shell stages no per-chart level, so the
-  next evidence step is a per-chart level source; (b) a selected-song
-  dword with a set top nibble (`0x7789d8 & 0xf0000000`) always paints
-  the AX family at `speed + 0x25` regardless of the difficulty byte
-  (files `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is
-  untraced (OPEN 5 states the global, not the flag).
+  Random-song readout (#759, PINNED): `FUN_004b2e30` sets colour
+  `0xffff00` and stores the string at VA `0x649848` (`<< Random 선택 >>`,
+  EV `ev_46c80b83…`, bytes EV `ev_1ff89f1f…`) when the staged song
+  dword's top nibble stands (files `0x4b30a2`-`0x4b30cd`), and stages
+  AX badge frame `speed + 0x25` at files `0x4b33d4`-`0x4b33e9`. The
+  4001 handler lifts the id's variant nibble into that top nibble
+  (file `0x15f2d0`); `ScreenGame::set_room_music` mirrors it into
+  `room_song_variant_nibble`, which the painters read. Guards:
+  `random_song_inks_the_caption_in_yellow`,
+  `random_song_paints_the_ax_badge_frame`, and the live-frame guard
+  `waiting_music_change_stages_the_random_flag_from_the_4001_id`.
+  One random-song capture with the flag writer (select-time store file
+  `0x3f379` / high-half OR file `0x15caa8`) stays OPEN.
+  One arithmetic branch stays OPEN: an EX chart whose music-record EX
+  level word (`+0x14`) exceeds 3 shifts the family by `0x30` into the
+  MX block (files `0x4b3372`-`0x4b33b7`) — the shell stages no
+  per-chart level, so the next evidence step is a per-chart level
+  source. The AX branch above resets that shift, as in the exe.
   Guards: `staged_pick_badge_paints_the_level_frame_the_pick_names` and
   `room_without_a_song_paints_no_level_badge` (Tier 0 seam, synthetic
   cells), `live_waiting_badge_paints_the_bound_level_frame` (real
