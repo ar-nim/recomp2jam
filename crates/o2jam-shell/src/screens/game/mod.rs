@@ -37,7 +37,7 @@ use super::super::avatar::{
     avatar_item_by_id, load_shop_portraits, load_worn_figure, ojn_cover_figure, AvatarFigure,
     ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
-use super::super::options::OptionsSettings;
+use super::super::options::{InSongMix, OptionsSettings};
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
@@ -1280,7 +1280,7 @@ impl ScreenGame {
     /// entry or audio rig stays silent — the cue is named OPEN there,
     /// never filled with a substitute sample.
     fn cue_ui_effect(&mut self, effect: UiEffectId) {
-        let gain = self.options_dialog.settings().effect_gain();
+        let gain = self.in_song_mix().ui_effect_gain();
         let slot = usize::from(effect.slot());
         let Some(pcm) = self.ui_effect_bank.get(slot).and_then(Option::as_ref) else {
             tracing::debug!(slot, "UI effect slot has no staged PCM; cue stays silent");
@@ -1303,6 +1303,8 @@ impl ScreenGame {
     /// share record 9, and a shared track must not restart from
     /// sample 0 on every emblem click.
     fn apply_bgm_cue(&mut self, cue: (i32, bool)) {
+        // Read the mix before borrowing the rig mutably below.
+        let gain = self.in_song_mix().scene_bgm_gain();
         let Some(rig) = self.audio.as_mut() else {
             return;
         };
@@ -1316,9 +1318,8 @@ impl ScreenGame {
         // The BGMusic volume (`Sound`/`GameBGVolume`, default 255 is
         // unity) scales the lobby cue: the Sound tab moves the live
         // scene mix (a gain change re-cues, the only path that
-        // carries the level to the mixer). The in-song mix path stays
-        // OPEN.
-        let gain = self.options_dialog.settings().bgm_gain();
+        // carries the level to the mixer). The in-song song-BGM path
+        // stays OPEN (`InSongMix::song_bgm_gain`).
         let request = SceneCue {
             id: cue_id,
             repeat: cue_repeat,
@@ -1389,7 +1390,7 @@ impl ScreenGame {
     /// the GameEffect volume (`Sound`/`NoteKeyVolume`, default 255
     /// is unity): the Sound tab moves the live key mix.
     fn pump_sounds(&mut self) {
-        let gain = self.options_dialog.settings().key_gain();
+        let gain = self.in_song_mix().note_key_gain();
         let Some(rig) = self.audio.as_mut() else {
             self.playing.drain_sounds();
             return;
@@ -5219,6 +5220,12 @@ impl ScreenGame {
     /// Mutable options-dialog values, for boot-time profile edits.
     pub fn options_mut(&mut self) -> &mut OptionsSettings {
         self.options_dialog.settings_mut()
+    }
+
+    /// Four pinned volume words as the running song's mix.
+    #[must_use]
+    pub fn in_song_mix(&self) -> InSongMix {
+        self.options_dialog.settings().in_song_mix()
     }
 
     /// Lane armed for rebind by a Key-tab click (`None` idle).
@@ -17807,10 +17814,10 @@ mod game_tests {
         }
         // Re-based across both options lanes: #716 (Game DEFAULT
         // restores the exe's effective values after the pinned load
-        // rewrites) and the Sound slider step moving 8 -> the exe's 4
-        // (hash recomputed on the union of the two lanes).
+        // rewrites), the Sound slider step moving 8 -> the exe's 4,
+        // and #590's first-knob GameBGVolume/BGVolume coupling.
         assert_eq!(
-            hash, 0x4E3D_A8FB_D75E_1206,
+            hash, 0x529D_C34E_9757_FA02,
             "options outputs drifted: {observed}"
         );
     }
@@ -18522,6 +18529,42 @@ mod game_tests {
             "a later options edit must not change the running song"
         );
         assert_eq!(game.play_longnote_mode(), Some(1));
+    }
+
+    #[test]
+    fn in_song_mix_follows_all_four_pinned_volume_words() {
+        // Live chain: boot -> gear disc -> Sound tab -> Down clicks
+        // -> `OptionsSettings::step_*` -> `InSongMix` -> the live
+        // scene/key/effect paths. The four words and their read sites
+        // come from `docs/options.md`; the NoteBG song PCM path has no
+        // exe trace and stays OPEN in the mix model.
+        let mut game = ScreenGame::new();
+        let full = game.in_song_mix();
+        assert_eq!(full.scene_bgm_gain(), 1.0);
+        assert_eq!(full.ui_effect_gain(), 1.0);
+        assert_eq!(full.song_bgm_gain(), 1.0);
+        assert_eq!(full.note_key_gain(), 1.0);
+
+        game.options_mut().step_bgm_music(false);
+        let stepped = 255.0 - f32::from(crate::options::SOUND_SLIDER_STEP);
+        let expected = stepped / 255.0;
+        let mixed = game.in_song_mix();
+        assert_eq!(mixed.scene_bgm_gain(), expected);
+        assert_eq!(mixed.ui_effect_gain(), expected);
+
+        game.options_mut().step_game_music(false);
+        assert_eq!(
+            game.in_song_mix().song_bgm_gain(),
+            expected,
+            "NoteBGVolume feeds the in-song song gain"
+        );
+
+        game.options_mut().step_game_effect(false);
+        assert_eq!(
+            game.in_song_mix().note_key_gain(),
+            expected,
+            "NoteKeyVolume feeds the in-song key gain"
+        );
     }
 
     #[test]

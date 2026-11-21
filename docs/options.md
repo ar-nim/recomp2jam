@@ -33,11 +33,14 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
   stays OPEN). `3KEY`/`7KEY` and `KEYTEST` record selection state
   only (behavior OPEN).
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
-  `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by 8 inside 0–255 in our shell
-  (ours-by-design; the exe steps by 4 — see the addendum).
-  GameEffect drives the live key-strike gain; BGMusic scales the
-  lobby scene-BGM cue and re-cues the running track on the slider click
-  (no scene change needed). The in-song mix path stays OPEN.
+  `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by the exe-pinned 4
+  inside 0–255. The first knob moves `GameBGVolume` and `BGVolume`
+  together (`#712` static pin, `0x551710(..., 1)`).
+  `NoteKeyVolume` drives the live key-strike gain, `BGVolume` the UI
+  effects, `GameBGVolume` the lobby scene-BGM cue (re-cued on the
+  slider click, no scene change), and `NoteBGVolume` the modeled
+  in-song song gain. No song PCM path applies that last gain yet;
+  the live mix trace stays OPEN.
 - Game tab: NoteType1/2 → 0/1, guides Long/Middle/Short/NoUse →
   3/2/1/0, EQ Yes/No → 1/0, ModeFull/Win → 1/2, Longnote
   Used/None → 1/0, effects High/Normal/Low → in-memory 0/1/2.
@@ -83,11 +86,13 @@ consumer (file `0x16E372`).
 
 ## OPEN (each with its rig next step)
 
-1. Slider↔key mapping, slider step, in-song mix application —
-   the first two are now pinned statically (see the addendum below:
-   step 4, control IDs `0x26200002..09` / `0x26500013..16`); in-song
-   mix application still needs the rig SAVE-diff (move one slider,
-   SAVE, diff `option.ini`).
+1. Slider↔key mapping, slider step and first-knob coupling are pinned
+   statically (see the addendum below: step 4, control IDs
+   `0x26200002..09` / `0x26500013..16`, coupled setter
+   `0x551710(..., 1)`). The four words now feed one modeled in-song
+   mix; the live song-BGM application and slider-to-caption order still
+   need the rig SAVE-diff (move one slider, SAVE, diff `option.ini`)
+   plus a Playing capture.
 2. Button→value orders (shape arms, guide order, Full/Win order) —
    next step: the ticket's exact rig list (one 0-vs-1 shape capture
    to name oval vs square; five tail captures to name the fifth;
@@ -148,6 +153,14 @@ switch codes, Live chain: `main.rs::run_online` → `run_windowed_session` →
   live chain: `main.rs::run_online` → `run_windowed_session` →
   `window::InputHandler::route_key` → `GameLoop::lane_key` →
   `ScreenGame::strike_at` → `pump_sounds` → `AudioBackend::play_key`),
+`first_sound_knob_moves_game_music_and_effect_words_together`
+  (seam suffices: the coupled setter is the whole behavior),
+`in_song_mix_follows_all_four_pinned_volume_words` (live chain:
+  `main.rs::run_online` → `run_windowed_session` →
+  `window::InputHandler::route_mouse_edge` → `GameLoop::ingest_snapshot` →
+  `ScreenGame::click_dispatch` → `click_planet` → `click_planet_modal` →
+  `click_options_dialog` → `OptionsSettings::step_*` → `InSongMix`;
+  the NoteBG song PCM path stays OPEN),
 `scene_bgm_cue_scales_with_the_bgmusic_volume`,
 `bgmusic_slider_re_cues_the_lobby_track_without_a_scene_change` (live chain:
 `main.rs::run_online` → `run_windowed_session` →

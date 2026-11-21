@@ -104,6 +104,64 @@ pub const DEFAULT_SOUND_VOLUME: u8 = 255;
 /// when that static pin landed.
 pub const SOUND_SLIDER_STEP: u8 = 4;
 
+/// Full-scale divisor for the four linear volume gains.
+const FULL_VOLUME: f32 = 255.0;
+
+/// The four `Sound` words as applied by a running song.
+///
+/// The exe pins the words (`docs/options.md`) and the first-knob
+/// coupling (`#712`). The NoteBG gain is exposed here, but no song PCM
+/// path in this client applies it yet; that application stays OPEN with
+/// the rig SAVE-diff in `docs/options.md` as the next evidence step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InSongMix {
+    /// `Sound`/`GameBGVolume` (the scene-BGM cue gain).
+    scene_bgm: f32,
+    /// `Sound`/`BGVolume` (the UI-effect gain).
+    ui_effect: f32,
+    /// `Sound`/`NoteBGVolume` (the in-song song-BGM gain).
+    song_bgm: f32,
+    /// `Sound`/`NoteKeyVolume` (the struck-key gain).
+    note_key: f32,
+}
+
+impl InSongMix {
+    /// Scene-BGM cue gain (`Sound`/`GameBGVolume`).
+    #[must_use]
+    pub const fn scene_bgm_gain(self) -> f32 {
+        self.scene_bgm
+    }
+
+    /// UI-effect gain (`Sound`/`BGVolume`).
+    #[must_use]
+    pub const fn ui_effect_gain(self) -> f32 {
+        self.ui_effect
+    }
+
+    /// In-song song-BGM gain (`Sound`/`NoteBGVolume`).
+    #[must_use]
+    pub const fn song_bgm_gain(self) -> f32 {
+        self.song_bgm
+    }
+
+    /// Struck-key gain (`Sound`/`NoteKeyVolume`).
+    #[must_use]
+    pub const fn note_key_gain(self) -> f32 {
+        self.note_key
+    }
+
+    fn from_words(words: [u8; 4]) -> Self {
+        let [game_bg, bg, note_bg, note_key] = words;
+        let gain = |word: u8| f32::from(word) / FULL_VOLUME;
+        Self {
+            scene_bgm: gain(game_bg),
+            ui_effect: gain(bg),
+            song_bgm: gain(note_bg),
+            note_key: gain(note_key),
+        }
+    }
+}
+
 /// Exe default `NOTE`/`NoteType` (file `0x1713c7`).
 pub const DEFAULT_NOTE_TYPE: u8 = 0;
 
@@ -640,10 +698,13 @@ impl OptionsSettings {
         self.game_effect
     }
 
-    /// Step one Sound volume by one slider step up or down,
-    /// clamped to the 0–255 domain (the Down/Up buttons).
+    /// Step the first Sound knob: the exe's coupled setter moves both
+    /// `GameBGVolume` (our BGMusic word) and `BGVolume` (our effect
+    /// word) by one step inside the 0–255 domain (`#712`, getter
+    /// `0x5517a0`, setter `0x551710(..., 1)`).
     pub fn step_bgm_music(&mut self, up: bool) {
         self.bgm_music = step_volume(self.bgm_music, up);
+        self.bg_effect = step_volume(self.bg_effect, up);
     }
     /// Step one Sound volume (see [`Self::step_bgm_music`]).
     pub fn step_bg_effect(&mut self, up: bool) {
@@ -665,6 +726,17 @@ impl OptionsSettings {
         self.bg_effect = DEFAULT_SOUND_VOLUME;
         self.game_music = DEFAULT_SOUND_VOLUME;
         self.game_effect = DEFAULT_SOUND_VOLUME;
+    }
+
+    /// All four pinned volume words as one in-song mix.
+    #[must_use]
+    pub fn in_song_mix(&self) -> InSongMix {
+        InSongMix::from_words([
+            self.bgm_music,
+            self.bg_effect,
+            self.game_music,
+            self.game_effect,
+        ])
     }
 
     /// Linear key-strike gain from the GameEffect volume: 255 is
@@ -919,6 +991,23 @@ mod tests {
         assert_eq!(settings.game_effect(), 255);
         assert_eq!(settings.key_gain(), 1.0);
         assert_eq!(settings.bgm_gain(), 1.0);
+    }
+
+    #[test]
+    fn first_sound_knob_moves_game_music_and_effect_words_together() {
+        // #712 static pin: the first Sound knob's setter writes both
+        // BGVolume and GameBGVolume (file `0x16bfd0`-era setter family,
+        // getter `0x5517a0`, coupled setter `0x551710(..., 1)`).
+        let mut settings = OptionsSettings::default();
+        settings.step_bgm_music(false);
+        assert_eq!(settings.bgm_music(), 255 - SOUND_SLIDER_STEP);
+        assert_eq!(
+            settings.bg_effect(),
+            255 - SOUND_SLIDER_STEP,
+            "the first knob moves the coupled word too"
+        );
+        assert_eq!(settings.game_music(), 255, "other words stay put");
+        assert_eq!(settings.game_effect(), 255, "other words stay put");
     }
 
     #[test]
