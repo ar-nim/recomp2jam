@@ -52,11 +52,12 @@ use super::side::{
     MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab,
     PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE,
     LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE,
-    MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES,
-    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949,
-    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949,
-    SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
+    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CURRENT_PROGRESS_CODE,
+    MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE,
+    MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
+    MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
+    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
     SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
     SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
@@ -1551,6 +1552,64 @@ const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
 /// Own-by-design band behind a pinned Korean shop notice. The text
 /// and the host control code are pinned; the band is presentation.
 const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
+
+/// Download bar inks: the exe's mode-2 style is pinned; the
+/// numeric value and the notify behind it stay OPEN (#832), so the
+/// split here is own-by-design presentation over staged rects.
+const MUSIC_SHOP_PROGRESS_BASE_TONE: u32 = pack_xrgb(0x20, 0x60, 0x90);
+const MUSIC_SHOP_PROGRESS_FILL_TONE: u32 = pack_xrgb(0x40, 0xB0, 0xE0);
+
+/// Paint the download bars and row readout while a shop transfer
+/// owns the panel. The completed/total pair comes from the staged
+/// queue; unstaged rects or an idle panel paint nothing.
+pub fn paint_music_shop_progress(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    readout: Option<(usize, usize)>,
+) {
+    let Some((completed, total)) = readout else {
+        return;
+    };
+    // The exe styles both bars with mode 2; only the current bar
+    // carries the visible advance. The total bar keeps the base ink
+    // because its numeric meaning is still OPEN (#832).
+    for (code, filled) in [
+        (MSHOP_CURRENT_PROGRESS_CODE, completed),
+        (MSHOP_TOTAL_PROGRESS_CODE, 0),
+    ] {
+        let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        fill_rect(frame, &rect, MUSIC_SHOP_PROGRESS_BASE_TONE);
+        let filled_width = if total == 0 {
+            0
+        } else {
+            u64::from(rect.w)
+                .saturating_mul(u64::try_from(filled.min(total)).unwrap_or(u64::MAX))
+                .checked_div(u64::try_from(total).unwrap_or(u64::MAX))
+                .and_then(|width| u32::try_from(width).ok())
+                .unwrap_or(0)
+        };
+        fill_rect(
+            frame,
+            &Rect {
+                x: rect.x,
+                y: rect.y,
+                w: filled_width,
+                h: rect.h,
+            },
+            MUSIC_SHOP_PROGRESS_FILL_TONE,
+        );
+    }
+    if let Some(staged) = placements
+        .iter()
+        .find(|placed| placed.code == MSHOP_DOWN_TEXT_CODE)
+    {
+        let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+        paint_text_into_rect(frame, rect, &format!("{completed}/{total}"), CP949_INK);
+    }
+}
 
 /// Ink a standing shop notice inside the staged rect of the control
 /// that posted it. An unstaged control paints nothing (ADR-0003).

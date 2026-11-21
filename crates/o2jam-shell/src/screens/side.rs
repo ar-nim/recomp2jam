@@ -1096,6 +1096,12 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 pub const MSHOP_EXIT_CODE: u32 = 0x1A20_0008;
 pub const MSHOP_DOWN_START_CODE: u32 = 0x1A20_000E;
 pub const MSHOP_DOWN_CANCEL_CODE: u32 = 0x1A20_000F;
+/// Download progress bars (`0x1A500022/23`): the exe styles both
+/// with mode 2 while a transfer handle stands (#832).
+pub const MSHOP_CURRENT_PROGRESS_CODE: u32 = 0x1A50_0022;
+pub const MSHOP_TOTAL_PROGRESS_CODE: u32 = 0x1A50_0023;
+/// First download caption (`IDC_TEXT_MSHOP_DN_CURRENTMUSIC`, `0x1A40001B`).
+pub const MSHOP_DOWN_TEXT_CODE: u32 = 0x1A40_001B;
 /// Owned/download face tabs (`IDC_IMAGE_MSHOP_TABDOWN/TABDELETE`,
 /// `0x1A600076/77`): FUN_004c7d50 writes 0/1 to the face flag.
 pub const MSHOP_TAB_DOWN_CODE: u32 = 0x1A60_0076;

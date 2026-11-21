@@ -109,6 +109,13 @@ pub(crate) struct MusicShopState {
     /// flips a state word and walks both boards; which value is
     /// "all" is OPEN, so the shell records the observed toggle.
     pub(crate) music_shop_select_all: Option<bool>,
+    /// A shop-initiated transfer stands. The exe reads its handle at
+    /// `state+0x58` (`FUN_004f7a10`); the queue itself lives in the
+    /// session's staged engine, so this only marks ownership.
+    pub(crate) music_shop_download_active: bool,
+    /// Songs completed by that transfer. The worker advances the
+    /// visible index at `0x77a868+0x9c` once per finished song.
+    pub(crate) music_shop_download_index: usize,
 }
 
 impl MusicShopState {
@@ -198,6 +205,24 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Completed-song index of the shop transfer (0 before the first
+    /// completion). Paired with the queue length by the caller.
+    pub(crate) fn download_index(&self) -> usize {
+        self.music_shop_download_index
+    }
+
+    /// Whether a shop-initiated transfer owns the download panel.
+    pub(crate) fn is_download_active(&self) -> bool {
+        self.music_shop_download_active
+    }
+
+    /// Advance the visible row readout once per finished transfer.
+    pub(crate) fn note_download_completion(&mut self, count: usize) {
+        if self.music_shop_download_active {
+            self.music_shop_download_index = self.music_shop_download_index.saturating_add(count);
+        }
     }
 
     /// Last SELECTALL toggle, if the control was pressed.
@@ -352,6 +377,7 @@ impl MusicShopState {
             MusicShopAction::DownCancel => {
                 let confirmation = Some((MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE));
                 if armed_notice == confirmation {
+                    self.music_shop_download_active = false;
                     MusicShopEffect::CancelDownloads
                 } else {
                     self.post_notice(MusicShopNotice::CancelDownload, MSHOP_DOWN_CANCEL_CODE);
@@ -368,6 +394,8 @@ impl MusicShopState {
                 if song_ids.is_empty() {
                     MusicShopEffect::None
                 } else {
+                    self.music_shop_download_active = true;
+                    self.music_shop_download_index = 0;
                     MusicShopEffect::StartDownloads(song_ids)
                 }
             }
