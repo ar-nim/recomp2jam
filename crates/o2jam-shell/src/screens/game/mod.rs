@@ -26055,6 +26055,38 @@ mod game_tests {
     }
 
     #[test]
+    fn tutorial_visit_leaves_the_channel_board_unchanged() {
+        // Spec #313 channel-observer story: a private side visit has no
+        // board cell (`docs/captures/journey-audit/313-tutorial-story-matrix.md`
+        // channel column is NA-DESIGN throughout). Live chain: boot ->
+        // Channel (two staged rows) -> Room with FIRSTSTEP ->`visit_side`
+        // -> Tutorial -> exit. The observer must see the same rows and no
+        // new wire frame; `wire_tap=0` in every Tutorial pack, so no
+        // server frame is invented here either.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let before = two_channels();
+        game.set_channels(before.clone());
+        assert_eq!(game.channel_rows(), before.as_slice());
+
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(
+            game.channel_rows(),
+            before.as_slice(),
+            "a side visit is not a channel-board row"
+        );
+        assert!(game.take_channel_message().is_none());
+        assert!(!game.take_channel_logout());
+
+        assert!(game.leave_side());
+        assert_eq!(game.side(), None);
+        assert_eq!(game.channel_rows(), before.as_slice());
+    }
+
+    #[test]
     fn tutorial_guide_art_has_no_wall_clock_timer_beyond_the_chart() {
         // Spec #313 story 12: the tutorial adds no invented timer. The
         // only cadence the exe pins is chart-derived (helper `0x495110`
