@@ -2469,6 +2469,8 @@ impl OnlineSession {
     /// only after the socket accepted it. Both live BACK arms
     /// (the Menu edge and the staged click) funnel through here, so
     /// the 3005 body and its failure rule have one home (#734).
+    /// Room residency clears with the leave: a re-press of the same
+    /// row is a new 3002 join, not a local replay (#733).
     /// `false` keeps the caller's local state untouched for a retry.
     fn send_waiting_leave(&mut self) -> bool {
         let leave = ExitWaiting { exit_type: 0 };
@@ -2481,6 +2483,8 @@ impl OnlineSession {
         }
         self.joined_waiting = false;
         self.joined_room = None;
+        self.resident_room = None;
+        self.clear_room_echo();
         true
     }
 
@@ -10596,6 +10600,119 @@ pub(super) mod session_tests {
                 .is_some_and(|member| member.master),
             "the promoted seat must carry the master emblem"
         );
+    }
+
+    /// #606 arm-2 wire with the #733 rejoin in front of it: the peer
+    /// leaves (3005), rejoins the same row (3002/3003), and only then
+    /// sees the master's leave promoted as 3007 — never a 2007
+    /// disband. A stale resident-room latch would skip the rejoin and
+    /// leave no peer for the master's exit to hand off to.
+    ///
+    /// Live caller chain:
+    ///   window snapshot -> OnlineSession::ingest_snapshot ->
+    ///   ScreenGame::click_waiting_button -> queue_waiting_exit ->
+    ///   OnlineSession::poll_wire -> flush_waiting_exit ->
+    ///   send_waiting_leave (3005) -> room-row press ->
+    ///   press::dispatch_room_press -> begin_room_join -> poll_room_join
+    ///   (3002/3003) -> master BACK -> 3005 -> peer poll_waiting_chat
+    ///   -> apply_user_left -> promote_waiting_master.
+    #[test]
+    fn rejoined_peer_survives_the_masters_leave_without_a_disband_broadcast() {
+        let (master_left_tx, master_left_rx) = mpsc::channel();
+        let (mut peer, peer_server) =
+            joined_waiting_session(guest_snapshot(), move |mut stream| {
+                let leave = read_frame(&mut stream);
+                assert_eq!(leave.id, 3005, "the peer's first exit posts 3005");
+                let rejoin = read_frame(&mut stream);
+                assert_eq!(rejoin.id, 3002, "the same row posts a second join");
+                stream
+                    .write_all(&encode_frame(3003, &hex_bytes(LIVE_JOIN_ANSWER_HEX)))
+                    .unwrap();
+                master_left_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("master leave never arrived");
+                // Last exit with a resident peer: Memoryer promotes it
+                // with 3007, not the 2007 the last occupant receives.
+                stream
+                    .write_all(&encode_frame(3007, &[0, 1, 0, 0, 0, 0, 0, 0]))
+                    .unwrap();
+                assert_quiet(&mut stream);
+            });
+        peer.game_mut()
+            .set_rooms(vec![listed_p380_room(3, "Lobby")]);
+        // The first join left this latch set. The leave must clear it,
+        // or the second press would replay locally as a resident row.
+        peer.resident_room = Some("Lobby".to_owned());
+
+        click_staged_waiting_back(&mut peer);
+        paint_until(&mut peer, |session| session.game.screen() == Screen::Room);
+        peer.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        paint_until(&mut peer, |session| {
+            session.game.screen() == Screen::Waiting && session.joined_room.is_some()
+        });
+
+        let (mut master, master_server) =
+            joined_waiting_session(joined_snapshot(), move |mut stream| {
+                let leave = read_frame(&mut stream);
+                assert_eq!(leave.id, 3005, "the master's exit posts 3005");
+                master_left_tx.send(()).unwrap();
+                assert_quiet(&mut stream);
+            });
+        click_staged_waiting_back(&mut master);
+        paint_until(&mut master, |session| session.game.screen() == Screen::Room);
+        paint_until(&mut peer, |session| {
+            session.game.staged_waiting_member(0).is_none() && session.game.is_room_master()
+        });
+
+        assert_eq!(
+            peer.game.listed_rooms(),
+            &[listed_p380_room(3, "Lobby")],
+            "the room row survives the master's non-last exit"
+        );
+        master_server.join().unwrap();
+        peer_server.join().unwrap();
+    }
+
+    /// #732 stays intact across the #733 rejoin: the first exit
+    /// discards the staged pick, and the fresh 3002/3003 join does
+    /// not invent a 4000-family send from that dead pick.
+    ///
+    /// Live caller chain:
+    ///   window snapshot -> OnlineSession::ingest_snapshot ->
+    ///   ScreenGame::click_waiting_button -> enter_screen(Room) ->
+    ///   ScreenGame::disband_waiting_room -> discard_music_send ->
+    ///   room-row press -> begin_room_join -> poll_room_join ->
+    ///   resolve_room_join -> ScreenGame::set_joined_room.
+    #[test]
+    fn rejoin_after_a_disbanded_pick_posts_no_stale_music_select() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 3005);
+            assert_eq!(read_frame(&mut stream).id, 3002);
+            stream
+                .write_all(&encode_frame(3003, &hex_bytes(LIVE_JOIN_ANSWER_HEX)))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![listed_p380_room(3, "Lobby")]);
+        click_master_song_row_and_ok(&mut session);
+        assert!(session.game.has_pending_music_send());
+
+        click_staged_waiting_back(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        assert!(
+            !session.game.has_pending_music_send(),
+            "the exited room's pick cannot follow into the rejoin"
+        );
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting && session.joined_room.is_some()
+        });
+        assert!(!session.game.has_pending_music_send());
+        server.join().unwrap();
     }
 
     #[test]

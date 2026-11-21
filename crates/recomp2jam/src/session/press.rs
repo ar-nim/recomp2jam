@@ -46,6 +46,11 @@ impl PressEcho {
         matches!(self, Self::Channel { .. })
     }
 
+    /// Whether this echo belongs to a room row.
+    fn is_room(self) -> bool {
+        matches!(self, Self::Room { .. })
+    }
+
     /// Whether this echo owns the given release point.
     fn matches(self, x: i32, y: i32) -> bool {
         match self {
@@ -169,6 +174,14 @@ impl OnlineSession {
     /// (leave, timeout) so no stale release is swallowed.
     pub(crate) fn clear_channel_echo(&mut self) {
         if self.resident_echo.is_some_and(PressEcho::is_channel) {
+            self.resident_echo = None;
+        }
+    }
+
+    /// Forget a resident echo when the room is left, so a later press
+    /// on the same row starts a new join instead of replaying locally.
+    pub(crate) fn clear_room_echo(&mut self) {
+        if self.resident_echo.is_some_and(PressEcho::is_room) {
             self.resident_echo = None;
         }
     }

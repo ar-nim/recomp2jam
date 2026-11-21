@@ -17,7 +17,7 @@ mod live_input_leg_tests {
 
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{
-        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, Frame, Gender,
+        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, Frame, Gender, JoinRoom,
         JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
@@ -409,6 +409,60 @@ mod live_input_leg_tests {
             .filter(|(id, _)| *id == Request::ExitWaiting.id())
             .count();
         assert_eq!(extra_leaves, 0, "one BACK click posts one leave");
+        finish(session, server);
+    }
+
+    /// Rejoin after an exit. A resident-room heuristic must not treat
+    /// the row as still joined once 3005 has cleared the seat: the
+    /// second identical click is a new join and must post 3002 again.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (first room-row click)
+    ///   -> OnlineSession::dispatch_pointer_edge(RoomRow) -> begin_room_join
+    ///   -> poll_room_join (3002/3003) -> echo_entry(Press) -> Waiting
+    ///   -> GameLoop::ingest_snapshot (BACK click) -> ScreenGame::queue_waiting_exit
+    ///   -> OnlineSession::flush_waiting_exit -> send_waiting_leave (3005)
+    ///   -> GameLoop::ingest_snapshot (second room-row click)
+    ///   -> dispatch_pointer_edge(RoomRow) -> begin_room_join -> 3002.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_click_rejoin_after_back_sends_a_second_join_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, reports, server) = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        join_waiting_by_click(&mut session);
+        let first = JoinRoom::decode_body(&wait_for_opcode(&reports, Request::JoinWaiting.id()))
+            .expect("first join body decodes");
+        assert_eq!(first.number, 3, "the first click joined the listed row");
+
+        click_staged(&mut session, Screen::Waiting, "IDC_BUTTON_SWAIT_BACK");
+        assert_eq!(session.screen(), Screen::Room, "BACK left Waiting");
+        paint(&mut session);
+        wait_for_opcode(&reports, Request::ExitWaiting.id());
+
+        join_waiting_by_click(&mut session);
+        let second = JoinRoom::decode_body(&wait_for_opcode(&reports, Request::JoinWaiting.id()))
+            .expect("rejoin body decodes");
+        assert_eq!(
+            second.number, first.number,
+            "the rejoin joined the same row"
+        );
+        assert_eq!(
+            second.password, first.password,
+            "the rejoin kept the row password"
+        );
+        assert_eq!(
+            session.screen(),
+            Screen::Waiting,
+            "the rejoin entered Waiting"
+        );
         finish(session, server);
     }
 
