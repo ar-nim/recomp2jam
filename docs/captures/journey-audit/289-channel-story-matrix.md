@@ -63,8 +63,7 @@ endpoints are an **environment actor**; row 17 names it in the stimulus.
 | **NOTICE-OK-DISMISS** (self:peer OK click) | NA-DESIGN — no popup offline | EVIDENCED — `<OK (400,365)>` → popup gone, rows revealed → t240 `drive.log`, guard `relay_down_dialog_holds_the_channel_list_until_ok_is_pressed` | EVIDENCED — `<OK>` → channel board usable → t240 `drive.log`, exe pin `baf781b8…` | EVIDENCED — `<OK>` → post-OK row frame → pack hash `ea5cc6d6…` | EVIDENCED — `<OK>` → OK itself sends no game frame; the first face click at 15:37:45 sends 1004 → 1005, then 4030/4031, 2000/2001, 2026, 2002/2003, 5028/5029, 2010/2011, 2024 → boot-2 tap `a33fc8d1…8913` + observe `9f942859…2499e` |
 | **FILL-PROBE** (rig operator tooling, #304) | NA-DESIGN — not a 7.55 behavior; no digit probe offline | NA-DESIGN — paint/pins exist (`channel_digits_select_tens_and_ones_frames`), mechanical rig probe is #304 | NA-DESIGN — tooling seam, not a player observation | NA-DESIGN — tooling seam; `docs/channel-fill.md` no-fill/digit pins stand | NA-DESIGN — tooling seam; server needs no probe story |
 
-Counts: **95 cells** — 56 EVIDENCED, 0 GAP, 3 LIVE-FILLED, 1 OPEN-FIX,
-35 NA-DESIGN. The eight former GAP cells were closed by the wave-1 batch:
+Counts after #382 final sweep: **95 cells** — 56 EVIDENCED, 3 LIVE-FILLED, 1 OPEN-FIX, 35 NA-DESIGN. Every disposition names a pack/pin/ticket or an owner item.
 three by qualified exe packs (X-close, relay timing, post-OK wire), five
 honestly re-graded to NA-DESIGN at the Channel-board boundary (no 1004,
 so no room-event push; no exe room creation on this rig). The remaining
