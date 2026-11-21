@@ -25,7 +25,7 @@ pub use avatar_source::{decode_item_table, read_installed_avatar, AvatarSource};
 pub use music_download::{MusicDownload, MusicDownloadRequest};
 pub use playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
-pub use screens::{paint_screen, ScreenGame};
+pub use screens::{paint_screen, AutoPickOutcome, ScreenGame};
 
 use std::collections::HashSet;
 use std::sync::Arc;

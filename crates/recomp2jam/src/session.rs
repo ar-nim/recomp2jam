@@ -163,13 +163,13 @@ use o2jam_net::{
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
     DownloadProgressChanged, Event, ExitPlaying, ExitWaiting, FinalizeRank, Frame, GameMode,
     GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
-    JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, MusicState, Ready, Request,
-    Response, RoomCreated, RoomRemoved, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame,
-    SubmitScore, SyncMemberMusicStateEvent, SyncMusicDownload, UpdateMusicState, UserJoinedWaiting,
-    UserLeftWaiting, WaitingMusicChanged, WireMessage,
+    JoinRoomResponse, JoinedRoom, KeyMode, KeyModeChanged, MemberReadyStateChanged, MusicState,
+    Ready, Request, Response, RoomCreated, RoomRemoved, SetDownloadProgress, SetRoomArena,
+    SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent, SyncMusicDownload,
+    UpdateMusicState, UserJoinedWaiting, UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
-    LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
+    AutoPickOutcome, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
 };
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -3305,7 +3305,11 @@ impl OnlineSession {
             id if id == WaitingMusicChanged::COMMAND => {
                 self.apply_waiting_music_changed(&frame);
             }
-            id if announces_room_music_state(id) => self.announce_music_state(),
+            id if id == KeyModeChanged::COMMAND => self.apply_key_mode_changed(&frame),
+            id if announces_room_music_state(id) => {
+                self.apply_auto_pick_after_seat_change(id);
+                self.announce_music_state();
+            }
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain"),
         }
@@ -3600,6 +3604,58 @@ impl OnlineSession {
         }
     }
 
+    /// Fold one 3001 key-mode change event. The exe's master arm
+    /// (case `0xbb9` of `FUN_004b0a50`, EV `ev_e1395126…`) clears the
+    /// select vectors, mirrors the song nibble and re-sends 4000; a
+    /// peer only learns the new room key mode. The wire body is OPEN,
+    /// so only the first byte (the new mode) is decoded.
+    fn apply_key_mode_changed(&mut self, frame: &Frame) {
+        let Ok(change) = KeyModeChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable key-mode change");
+            return;
+        };
+        if !self.joined_waiting || self.game.screen() != Screen::Waiting {
+            return;
+        }
+        if self.game.is_room_master() && self.game.apply_key_mode_change(change.key_mode) {
+            tracing::info!(
+                key_mode = change.key_mode,
+                "key-mode change cleared the select rows and queued 4000"
+            );
+        }
+        if let Some(room) = self.joined_room.as_mut() {
+            room.key_mode = change.key_mode;
+        }
+    }
+
+    /// Run the exe's in-Waiting auto-pick arm after a seat-change
+    /// broadcast (`FUN_004b42d0` called from 3007 VA `0x4b0bf2` and
+    /// the 0xfb6/4022 arm at VA `0x4b0f1c`). Only the room master owns
+    /// the pick; a peer only updates its own captions from the 4000
+    /// echo. The shell queues that 4000 in its outbox, which the next
+    /// `flush_music_send` writes to the gateway.
+    fn apply_auto_pick_after_seat_change(&mut self, command: u16) {
+        if !self.joined_waiting
+            || self.game.screen() != Screen::Waiting
+            || !self.game.is_room_master()
+        {
+            return;
+        }
+        match self.game.auto_pick_waiting_song() {
+            AutoPickOutcome::Picked(music_id) => tracing::info!(
+                command,
+                music_id,
+                "waiting auto-pick queued 4000 after seat change"
+            ),
+            AutoPickOutcome::Kept => {
+                tracing::debug!(command, "standing room song still fits the key mode")
+            }
+            AutoPickOutcome::Missed => {
+                tracing::warn!(command, "waiting auto-pick found no chart for the key mode")
+            }
+        }
+    }
+
     /// Fold one 3007 leave broadcast into the staged seats: the
     /// departed cover clears on every remaining member (#379). The
     /// promoted-master word is read but does not change our own seat id.
@@ -3623,6 +3679,7 @@ impl OnlineSession {
                 }
             }
         }
+        self.apply_auto_pick_after_seat_change(frame.id);
     }
 
     /// Fold one 3012 frame into the waiting history (undecodable
@@ -8359,6 +8416,133 @@ pub(super) mod session_tests {
                 placement.id
             );
         }
+    }
+
+    #[test]
+    fn waiting_music_change_stages_the_random_flag_from_the_4001_id() {
+        // Ticket #759, live chain: OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat ->
+        //   apply_waiting_frame (4001 / `WaitingMusicChanged`) ->
+        //   ScreenGame::set_room_music -> variant nibble read by
+        //   paint_waiting -> paint_waiting_staged ->
+        //   paint_waiting_music / paint_waiting_level_badge.
+        // The 4001 handler (file `0x15f2d0`) lifts the id's high nibble
+        // into global `0x7789d8`; the shell mirrors that nibble here.
+        let (port, server) = fake_gateway(|mut stream| {
+            let state = read_frame(&mut stream);
+            assert_eq!(state.id, Request::UpdateMusicState.id());
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(joined_snapshot());
+        session.joined_waiting = true;
+        let event = WaitingMusicChanged {
+            music_id: 0xF757,
+            difficulty: 1,
+            speed: 2,
+        };
+        session.apply_waiting_frame(Frame {
+            id: WaitingMusicChanged::COMMAND,
+            payload: event.encode_body(),
+        });
+        assert_eq!(
+            session.game.room_song_variant_nibble(),
+            0xF,
+            "the 4001 id's variant nibble is staged for the painters"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn key_mode_change_requeues_the_room_song_after_clearing_rows() {
+        // Ticket #758, live chain: OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat ->
+        //   apply_waiting_frame (3001 / 0xbb9, `FUN_004b0a50`) ->
+        //   ScreenGame::apply_key_mode_change ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // The exe compares new/old bytes at VAs `0x4b0ff6`/`0x4b1004`,
+        // clears the select vectors and re-sends 4000 at `0x4b10de`.
+        let mut room = joined_snapshot();
+        room.key_mode = 0;
+        room.music_id = 0xF757;
+        room.difficulty = 1;
+        room.speed = 2;
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(room.clone());
+        session.joined_room = Some(room);
+        session.joined_waiting = true;
+        session.apply_waiting_frame(Frame {
+            id: 3001,
+            payload: vec![2],
+        });
+        assert_eq!(session.game.room_key_mode(), 2);
+        assert_eq!(session.game.room_song_variant_nibble(), 0xF);
+        assert_eq!(
+            session.game.take_music_send().map(|pick| pick.music_id),
+            Some(0xF757),
+            "the master re-queues the room song as 4000"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn master_auto_picks_a_matching_chart_when_a_3007_leave_arrives() {
+        // Ticket #757, live chain: OnlineSession::paint (Waiting) ->
+        //   poll_waiting_chat -> drain_waiting_chat ->
+        //   apply_waiting_frame (3007 / UserLeaveWaiting, call VA
+        //   `0x4b0bf2`) -> apply_auto_pick_after_seat_change ->
+        //   ScreenGame::auto_pick_waiting_song ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // FUN_004b42d0 maps key mode 1 to 5 lanes and picks the staged
+        // 757 row. Synthetic catalog and frame: no install-root read.
+        let mut room = joined_snapshot();
+        room.key_mode = 1;
+        room.music_id = 0;
+        room.difficulty = 1;
+        room.speed = 2;
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(room.clone());
+        session.joined_room = Some(room);
+        session.joined_waiting = true;
+        let blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        session.game.set_song_catalog(&entries);
+        session.game.set_song_lanes(757, 5);
+        session.apply_waiting_frame(Frame {
+            id: 3007,
+            payload: vec![1, 0, 0, 0, 0, 0, 0, 0],
+        });
+        assert_eq!(session.game.room_music_id(), Some(757));
+        assert!(
+            session.game.has_pending_music_send(),
+            "the auto-pick queues a 4000 body"
+        );
+        server.join().unwrap();
     }
 
     #[test]

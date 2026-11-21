@@ -71,9 +71,9 @@ pub use relay::{
 pub use rooms::{
     Announce, Announcement, Difficulty, ExitWaiting, GameSpeed, GetMusicMaxScore,
     GetMusicPlayRanking, GetMusicScoreList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    MainRoomAdminMessage, MainRoomChatLine, MainRoomUserMessage, MusicMaxScoreAnswer,
-    MusicPlayRankingAnswer, MusicScoreListAnswer, MusicScoreRow, RankDelta, RankEntry,
-    RankNotification, ReceiveWhisper, RoomList, RoomListEntry, RoomMember, RoomSlot,
+    KeyModeChanged, MainRoomAdminMessage, MainRoomChatLine, MainRoomUserMessage,
+    MusicMaxScoreAnswer, MusicPlayRankingAnswer, MusicScoreListAnswer, MusicScoreRow, RankDelta,
+    RankEntry, RankNotification, ReceiveWhisper, RoomList, RoomListEntry, RoomMember, RoomSlot,
     RoomSlotAction, RoomSlotState, RoomSlotUpdate, RoomState, SendMainRoomMessage, SendWhisper,
     SendWhisperResponse, UserJoinedWaiting, UserLeftWaiting, ROOM_TITLE_LEN,
 };

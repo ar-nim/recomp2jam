@@ -6,7 +6,7 @@ pub mod paint;
 mod select_paint;
 pub mod side;
 
-pub use game::ScreenGame;
+pub use game::{AutoPickOutcome, ScreenGame};
 pub use paint::paint_screen;
 pub use side::{
     bind_side_scene, can_return_side, can_visit_side, load_side_figures, paint_side_scene,

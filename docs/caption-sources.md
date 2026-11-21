@@ -147,6 +147,7 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   rides the same `JoinedRoom.speed` the `SPEED_NUM` caption paints, so
   both name one local speed; a per-member speed distinct from the room
   echo is not staged yet.
+
   The MX branch (a) is wired (#761): an EX chart (difficulty byte 0)
   whose record level word at `+0x14` exceeds 3 shifts the family by
   `0x30` into the MX block (files `0x4b3372`-`0x4b33b7`). The level
@@ -159,6 +160,36 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   at `speed + 0x25` regardless of the difficulty byte (files
   `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is untraced
   (OPEN 5 states the global, not the flag).
+  Speed selector (#756, PINNED): `FUN_004b7c60` (file `0xb7c60`, EV
+  `ev_75d1bc10…`) handles `IDC_BUTTON_SWAIT_SPEED_LEFT/RIGHT`
+  (`0x16200064/65`): step the speed 0..=11, mirror it into the room-speed
+  byte (`0x7789e9`), and repaint this badge frame through setter VA
+  `0x42f870`; the handler sends no wire frame. `ScreenGame::step_waiting_speed`
+  mirrors the visible speed into the joined room and a staged pick, so the
+  badge and `SPEED_NUM` repaint from the same byte. Guards:
+  `speed_button_steps_the_mirrored_speed_and_repaints_the_badge`,
+  `speed_buttons_clamp_the_mirror_at_both_ends`. A captured click leg with
+  every C2S frame and a before/after badge pair stays OPEN (the ticket's
+  next step); the static pin does not assert exe local-only wire behavior.
+  Random-song readout (#759, PINNED): `FUN_004b2e30` sets colour
+  `0xffff00` and stores the string at VA `0x649848` (`<< Random 선택 >>`,
+  EV `ev_46c80b83…`, bytes EV `ev_1ff89f1f…`) when the staged song
+  dword's top nibble stands (files `0x4b30a2`-`0x4b30cd`), and stages
+  AX badge frame `speed + 0x25` at files `0x4b33d4`-`0x4b33e9`. The
+  4001 handler lifts the id's variant nibble into that top nibble
+  (file `0x15f2d0`); `ScreenGame::set_room_music` mirrors it into
+  `room_song_variant_nibble`, which the painters read. Guards:
+  `random_song_inks_the_caption_in_yellow`,
+  `random_song_paints_the_ax_badge_frame`, and the live-frame guard
+  `waiting_music_change_stages_the_random_flag_from_the_4001_id`.
+  One random-song capture with the flag writer (select-time store file
+  `0x3f379` / high-half OR file `0x15caa8`) stays OPEN.
+  One arithmetic branch stays OPEN: an EX chart whose music-record EX
+  level word (`+0x14`) exceeds 3 shifts the family by `0x30` into the
+  MX block (files `0x4b3372`-`0x4b33b7`) — the shell stages no
+  per-chart level, so the next evidence step is a per-chart level
+  source. The AX branch above resets that shift, as in the exe.
+
   Guards: `staged_pick_badge_paints_the_level_frame_the_pick_names` and
   `room_without_a_song_paints_no_level_badge` (Tier 0 seam, synthetic
   cells), `live_waiting_badge_paints_the_bound_level_frame` (real

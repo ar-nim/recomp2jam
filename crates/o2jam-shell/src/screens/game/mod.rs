@@ -92,7 +92,9 @@ use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
 };
-use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry};
+use o2jam_file::{
+    AvatarItemTable, ChartMask, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry,
+};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
@@ -105,8 +107,8 @@ use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicP
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
-    Gender, JoinRoom, JoinedRoom, MemberRole, Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam,
-    StartGame, EQUIPMENT_SLOTS,
+    GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
+    RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
@@ -535,6 +537,23 @@ pub const WAITING_START_TEAMS_NOTICE: &str = "The teams do not match.";
 /// geometry stays OPEN, so this class stands in until then.
 pub const WAITING_START_DOWNLOAD_NOTICE: &str =
     "The song is downloading. Press OK after it completes.";
+/// Auto-pick miss notice at VA `0x6498b0` (EV `ev_3f58de30…`), the
+/// CP949 text the miss arm of `FUN_004b42d0` passes to VA `0x478c90`.
+pub const WAITING_AUTO_PICK_MISS_NOTICE: &str =
+    " 구입하신곡 또는 무료곡 음악파일이\n Music 폴더에 없습니다.\n 뮤직샵에서 다운로드를 하세요!";
+
+/// Result of one in-Waiting auto-pick arm (`FUN_004b42d0`): a row was
+/// staged (`Picked`), the standing song still qualified (`Kept`), or
+/// no row qualified and the miss arm fired (`Missed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoPickOutcome {
+    /// A matching row became the room song; 4000 is queued.
+    Picked(u16),
+    /// The standing song already fits; no frame is queued.
+    Kept,
+    /// No row fits; BACK is armed and the notice is posted.
+    Missed,
+}
 
 /// Notice for one gate verdict (`None` while the verdict has no box
 /// arm: the exe sends `4034` for a missing song and shows nothing).
@@ -682,6 +701,21 @@ pub struct ScreenGame {
     /// guest's face needs no field — it follows the local seat's ready
     /// byte (see [`Self::waiting_confirm_armed`]).
     waiting_start_armed: bool,
+    /// BACK press state armed by the auto-pick miss arm (control code
+    /// `0x16200002`, `FUN_004b42d0`). Painting the pressed face is a
+    /// separate next step; this byte names the armed arm.
+    waiting_back_armed: bool,
+    /// High nibble of the staged room song id, mirrored by the 3001
+    /// key-mode change arm into global `0x77890c` (`FUN_004b0a50`,
+    /// file `0xb10d2`). The exe lifts the variant into the top nibble
+    /// of its 32-bit id; our wire id is a `u16`, so the same nibble is
+    /// bits 12..15 here.
+    room_song_variant_nibble: u8,
+    /// Level ceiling the auto-pick arm applies to catalog rows (`
+    /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
+    /// writer of that global stays OPEN, so an unstaged cap admits
+    /// every row rather than inventing a limit.
+    auto_pick_level_cap: u16,
     /// Pinned Waiting-room notice standing over the top-bar room line:
     /// the exe's notice box over the START control (VA `0x4b22d0`,
     /// calls VA `0x478c90`) for the gate refusals
@@ -1149,6 +1183,9 @@ impl ScreenGame {
             waiting_channel_number: None,
             waiting_room_number: None,
             waiting_start_armed: false,
+            waiting_back_armed: false,
+            room_song_variant_nibble: 0,
+            auto_pick_level_cap: u16::MAX,
             selected_music: None,
             loading_status: None,
             loading_gate_phase: 0,
@@ -3114,12 +3151,33 @@ impl ScreenGame {
     /// song `0x7789d8`, handler VA `0x55f2d0`): the 4025 announcement
     /// and the waiting captions follow it.
     pub fn set_room_music(&mut self, music_id: u16, difficulty: u8, speed: u8) -> &mut Self {
+        // The 4001 handler lifts the id's variant nibble into the top
+        // nibble of global `0x7789d8` (file `0x15f2d0`); the waiting
+        // painters read that flag for the random caption and AX badge.
+        self.room_song_variant_nibble =
+            u8::try_from((u32::from(music_id) >> 12) & 0xF).unwrap_or(0);
         if let Some(room) = self.waiting.as_mut() {
             room.music_id = music_id;
             room.difficulty = difficulty;
             room.speed = speed;
         }
         self
+    }
+
+    /// Whether the staged room song carries the variant flag the exe
+    /// reads as `0x7789d8 & 0xf0000000`. `set_room_music` mirrors the
+    /// 4001 nibble; a direct staged song id with its own high nibble
+    /// names the same flag.
+    #[must_use]
+    fn waiting_random_song(&self) -> bool {
+        self.room_song_variant_nibble != 0
+            || self
+                .waiting
+                .as_ref()
+                .is_some_and(|room| room.music_id & 0xF000 != 0)
+            || self
+                .selected_music
+                .is_some_and(|pick| pick.music_id & 0xF000 != 0)
     }
 
     /// The room song a 4025 announcement is computed for: the joined
@@ -3717,6 +3775,200 @@ impl ScreenGame {
             speed: self.staged_pick_speed()?,
         })
     }
+    /// Highest speed code the Waiting selector can stage (`XR`, code
+    /// 11), the ceiling of `FUN_004b7c60` (file `0xb7c60`).
+    const WAITING_SPEED_MAX: u8 = GameSpeed::Xr as u8;
+
+    /// One Waiting speed-button press: step the visible speed within
+    /// 0..=11 and mirror it into the room-speed byte and a staged pick
+    /// (the exe's globals `0x779808` and `0x7789e9`). No `4000` send:
+    /// the selector handler only stages art (EV `ev_75d1bc10…`).
+    fn step_waiting_speed(&mut self, delta: i8) {
+        let current = self
+            .selected_music
+            .map(|pick| pick.speed)
+            .or_else(|| self.waiting.as_ref().map(|room| room.speed));
+        let Some(current) = current else {
+            return;
+        };
+        let next = current
+            .min(Self::WAITING_SPEED_MAX)
+            .saturating_add_signed(delta)
+            .min(Self::WAITING_SPEED_MAX);
+        if let Some(room) = self.waiting.as_mut() {
+            room.speed = next;
+        }
+        if let Some(pick) = self.selected_music.as_mut() {
+            pick.speed = next;
+        }
+    }
+
+    /// Stage the catalog lane count a local source names for one song
+    /// (`0` clears it back to "no lane source"). The exe reads its
+    /// per-row byte at `+0x1b0`; the shell's OJNList parser has no such
+    /// column, so unstaged rows stay eligible for any key mode.
+    pub fn set_song_lanes(&mut self, song_id: u32, lanes: u8) -> &mut Self {
+        if let Some(row) = self
+            .catalog_songs
+            .iter_mut()
+            .find(|row| row.song_id == song_id)
+        {
+            row.lanes = lanes;
+        }
+        self
+    }
+
+    /// Stage the level ceiling the auto-pick arm applies. The exe
+    /// reads global `0x7798bc`; its writer is OPEN, so the default is
+    /// "no ceiling" instead of an invented level limit.
+    pub fn set_auto_pick_level_cap(&mut self, cap: u16) -> &mut Self {
+        self.auto_pick_level_cap = cap;
+        self
+    }
+
+    /// BACK press state armed by the auto-pick miss arm.
+    #[must_use]
+    pub fn waiting_back_armed(&self) -> bool {
+        self.waiting_back_armed
+    }
+
+    /// High nibble the 3001 arm mirrored from the room song id.
+    #[must_use]
+    pub fn room_song_variant_nibble(&self) -> u8 {
+        self.room_song_variant_nibble
+    }
+
+    /// Apply one 3001 key-mode change event on the master's Waiting
+    /// screen (`FUN_004b0a50` case `0xbb9`, EV `ev_e1395126…`). An
+    /// unchanged byte is a no-op; a change drops the stale select rows
+    /// (pick, search page and draft — the two exe select vectors and
+    /// their dialog globals), mirrors the song's high nibble, and
+    /// queues the standing room song as a fresh 4000. The exe's wire
+    /// body is unpinned; this arm takes the new mode from the staged
+    /// frame byte named by the ticket.
+    pub fn apply_key_mode_change(&mut self, key_mode: u8) -> bool {
+        let Some(room) = self.waiting.as_mut() else {
+            return false;
+        };
+        if room.key_mode == key_mode {
+            return false;
+        }
+        room.key_mode = key_mode;
+        self.room_song_variant_nibble =
+            u8::try_from((u32::from(room.music_id) >> 12) & 0xF).unwrap_or(0);
+        self.selected_music = None;
+        self.select_page = 0;
+        self.select_search_query = None;
+        self.select_search_draft.clear();
+        self.select_music_notice = None;
+        if let Some(song) = self.room_music_selection() {
+            self.outbox.pending_music_send = Some(song);
+        }
+        true
+    }
+
+    /// Lane count the exe's key-mode map names (`FUN_004b42d0`,
+    /// globals `0x7789e4` → 3/5/7). Unknown bytes name no lanes.
+    #[must_use]
+    fn auto_pick_lanes(key_mode: u8) -> Option<u8> {
+        match KeyMode::from_u8(key_mode).ok()? {
+            KeyMode::ThreeKeys => Some(3),
+            KeyMode::FiveKeys => Some(5),
+            KeyMode::SevenKeys => Some(7),
+        }
+    }
+
+    /// Chart bit the exe's difficulty table names (`0x680724` holds
+    /// `1`/`2`/`4`, EV `ev_920e926b…`); `None` for an unknown code.
+    #[must_use]
+    fn auto_pick_chart_mask(difficulty: u8) -> Option<u8> {
+        Difficulty::from_code(difficulty)?;
+        1u8.checked_shl(u32::from(difficulty))
+    }
+
+    /// Whether one catalog row passes the pinned availability, chart,
+    /// lane and level filters ([`Self::auto_pick_waiting_song`]).
+    #[must_use]
+    fn auto_pick_row_fits(
+        row: &SelectMusicSong,
+        lanes: u8,
+        difficulty: u8,
+        mask: u8,
+        cap: u16,
+    ) -> bool {
+        let level = row
+            .levels
+            .get(usize::from(difficulty))
+            .copied()
+            .unwrap_or(0);
+        row.installed
+            && row.charts != ChartMask::NONE
+            && row.charts.bits() & mask != 0
+            && (row.lanes == 0 || row.lanes == lanes)
+            && (level == 0 || level <= cap)
+    }
+
+    /// In-Waiting auto-pick arm (`FUN_004b42d0`). Keep the standing
+    /// song when its row already fits; otherwise pick the first
+    /// catalog row that fits the room's key-mode lanes, availability
+    /// bit, difficulty chart and level ceiling. A match stages the
+    /// song id and queues 4000 through the existing outbox; a miss
+    /// arms BACK and posts the pinned notice. No catalog row is a
+    /// no-op for the notice: the exe reports the miss even with an
+    /// empty table.
+    pub fn auto_pick_waiting_song(&mut self) -> AutoPickOutcome {
+        let (key_mode, difficulty, speed, current_id) = {
+            let Some(room) = self.waiting.as_ref() else {
+                return AutoPickOutcome::Missed;
+            };
+            (
+                room.key_mode,
+                room.difficulty,
+                room.speed,
+                self.selected_music
+                    .map_or(room.music_id, |pick| pick.music_id),
+            )
+        };
+        let (Some(lanes), Some(mask)) = (
+            Self::auto_pick_lanes(key_mode),
+            Self::auto_pick_chart_mask(difficulty),
+        ) else {
+            return AutoPickOutcome::Missed;
+        };
+        let cap = self.auto_pick_level_cap;
+        if self.catalog_songs.iter().any(|row| {
+            u64::from(row.song_id) == u64::from(current_id)
+                && Self::auto_pick_row_fits(row, lanes, difficulty, mask, cap)
+        }) {
+            return AutoPickOutcome::Kept;
+        }
+        let mut chosen = None;
+        for row in &self.catalog_songs {
+            if !Self::auto_pick_row_fits(row, lanes, difficulty, mask, cap) {
+                continue;
+            }
+            if let Ok(music_id) = u16::try_from(row.song_id) {
+                chosen = Some(SetRoomMusic {
+                    music_id,
+                    difficulty,
+                    speed,
+                });
+                break;
+            }
+        }
+        let Some(pick) = chosen else {
+            self.waiting_back_armed = true;
+            self.waiting_notice = Some(WAITING_AUTO_PICK_MISS_NOTICE);
+            return AutoPickOutcome::Missed;
+        };
+        self.waiting_back_armed = false;
+        self.clear_waiting_notice();
+        self.set_selected_music(pick);
+        self.set_room_music(pick.music_id, pick.difficulty, pick.speed);
+        self.outbox.pending_music_send = Some(pick);
+        AutoPickOutcome::Picked(pick.music_id)
+    }
+
     /// Speed surviving a dialog pick: the staged selection's speed
     /// first, else the joined room's. `None` with no source.
     fn staged_pick_speed(&self) -> Option<u8> {
@@ -3992,6 +4244,21 @@ impl ScreenGame {
         // the 4004+4008 send pair through `select_team`.
         if let Some(team) = waiting_team_at(placements, x, y) {
             self.select_team(team);
+            return;
+        }
+        // Speed selector: the two staged `SWAIT_SPEED` buttons step
+        // and mirror the speed without sending 4000 (#756,
+        // `FUN_004b7c60`). Both captions and the LEVEL badge read the
+        // mirrored bytes on the next paint.
+        let speed_step = if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_SPEED_LEFT", x, y) {
+            Some(-1)
+        } else if staged_rect_hit(placements, "IDC_BUTTON_SWAIT_SPEED_RIGHT", x, y) {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(delta) = speed_step {
+            self.step_waiting_speed(delta);
             return;
         }
         // Song-select open trigger: the room master's MUSELECT button
@@ -7054,6 +7321,7 @@ impl ScreenGame {
             song_bpm: self.waiting_song_bpm(),
             skill_counts: self.skill_counts,
             level: self.waiting_level(),
+            random: self.waiting_random_song(),
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
@@ -7998,9 +8266,10 @@ mod game_tests {
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
     use crate::screens::side::{
-        SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
+        SelectMusicSong, SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
     };
     use crate::{GameLoop, MenuKey};
+    use o2jam_file::ChartMask;
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
@@ -12253,6 +12522,93 @@ mod game_tests {
         );
     }
 
+    /// Waiting game with the `LEVEL` badge body extended through the
+    /// AX family (`speed + 0x25`) and a `MUSICNAME` caption well. Song
+    /// id `0xF757` carries the variant nibble the exe lifts from the
+    /// 4001 id into `0x7789d8`'s top nibble.
+    fn random_badge_game() -> ScreenGame {
+        let mut body = AvatarFigure::default();
+        for cell in 0..=0x25u8 + 11 {
+            body.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&level_badge_cell_word(cell).to_le_bytes(), 1, 1)
+                    .unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        let (mut placements, _) = level_badge_scene();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_TEXT_SWAIT_MUSICNAME".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 573,
+                y: 15,
+                w: 200,
+                h: 23,
+            },
+        });
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 0xF757;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(
+            Screen::Waiting,
+            placements,
+            HashMap::from([("Wait_Level.ojs".to_owned(), body)]),
+        );
+        game
+    }
+
+    #[test]
+    fn random_song_paints_the_ax_badge_frame() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #759, FUN_004b2e30 files `0x4b33d4`-`0x4b33e9`: a
+        // variant-flagged song ignores the difficulty family and stages
+        // `speed + 0x25`, so speed 2 paints cell 0x27 alone.
+        let mut game = random_badge_game();
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(0x25 + 2)],
+            "the AX family frame is staged for a random song"
+        );
+    }
+
+    #[test]
+    fn random_song_inks_the_caption_in_yellow() {
+        // Same live chain as `random_song_paints_the_ax_badge_frame`,
+        // ending at `paint_waiting_music`. The variant flag at
+        // `0x4b30a2`-`0x4b30cd` selects colour `0xffff00` and the
+        // string at VA `0x649848` (`<< Random 선택 >>`, EV
+        // `ev_46c80b83…`) instead of the catalog title.
+        let mut game = random_badge_game();
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        let rect = game
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_TEXT_SWAIT_MUSICNAME")
+            .map(|placed| placed.rect)
+            .expect("staged MUSICNAME placement");
+        let ink = o2jam_render::pixels_in_rect(&frame, 800, rect);
+        assert!(
+            ink.contains(&pack_xrgb(0xFF, 0xFF, 0x00)),
+            "the random caption is yellow"
+        );
+        assert!(
+            !ink.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "the random caption does not ink the plain title"
+        );
+    }
+
     #[test]
     fn an_ex_chart_above_level_three_paints_the_mx_badge_family() {
         // Live chain: main.rs::run_play -> Shell::run ->
@@ -12300,6 +12656,267 @@ mod game_tests {
             Vec::<u32>::new(),
             "a room with no song paints no badge"
         );
+    }
+
+    /// Waiting game with the bound `LEVEL` badge and the two staged
+    /// speed buttons (`STATE_WAITING` lines 735-736): the speed-click
+    /// stage for #756.
+    fn speed_button_game(pick: Option<SetRoomMusic>) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 757;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        if let Some(pick) = pick {
+            game.set_selected_music(pick);
+        }
+        let (mut placements, figures) = level_badge_scene();
+        placements.extend([
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_SPEED_LEFT".to_owned(),
+                code: 0x1620_0064,
+                sprite: None,
+                rect: Rect {
+                    x: 647,
+                    y: 378,
+                    w: 33,
+                    h: 36,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_SPEED_RIGHT".to_owned(),
+                code: 0x1620_0065,
+                sprite: None,
+                rect: Rect {
+                    x: 736,
+                    y: 378,
+                    w: 33,
+                    h: 36,
+                },
+            },
+        ]);
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn speed_button_steps_the_mirrored_speed_and_repaints_the_badge() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::ingest_snapshot -> apply_pointer_down ->
+        //   click_dispatch -> click_waiting -> click_waiting_button ->
+        //   (new) step_waiting_speed -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #756, FUN_004b7c60: the RIGHT button increments the
+        // speed (0..11), mirrors it into the room's speed byte, and the
+        // LEVEL badge repaints its `12*difficulty + speed` frame.
+        let mut game = speed_button_game(Some(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 3,
+        }));
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            game.room_music_selection().unwrap().speed,
+            4,
+            "the room-speed byte mirrors the selected speed"
+        );
+        assert_eq!(
+            game.waiting_level().unwrap().speed,
+            4,
+            "the staged pick mirrors the selected speed"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "the speed handler stages art without sending 4000"
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(16)],
+            "the badge repaints the frame for difficulty 1, speed 4"
+        );
+    }
+
+    #[test]
+    fn speed_buttons_clamp_the_mirror_at_both_ends() {
+        // Same live chain as `speed_button_steps_the_mirrored_speed...`;
+        // FUN_004b7c60 floors the decrement at 0 and ceilings the
+        // increment at 11, so no out-of-range cell is ever staged.
+        let mut low = speed_button_game(None);
+        low.waiting.as_mut().unwrap().speed = 1;
+        low.ingest_snapshot(&InputSnapshot::click_at(663, 396));
+        assert_eq!(
+            low.room_music_selection().unwrap().speed,
+            0,
+            "LEFT steps down to speed 0"
+        );
+        low.ingest_snapshot(&InputSnapshot::click_at(663, 396));
+        assert_eq!(
+            low.room_music_selection().unwrap().speed,
+            0,
+            "LEFT at the floor stays at speed 0"
+        );
+
+        let mut high = speed_button_game(None);
+        high.waiting.as_mut().unwrap().speed = 10;
+        high.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            high.room_music_selection().unwrap().speed,
+            11,
+            "RIGHT steps up to speed 11"
+        );
+        high.ingest_snapshot(&InputSnapshot::click_at(752, 396));
+        assert_eq!(
+            high.room_music_selection().unwrap().speed,
+            11,
+            "RIGHT at the ceiling stays at speed 11"
+        );
+    }
+
+    #[test]
+    fn key_mode_change_clears_stale_rows_and_resends_the_room_song() {
+        // Live chain: OnlineSession::apply_waiting_frame (3001) ->
+        //   ScreenGame::apply_key_mode_change -> clear staged rows ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // FUN_004b0a50 case 0xbb9 (EV `ev_e1395126…`) compares new and
+        // old key modes, clears the two select vectors and resets the
+        // dialog globals, copies the song's high nibble to 0x77890c,
+        // then sends 4000 (VA `0x4b10de`).
+        let mut game = auto_pick_game(0);
+        game.set_room_music(0xF757, 1, 2);
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 2,
+        });
+        game.push_select_search_char('x');
+        assert!(game.apply_key_mode_change(2));
+        assert_eq!(game.room_key_mode(), 2, "the new key mode is staged");
+        assert_eq!(game.selected_music(), None, "the stale pick is cleared");
+        assert_eq!(game.select_search_draft(), "", "the stale query is cleared");
+        assert_eq!(
+            game.room_song_variant_nibble(),
+            0xF,
+            "the song high nibble is mirrored"
+        );
+        assert_eq!(
+            game.take_music_send(),
+            Some(SetRoomMusic {
+                music_id: 0xF757,
+                difficulty: 1,
+                speed: 2,
+            }),
+            "the room song is re-sent as 4000"
+        );
+        assert!(
+            !game.apply_key_mode_change(2),
+            "an equal key mode is a no-op"
+        );
+        assert!(!game.has_pending_music_send());
+    }
+
+    /// One catalog row for the auto-pick seam tests: all charts,
+    /// installed, one lane count and one level per difficulty.
+    fn auto_pick_song(id: u32, lanes: u8, level: u16) -> SelectMusicSong {
+        SelectMusicSong {
+            song_id: id,
+            title: format!("Song {id}"),
+            artist: "Artist".to_owned(),
+            levels: [level, level, level],
+            genre: 0,
+            label: None,
+            charts: ChartMask::ALL,
+            installed: true,
+            lanes,
+        }
+    }
+
+    /// Master in Waiting with a key mode and a synthetic three-row
+    /// catalog (3/5/7 lanes). No install-root read.
+    fn auto_pick_game(key_mode: u8) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.key_mode = key_mode;
+        room.music_id = 0;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.catalog_songs = vec![
+            auto_pick_song(100, 3, 4),
+            auto_pick_song(200, 5, 4),
+            auto_pick_song(300, 7, 4),
+        ];
+        game
+    }
+
+    #[test]
+    fn auto_pick_uses_the_room_key_mode_lane_count() {
+        // Live chain: OnlineSession::apply_waiting_frame (3007 /**
+        // 0xfb6) -> ScreenGame::auto_pick_waiting_song ->
+        //   ScreenGame::set_selected_music ->
+        //   PendingOutbox::pending_music_send -> flush_music_send 4000.
+        // FUN_004b42d0: key mode 0/1/2 maps to 3/5/7 lanes; a match
+        // stages the row's song id and sends 4000.
+        for (key_mode, expected_id) in [(0u8, 100u16), (1, 200), (2, 300)] {
+            let mut game = auto_pick_game(key_mode);
+            assert_eq!(
+                game.auto_pick_waiting_song(),
+                AutoPickOutcome::Picked(expected_id),
+                "key mode {key_mode} must pick the {expected_id} row"
+            );
+            assert_eq!(game.room_music_id(), Some(expected_id));
+            assert!(game.has_pending_music_send(), "a match queues 4000");
+        }
+    }
+
+    #[test]
+    fn auto_pick_skips_rows_that_fail_the_pinned_filters() {
+        // Same live chain as `auto_pick_uses_the_room_key_mode_lane_count`.
+        // FUN_004b42d0 requires availability bit 8, the difficulty bit
+        // from the 0x680724 table (1/2/4), and a level word of zero or
+        // at most the staged cap. A zero level bypasses the cap.
+        let mut game = auto_pick_game(1);
+        game.set_auto_pick_level_cap(10);
+        game.catalog_songs = vec![
+            auto_pick_song(101, 3, 4),
+            auto_pick_song(102, 5, 20),
+            SelectMusicSong {
+                installed: false,
+                ..auto_pick_song(103, 5, 4)
+            },
+            SelectMusicSong {
+                charts: ChartMask::NONE,
+                ..auto_pick_song(104, 5, 4)
+            },
+            auto_pick_song(105, 5, 0),
+        ];
+        assert_eq!(
+            game.auto_pick_waiting_song(),
+            AutoPickOutcome::Picked(105),
+            "only the zero-level row is eligible"
+        );
+    }
+
+    #[test]
+    fn auto_pick_miss_arms_back_and_posts_the_notice() {
+        // Same live chain as the match guards. With no eligible row
+        // FUN_004b42d0 arms BACK (0x16200002) and posts the pinned
+        // Korean notice; no 4000 is queued.
+        let mut game = auto_pick_game(2);
+        game.catalog_songs = vec![auto_pick_song(100, 3, 1)];
+        assert_eq!(game.auto_pick_waiting_song(), AutoPickOutcome::Missed);
+        assert!(game.waiting_back_armed(), "the miss arm stages BACK");
+        assert!(
+            game.waiting_notice().is_some(),
+            "the miss arm posts the notice"
+        );
+        assert!(!game.has_pending_music_send(), "a miss sends no 4000");
     }
 
     /// Staged waiting covers plus the `MUSICNAME` top-bar rect

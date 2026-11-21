@@ -142,6 +142,11 @@ wire_enum! {
         /// re-announces its music state (the exe's 4001 arm, VAs
         /// `0x4ab591`/`0x4b0d4e`; handler VA `0x55f2d0`).
         WaitingMusicChanged = 4001,
+        /// Master-only key-mode change in Waiting (`0xbb9`, case arm
+        /// of `FUN_004b0a50`, EV `ev_e1395126…`): clears the select
+        /// rows and re-sends 4000. Body shape is OPEN; the shell takes
+        /// the new mode from the first byte named by ticket #758.
+        KeyModeChanged = 3001,
         RoomArenaEcho = 4003,
         RoomTeamChanged = 4007,
         UserReadyStateChanged = 4009,
@@ -317,6 +322,7 @@ mod tests {
             Event::ScoreCompleted,
             Event::GameRankUpdate,
             Event::WaitingMusicChanged,
+            Event::KeyModeChanged,
             Event::UserLeaveGame,
             Event::WaitingSkillChanged,
             Event::WaitingSkillExChanged,
