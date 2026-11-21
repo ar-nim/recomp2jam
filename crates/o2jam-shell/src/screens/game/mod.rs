@@ -52,19 +52,19 @@ use super::paint::{
     paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_face, paint_music_shop_owned_rows,
-    paint_music_shop_row_selection, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    paint_music_shop_cart, paint_music_shop_face, paint_music_shop_notice,
+    paint_music_shop_owned_rows, paint_music_shop_row_selection, paint_music_shop_top100_chrome,
+    paint_music_shop_wallet, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
     WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
     WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
@@ -79,15 +79,15 @@ use super::side::{
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
     shop_panel_kept, shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
-    MusicShopAction, MusicShopFace, MusicShopRow, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
-    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    MusicShopAction, MusicShopFace, MusicShopNotice, MusicShopRow, MyRoomState, PasswordAction,
+    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
+    SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow,
+    WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS,
+    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -6892,6 +6892,12 @@ impl ScreenGame {
         self.music_shop.selected_row()
     }
 
+    /// Standing music-shop notice and its staging code (#822).
+    #[must_use]
+    pub fn music_shop_notice(&self) -> Option<(MusicShopNotice, u32)> {
+        self.music_shop.notice()
+    }
+
     /// Owned-list rows from the 4031 ids joined to local chart
     /// presence and this page's check marks (#821).
     #[must_use]
@@ -6999,6 +7005,9 @@ impl ScreenGame {
         let Some(action) = music_shop_action_at(&self.side_placements, x, y) else {
             return;
         };
+        if matches!(action, MusicShopAction::OwnedRow(_)) && self.music_download.is_running() {
+            return;
+        }
         if action == MusicShopAction::BackToLobby {
             // Local return to the opening lobby. No 5007 ExitShop
             // body is pinned from a qualified BACK tap, so none is
@@ -7226,6 +7235,7 @@ impl ScreenGame {
                 &self.side_placements,
                 &self.music_shop.owned_rows(),
             );
+            paint_music_shop_notice(frame, &self.side_placements, self.music_shop.notice());
             paint_music_shop_row_selection(
                 frame,
                 &self.side_placements,
@@ -24075,6 +24085,89 @@ mod game_tests {
         assert_ne!(before[band], after[band], "press inks the staged band");
         let outside = 20 * 800 + 400;
         assert_eq!(before[outside], after[outside], "no chrome outside");
+    }
+
+    #[test]
+    fn a_sixth_owned_row_click_posts_the_five_song_notice_and_keeps_five_marks() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // visit_side(MusicShop) -> GameLoop::mouse_click ->
+        // click_music_shop -> music_shop_action_at ->
+        // MusicShopState::apply_action(OwnedRow) -> notice paint.
+        // The five-song cap and the Korean notice are pinned
+        // (FUN_004cdca0, VA 0x64a7d8); the marked-row → download
+        // queue step stays OPEN and is not claimed here.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut blob = Vec::new();
+        for id in 757..763u32 {
+            blob.extend_from_slice(&lanking_record(id, 124.0, "Tune", "Band"));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.stage_music_shop_board(MusicListAnswer {
+            entries: (757..763u16)
+                .map(|id| MusicListEntry {
+                    id,
+                    notes_ex: 3,
+                    notes_nx: 7,
+                    notes_hx: 10,
+                })
+                .collect(),
+            free_music: false,
+        });
+        let placements = (0..12u32)
+            .map(|slot| ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MSHOP_OWNED_FIRST_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 20 + slot as i32 * 30,
+                    w: 20,
+                    h: 20,
+                },
+            })
+            .collect();
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+
+        for slot in 0..5 {
+            game.click_music_shop(20, 30 + slot * 30);
+        }
+        assert_eq!(
+            game.music_shop_owned_rows()
+                .iter()
+                .filter(|row| row.marked)
+                .count(),
+            5
+        );
+        assert_eq!(game.music_shop_notice(), None);
+
+        game.click_music_shop(20, 30 + 5 * 30);
+        assert_eq!(
+            game.music_shop_owned_rows()
+                .iter()
+                .filter(|row| row.marked)
+                .count(),
+            5,
+            "the sixth pick is refused"
+        );
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((MusicShopNotice::FiveSongCap, MSHOP_OWNED_FIRST_CODE + 5))
+        );
+
+        let mut buf = vec![0_u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[188 * 800 + 11], pack_xrgb(0x30, 0x30, 0x90));
     }
 
     #[test]

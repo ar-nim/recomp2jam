@@ -1115,6 +1115,35 @@ pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
 /// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
 pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
 pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
+/// Five-song cap notice at VA `0x64a7d8` (`FUN_004cdca0`).
+pub const MSHOP_FIVE_SONG_CAP_NOTICE: &str = "5개 이상 선택할수 없습니다.";
+/// MUSICDELETE confirmation at VA `0x64a5d4` (`FUN_004c7f70`).
+pub const MSHOP_MUSICDELETE_NOTICE: &str = "선택한 파일을 지우겠습니까?";
+/// DOWN_CANCEL confirmation at VA `0x64a710` (`FUN_004c7f70`).
+pub const MSHOP_DOWN_CANCEL_NOTICE: &str = "다운로드를 취소하시겠습니까?";
+/// One music-shop notice, identified by its pinned CP949 text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicShopNotice {
+    /// A sixth owned row was picked while five were marked.
+    FiveSongCap,
+    /// MUSICDELETE asked before removing the selected files.
+    DeleteFiles,
+    /// DOWN_CANCEL asked before cancelling an active transfer.
+    CancelDownload,
+}
+
+impl MusicShopNotice {
+    /// Pinned CP949 notice text (own-words transcription).
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::FiveSongCap => MSHOP_FIVE_SONG_CAP_NOTICE,
+            Self::DeleteFiles => MSHOP_MUSICDELETE_NOTICE,
+            Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
+        }
+    }
+}
+
 /// First owned-row hit area (`IDC_BUTTON_MY_EX1`); twelve run
 /// contiguously through `+0x0B` (block walk + staged dump).
 pub const MSHOP_OWNED_FIRST_CODE: u32 = 0x1A01_9047;

@@ -49,8 +49,8 @@ use super::side::{
     music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
     planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
     shop_cart_page_rects, shop_cart_slots, wallet_amount_caption, wallet_row_caption, LankingSong,
-    MusicShopFace, MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood,
-    ShopPanel, WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE,
+    MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab,
+    PlanetPromo, ShopGood, ShopPanel, WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE,
     LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_DIFF_CODE,
     MSHOP_GEM_PRICE_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES,
@@ -1547,6 +1547,28 @@ const MUSIC_SHOP_INSTALLED_TONE: u32 = pack_xrgb(0x50, 0xE0, 0x70);
 /// properties (`FUN_004cbdd0`); their sprite faces are OPEN.
 const MUSIC_SHOP_OWNED_MARK_TONE: u32 = pack_xrgb(0x30, 0xC4, 0xF2);
 const MUSIC_SHOP_OWNED_STATUS_TONE: u32 = pack_xrgb(0xE0, 0xC0, 0x40);
+
+/// Own-by-design band behind a pinned Korean shop notice. The text
+/// and the host control code are pinned; the band is presentation.
+const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
+
+/// Ink a standing shop notice inside the staged rect of the control
+/// that posted it. An unstaged control paints nothing (ADR-0003).
+pub fn paint_music_shop_notice(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    notice: Option<(MusicShopNotice, u32)>,
+) {
+    let Some((notice, code)) = notice else {
+        return;
+    };
+    let Some(staged) = placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let rect = scale_rect_to_frame(&staged.rect, frame.w, frame.h);
+    fill_rect(frame, &rect, MUSIC_SHOP_NOTICE_TONE);
+    paint_text_into_rect(frame, rect, notice.text(), CP949_INK);
+}
 
 /// Ink the twelve owned rows' check and installed-status marks in
 /// their staged `MY_EX` rects. The exe's -2/-4 corner offsets and

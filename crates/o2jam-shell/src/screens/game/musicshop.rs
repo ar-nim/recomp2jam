@@ -8,8 +8,9 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
-    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopPrice,
-    MusicShopRow, MSHOP_CART_ROWS, MSHOP_OWNED_ROWS, MSHOP_SONG_ROWS,
+    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopNotice,
+    MusicShopPrice, MusicShopRow, MSHOP_CART_ROWS, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
+    MSHOP_SONG_ROWS,
 };
 
 /// One owned-list row: a 4031 song id, its catalog title, the local
@@ -27,6 +28,9 @@ pub struct OwnedRow {
     /// This row's check mark on the visible owned page.
     pub marked: bool,
 }
+
+/// Exe's five-song selection cap (`FUN_004cdca0`, VA `0x64a7d8`).
+const MAX_SELECTED_SONGS: usize = 5;
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
 /// the music-shop side screen (#139 cluster 4: the Data Clump of all
@@ -82,6 +86,10 @@ pub(crate) struct MusicShopState {
     /// keeps a twelve-column per-page mark table; presses toggle one
     /// cell (`FUN_004cdca0`).
     pub(crate) music_shop_owned_marks: [bool; MSHOP_OWNED_ROWS],
+    /// Standing notice and the staged control code whose rect hosts
+    /// it. The exe posts these strings through its notice helper;
+    /// the host rect is ours-by-design chrome over the bnd layout.
+    pub(crate) music_shop_notice: Option<(MusicShopNotice, u32)>,
 }
 
 impl MusicShopState {
@@ -171,6 +179,17 @@ impl MusicShopState {
     /// Last picked row on the visible page, if any.
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.music_shop_selected_row
+    }
+
+    /// Standing shop notice, if any, with its staging code.
+    pub(crate) fn notice(&self) -> Option<(MusicShopNotice, u32)> {
+        self.music_shop_notice
+    }
+
+    /// Post one notice against a staged control rect. A later notice
+    /// replaces the standing one; the next board press dismisses it.
+    pub(crate) fn post_notice(&mut self, notice: MusicShopNotice, code: u32) {
+        self.music_shop_notice = Some((notice, code));
     }
 
     /// Owned rows from the fetched 4031 ids joined to the catalog
@@ -276,6 +295,9 @@ impl MusicShopState {
     /// the cart `BUYITEM`): the caller queues it on the outbox, so
     /// this board state never touches the wire.
     pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> bool {
+        // A notice owns only the next board press: any control that
+        // follows dismisses it, and the arm may post a fresh one.
+        self.music_shop_notice = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
                 self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
@@ -299,7 +321,20 @@ impl MusicShopState {
             MusicShopAction::OwnedRow(slot) => {
                 if slot < self.music_shop_owned_marks.len() && self.owned_rows().get(slot).is_some()
                 {
-                    self.music_shop_owned_marks[slot] = !self.music_shop_owned_marks[slot];
+                    let already_marked = self.music_shop_owned_marks[slot];
+                    let mark_count = self
+                        .music_shop_owned_marks
+                        .iter()
+                        .filter(|cell| **cell)
+                        .count();
+                    if !already_marked && mark_count >= MAX_SELECTED_SONGS {
+                        self.post_notice(
+                            MusicShopNotice::FiveSongCap,
+                            MSHOP_OWNED_FIRST_CODE + u32::try_from(slot).unwrap_or(0),
+                        );
+                    } else {
+                        self.music_shop_owned_marks[slot] = !already_marked;
+                    }
                 }
                 false
             }
