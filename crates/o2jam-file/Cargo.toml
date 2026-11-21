@@ -16,3 +16,5 @@ zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 o2jam-render = { path = "../o2jam-render" }
+# Hash-pinned sample of the shipped chart pack (issue #737).
+sha2 = "0.10"
