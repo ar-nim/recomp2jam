@@ -5928,6 +5928,17 @@ impl ScreenGame {
         self
     }
 
+    /// Staged rect for one side control code, for guards that drive
+    /// the live click path at the `.bnd` geometry instead of a literal
+    /// aim. `None` when the mounted side block omits the code.
+    #[must_use]
+    pub fn staged_side_control_rect(&self, code: u32) -> Option<Rect> {
+        self.side_placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    }
+
     /// Planet board click through the control-code → action
     /// dispatch table ([`planet_action_at`]): lit-emblem presses
     /// record the family pick and open the channel dialog through
@@ -7070,6 +7081,17 @@ impl ScreenGame {
     /// the item page; the cart keeps its checks.
     pub fn set_shop_catalog(&mut self, table: &o2jam_file::AvatarItemTable) -> &mut Self {
         self.shop.set_catalog(table);
+        self
+    }
+
+    /// Stage the exe's state-3 new-arrivals catalog on the live entry
+    /// path (`main.rs::stage_online_identity`); the seam staging
+    /// above still uses raw file order for its synthetic fixtures.
+    pub fn stage_exe_item_shop_catalog(
+        &mut self,
+        table: &o2jam_file::AvatarItemTable,
+    ) -> &mut Self {
+        self.shop.stage_exe_catalog(table);
         self
     }
 

@@ -1,5 +1,44 @@
 # STATE_SHOP screen (7.55) — evidence log
 
+## Ticket #861 — the goods-grid block (2026-11-22)
+
+Wave-3 leg 6 (`w3-itemshop-*-fixed`, entry SSIM 0.1237 at `70f9a33`)
+shows the exe's four full-body avatar outfits against Rust's raw
+`Itemdata_Korea.dat` face rows. The Room entry handler itself stages
+no goods: `FUN_0048fd20` case `0x13200008` (file `0x8fd20`, EV
+`ev_ac6983f…b584086`) calls `FUN_00478c50(3)` (EV
+`ev_a18e423…51476`) and plays sound `0x138e`. Case 3 of the state
+switch (`FUN_00477990`, file `0x77990`) constructs state 3 via
+`FUN_00497f60` (EV `ev_ea7f654…84229`), whose category/submenu word
+`+0x17/+0x58` starts at `0xc` and gender word `+0x60` at `0`.
+
+The goods grid reads a **staged item-id vector**, not table order:
+`FUN_0049ee90` (`0x9ee90`, EV `ev_9d8667…74b4096`) fills the eight
+`ITEMSHOW` cells (`0x14600035..3C`) from `state+0x68..0x6c`, inks each
+name from `FUN_0052dba0(id)+0x1c`, and resolves the portrait with
+`FUN_0052e730(id,1)`. `FUN_0049ead0` (`0x9ead0`, EV
+`ev_a0af2c0…830ff`) builds that vector for the entry tab `0xc` from
+`FUN_0052dc90` (`0x52dc90`, EV `ev_5946e0…d5385e81`): submenu buckets
+11 down to 1, each vector back to front, keeping records whose worn
+slot `(record+6 >> 7) & 0xf` equals the gender word or is `2`.
+The parsed row exposes those words as `item_type` bytes 0/1 and
+`(item_type >> 23) & 0xf`; a zero table price takes `params[1]`
+(the four pinned outfits 1537/1539/1540/1541 ink `4500` won / `0` gem).
+
+Implementation: `exe_new_arrivals_goods` (`o2jam-shell`) stages that
+order; `stage_online_identity` calls `ScreenGame::stage_exe_item_shop_catalog`
+so both Room ITEMSHOP and MyRoom GOSHOP mount the same catalog. Seam
+setters keep raw file order. Guards: the live-boot catalog guard names
+the first page (블루/투스/해피쥴리/콘트루리 at 4500), and the BUYITEM
+guard drives the staged row and cart buttons to the sheet flag.
+
+OPEN: the paired tap's missing C2S 6001 is the generic 15 s watchdog
+(`FUN_00558b10`, EV `ev_5a705b…c3dfe`), not a shop-only frame; next
+step is a timed session keepalive with a wire diff. The BUYITEM sheet
+exists as the local web overlay (`#397`); the exe's native MESSAGE
+sheet art/text parity stays OPEN pending a paired press frame.
+
+
 Item shop (`CStateShop`, `0xA4`; shared `Payment`/`CMyBag`/`CCart`
 per lifecycle). Read-only walks below; offsets are file offsets
 unless marked VA. Version pin for all EXE rows: `AngelO2Jam.exe`

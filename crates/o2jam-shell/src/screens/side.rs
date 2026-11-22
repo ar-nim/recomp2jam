@@ -1406,6 +1406,47 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
         .collect()
 }
 
+/// Exe's entry catalog for the state-3 `0xc` new-arrivals tab.
+///
+/// `FUN_0049ead0` (`0x9ead0`) asks `FUN_0052dc90` (`0x52dc90`) for
+/// every item bucket; that walk takes submenus 11 down to 1 and each
+/// bucket from its last id back to its first, then keeps records whose
+/// worn slot `(record+6 >> 7) & 0xf` is the gender word or `2`.
+/// `FUN_0049ee90` (`0x9ee90`) inks eight cards from that vector.
+/// The row's `item_type` carries the bucket bytes (`+4`, `+5`) and
+/// the worn slot (`+6..7`); the exe price getter reads `+0x14`,
+/// which for a zero table price is the row's second parsed param word
+/// (`+0x11`, `params[1]`)
+/// (pinned by the four 4500-won outfits in the wave-3 entry frame).
+#[must_use]
+pub fn exe_new_arrivals_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
+    let mut bucketed: Vec<&AvatarItemRow> = table
+        .rows
+        .iter()
+        .filter(|row| {
+            let category = row.item_type & 0xff;
+            let submenu = (row.item_type >> 8) & 0xff;
+            let worn_slot = (row.item_type >> 23) & 0xf;
+            category < 0x1d && (1..0xc).contains(&submenu) && (worn_slot == 0 || worn_slot == 2)
+        })
+        .collect();
+    bucketed
+        .sort_unstable_by_key(|row| std::cmp::Reverse(((row.item_type >> 8) & 0xff, row.item_id)));
+    bucketed
+        .into_iter()
+        .map(|row| ShopGood {
+            item_id: row.item_id,
+            name: row.name.clone(),
+            price: if row.price == 0 {
+                row.params[1]
+            } else {
+                row.price
+            },
+            gem_price: None,
+        })
+        .collect()
+}
+
 /// Lower-left panel face on the Item Shop. The A/B entry frame
 /// (`05b24e64…cb00`, audit D4) opens on MY BAG; the row-pick frame
 /// (`c84b952f…9922e`) shows SHOPPING BAG with the checked row. The
