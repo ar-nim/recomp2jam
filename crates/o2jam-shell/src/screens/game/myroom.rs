@@ -18,10 +18,10 @@ use crate::screens::paint::{
 use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
-    myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
-    myroom_tab_kept, myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab,
-    MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
-    MYROOM_NOTICE_TEXT_CODE,
+    myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_rank_caption,
+    myroom_record_slot, myroom_tab_kept, myroom_wallet_captions, myroom_worn_well_items,
+    MyRoomAction, MyRoomLowerTab, MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState,
+    SideScreen, MYROOM_BAG_CELLS, MYROOM_NOTICE_TEXT_CODE, MYROOM_RANK_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -592,7 +592,13 @@ impl ScreenGame {
         // Identity fields belong to the status face; the exe's default
         // Inventory face hides them with the rest of that plate (#369).
         let mut captions = if self.myroom.panel() == MyRoomPanel::Status {
-            myroom_identity_captions(character)
+            let mut status = myroom_identity_captions(character);
+            // STATUS rank from the staged web word (FUN_004a7a80,
+            // EV ev_4ba373ad…). Its wire source stays OPEN.
+            if let Some(rank) = myroom_rank_caption(self.myroom_rank_word) {
+                status.push((MYROOM_RANK_CODE, rank));
+            }
+            status
         } else {
             Vec::new()
         };

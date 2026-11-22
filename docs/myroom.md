@@ -214,6 +214,24 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+Ticket #810 adds the remaining STATUS words from the same dossier:
+nickname fits its staged rect (the exe's 121-pixel fit loop), bonus
+prints `"%d PT"` from `0x768b58`, penalty count/level print `"%d"` /
+`"Lv %d"` from `0x76fc64/66`, and rank `0x1540003d` prints the exe's
+`" %d 등"` for a nonzero web-served word `0x768b78`. Our nickname,
+level, exp, next-up, bonus and penalties already ink from the staged
+2001 character; rank is staged explicitly via
+`ScreenGame::set_myroom_rank_word` because that word's writer is OPEN.
+A fresh REA 6.9.0 / Ghidra 12.2 dossier for `FUN_004a7a80` is
+`ev_4ba373ad8aab8b9cb9f8adfae1ac6e8860fce4277d9bc5b22368a3b8283218ef`;
+a raw read of file `0x249474` confirms `b5 ee` = `등` (the #180 row's
+`만` is a transcription error). Guards:
+`myroom_status_prints_the_web_served_rank_with_the_exe_format`,
+`myroom_status_inks_the_staged_rank_word_in_its_bnd_rect` and
+`myroom_status_fits_a_long_nickname_inside_121_pixels`. OPEN: pair a
+known-rank exe STATUS frame with the wire field that feeds `0x768b78`;
+no such live capture exists, so the staged word is never inferred here.
+
 ## Gift pager wrap/clamp (ticket #806, 2026-11-22)
 
 `FUN_004a3ee0` cases `0x15200048/49` (file `0xa3ee0`,

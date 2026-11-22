@@ -21,6 +21,21 @@ pub const NEXT_UP_THRESHOLDS: [u32; 99] = [
     4712434, 4863513, 5017805, 5175344, 5336164, 5500299, 5667783,
 ];
 
+/// Rank caption from the exe's web-served rank word `0x768b78`.
+/// `FUN_004a7a80` (file `0xa7a80`, EV
+/// `ev_4ba373ad8aab8b9cb9f8adfae1ac6e8860fce4277d9bc5b22368a3b8283218ef`)
+/// inks `0x1540003d` only for a nonzero word, with the cp949 format at
+/// file `0x249474`: `" %d 등"`. The ticket transcribed the last syllable
+/// as `만`; the raw bytes `b5 ee` decode to `등`, so the exe wins.
+/// The word's wire writer is untraced (OPEN), so callers stage it
+/// explicitly instead of guessing a 2001 field.
+#[must_use]
+pub fn myroom_rank_caption(rank_word: Option<i32>) -> Option<String> {
+    rank_word
+        .filter(|word| *word != 0)
+        .map(|word| format!(" {word} 등"))
+}
+
 /// Threshold printed by the next-up cell for one level. Levels outside
 /// the table print nothing in the exe: no guess is substituted.
 #[must_use]

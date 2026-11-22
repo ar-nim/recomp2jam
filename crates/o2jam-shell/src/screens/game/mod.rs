@@ -914,6 +914,10 @@ pub struct ScreenGame {
     /// Staged pass/membership state behind the FREEINFO lines. The
     /// wire writer of the exe's `0x768b34` word stays OPEN.
     myroom_pass: MyRoomPassInfo,
+    /// Web-served rank word read by the exe at `0x768b78` for the
+    /// STATUS rank cell. No wire writer is pinned (OPEN), so callers
+    /// stage it explicitly; `None` inks nothing.
+    myroom_rank_word: Option<i32>,
     /// NOTICE_TEXT caption value. The exe's writer is untraced, so
     /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
     /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
@@ -1320,6 +1324,7 @@ impl ScreenGame {
             myroom_counts: [0; 17],
 
             myroom_pass: MyRoomPassInfo::default(),
+            myroom_rank_word: None,
 
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1962,6 +1967,14 @@ impl ScreenGame {
     /// staged word the exe's blank case holds.
     pub fn set_myroom_pass(&mut self, pass: MyRoomPassInfo) -> &mut Self {
         self.myroom_pass = pass;
+        self
+    }
+
+    /// Stage the web-served rank word for the STATUS rank cell. The
+    /// exe's writer of `0x768b78` is untraced (OPEN): staging is the
+    /// whole source seam, and no 2001 field is inferred.
+    pub fn set_myroom_rank_word(&mut self, word: Option<i32>) -> &mut Self {
+        self.myroom_rank_word = word;
         self
     }
 
@@ -15762,12 +15775,23 @@ mod game_tests {
         }
     }
 
+    /// Staged rank TEXT rect: a distinct corner so a rank paint guard
+    /// can attribute every changed pixel to the rank cell alone.
+    fn myroom_rank_rect() -> Rect {
+        Rect {
+            x: 700,
+            y: 10,
+            w: 40,
+            h: 20,
+        }
+    }
+
     fn myroom_open_overlay() -> ScreenGame {
         use super::super::side::{
             MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
             MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
             MYROOM_GIFT_RIGHT_CODE, MYROOM_GIFT_TAB_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE,
-            MYROOM_NICKNAME_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
+            MYROOM_NICKNAME_CODE, MYROOM_RANK_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
         };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -15790,6 +15814,7 @@ mod game_tests {
             myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
             myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
             myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
+            myroom_hit_placement(MYROOM_RANK_CODE, myroom_rank_rect().x, myroom_rank_rect().y),
         ];
         game.load_side_scene(placements, HashMap::new());
         assert!(game.visit_side(SideScreen::MyRoom));
@@ -17778,6 +17803,172 @@ mod game_tests {
         };
         assert_eq!(caption(MYROOM_EXP_CODE), Some(" 2133"));
         assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some(" 884"));
+    }
+
+    #[test]
+    fn myroom_status_inks_the_staged_rank_word_in_its_bnd_rect() {
+        // Live caller chain (paint):
+        //   GameLoop::paint -> ScreenGame::paint_side -> paint_myroom_overlay
+        //   -> myroom_rank_caption -> paint_myroom_data.
+        // Feed seam: the exe's `0x768b78` web writer is untraced (OPEN),
+        // so callers stage the word explicitly; no 2001 field is claimed.
+        // Pure shell state with synthetic art, so no install-root skip.
+        use super::super::side::MYROOM_RANK_CODE;
+        let _ = MYROOM_RANK_CODE;
+        let mut game = myroom_open_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
+        let before = paint_myroom_panel(&mut game);
+        game.set_myroom_rank_word(Some(7));
+        let after = paint_myroom_panel(&mut game);
+        let rank = myroom_rank_rect();
+        let changed: Vec<usize> = (0..after.len())
+            .filter(|index| before[*index] != after[*index])
+            .collect();
+        assert!(!changed.is_empty(), "the staged rank word must ink");
+        assert!(
+            changed.iter().all(|index| {
+                let x = (index % 800) as i32;
+                let y = (index / 800) as i32;
+                x >= rank.x
+                    && x < rank.x + rank.w as i32
+                    && y >= rank.y
+                    && y < rank.y + rank.h as i32
+            }),
+            "rank ink must stay inside its staged rect"
+        );
+    }
+
+    /// Paint the STATUS nickname cell with one staged name. The rect is
+    /// the exe's 121-pixel fit width (file `0xa7a80`, EV
+    /// `ev_4ba373ad…`); no geometry is copied from the archive here.
+    fn myroom_nickname_paint(name: &str) -> Vec<u32> {
+        use super::super::side::MYROOM_NICKNAME_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(CharacterInfo {
+            nickname: name.to_owned(),
+            ..myroom_test_character(Vec::new())
+        });
+        let rect = Rect {
+            x: 10,
+            y: 100,
+            w: 121,
+            h: 20,
+        };
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_NICKNAME_CODE,
+                sprite: None,
+                rect,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.show_myroom_panel(MyRoomPanel::Status);
+        paint_myroom_panel(&mut game)
+    }
+
+    #[cfg(any())]
+    /// Two-frame PCROOMMARK body: frame 0 red, frame 1 green. The
+    /// staged placement code and rect are synthetic; no archive data.
+    fn myroom_pc_room_overlay() -> (ScreenGame, Rect) {
+        use super::super::side::{MyRoomPassInfo, MYROOM_PCROOMMARK_CODE};
+        use crate::avatar::FigureLayer;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_pass(MyRoomPassInfo::default());
+        let rect = Rect {
+            x: 700,
+            y: 40,
+            w: 20,
+            h: 20,
+        };
+        let mut figure = solid_figure(20, 20, 0xF800);
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(
+                &vec![0x07E0u16.to_le_bytes(); 20 * 20].concat(),
+                20,
+                20,
+            )
+            .expect("green frame"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "PCRoomMark.ojs".to_owned(),
+                code: MYROOM_PCROOMMARK_CODE,
+                sprite: Some("PCRoomMark.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([("PCRoomMark.ojs".to_owned(), figure)]),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, rect)
+    }
+
+    #[cfg(any())]
+    #[test]
+    fn myroom_pc_room_mark_stages_frame_one_only_for_the_exe_pass_words() {
+        // Live caller chain: GameLoop::paint -> ScreenGame::paint_side
+        // -> paint_scene_figures_selected -> myroom_pc_room_mark_kept /
+        // myroom_pc_room_mark_frame. The same staged pass word feeds
+        // FREEINFO (#800); its wire writer stays OPEN.
+        // Static oracle: FUN_004a3730 (file `0xa3730`, EV
+        // `ev_1b8cb135…`) looks up `0x1550006a` and stages frame 1 for
+        // `0x768b34 == 1 || == 0x800` only; every other word paints
+        // no mark. Pure synthetic paint, so no install-root skip.
+        use super::super::side::MyRoomPassInfo;
+        let paint_center = |word: Option<u32>| {
+            let (mut game, rect) = myroom_pc_room_overlay();
+            game.set_myroom_pass(MyRoomPassInfo {
+                word,
+                ..MyRoomPassInfo::default()
+            });
+            let buf = paint_myroom_panel(&mut game);
+            buf[((rect.y + 10) as usize) * 800 + (rect.x + 10) as usize]
+        };
+        let green = pack_xrgb(0, 255, 0);
+        assert_eq!(paint_center(Some(1)), green, "pass 1 stages frame 1");
+        assert_eq!(
+            paint_center(Some(0x800)),
+            green,
+            "pass 0x800 stages frame 1"
+        );
+        for word in [None, Some(0), Some(2), Some(0x7FF)] {
+            assert_ne!(paint_center(word), green, "word {word:?} stages no mark");
+        }
+    }
+
+    #[test]
+    fn myroom_status_fits_a_long_nickname_inside_121_pixels() {
+        // Live caller chain: GameLoop::paint -> ScreenGame::paint_side
+        // -> paint_myroom_overlay -> myroom_identity_captions
+        // -> paint_myroom_data -> paint_text_into_rect.
+        // The exe's 121-pixel fit loop is file `0xa7a80` (EV
+        // `ev_4ba373ad…`); our modern font rasterizer fits into the
+        // staged rect instead of the exe's glyph advances (owner pin).
+        // Pure seam paint with synthetic art, so no install-root skip.
+        let short = myroom_nickname_paint("A");
+        let long =
+            myroom_nickname_paint("가나다라마바사아자차카타파하가나다라마바사아자차카타파하");
+        let changed: Vec<usize> = (0..long.len())
+            .filter(|index| short[*index] != long[*index])
+            .collect();
+        assert!(!changed.is_empty(), "a longer name must ink");
+        assert!(
+            changed.iter().all(|index| {
+                let x = (index % 800) as i32;
+                let y = (index / 800) as i32;
+                (10..131).contains(&x) && (100..120).contains(&y)
+            }),
+            "a long nickname must fit its 121-pixel rect"
+        );
     }
 
     #[test]
