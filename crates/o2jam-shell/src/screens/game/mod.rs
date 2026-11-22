@@ -62,28 +62,28 @@ use super::paint::{
     myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
     myroom_pc_room_mark_kept, paint_avi_scene, paint_billing_failure_notice,
     paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record,
-    paint_dialog_frame_record_at_anchor_of, paint_dialog_scene, paint_information_message,
-    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
-    paint_music_shop_cashfillup_notice, paint_music_shop_face, paint_music_shop_genre_frames,
-    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_dialog_frame_record_at_anchor_of, paint_dialog_scene, paint_dialog_scene_filtered,
+    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
+    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
+    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
+    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -103,10 +103,11 @@ use super::side::{
     SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
     SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
     ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
-    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
-    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE,
+    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -3924,8 +3925,12 @@ impl ScreenGame {
         let hovered = self
             .pointer
             .and_then(|(x, y)| dialog_control_code(&art.placements, x, y));
+        let key_modes_inert = self.create_room_key_modes_inert();
         for placed in &art.placements {
             if placed.code == 0 {
+                continue;
+            }
+            if key_modes_inert && Self::is_create_room_key_mode_code(placed.code) {
                 continue;
             }
             let state = self.dialog_frames.frame_for(host, hovered, placed.code);
@@ -3933,6 +3938,27 @@ impl ScreenGame {
                 paint_dialog_frame_record(frame, art, placed.code, record);
             }
         }
+    }
+
+    /// Key-mode control codes of the create-room sheet. Grouped so
+    /// the scene, frame-state, and selection layers withhold the same
+    /// pair at the fresh-open sentinel.
+    #[must_use]
+    fn is_create_room_key_mode_code(code: u32) -> bool {
+        matches!(
+            code,
+            CREATE_ROOM_3KEY_MODE_CODE | CREATE_ROOM_7KEY_MODE_CODE
+        )
+    }
+
+    /// Fresh-open create-room key plates stay inert chrome: the exe
+    /// sentinel (`+0x20d = 3`, `FUN_004351e0`) leaves no key mode,
+    /// and the sheet's own baked plates are the disabled face. A
+    /// key-body hover or press would paint an enabled plate there.
+    #[must_use]
+    fn create_room_key_modes_inert(&self) -> bool {
+        self.room_dialog == Some(RoomDialog::CreateRoom)
+            && self.create_room_form.seven_key.is_none()
     }
 
     /// Shelf cell under the pointer on the open Item Shop side.
@@ -8516,7 +8542,10 @@ impl ScreenGame {
         match self.room_dialog {
             Some(RoomDialog::CreateRoom) => {
                 if let Some(art) = self.create_room_art.as_ref() {
-                    paint_dialog_scene(frame, art);
+                    let key_modes_inert = self.create_room_key_modes_inert();
+                    paint_dialog_scene_filtered(frame, art, |placed| {
+                        !(key_modes_inert && Self::is_create_room_key_mode_code(placed.code))
+                    });
                     self.paint_create_room_texts(frame, &art.placements);
                 }
             }
@@ -8574,9 +8603,11 @@ impl ScreenGame {
     /// file `0x4f6a30`, ev_9911bf18…; `FUN_004f72b0`, file `0x4f72b0`,
     /// ev_196cde65…; dialog open `FUN_00433b60`, file `0x433b60`).
     /// Geometry and sprite ids come only from the staged placements.
-    /// Fresh open carries the exe sentinel (`+0x20d = 3`, `+0x20e = 2`)
-    /// and paints base faces for both pairs until a toggle press;
-    /// the OK notice for an untouched sentinel stays OPEN.
+    /// Fresh open carries the exe sentinel (`+0x20d = 3`, `+0x20e = 2`):
+    /// the mode pair rests on its base faces, while the key pair keeps
+    /// the disabled plates baked into `Dialog_CreateRoom.ojs` until a
+    /// key press gives it a mode context (cw-02, #844). The OK notice
+    /// for an untouched sentinel stays OPEN.
     fn paint_create_room_toggle_selection(&self, frame: &mut Frame<'_>) {
         if self.room_dialog != Some(RoomDialog::CreateRoom) {
             return;
@@ -8619,10 +8650,9 @@ impl ScreenGame {
                 CREATE_ROOM_3KEY_MODE_CODE,
                 CREATE_ROOM_7KEY_MODE_CODE,
             ),
-            None => {
-                Self::repaint_toggle_base(frame, art, CREATE_ROOM_3KEY_MODE_CODE);
-                Self::repaint_toggle_base(frame, art, CREATE_ROOM_7KEY_MODE_CODE);
-            }
+            // The scene and frame-state layers withhold both key
+            // bodies at the sentinel; keep their baked plates visible.
+            None => {}
         }
     }
 
@@ -23874,6 +23904,23 @@ mod game_tests {
         assert!(!body.has_password);
     }
 
+    /// Sheet body with the key-plate footprint baked in. Real
+    /// `Dialog_CreateRoom.ojs` (`Interface1.opi` slot 142, one 425x433
+    /// record at 188,71) carries the dark, disabled 3KEY/7KEY plates;
+    /// the archive-free fixture uses a solid stand-in over the same
+    /// staged area.
+    fn create_room_sheet_with_baked_key_plates() -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&0x001F_u16.to_le_bytes().repeat(320 * 160), 320, 160)
+                .expect("synthetic create-room sheet"),
+            dx: 188,
+            dy: 71,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
     /// Three staged records per toggle body: base, hover, selected.
     /// The selected record carries the archive's one-pixel anchor
     /// offset, so a stale selected face cannot hide behind a base
@@ -23913,7 +23960,10 @@ mod game_tests {
                 toggle("SevenKey", CREATE_ROOM_7KEY_MODE_CODE, 60, 50),
             ],
             HashMap::from([
-                ("Dialog_test.ojs".to_owned(), dialog_body_figure(188, 71)),
+                (
+                    "Dialog_test.ojs".to_owned(),
+                    create_room_sheet_with_baked_key_plates(),
+                ),
                 (
                     "CreateRoom_Normal.ojs".to_owned(),
                     three_record_toggle_figure(10, 10),
@@ -23969,19 +24019,20 @@ mod game_tests {
     }
 
     #[test]
-    fn create_room_fresh_open_leaves_both_toggle_pairs_on_base_faces() {
-        // Ticket #840. Live caller chain: main.rs::run_play -> winit
+    fn create_room_fresh_open_keeps_key_plates_on_the_baked_disabled_faces() {
+        // Ticket #844. Live caller chain: main.rs::run_play -> winit
         // CREATE click -> ScreenGame::click_room_control ->
         // open_create_room_dialog -> paint_at -> paint_room ->
         // paint_create_room_toggle_selection. Exe fresh open writes
-        // +0x20d=3 / +0x20e=2 (FUN_004351e0) and cw-02 shows no
-        // selected outline on either pair.
+        // +0x20d=3 / +0x20e=2 (FUN_004351e0); cw-02 shows the mode
+        // plates at rest and both key plates baked dark in the sheet.
         let mut game = hover_room_lobby();
         stage_three_record_toggles(&mut game);
         game.open_create_room_dialog();
         game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
         let [normal, live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
         let base = pack_xrgb(0xFF, 0, 0);
+        let baked = pack_xrgb(0, 0, 0xFF);
         assert!(
             near_xrgb(normal, base),
             "NORMAL must start on its staged base face, got {normal:#010x}"
@@ -23991,12 +24042,64 @@ mod game_tests {
             "LIVE must start on its staged base face, got {live:#010x}"
         );
         assert!(
-            near_xrgb(three_key, base),
-            "3KEY must start on its staged base face, got {three_key:#010x}"
+            near_xrgb(three_key, baked),
+            "3KEY must keep the sheet's baked disabled face, got {three_key:#010x}"
         );
         assert!(
-            near_xrgb(seven_key, base),
-            "7KEY must start on its staged base face, got {seven_key:#010x}"
+            near_xrgb(seven_key, baked),
+            "7KEY must keep the sheet's baked disabled face, got {seven_key:#010x}"
+        );
+    }
+
+    #[test]
+    fn fresh_open_key_plates_stay_disabled_under_the_cursor() {
+        // Ticket #844. Live caller chain: main.rs::run_play -> winit
+        // CREATE click -> open_create_room_dialog -> pointer snapshot ->
+        // paint_at -> paint_dialog_frame_states -> key pair stays inert
+        // while +0x20d=3 (FUN_004351e0). Hover must not light a plate
+        // the exe leaves as baked chrome.
+        let mut game = hover_room_lobby();
+        stage_three_record_toggles(&mut game);
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(188 + 60 + 20, 71 + 50 + 15));
+        let [_normal, _live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
+        let baked = pack_xrgb(0, 0, 0xFF);
+        assert!(
+            near_xrgb(three_key, baked),
+            "hovering 3KEY at the sentinel must keep the baked face, got {three_key:#010x}"
+        );
+        assert!(
+            near_xrgb(seven_key, baked),
+            "hovering 7KEY at the sentinel must keep the baked face, got {seven_key:#010x}"
+        );
+    }
+
+    #[test]
+    fn first_key_press_lifts_the_baked_disabled_faces() {
+        // Ticket #844. Live caller chain: main.rs::run_play -> winit
+        // CREATE click -> InputSnapshot::click_at -> ingest_snapshot ->
+        // apply_pointer_down -> click_room_dialog -> CreateRoomForm::seven_key
+        // -> paint_at -> paint_room -> paint_create_room_toggle_selection.
+        // The first press gives the pair a mode context; both faces
+        // then paint from the staged bodies, never the baked chrome.
+        let mut game = hover_room_lobby();
+        stage_three_record_toggles(&mut game);
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        let click_seven_key = |game: &mut ScreenGame| {
+            game.ingest_snapshot(&InputSnapshot::click_at(188 + 60 + 20, 71 + 50 + 15));
+        };
+        click_seven_key(&mut game);
+        let [_normal, _live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
+        let base = pack_xrgb(0xFF, 0, 0);
+        let selected = pack_xrgb(0, 0xFF, 0);
+        assert!(
+            near_xrgb(three_key, base),
+            "3KEY must leave the baked face when 7KEY is picked, got {three_key:#010x}"
+        );
+        assert!(
+            near_xrgb(seven_key, selected),
+            "7KEY must paint its staged selected face, got {seven_key:#010x}"
         );
     }
 
@@ -24020,13 +24123,20 @@ mod game_tests {
         let [normal, live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
         let base = pack_xrgb(0xFF, 0, 0);
         let selected = pack_xrgb(0, 0xFF, 0);
+        let baked = pack_xrgb(0, 0, 0xFF);
         assert!(near_xrgb(normal, selected), "NORMAL must be selected");
         assert!(
             near_xrgb(live, base),
             "LIVE must return to its staged base face after NORMAL is chosen, got {live:#010x}"
         );
-        assert!(near_xrgb(three_key, base));
-        assert!(near_xrgb(seven_key, base));
+        assert!(
+            near_xrgb(three_key, baked),
+            "3KEY keeps the baked plate until a key mode is picked, got {three_key:#010x}"
+        );
+        assert!(
+            near_xrgb(seven_key, baked),
+            "7KEY keeps the baked plate until a key mode is picked, got {seven_key:#010x}"
+        );
         let anchor_row = live_toggle_selected_anchor_row(&mut game);
         assert!(
             near_xrgb(anchor_row, base),
@@ -24148,8 +24258,15 @@ mod game_tests {
             "fresh open leaves NORMAL on its base face"
         );
         assert!(near_xrgb(live, pack_xrgb(0xFF, 0, 0)));
-        assert!(near_xrgb(three_key, pack_xrgb(0xFF, 0, 0)));
-        assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
+        let key_body = pack_xrgb(0xFF, 0, 0);
+        assert!(
+            !near_xrgb(three_key, key_body),
+            "fresh-open 3KEY body is withheld, got {three_key:#010x}"
+        );
+        assert!(
+            !near_xrgb(seven_key, key_body),
+            "fresh-open 7KEY body is withheld, got {seven_key:#010x}"
+        );
 
         click_toggle(&mut game, 60, 10);
         let [normal, live, three_key, seven_key] = faces(&mut game);
@@ -24162,10 +24279,10 @@ mod game_tests {
             "NORMAL returns to the base face when LIVE is picked"
         );
         assert!(
-            near_xrgb(three_key, pack_xrgb(0xFF, 0, 0)),
-            "the key pair stays on its sentinel until a key toggle is pressed"
+            !near_xrgb(three_key, key_body),
+            "the key bodies stay withheld until a key toggle is pressed"
         );
-        assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
+        assert!(!near_xrgb(seven_key, key_body));
 
         click_toggle(&mut game, 60, 50);
         let [normal, live, three_key, seven_key] = faces(&mut game);
