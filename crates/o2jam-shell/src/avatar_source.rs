@@ -115,6 +115,19 @@ pub fn read_installed_avatar(root: &Path) -> Option<Arc<AvatarSource>> {
     }
 }
 
+/// Drop every cached decoded source so the next read decodes again.
+/// Test-only hook behind the `test-support` feature: downstream guards
+/// force a cache miss to prove identity reuse is caller-owned (#862).
+#[cfg(feature = "test-support")]
+pub fn clear_decoded_avatar_cache() {
+    if let Some(cache) = DECODED_AVATAR_CACHE.get() {
+        let mut cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{read_installed_avatar, AVATAR_ARCHIVE_RELATIVE};

@@ -6725,6 +6725,14 @@ impl ScreenGame {
         self.set_decoded_avatar_source(&Arc::new(AvatarSource::with_table(archive, table)))
     }
 
+    /// The decoded source staged by the last identity landing, if any.
+    /// Callers compare `Arc` identity to pin that repeated landings
+    /// reuse one decode rather than silently re-decoding the archive.
+    #[must_use]
+    pub fn staged_avatar_source(&self) -> Option<&Arc<AvatarSource>> {
+        self.avatar_source.as_ref()
+    }
+
     /// Stage a source decoded once by [`crate::avatar_source`]. The
     /// catalog, portraits, seats, and shop pane read the same shared
     /// bytes; no landing decodes the archive again.

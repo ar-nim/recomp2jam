@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Test-only hooks (cache eviction) for downstream parity guards (#862).
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true
