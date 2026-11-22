@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "id": "w4-shop-goshop-861",
+  "ticket": 861,
+  "trace_id": "wave4-itemshop-reverify-myroom-goshop-861",
+  "source": "~/scratch/journey-matrix/w3-exe.py + w4-plan-shop-goshop.json (two-aim entry wave, migrated)",
+  "injector": "sendinput",
+  "aims": {
+    "myroom": {
+      "x": 517,
+      "y": 16,
+      "evidence": "w4-plan-shop-goshop.json s1-myroom: MyRoom top tab; exe C2S 5006 at 21:41:16 in w4-shop-goshop-exe/exe/wire/room-stage.log"
+    },
+    "goshop": {
+      "x": 89,
+      "y": 320,
+      "evidence": "w4-plan-shop-goshop.json s2-goshop-entry: MyRoom GOSHOP; exe paints the same catalog in w4-shop-goshop-exe/exe/artifacts/screenshots/s2-goshop-entry.png"
+    }
+  },
+  "steps": [
+    {
+      "id": "boot-room",
+      "action": "boot-attach",
+      "leg": {
+        "mode": "boot",
+        "client": "exe",
+        "user_index_id": 1,
+        "target": "room",
+        "wire_port": 15012,
+        "upstream_port": 15010,
+        "login_timeout_seconds": 180
+      },
+      "evidence": "w4-exe-run.sh: rig-mint-launch-argv.sh user 1, wire tap 15012 -> Memoryer 15010, rig-run.sh run (standard preflight), w3-exe.py scene.drive target=room"
+    },
+    {
+      "id": "sync-room",
+      "action": "scene-sync",
+      "leg": {
+        "mode": "screen",
+        "scene": "room",
+        "timeout_seconds": 180
+      },
+      "evidence": {
+        "observed_scene": "room",
+        "full": "/home/arnim/scratch/journey-matrix/w4-shop-goshop-exe/exe/artifacts/screenshots/room.png",
+        "sha256": "171b0f3712541fd1b6d03e671835753bfa0c5a04d92ea1cc4eb8857a66631199"
+      }
+    },
+    {
+      "id": "wine-input",
+      "action": "set-injector",
+      "leg": {
+        "name": "sendinput"
+      },
+      "evidence": "docs/wine-boot.md Attempts 9-12: canvas clicks go through rig-wine.sh send (siclick/sendinput-helper), never bare XTEST"
+    },
+    {
+      "id": "myroom-click",
+      "action": "click",
+      "aim": "myroom",
+      "time": "21:41:16",
+      "text": "w3 step=s1-myroom aim=(517,16) repeats=1"
+    },
+    {
+      "id": "settle-myroom",
+      "action": "wait",
+      "seconds": 4.0,
+      "text": "w4-plan-shop-goshop.json s1-myroom settle=4.0"
+    },
+    {
+      "id": "myroom-5006",
+      "action": "wire-cue",
+      "direction": "C2S",
+      "opcode": 5006,
+      "text": "21:41:16 C2S opcode=5006 (138E) len=0 hex="
+    },
+    {
+      "id": "capture-myroom",
+      "action": "capture",
+      "name": "s1-myroom",
+      "time": "21:41:16",
+      "evidence": {
+        "full": "/home/arnim/scratch/journey-matrix/w4-shop-goshop-exe/exe/artifacts/screenshots/s1-myroom.png",
+        "full_sha256": "fff4fedfc38c9fc6cd8b5e69c0c11c65ce121119e0de3643d38df577d2489f79",
+        "size": [800, 600]
+      }
+    },
+    {
+      "id": "goshop-click",
+      "action": "click",
+      "aim": "goshop",
+      "time": "21:41:31",
+      "text": "w3 step=s2-goshop-entry aim=(89,320) repeats=1"
+    },
+    {
+      "id": "settle-goshop",
+      "action": "wait",
+      "seconds": 12.0,
+      "text": "w4-plan-shop-goshop.json s2-goshop-entry settle=12.0"
+    },
+    {
+      "id": "capture-goshop",
+      "action": "capture",
+      "name": "s2-goshop-entry",
+      "time": "21:41:43",
+      "evidence": {
+        "full": "/home/arnim/scratch/journey-matrix/w4-shop-goshop-exe/exe/artifacts/screenshots/s2-goshop-entry.png",
+        "full_sha256": "2039011137584edd8bfd9e66e1539489564fb535c087dde2959965412833e0b0",
+        "size": [800, 600]
+      }
+    },
+    {
+      "id": "no-goshop-expectation",
+      "action": "note",
+      "time": "21:41:43",
+      "text": "s2-goshop-entry expect=none (w4-plan-shop-goshop.json); exe paints the same catalog"
+    }
+  ],
+  "proxy_rules": [],
+  "evidence": {
+    "scene": "w4-shop-goshop-exe/exe/drive.log prelude reached=room",
+    "wire": "w4-shop-goshop-exe/exe/wire/room-stage.log: C2S 5006 at 21:41:16, C2S 6001 at 21:41:31",
+    "exe_sha256": "83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b",
+    "memoryer": "pid 37333 boot_epoch 1795246022 (unchanged across the pair)",
+    "paired_rust": "w4-shop-goshop-rust: both clicks applied; every state shot is the Room board; no 5006 (SSIM 0.9968 vs room.png)"
+  }
+}

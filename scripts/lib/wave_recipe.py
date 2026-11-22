@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Validated wave recipes: aims, steps, and proxy rules as data.
+"""Validated wave recipes: aims, steps, leg payloads, and proxy rules as data.
 
 One recipe replaces a forked scene driver. Coordinates carry their evidence
 strings; popup faces are references to `lib/popup_state.py`, never copied
-coordinates. The driver reads a recipe; it does not grow per-wave branches.
+coordinates. A leg step carries its action-specific fields under `leg`:
+boot-attach, scene-sync, host-marker, and set-injector. The driver reads a
+recipe; it does not grow per-wave branches.
 """
 
 from __future__ import annotations
@@ -20,10 +22,16 @@ from popup_state import POPUP_AIMS, aim as published_aim
 
 RECIPE_SCHEMA = 1
 ACTIONS = frozenset(
-    {"probe-popup", "dismiss-popup", "click", "wire-cue", "capture", "wait", "note"}
+    {"probe-popup", "dismiss-popup", "click", "wire-cue", "capture", "wait", "note",
+     "boot-attach", "scene-sync", "host-marker", "set-injector"}
 )
 REWRITE_ACTIONS = frozenset({"rotate_u16_rows"})
 POPUP_ACTIONS = frozenset({"probe-popup", "dismiss-popup"})
+LEG_ACTIONS = frozenset({"boot-attach", "scene-sync", "host-marker", "set-injector"})
+INJECTORS = frozenset({"sendinput", "xtest"})
+BOOT_CLIENTS = frozenset({"exe", "rust"})
+BOOT_MODES = frozenset({"boot", "attach"})
+SCENE_SYNC_MODES = frozenset({"screen", "state"})
 
 
 class RecipeError(ValueError):
@@ -63,6 +71,7 @@ class Step:
     seconds: float = 0.0
     max_tries: int = 2
     evidence: Mapping[str, object] = field(default_factory=dict)
+    leg: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,7 @@ class WaveRecipe:
     steps: tuple[Step, ...]
     proxy_rules: tuple[Mapping[str, object], ...]
     evidence: Mapping[str, object]
+    injector: str = "sendinput"
 
     def aim(self, key: str) -> Aim:
         try:
@@ -103,6 +113,89 @@ def _read_aim(key: str, data: Mapping[str, Any]) -> Aim:
     if not isinstance(x, int) or not isinstance(y, int):
         raise RecipeError(f"aim {key!r} needs integer x and y")
     return Aim(key=key, evidence=evidence, x=x, y=y)
+
+
+def _is_command(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(word, str) and word for word in value)
+
+
+def _has_positive_timeout(leg: Mapping[str, Any]) -> bool:
+    try:
+        return float(leg.get("timeout_seconds", 0.0)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _read_leg(data: Mapping[str, Any], step_id: str, action: str) -> dict[str, Any]:
+    leg = data.get("leg")
+    if not isinstance(leg, dict):
+        raise RecipeError(f"step {step_id!r} {action} needs a leg object")
+    return dict(leg)
+
+
+def _read_boot_attach_leg(leg: dict[str, Any], step_id: str) -> dict[str, Any]:
+    client = str(leg.get("client", ""))
+    if client not in BOOT_CLIENTS:
+        raise RecipeError(f"step {step_id!r} boot-attach needs a published client")
+    mode = str(leg.get("mode", "boot"))
+    if mode not in BOOT_MODES:
+        raise RecipeError(f"step {step_id!r} boot-attach mode {mode!r} is not published")
+    if not str(leg.get("target", "")):
+        raise RecipeError(f"step {step_id!r} boot-attach needs a login target")
+    if mode == "boot":
+        if not isinstance(leg.get("wire_port"), int):
+            raise RecipeError(f"step {step_id!r} boot-attach needs a wire_port")
+        if client == "exe" and not isinstance(leg.get("user_index_id"), int):
+            raise RecipeError(f"step {step_id!r} boot-attach needs a user_index_id")
+        if client == "rust" and not _is_command(leg.get("launch")):
+            raise RecipeError(f"step {step_id!r} boot-attach needs a launch command")
+    elif client == "rust" and not _is_command(leg.get("login")):
+        raise RecipeError(f"step {step_id!r} boot-attach needs a login command")
+    leg.setdefault("mode", mode)
+    leg.setdefault("upstream_port", 15010)
+    leg.setdefault("login_timeout_seconds", 180.0)
+    return leg
+
+
+def _read_scene_sync_leg(leg: dict[str, Any], step_id: str) -> dict[str, Any]:
+    mode = str(leg.get("mode", ""))
+    if mode not in SCENE_SYNC_MODES:
+        raise RecipeError(f"step {step_id!r} scene-sync needs mode screen or state")
+    if mode == "screen" and not str(leg.get("scene", "")):
+        raise RecipeError(f"step {step_id!r} scene-sync screen mode needs a scene")
+    if mode == "state" and (not str(leg.get("state_file", ""))
+                            or not str(leg.get("state_text", ""))):
+        raise RecipeError(f"step {step_id!r} scene-sync state mode needs state_file and state_text")
+    if not _has_positive_timeout(leg):
+        raise RecipeError(f"step {step_id!r} scene-sync needs a positive timeout_seconds")
+    return leg
+
+
+def _read_host_marker_leg(leg: dict[str, Any], step_id: str) -> dict[str, Any]:
+    for field_name in ("marker", "command", "ack_text"):
+        if not str(leg.get(field_name, "")):
+            raise RecipeError(f"step {step_id!r} host-marker needs {field_name}")
+    if not isinstance(leg.get("gate_opcode"), int):
+        raise RecipeError(f"step {step_id!r} host-marker needs a gate_opcode")
+    leg.setdefault("timeout_seconds", 60.0)
+    return leg
+
+
+def _read_injector_leg(leg: dict[str, Any], step_id: str) -> dict[str, Any]:
+    name = str(leg.get("name", ""))
+    if name not in INJECTORS:
+        raise RecipeError(
+            f"step {step_id!r} injector {name!r} is not published: {sorted(INJECTORS)}")
+    return leg
+
+
+LEG_VALIDATORS = {
+    "boot-attach": _read_boot_attach_leg,
+    "scene-sync": _read_scene_sync_leg,
+    "host-marker": _read_host_marker_leg,
+    "set-injector": _read_injector_leg,
+}
 
 
 def _read_step(data: Mapping[str, Any], aims: Mapping[str, Aim]) -> Step:
@@ -134,6 +227,9 @@ def _read_step(data: Mapping[str, Any], aims: Mapping[str, Aim]) -> Step:
         raise RecipeError(f"step {step_id!r} needs a name and capture evidence")
     if action == "note" and not data.get("text"):
         raise RecipeError(f"step {step_id!r} needs text")
+    leg = _read_leg(data, step_id, action) if action in LEG_ACTIONS else {}
+    if leg:
+        leg = LEG_VALIDATORS[action](leg, step_id)
     return Step(
         id=step_id,
         action=action,
@@ -152,6 +248,7 @@ def _read_step(data: Mapping[str, Any], aims: Mapping[str, Aim]) -> Step:
         seconds=float(data.get("seconds", 0.0)),
         max_tries=int(data.get("max_tries", 2)),
         evidence=data.get("evidence", {}),
+        leg=leg,
     )
 
 
@@ -182,6 +279,9 @@ def load_recipe(path: Path) -> WaveRecipe:
     for rule in rules:
         if not isinstance(rule, dict) or rule.get("action") not in REWRITE_ACTIONS:
             raise RecipeError(f"unsupported proxy rule {rule!r}")
+    injector = str(data.get("injector", "sendinput"))
+    if injector not in INJECTORS:
+        raise RecipeError(f"recipe injector {injector!r} is not published: {sorted(INJECTORS)}")
     return WaveRecipe(
         id=str(data.get("id", "")),
         ticket=int(data.get("ticket", 0)),
@@ -191,6 +291,7 @@ def load_recipe(path: Path) -> WaveRecipe:
         steps=tuple(steps),
         proxy_rules=tuple(rules),
         evidence=data.get("evidence", {}),
+        injector=injector,
     )
 
 
@@ -215,6 +316,11 @@ class WaveRecipeTests(unittest.TestCase):
     def test_copied_popup_coordinates_are_refused(self) -> None:
         with self.assertRaises(RecipeError):
             _read_aim("normal-mode-ok", {"x": 400, "y": 365, "evidence": "copied"})
+
+    def test_leg_actions_are_published_in_the_driver_vocabulary(self) -> None:
+        self.assertEqual(LEG_ACTIONS, {"boot-attach", "scene-sync",
+                                       "host-marker", "set-injector"})
+        self.assertEqual(LEG_ACTIONS - ACTIONS, set())
 
 
 if __name__ == "__main__":
