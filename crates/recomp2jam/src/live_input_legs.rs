@@ -857,6 +857,53 @@ mod live_input_leg_tests {
         }
     }
 
+    /// Wave-4 boots pass `--join-room`, so the session carries a pending
+    /// join intent into the Room board. A top-tab press is a local press
+    /// (unlike the row press that joined), and must still reach the staged
+    /// ITEMSHOP routing while that intent is unconfirmed. Regression for
+    /// #864.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> assemble_online_session
+    ///   -> set_pending_room_join -> window::deliver_snapshot
+    ///   -> OnlineSession::ingest_snapshot -> dispatch_pointer_edge
+    ///   -> dispatch_pointer_down -> dispatch_local_press
+    ///   -> ScreenGame::click_dispatch -> click_room_row -> click_room_control
+    ///   -> enter_room_side_with_enter_shop -> PendingOutbox::pending_enter_shop
+    ///   -> C2S 5006.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_itemshop_routes_with_a_pending_join_intent() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        // The wave-4 driver boots with `--join-room 0`.
+        session.set_pending_room_join(0, "");
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        assert_eq!(
+            session.screen(),
+            Screen::Room,
+            "channel press reaches the Room board"
+        );
+
+        let tabs = room_top_tabs();
+        let itemshop = &tabs[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        paint(&mut session);
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::Shop),
+            "an unconfirmed pending join must not swallow the ITEMSHOP press"
+        );
+        wait_for_enter_shop(&gateway.reports, itemshop.id);
+        finish(session, gateway.server);
+    }
+
     /// Painted frame from the same live path the window drives.
     fn painted_frame(session: &mut OnlineSession) -> Vec<u32> {
         let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");

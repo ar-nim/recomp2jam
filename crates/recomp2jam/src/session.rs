@@ -1992,6 +1992,10 @@ impl OnlineSession {
     /// originating input — the old synchronous Confirm shape,
     /// deferred to the poll.
     fn resolve_room_join(&mut self, room: JoinedRoom, origin: EntryEcho) {
+        // The one-shot join intent is spent now. Keeping it would make
+        // dispatch_local_press swallow every later local Room click,
+        // including the staged ITEMSHOP/GOSHOP entry arms (#864).
+        self.pending_room = None;
         self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
@@ -7478,6 +7482,10 @@ pub(super) mod session_tests {
         });
         server.join().unwrap();
         assert!(session.game.is_room_master());
+        assert!(
+            session.pending_room.is_none(),
+            "one-shot join intent is spent after the 3003 answer"
+        );
         assert_eq!(session.game.room_key_mode(), 2);
         assert_eq!(
             session.game.waiting_room_number(),
