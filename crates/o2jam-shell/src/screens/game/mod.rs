@@ -175,6 +175,12 @@ const TUTORIAL_PAGE_BEATS: [f32; 13] = [
 const TUTORIAL_PAGE_LEAD_S: f32 = 1.4;
 const TUTORIAL_CHART_BPM: f32 = 100.0;
 
+/// Whole milliseconds since a wall-clock stamp. `Instant::elapsed`
+/// saturates a future stamp to 0; a conversion overflow reads `u64::MAX`.
+fn elapsed_ms_since(entered: Instant) -> u64 {
+    u64::try_from(entered.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
 /// One page deadline in chart ms, or `None` past the 13 pinned pages.
 fn tutorial_page_deadline_ms(page: usize) -> Option<u32> {
     // Page 0 is entry; page 1 uses the first pinned deadline.
@@ -1062,6 +1068,11 @@ pub struct ScreenGame {
     /// First painted frame of the current Tutorial visit; chart time
     /// for its notes and page markers is relative to this stamp.
     tutorial_clock_start_ms: Option<u64>,
+    /// Wall instant of the current Tutorial visit. The exe's tutorial
+    /// update reads a millisecond clock (`0x4f19e0` -> `0x5711e0`),
+    /// so the side visit carries its own origin instead of borrowing
+    /// a Playing song anchor that never exists on the standard boot.
+    tutorial_entered_wall: Option<Instant>,
     /// Current tutorial page. The exe's update at `0x4f19e0` re-cues
     /// the mode-3 record on every page crossing.
     tutorial_page: usize,
@@ -1475,6 +1486,7 @@ impl ScreenGame {
             tutorial_key_lights: TutorialKeyLights::default(),
             tutorial_notes: PlayingView::default(),
             tutorial_clock_start_ms: None,
+            tutorial_entered_wall: None,
             tutorial_page: 0,
             lanking: LankingState::default(),
             shop: ShopState::default(),
@@ -6982,6 +6994,7 @@ impl ScreenGame {
         self.mount_staged_side_art(side);
         if side == SideScreen::Tutorial {
             self.tutorial_clock_start_ms = None;
+            self.tutorial_entered_wall = Some(Instant::now());
             self.tutorial_page = 0;
             self.apply_tutorial_ojm_cue();
             self.tutorial_key_lights.clear();
@@ -7086,6 +7099,7 @@ impl ScreenGame {
         if side == SideScreen::Tutorial {
             self.tutorial_key_lights.clear();
             self.tutorial_clock_start_ms = None;
+            self.tutorial_entered_wall = None;
             self.tutorial_page = 0;
         }
         self.billing_failure_notice = false;
@@ -8349,6 +8363,19 @@ impl ScreenGame {
         }
     }
 
+    /// Set the wall-time origin of an open Tutorial visit to `elapsed`
+    /// ms ago. Deterministic replay affordance for the live paint clock;
+    /// production stamps the origin on [`Self::visit_side`] instead.
+    pub fn set_tutorial_wall_elapsed(&mut self, elapsed: std::time::Duration) {
+        if self.side == Some(SideScreen::Tutorial) {
+            self.tutorial_entered_wall = Some(
+                Instant::now()
+                    .checked_sub(elapsed)
+                    .unwrap_or_else(Instant::now),
+            );
+        }
+    }
+
     /// Live song position: the sample clock with a wall-time floor.
     /// The device callback stops counting consumed frames once the
     /// key-sound queue drains and Playing cues no scene BGM, so a
@@ -8362,9 +8389,30 @@ impl ScreenGame {
         }
         self.playing_entered_wall
             .map_or(sample_position_ms, |entered| {
-                let wall_ms = u64::try_from(entered.elapsed().as_millis()).unwrap_or(u64::MAX);
-                sample_position_ms.max(wall_ms)
+                sample_position_ms.max(elapsed_ms_since(entered))
             })
+    }
+
+    /// Tutorial paint clock: time since the side visit opened.
+    /// The exe's tutorial update (`0x4f19e0`) crosses its 13 page
+    /// deadlines on the state's millisecond clock (`0x5711e0`), a
+    /// wall-derived song timer (B38 `efdaac19…`), with no samples-played
+    /// anchor. The standard boot never enters Playing, so the tutorial
+    /// cannot borrow the Playing anchor: it uses its own origin.
+    /// Fixed-clock replays still serve their virtual sample clock; the
+    /// explicit `paint_at` seam is untouched.
+    fn tutorial_paint_position_ms(&mut self) -> u64 {
+        let sample_position = self.now_ms();
+        self.tutorial_live_position_ms(sample_position)
+    }
+
+    /// Convert a paint sample position into tutorial clock time.
+    fn tutorial_live_position_ms(&self, sample_position_ms: u64) -> u64 {
+        if self.fixed_clock_step_ms.is_some() {
+            return sample_position_ms;
+        }
+        self.tutorial_entered_wall
+            .map_or(sample_position_ms, elapsed_ms_since)
     }
 
     /// Either terminal arm of a live song: the chart played out, or
@@ -9680,7 +9728,7 @@ impl GameLoop for ScreenGame {
             // Tutorial keys light their own cap and glow; they never
             // reach the Playing strike path or any judgement tally.
             if down {
-                let pressed_at_ms = self.now_ms();
+                let pressed_at_ms = self.tutorial_paint_position_ms();
                 self.tutorial_key_lights.press(lane, pressed_at_ms);
             } else {
                 self.tutorial_key_lights.release(lane);
@@ -9876,7 +9924,11 @@ impl GameLoop for ScreenGame {
         self.pump_dialog_queue();
         self.advance_splash_on_wall_clock();
         let sample_position = self.now_ms();
-        let now = self.live_song_position_ms(sample_position);
+        let now = if self.side == Some(SideScreen::Tutorial) {
+            self.tutorial_live_position_ms(sample_position)
+        } else {
+            self.live_song_position_ms(sample_position)
+        };
         self.paint_at(frame, now);
         if let Some(step_ms) = self.fixed_clock_step_ms {
             self.fixed_now_ms = self.fixed_now_ms.saturating_add(step_ms);
@@ -34274,6 +34326,63 @@ mod game_tests {
             pushes.borrow().as_slice(),
             &[1, 2],
             "the backend receives the entry cue then the page-2 sample"
+        );
+    }
+
+    /// Live chain: boot -> Planet -> Channel -> Room -> FIRSTSTEP click
+    /// -> window present -> `OnlineSession::paint` -> `ScreenGame::paint`
+    /// -> `paint_side` -> tutorial chart and page deadlines. The standard
+    /// boot never enters Playing, so no song sample anchor exists here;
+    /// a parked backend must still let the visit's own clock cross a page
+    /// deadline (exe update `0x4f19e0` reads its ms clock at `0x5711e0`).
+    #[test]
+    fn tutorial_chart_advances_on_visit_wall_time_when_song_samples_are_parked() {
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.with_audio(cue_log_backend(&pushes, &effects), HashMap::new());
+        game.set_tutorial_ojm_bank(
+            (1..=12)
+                .map(|marker| {
+                    Some(o2jam_audio::PcmSamples {
+                        samples: vec![marker; 441],
+                        sample_rate: 44_100,
+                        channels: 1,
+                    })
+                })
+                .collect(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection().map(|cue| cue.record), Some(1));
+
+        let paint = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint(&mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            });
+        };
+        // The first live frame latches the chart origin; earlier page
+        // guards use the explicit `paint_at` seam and stay unchanged.
+        paint(&mut game);
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(1),
+            "entry holds the first page"
+        );
+
+        game.set_tutorial_wall_elapsed(std::time::Duration::from_millis(33_000));
+        paint(&mut game);
+
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(2),
+            "page 2 crosses at 13 * 2.4 s + 1.4 s with sampled audio parked"
         );
     }
 
