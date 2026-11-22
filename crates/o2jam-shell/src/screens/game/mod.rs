@@ -4118,6 +4118,17 @@ impl ScreenGame {
         self.enter(Screen::Waiting);
     }
 
+    /// Visit a Room side whose press carries the exe's empty
+    /// `EnterShop` 5006. The queue lives here so a side entered from
+    /// another lobby never invents the frame.
+    fn enter_room_side_with_enter_shop(&mut self, side: SideScreen) -> bool {
+        let entered = self.visit_side(side);
+        if entered {
+            self.outbox.pending_enter_shop = Some(EnterShop);
+        }
+        entered
+    }
+
     /// Answer the staged room chrome control under the click (tickets
     /// #32/#34): the behaviour comes from [`ROOM_CONTROLS`], and a
     /// control with no evidenced target still records its press instead
@@ -4159,9 +4170,7 @@ impl ScreenGame {
             // entry packet is not. Queue 5006 only when the visit was
             // accepted, so an occupied side never invents a wire frame.
             RoomControlAction::EnterShopSide(side) => {
-                if self.visit_side(side) {
-                    self.outbox.pending_enter_shop = Some(EnterShop);
-                }
+                self.enter_room_side_with_enter_shop(side);
             }
             // Room control `0x13200032` follows the exe chain
             // `0x4902bb` → `0x495110` → `ChangeState(0xb)`: set the
@@ -4178,7 +4187,10 @@ impl ScreenGame {
                 });
             }
             RoomControlAction::TutorialEntry => {
-                if self.visit_side(SideScreen::Tutorial) {
+                // Wave-2 tap `w2-tab-exe-firststep` pins 5006 on the
+                // Tutorial entry too (#855): the old story-313 packs
+                // had no wire tap, so their silence was not a pin.
+                if self.enter_room_side_with_enter_shop(SideScreen::Tutorial) {
                     self.tutorial_chart_globals = Some(TUTORIAL_CHART_GLOBALS);
                 }
             }

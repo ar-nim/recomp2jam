@@ -692,9 +692,9 @@ mod live_input_leg_tests {
         enters_shop: bool,
     }
 
-    /// The three shop-family tabs send `EnterShop` 5006 on entry; the
-    /// exe's FIRSTSTEP tap carries no 5006 (story 313 wire pack), so
-    /// the Tutorial arm keeps its local chart globals only.
+    /// Every Room top tab sends `EnterShop` 5006 on entry. The older
+    /// story 313 packs had no tap, so their silence could not disprove
+    /// the wire; wave 2's `w2-tab-exe-firststep` tap pins it (see #855).
     fn room_top_tabs() -> [RoomTopTab; 4] {
         [
             RoomTopTab {
@@ -723,7 +723,7 @@ mod live_input_leg_tests {
                 id: "IDC_BUTTON_SROOM_FIRSTSTEP",
                 aim: (689, 16),
                 side: SideScreen::Tutorial,
-                enters_shop: false,
+                enters_shop: true,
             },
         ]
     }
