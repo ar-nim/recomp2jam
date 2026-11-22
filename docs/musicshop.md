@@ -135,6 +135,52 @@ Guards: `music_shop_top100_arm_stages_eight_rects_and_answer_each_press`
 `music_shop_top100_press_reaches_staged_chrome_without_a_wire`,
 `music_shop_top100_press_inks_only_the_pressed_staged_rect`.
 
+### TOP100 entry state (#827)
+
+Entry `FUN_004c6d70` looks up `0x1A20007D` and writes 0 into the
+control property at `+0x20` (setter `FUN_00409bd0`). `visit_side`
+records that entry through `MusicShopState::enter_music_shop`, so a
+fresh shop carries no press and no ranking-board ink. The guard
+`music_shop_entry_clears_the_top100_press_and_stages_no_ranking_board`
+compares the eight staged header rects before and after a leave/re-entry
+and asserts no 5010. OPEN: the `+0x20` property name, any nonzero
+writer, and a 5011 rank-wire source.
+
+### TOP100 header rank keys (#828)
+
+The six header keys `0x1A20007E..83` (3KEY/7KEY/TITLE/DIFF/BPM/PRICE)
+clear the search flag and page and record one rank-table selector
+(exe state `+0x538`, routed through `FUN_004d66b0`). TITLE/DIFF/BPM
+keep their catalog sorts beside the selector; the vectors at state
+`+0x1c0..0x210` are not staged. Guard:
+`music_shop_rank_headers_select_their_table_and_clear_the_search`.
+OPEN: vector contents, wire source, and a header press with the board
+visible (#408 covers chrome only).
+
+### CONFERENCE and MESSENGER notices (#829)
+
+CONFERENCE (`0x1A200087`) posts notice id `0x14` with no decoded copy.
+MESSENGER (`0x1A200088`) calls `FUN_004d6890` and posts either the
+connection-lost string (VA `0x647dc0`) or the loading string (VA
+`0x647e08`). The branch comes from globals at `0x7684d8` and is staged
+at the seam; a tapped press frame and messenger-state fixture stay OPEN.
+Guard: `music_shop_conference_and_messenger_post_their_pinned_notices`.
+
+### Row buy-rect → shopping bag (#833)
+
+The two tiled row buy rect arrays (`0x41`/`0x46`) now index the catalog
+by page `+0x27` × five plus row, add that song with the bag item code
+for its won/gem price (`0x43`/`0x47`), and invoke the BUYITEM control on
+success, queueing the one 5010. A full ten-entry bag and a duplicate
+song post the pinned VA `0x64a5f0` / `0x6486a4` words and buy nothing.
+Guard: `music_shop_row_buy_adds_the_catalog_song_and_invokes_buyitem`.
+Source conflict, not silently resolved: the ticket names the vtable BUYITEM
+code `0x1A20005F`, while the block-walk table groups `0x1A20005D..5F`
+as BUYITEM plus the cart pagers and our hit-tested cart BUYITEM remains
+`0x5D`. The ticket code is recorded as a vtable-invocation marker only,
+never as a hit-tested control. OPEN: one tapped row-buy leg with a wire
+tap.
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).

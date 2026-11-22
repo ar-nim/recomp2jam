@@ -1649,6 +1649,21 @@ pub const MSHOP_MONEY_WON_CODE: u32 = 0x1A40_001A;
 /// gem buy, won buy.
 pub const MSHOP_GEM_BUY_CODE: u32 = 0x1A20_0041;
 pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
+/// Bag item codes passed to the exe's add helper `FUN_0053ad10(1, id,
+/// code)`: won-priced rows choose `0x43`, gem-priced rows `0x47`
+/// (`ev_26ac6479…` via spec #179 row 21).
+pub const MSHOP_BAG_WON_CODE: u16 = 0x43;
+pub const MSHOP_BAG_GEM_CODE: u16 = 0x47;
+/// BUYITEM control invoked through the state vtable after a successful
+/// row add. The ticket names `0x1A20005F`; `docs/musicshop.md` groups
+/// `0x1A20005D..5F` as BUYITEM plus cart pagers and our hit-tested cart
+/// BUYITEM stays `0x5D`. This marker records the ticket's vtable-invoked
+/// code only; it is never hit-tested (#833).
+pub const MSHOP_BUYITEM_INVOKE_CODE: u32 = 0x1A20_005F;
+/// Pinned notice words for the row-buy ladder (VA `0x64a5f0` with
+/// `%d` = ten bag entries, and VA `0x6486a4`).
+pub const MSHOP_CART_FULL_NOTICE: &str = "장바구니에 담을 수 있는 곡의 개수는 최대 10개 입니다.";
+pub const MSHOP_DUPLICATE_ITEM_NOTICE: &str = "중복된 아이템을 쇼핑백에 담을 수 없습니다.";
 /// Shop-list pager (`IDC_BUTTON_MSHOP_MSALL_LEFT/RIGHT`): left
 /// steps back, right steps forward (ASSUMED pairing — same named
 /// next step as lanking).
@@ -1787,6 +1802,31 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 /// fallback caption, never an exe-text claim (#836).
 pub const MSHOP_CASHFILLUP_NOTICE_ID: u16 = 0x12;
 pub const MSHOP_CASHFILLUP_FALLBACK_CAPTION: &str = "WEB UNAVAILABLE (0x12)";
+
+/// Music-shop top-right chrome (#829). CONFERENCE (`0x1A200087`)
+/// posts notice id `0x14` from `FUN_004c7f70`; MESSENGER
+/// (`0x1A200088`) calls `FUN_004d6890` (VA `0x4d6890`,
+/// `ev_f55061f4…`) and posts one of two strings at VA `0x647dc0` /
+/// `0x647e08`. The notice-id copy and the branch writer are OPEN.
+pub const MSHOP_CONFERENCE_CODE: u32 = 0x1A20_0087;
+pub const MSHOP_MESSENGER_CODE: u32 = 0x1A20_0088;
+pub const MSHOP_CONFERENCE_NOTICE_ID: u8 = 0x14;
+pub const MSHOP_MESSENGER_UNAVAILABLE_NOTICE: &str = "메신져 서버와 연결이 되지 않았습니다.";
+pub const MSHOP_MESSENGER_LOADING_NOTICE: &str = "메신져 정보를 로딩중 입니다.";
+
+/// Messenger branch behind the two pinned MESSENGER notices. The exe
+/// reads global `0x7684d8` fields; no wire writer or tapped frame pins
+/// them yet, so callers stage the branch (next step: a messenger-state
+/// fixture and one qualified press frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopMessengerState {
+    /// Connection-lost notice at VA `0x647dc0` (default branch).
+    #[default]
+    Disconnected,
+    /// Info-loading notice at VA `0x647e08`.
+    Loading,
+}
+
 /// Pinned CP949 copy for the search edit hint and its two notices.
 pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
 pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
@@ -1848,6 +1888,30 @@ pub enum MusicShopFace {
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
 pub const MSHOP_DIFF_SORT_CODE: u32 = 0x1A20_0081;
 pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
+/// TOP100 rank-table header keys (`0x1A20007E..83`): 3KEY, 7KEY,
+/// TITLE, DIFF, BPM, PRICE. `FUN_004c7f70` routes all six to
+/// `FUN_004d66b0` (VA `0x4d66b0`, `ev_74dbde37…`), which selects one
+/// of six rank vectors by state `+0x538`. TITLE/DIFF/BPM double as the
+/// sort codes above; the vectors' contents and wire source stay OPEN
+/// (next step: a 5011 rank wire pin and a board-visible press frame).
+pub const MSHOP_RANK_HEADER_FIRST_CODE: u32 = 0x1A20_007E;
+pub const MSHOP_RANK_HEADER_LAST_CODE: u32 = 0x1A20_0083;
+pub const MSHOP_RANK_3KEY_CODE: u32 = MSHOP_RANK_HEADER_FIRST_CODE;
+pub const MSHOP_RANK_7KEY_CODE: u32 = MSHOP_RANK_HEADER_FIRST_CODE + 1;
+pub const MSHOP_RANK_PRICE_CODE: u32 = MSHOP_RANK_HEADER_LAST_CODE;
+
+/// Rank-table selector behind one header code (`None` outside the six).
+/// Only the selector is recorded; the six vectors at state
+/// `+0x1c0/+0x1d0/+0x1e0/+0x1f0/+0x200/+0x210` stay unpinned (#828).
+#[must_use]
+pub const fn music_shop_rank_header_key(code: u32) -> Option<u32> {
+    if code >= MSHOP_RANK_HEADER_FIRST_CODE && code <= MSHOP_RANK_HEADER_LAST_CODE {
+        Some(code)
+    } else {
+        None
+    }
+}
+
 /// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
 pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
 pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
@@ -1872,6 +1936,16 @@ pub enum MusicShopNotice {
     EmptySearch,
     /// SEARCH found no catalog title containing the query.
     NoSearchHits,
+    /// CONFERENCE posted notice id `0x14`; its copy is not decoded.
+    Conference,
+    /// MESSENGER reported no server connection (VA `0x647dc0`).
+    MessengerUnavailable,
+    /// MESSENGER reported that info is loading (VA `0x647e08`).
+    MessengerLoading,
+    /// Row buy at the exe's ten-entry bag cap (VA `0x64a5f0`).
+    CartFull,
+    /// Row buy repeated a song already in the bag (VA `0x6486a4`).
+    DuplicateCartItem,
 }
 
 impl MusicShopNotice {
@@ -1884,6 +1958,22 @@ impl MusicShopNotice {
             Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
             Self::EmptySearch => MSHOP_EMPTY_SEARCH_NOTICE,
             Self::NoSearchHits => MSHOP_NO_SEARCH_HITS_NOTICE,
+            Self::Conference => "",
+            Self::MessengerUnavailable => MSHOP_MESSENGER_UNAVAILABLE_NOTICE,
+            Self::MessengerLoading => MSHOP_MESSENGER_LOADING_NOTICE,
+            Self::CartFull => MSHOP_CART_FULL_NOTICE,
+            Self::DuplicateCartItem => MSHOP_DUPLICATE_ITEM_NOTICE,
+        }
+    }
+
+    /// Exe notice id when the press posts one by id rather than by
+    /// text. Only CONFERENCE's `0x14` is pinned; no id is invented for
+    /// the text-bearing notices (#829).
+    #[must_use]
+    pub const fn notice_type(self) -> Option<u8> {
+        match self {
+            Self::Conference => Some(MSHOP_CONFERENCE_NOTICE_ID),
+            _ => None,
         }
     }
 }
@@ -2055,6 +2145,10 @@ pub enum MusicShopAction {
     Search,
     /// CASHFILLUP pressed; the web helper has no local path.
     CashFillup,
+    /// CONFERENCE pressed (notice id `0x14`, copy OPEN).
+    Conference,
+    /// MESSENGER pressed (one of two pinned notice strings).
+    Messenger,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -2126,6 +2220,8 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_SEARCH_CODE => Some(MusicShopAction::Search),
         MSHOP_CASH_FILLUP_CODE => Some(MusicShopAction::CashFillup),
+        MSHOP_CONFERENCE_CODE => Some(MusicShopAction::Conference),
+        MSHOP_MESSENGER_CODE => Some(MusicShopAction::Messenger),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),

@@ -8,11 +8,14 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
-    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
-    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
-    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
-    MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
-    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
+    lanking_page_window, lanking_songs, music_shop_rank_header_key, music_shop_rows,
+    shop_page_count, song_installed, sort_lanking_songs, LankingSong, LankingSort, MusicShopAction,
+    MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState, MusicShopNotice, MusicShopPrice,
+    MusicShopRow, OwnedSort, MSHOP_BAG_GEM_CODE, MSHOP_BAG_WON_CODE, MSHOP_BPM_SORT_CODE,
+    MSHOP_BUYITEM_INVOKE_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_CONFERENCE_CODE,
+    MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MESSENGER_CODE,
+    MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE,
+    MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -48,6 +51,8 @@ pub struct OwnedRow {
 
 /// Exe's five-song selection cap (`FUN_004cdca0`, VA `0x64a7d8`).
 const MAX_SELECTED_SONGS: usize = 5;
+/// Exe's ten-entry shopping-bag cap (row-buy notice at VA `0x64a5f0`).
+const MAX_BAG_SONGS: usize = 10;
 
 /// Song-shop songs, sorts, pages, and the fetched flag board behind
 /// the music-shop side screen (#139 cluster 4: the Data Clump of all
@@ -80,6 +85,12 @@ pub(crate) struct MusicShopState {
     /// Checked song-shop cart ids in pick order (the `MS_EX` row
     /// selection behind the cart `BUYITEM` commit).
     pub(crate) music_shop_cart: Vec<u32>,
+    /// Bag item code chosen by each row buy's price field
+    /// (`FUN_0053ad10(1, id, 0x43/0x47)`, #833).
+    pub(crate) music_shop_bag_item_codes: HashMap<u32, u16>,
+    /// BUYITEM control invoked through the state vtable by the last
+    /// successful row add (`0x1A20005F` per #833; never hit-tested).
+    pub(crate) music_shop_buyitem_invoked: Option<u32>,
     /// Cart-list page (five rows per page, the staged music-cart
     /// `CART_EX` slots).
     pub(crate) music_shop_cart_page: usize,
@@ -92,6 +103,10 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Pressed rank-table header (`0x1A20007E..83`, exe state `+0x538`).
+    /// The six rank vectors and their 5011 wire source are unpinned; only
+    /// the selector and the search/page reset are recorded (#828).
+    pub(crate) music_shop_rank_key: Option<u32>,
     /// Last staged song-shop preview plate control code. The exe
     /// clears `0x1A200003`/`0x1A500002` on a page turn; our shell has
     /// no live producer for those art plates, so this records the
@@ -120,6 +135,10 @@ pub(crate) struct MusicShopState {
     /// Notice id posted by CASHFILLUP when no web path exists. The
     /// exe's text for id `0x12` stays OPEN (#836).
     pub(crate) music_shop_cashfillup_notice_id: Option<u16>,
+    /// Branch behind the two MESSENGER notices. The exe reads globals
+    /// at `0x7684d8`; no wire writer or fixture is pinned, so callers
+    /// stage it (#829).
+    pub(crate) music_shop_messenger_state: MusicShopMessengerState,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -167,6 +186,7 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+        self.music_shop_rank_key = None;
         self.music_shop_search_active = false;
         self.music_shop_search_hits.clear();
     }
@@ -176,6 +196,12 @@ impl MusicShopState {
     /// the client can play does.
     pub(crate) fn set_installed(&mut self, installed: Option<&InstalledMusic>) {
         self.music_shop_installed = installed.cloned();
+    }
+
+    /// Stage the MESSENGER branch whose pinned notice a press posts
+    /// (#829). The default is the connection-lost branch.
+    pub(crate) fn set_messenger_state(&mut self, state: MusicShopMessengerState) {
+        self.music_shop_messenger_state = state;
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -382,6 +408,21 @@ impl MusicShopState {
         self.music_shop_top100_pressed
     }
 
+    /// Rank-table header selected by the last press, if any (#828).
+    pub(crate) fn rank_key(&self) -> Option<u32> {
+        self.music_shop_rank_key
+    }
+
+    /// Stage the TOP100 entry state recorded by `FUN_004c6d70`: it
+    /// looks up `0x1A20007D` and writes 0 into the control property at
+    /// `+0x20` (setter `FUN_00409bd0`). A fresh entry therefore carries
+    /// no press and no ranking board. The property's name and any
+    /// nonzero writer stay OPEN; the qualified press frame pins no board
+    /// content, so none is staged (#827).
+    pub(crate) fn enter_music_shop(&mut self) {
+        self.music_shop_top100_pressed = None;
+    }
+
     /// Active color filter.
     pub(crate) fn genre_filter(&self) -> MusicShopGenreFilter {
         self.music_shop_genre_filter
@@ -465,6 +506,50 @@ impl MusicShopState {
         self.music_shop_cart.clone()
     }
 
+    /// Bag item code chosen for one row buy, if that song was added
+    /// through the per-row buy rectangles (#833).
+    pub(crate) fn bag_item_code(&self, song_id: u32) -> Option<u16> {
+        self.music_shop_bag_item_codes.get(&song_id).copied()
+    }
+
+    /// BUYITEM code invoked by the last successful row add, if any.
+    pub(crate) fn buyitem_invoked(&self) -> Option<u32> {
+        self.music_shop_buyitem_invoked
+    }
+
+    /// Entries added through the row-buy arm. A row pick only stages
+    /// the local cart, so it must not count against the exe's bag cap.
+    pub(crate) fn bag_count(&self) -> usize {
+        self.music_shop_bag_item_codes.len()
+    }
+
+    /// Stage one bag entry at the seam for restores and cap guards.
+    /// Production reaches the same state through `BuyRow` only.
+    pub(crate) fn stage_bag_song(&mut self, song_id: u32, gem: bool) {
+        if !self.music_shop_cart.contains(&song_id) {
+            self.music_shop_cart.push(song_id);
+        }
+        self.music_shop_bag_item_codes
+            .insert(song_id, Self::bag_code_for_price(gem));
+    }
+
+    fn bag_code_for_price(gem: bool) -> u16 {
+        if gem {
+            MSHOP_BAG_GEM_CODE
+        } else {
+            MSHOP_BAG_WON_CODE
+        }
+    }
+
+    /// Drop the bag and every per-row price marker after a completed
+    /// purchase; the caller's 5011 answer owns that transition.
+    pub(crate) fn clear_cart(&mut self) {
+        self.music_shop_cart.clear();
+        self.music_shop_bag_item_codes.clear();
+        self.music_shop_buyitem_invoked = None;
+        self.music_shop_cart_page = 0;
+    }
+
     /// Pick one catalog song into the cart (id must exist; the
     /// click seam feeds the same cart — this stages restores).
     pub(crate) fn cart_push(&mut self, song_id: u32) {
@@ -506,6 +591,14 @@ impl MusicShopState {
         shop_page_count(self.music_shop_songs.len(), MSHOP_SONG_ROWS)
     }
 
+    /// Catalog song at one row of the visible page. The row-buy arm
+    /// indexes the catalog by page `+0x27` times five plus the row,
+    /// not through the sorted/filtered painter rows (#833).
+    fn catalog_song_on_page(&self, slot: usize) -> Option<&LankingSong> {
+        let start = self.music_shop_page.checked_mul(MSHOP_SONG_ROWS)?;
+        self.music_shop_songs.get(start.checked_add(slot)?)
+    }
+
     /// Sorted song-shop rows with live flags on the current page
     /// (owned page: small, five rows at most).
     pub(crate) fn visible_rows(&self) -> Vec<MusicShopRow> {
@@ -542,6 +635,7 @@ impl MusicShopState {
         let armed_notice = self.music_shop_notice;
         self.music_shop_notice = None;
         self.music_shop_cashfillup_notice_id = None;
+        self.music_shop_buyitem_invoked = None;
         match action {
             MusicShopAction::SelectRow(slot) => {
                 self.music_shop_selected_row = self.visible_rows().get(slot).map(|_| slot);
@@ -553,15 +647,35 @@ impl MusicShopState {
                 }
                 MusicShopEffect::None
             }
-            MusicShopAction::BuyRow { slot, gem: _ } => {
-                if self.visible_rows().get(slot).is_some() {
-                    MusicShopEffect::Buy
-                } else {
-                    MusicShopEffect::None
+            MusicShopAction::BuyRow { slot, gem } => {
+                let Some(song_id) = self.catalog_song_on_page(slot).map(|song| song.song_id) else {
+                    return MusicShopEffect::None;
+                };
+                if self.bag_count() >= MAX_BAG_SONGS {
+                    self.post_notice(MusicShopNotice::CartFull, MSHOP_GEM_BUY_CODE);
+                    return MusicShopEffect::None;
                 }
+                if self.music_shop_bag_item_codes.contains_key(&song_id) {
+                    self.post_notice(MusicShopNotice::DuplicateCartItem, MSHOP_GEM_BUY_CODE);
+                    return MusicShopEffect::None;
+                }
+                if !self.music_shop_cart.contains(&song_id) {
+                    self.music_shop_cart.push(song_id);
+                }
+                self.music_shop_bag_item_codes
+                    .insert(song_id, Self::bag_code_for_price(gem));
+                self.music_shop_selected_row = Some(slot);
+                self.music_shop_buyitem_invoked = Some(MSHOP_BUYITEM_INVOKE_CODE);
+                MusicShopEffect::Buy
             }
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
+                if music_shop_rank_header_key(code).is_some() {
+                    self.music_shop_rank_key = Some(code);
+                    self.music_shop_search_active = false;
+                    self.music_shop_page = 0;
+                    self.music_shop_selected_row = None;
+                }
                 MusicShopEffect::None
             }
             MusicShopAction::Face(face) => {
@@ -631,6 +745,18 @@ impl MusicShopState {
                 }
                 MusicShopEffect::None
             }
+            MusicShopAction::Conference => {
+                self.post_notice(MusicShopNotice::Conference, MSHOP_CONFERENCE_CODE);
+                MusicShopEffect::None
+            }
+            MusicShopAction::Messenger => {
+                let notice = match self.music_shop_messenger_state {
+                    MusicShopMessengerState::Disconnected => MusicShopNotice::MessengerUnavailable,
+                    MusicShopMessengerState::Loading => MusicShopNotice::MessengerLoading,
+                };
+                self.post_notice(notice, MSHOP_MESSENGER_CODE);
+                MusicShopEffect::None
+            }
             MusicShopAction::CashFillup => {
                 // The exe calls its web helper with argument 0 and
                 // posts notice id 0x12 on an empty result. This client
@@ -685,6 +811,18 @@ impl MusicShopState {
             }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
+                // TITLE/DIFF/BPM double as rank headers (`0x80..82`);
+                // the lanking-only ARTIST key selects no rank table.
+                let header = match sort {
+                    LankingSort::Title => Some(MSHOP_TITLE_SORT_CODE),
+                    LankingSort::Diff => Some(MSHOP_DIFF_SORT_CODE),
+                    LankingSort::Bpm => Some(MSHOP_BPM_SORT_CODE),
+                    LankingSort::Artist => None,
+                };
+                if header.is_some() {
+                    self.music_shop_rank_key = header;
+                }
+                self.music_shop_search_active = false;
                 self.music_shop_page = 0;
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;
@@ -733,6 +871,7 @@ impl MusicShopState {
                 if let Some(song) = self.visible_cart().get(slot) {
                     let song_id = song.song_id;
                     self.music_shop_cart.retain(|id| *id != song_id);
+                    self.music_shop_bag_item_codes.remove(&song_id);
                     let last_page = self.cart_pages().saturating_sub(1);
                     if self.music_shop_cart_page > last_page {
                         self.music_shop_cart_page = last_page;
