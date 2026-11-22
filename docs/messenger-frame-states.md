@@ -31,7 +31,7 @@ parks. A sheet with no second record gets no active frame.
 | `DIALOG_MESSENGER_QUESTION` | 7 / 7 | Shared OK/CANCEL body carries 2 records | No — geometry-only park | Qualified QUESTION mount with the same body at both rects; capture off/on/pressed for each control |
 | `DIALOG_MESSENGER_NOTE` | 13 / 13 | Close, Search, Send, Cancel, Reply and Save bodies carry 2 records | No — geometry-only park; NOTE SEND stays P0 until a wire pin (#664) | Mounted note compose/search sheet with off/on/pressed per button; keep the send opcode OPEN |
 | `DIALOG_MESSENGER_POPUPMENU` | 6 / 6 | Five button bodies carry 2 records | No — the five actions are labeled no-ops (#669) | Mounted menu with one off/on/pressed crop per action; pair the action frame before any dispatch |
-| `DIALOG_MESSENGER_INFORMATION` | 5 / 5 | OK body carries 2 records | No — the B8 one-OK liveness sheet is a different sheet and its Information-style origin cannot be transferred (#345) | Qualified Messenger INFORMATION mount with pointer and held OK crops; name the OK record pair |
+| `DIALOG_MESSENGER_INFORMATION` | 5 / 5 | OK body carries 2 records | No — the B8 MyRoom and W2 Room one-OK liveness sheets use `Dialog_Information` art; their Information-style origin cannot be transferred here (#345/#859) | Qualified Messenger INFORMATION mount with pointer and held OK crops; name the OK record pair |
 
 ## Composition rules
 

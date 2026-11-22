@@ -24,7 +24,7 @@ mod live_input_leg_tests {
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
-    use o2jam_shell::screens::side::{SideScreen, INFORMATION_OK_CODE};
+    use o2jam_shell::screens::side::{MyRoomNotice, SideScreen, INFORMATION_OK_CODE};
     use o2jam_shell::staging::{read_install_archives, stage_dialog, Dialog, StageContext};
     use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, Screen};
 
@@ -320,6 +320,12 @@ mod live_input_leg_tests {
     }
 
     fn paint(session: &mut OnlineSession) {
+        drop(paint_frame(session));
+    }
+
+    /// Paint one native frame and return its pixels, so a guard can
+    /// prove a mounted sheet actually changed the picture.
+    fn paint_frame(session: &mut OnlineSession) -> Vec<u32> {
         let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");
         let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits a buffer index");
         let mut buf = vec![0u32; width * height];
@@ -328,6 +334,7 @@ mod live_input_leg_tests {
             w: width,
             h: height,
         });
+        buf
     }
 
     /// Click path to the Room lobby: the pinned emblem face opens the
@@ -391,11 +398,12 @@ mod live_input_leg_tests {
         server.join().unwrap();
     }
 
-    /// Messenger tier-1 leg (spec #315 story 17): one live caller chain
-    /// from boot into a Messenger-family P0. The Room board's MESSENGER
-    /// control stages from the installed `.bnd`, and the click goes
-    /// through the same pointer snapshot a window queues. It ends at
-    /// the labeled `unwired` arm: no side screen, no sheet, no wire.
+    /// Messenger tier-1 leg (ticket #859): the Room board's pinned
+    /// MESSENGER press mounts the same one-OK server-unavailable sheet
+    /// the exe paints in wave-2 pack `w2-messenger-exe` (frame
+    /// `0ac774e9…`, mean delta 11.88 from the Room board; Rust frame
+    /// `29649476…` was inert). The click goes through the same pointer
+    /// snapshot a window queues; no wire is invented.
     ///
     /// Live caller chain:
     ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
@@ -404,11 +412,11 @@ mod live_input_leg_tests {
     ///   -> staged room-row click -> Screen::Room
     ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_room_row
     ///   -> ScreenGame::click_room_control -> ScreenGame::room_control_at
-    ///   -> RoomControlAction::Unwired (IDC_BUTTON_SROOM_MESSENGER)
-    ///   -> ScreenGame::last_room_control_noop.
+    ///   -> RoomControlAction::MessengerLiveness -> ScreenGame::post_myroom_notice
+    ///   -> ScreenGame::paint_room -> paint_information_message.
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
-    fn live_room_messenger_press_reaches_its_labeled_p0_from_boot() {
+    fn live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
             return;
@@ -417,33 +425,52 @@ mod live_input_leg_tests {
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
         enter_room_by_clicks(&mut session);
+        let before = paint_frame(&mut session);
 
         let code = MessengerHost::Room.control_code();
         let (x, y) = staged_code_centre(&mut session, Screen::Room, code);
         session.ingest_snapshot(&InputSnapshot::click_at(x, y));
         paint(&mut session);
 
-        let noop = session
-            .game_mut()
-            .room_control_noop()
-            .expect("the MESSENGER press reached the labeled P0");
-        assert_eq!(noop.id, "IDC_BUTTON_SROOM_MESSENGER");
-        assert!(
-            noop.next_step.contains("CStateRoom click dispatch"),
-            "next step names the host capture: {}",
-            noop.next_step
-        );
-        assert_eq!(session.screen(), Screen::Room, "no sheet replaces the host");
+        assert_eq!(session.screen(), Screen::Room, "the sheet overlays Room");
         assert_eq!(session.game_mut().side(), None, "no side screen opens");
         assert!(
-            !session.game_mut().messenger_liveness_open(),
-            "the liveness sheet is a different pinned arm"
+            session.game_mut().room_control_noop().is_none(),
+            "the pinned Room MESSENGER press must not be a labeled no-op"
+        );
+        assert!(
+            session.game_mut().messenger_liveness_open(),
+            "the Room press must mount the one-OK liveness sheet"
+        );
+        assert_eq!(
+            session.game_mut().myroom_notice(),
+            Some(&MyRoomNotice::MessengerUnavailable),
+            "the sheet carries the pinned server-unavailable copy"
+        );
+        let after = paint_frame(&mut session);
+        let changed_pixels = before
+            .iter()
+            .zip(&after)
+            .filter(|(before, after)| before != after)
+            .count();
+        assert!(
+            changed_pixels > 0,
+            "the mounted sheet must change the Room board pixels"
         );
         assert!(
             observed(&gateway.reports).is_empty(),
-            "a P0 press invents no Messenger wire: {:?}",
+            "a liveness sheet invents no Messenger wire: {:?}",
             observed(&gateway.reports)
         );
+
+        let (ok_x, ok_y) = information_ok_centre();
+        session.ingest_snapshot(&InputSnapshot::click_at(ok_x, ok_y));
+        paint(&mut session);
+        assert!(
+            !session.game_mut().messenger_liveness_open(),
+            "OK clears the mounted sheet"
+        );
+        assert_eq!(session.screen(), Screen::Room, "OK keeps the Room board");
         finish(session, gateway.server);
     }
 
@@ -692,9 +719,9 @@ mod live_input_leg_tests {
         enters_shop: bool,
     }
 
-    /// The three shop-family tabs send `EnterShop` 5006 on entry; the
-    /// exe's FIRSTSTEP tap carries no 5006 (story 313 wire pack), so
-    /// the Tutorial arm keeps its local chart globals only.
+    /// Every Room top tab sends `EnterShop` 5006 on entry. The older
+    /// story 313 packs had no tap, so their silence could not disprove
+    /// the wire; wave 2's `w2-tab-exe-firststep` tap pins it (see #855).
     fn room_top_tabs() -> [RoomTopTab; 4] {
         [
             RoomTopTab {
@@ -723,7 +750,7 @@ mod live_input_leg_tests {
                 id: "IDC_BUTTON_SROOM_FIRSTSTEP",
                 aim: (689, 16),
                 side: SideScreen::Tutorial,
-                enters_shop: false,
+                enters_shop: true,
             },
         ]
     }
