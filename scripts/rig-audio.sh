@@ -26,10 +26,12 @@
 #     silent; the level sidecar judges silence.
 # probe: prints `peak_dbfs=` and `mean_dbfs=`; exit 0 when the peak is
 #     above the silence floor, 1 when the file is silent, 2 when unreadable.
-# verify: the audio verifier for a finished run — fails a run whose audio
-#     is declared (`expect=sound`) but missing or silent, and a run that
-#     never captured the lane at all. Wire it into `run-manifest.sh verify`
-#     (the orchestrator owns that call site; see docs/rig-runbook.md).
+# verify: the audio verifier for a finished run — applies the one sidecar
+#     verdict from lib/rig-audio-verdict.sh (PASS / FAIL / OPEN), then fails
+#     a run whose audio is declared (`expect=sound`) but missing or silent,
+#     and a run that never captured the lane at all. Wire it into
+#     `run-manifest.sh verify` (the orchestrator owns that call site; see
+#     docs/rig-runbook.md).
 # expect=silence marks a run that passed `--no-sound` (containment proof,
 #     not an audio-parity artifact); expect=disabled marks an explicit
 #     opt-out via RIG_AUDIO_CAPTURE=0.
@@ -41,9 +43,15 @@
 #     RIG_AUDIO_TEST_STREAM_PIDS, RIG_AUDIO_SKIP_STREAM_BASELINE.
 set -euo pipefail
 
-RIG_AUDIO_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/rig-preflight.sh"
+RIG_AUDIO_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+RIG_AUDIO_LIB="$RIG_AUDIO_LIB_DIR/rig-preflight.sh"
 # shellcheck source=lib/rig-preflight.sh
 . "$RIG_AUDIO_LIB"
+# The one sidecar verdict vocabulary (#744): sink and a clean corked probe
+# both read PASS; a bound default-sink stream reads FAIL.
+RIG_AUDIO_VERDICT_LIB="$RIG_AUDIO_LIB_DIR/rig-audio-verdict.sh"
+# shellcheck source=lib/rig-audio-verdict.sh
+. "$RIG_AUDIO_VERDICT_LIB"
 # This module's own path: the selftest re-sources the lane in a subshell.
 RIG_AUDIO_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -786,7 +794,7 @@ rig_audio_probe() {
 }
 
 rig_audio_verify() {
-  local out_dir="$1" sidecar expect state artifact measured peak
+  local out_dir="$1" sidecar expect state artifact measured peak decision word reason
   sidecar="$(rig_audio_sidecar "$out_dir")"
   if [ ! -f "$sidecar" ]; then
     echo "rig-audio: FAIL no audio lane captured in $out_dir (run through scripts/rig-run.sh)" >&2
@@ -799,6 +807,18 @@ rig_audio_verify() {
     echo "rig-audio: FAIL audio lane failed (expect=$expect, see $sidecar)" >&2
     return 1
   fi
+  decision="$(rig_audio_verdict "$sidecar")"
+  word="${decision%%$'\t'*}"
+  reason="${decision#*$'\t'}"
+  rig_audio_set_field "$out_dir" audio_verdict "$word"
+  case "$word" in
+    PASS) echo "rig-audio: verdict PASS ($reason)" ;;
+    OPEN) echo "rig-audio: verdict OPEN ($reason)" ;;
+    FAIL)
+      echo "rig-audio: verdict FAIL: $reason (see $sidecar)" >&2
+      return 1
+      ;;
+  esac
   if [ ! -r "$artifact" ]; then
     echo "rig-audio: FAIL audio artifact missing: $artifact" >&2
     return 1
