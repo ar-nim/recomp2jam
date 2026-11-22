@@ -427,7 +427,8 @@ pub fn connect_and_login_with_transport(
 }
 
 /// Same boot, plus the exe's room-stage wire set after channel login:
-/// 4030/4031, 2000/2001, 2002/2003, 2010/2011, then 2024 (`#341`).
+/// 4030/4031, 2000/2001, 2002/2003, 5028/5029, 2010/2011, then 2024
+/// (`#341`, `#850`).
 ///
 /// The ids are the client's installed catalog rows (see
 /// [`crate::owned_music_ids`]); the 2024 report drives member
@@ -484,6 +485,14 @@ fn connect_and_login_staged(
     } else {
         Vec::new()
     };
+    // 7.55 reads the wallet between the room list and the user list
+    // (boot-1c tap; #850). The 5029 words come back in the report so
+    // the boot can fold them into the same wallet the shop read uses.
+    let cash_sync = if staged_ids.is_some() {
+        Some(fetch_cash_sync(&mut gateway, &mut staged_skipped).context("syncing channel wallet")?)
+    } else {
+        None
+    };
     if let Some(ids) = staged_ids {
         request_user_list(&mut gateway, &mut staged_skipped).context("listing room users")?;
         report_installed_music(&mut gateway, ids).context("reporting installed music")?;
@@ -523,6 +532,7 @@ fn connect_and_login_staged(
         auth_code,
         character,
         wallet,
+        cash_sync,
         avatar_layers,
         channels,
         channel_login,
@@ -990,8 +1000,9 @@ mod connect_flow_tests {
 
     /// Live caller chain: `run_online` ->
     /// `connect_and_login_with_room_stage` -> staged boot exchanges.
-    /// The script mirrors the #339 exe tap: 4030, 2000, 2002, 2010,
-    /// 2024 before any room join; the report carries the install's ids.
+    /// The script mirrors the #339/#850 exe tap: 4030, 2000, 2002,
+    /// 5028/5029, 2010, 2024 before any room join; the report carries
+    /// the install's ids and the wallet words.
     #[test]
     fn room_stage_gateway_sends_exe_wire_sequence() {
         let installed_ids = [0xf361, 0xf2f5];
@@ -1046,6 +1057,17 @@ mod connect_flow_tests {
             stream
                 .write_all(&RoomList { rooms: vec![] }.encode())
                 .unwrap();
+            // #850: the exe reads the wallet after 2003, before 2010.
+            assert_eq!(read_frame(&mut stream).id, SyncCashPoint::COMMAND);
+            stream
+                .write_all(
+                    &SyncCashPointResponse {
+                        gem: 5,
+                        cash_point: 6,
+                    }
+                    .encode(),
+                )
+                .unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetUserList.id());
             stream
                 .write_all(&o2jam_net::testing::encode(
@@ -1064,9 +1086,98 @@ mod connect_flow_tests {
             );
         });
         let options = test_options(port, Some((1, 2)), true, None);
-        let (_report, _gateway) =
+        let (report, _gateway) =
             connect_and_login_with_room_stage(&options, &installed_ids).unwrap();
         server.join().unwrap();
+        assert_eq!(
+            report.cash_sync,
+            Some(SyncCashPointResponse {
+                gem: 5,
+                cash_point: 6
+            })
+        );
+    }
+
+    /// Ticket #850: the exe's channel-entry ladder reads the wallet
+    /// between the room list (2003) and the user list (2010/2011).
+    /// Live caller chain: `main.rs::run_online` ->
+    /// `connect::connect_and_login_with_room_stage` ->
+    /// `connect_and_login_staged` -> staged 5028/5029 exchange.
+    #[test]
+    fn channel_entry_sends_the_wallet_read_before_the_user_list() {
+        use o2jam_net::frame::encode_frame;
+
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels: vec![] }.encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream
+                .write_all(
+                    &MusicListAnswer {
+                        entries: vec![],
+                        free_music: false,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
+            stream
+                .write_all(&CharacterInfo::default().encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(&RoomList { rooms: vec![] }.encode())
+                .unwrap();
+
+            let cash = read_frame(&mut stream);
+            assert_eq!(cash.id, SyncCashPoint::COMMAND, "5028 must precede 2010");
+            assert!(cash.payload.is_empty(), "5028 carries an empty body");
+            stream
+                .write_all(&encode_frame(
+                    SyncCashPointResponse::COMMAND,
+                    &[0x72, 0x02, 0, 0, 0, 0, 0, 0],
+                ))
+                .unwrap();
+
+            assert_eq!(read_frame(&mut stream).id, Request::GetUserList.id());
+            stream
+                .write_all(&encode_frame(Response::GetUserList as u16, &[]))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SendMusicList.id());
+        });
+        let options = test_options(port, Some((1, 2)), true, None);
+        let (report, _gateway) = connect_and_login_with_room_stage(&options, &[1, 2]).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            report.cash_sync,
+            Some(SyncCashPointResponse {
+                gem: 626,
+                cash_point: 0
+            }),
+            "the 5029 words reach the boot report"
+        );
     }
 
     #[test]

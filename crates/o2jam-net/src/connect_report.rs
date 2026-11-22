@@ -7,8 +7,8 @@
 //! entry point, and [`print_connect_report`] writes it to stdout.
 
 use crate::{
-    play::RoomArenaEcho, AuthResult, ChannelLoginResponse, ChannelState, CharacterInfo,
-    GameStatsUpdate, JoinRoomResponse, RoomListEntry,
+    play::RoomArenaEcho, wallet::SyncCashPointResponse, AuthResult, ChannelLoginResponse,
+    ChannelState, CharacterInfo, GameStatsUpdate, JoinRoomResponse, RoomListEntry,
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 
@@ -21,6 +21,9 @@ pub struct ConnectReport {
     pub character: Option<CharacterInfo>,
     /// Wallet balances, when requested with character info.
     pub wallet: Option<WalletReport>,
+    /// Channel-entry `SyncCashPoint` 5029 answer (two words), read
+    /// before the user list on the exe's room-stage ladder.
+    pub cash_sync: Option<SyncCashPointResponse>,
     /// Worn figure layers stacked from `avatar.opa`, when requested.
     pub avatar_layers: usize,
     /// Channels the gateway listed.
@@ -244,7 +247,7 @@ pub fn print_connect_report(report: &ConnectReport) {
 mod tests {
     use super::*;
     use crate::connect_report as connect;
-    use crate::{Gender, JoinedRoom, RoomSlot};
+    use crate::{wallet::SyncCashPointResponse, Gender, JoinedRoom, RoomSlot};
     use o2jam_game::PeerBars;
 
     fn room_row(number: i32, title: &str, locked: bool) -> RoomListEntry {
@@ -288,6 +291,10 @@ mod tests {
         connect::ConnectReport {
             auth_code: 0,
             character: Some(hero),
+            cash_sync: Some(SyncCashPointResponse {
+                gem: 5,
+                cash_point: 6,
+            }),
             wallet: Some(connect::WalletReport {
                 gem: 5,
                 cash_point: 6,
@@ -396,6 +403,7 @@ mod tests {
             auth_code: 99,
             character: None,
             wallet: None,
+            cash_sync: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: None,
@@ -413,6 +421,7 @@ mod tests {
             auth_code: 0,
             character: None,
             wallet: None,
+            cash_sync: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: Some(ChannelLoginResponse {
