@@ -330,6 +330,20 @@ const START_RESULT_SUCCESS: i32 = 0;
 /// update, so a scripted 2009 is a labeled no-op — no local mutation.
 const ROOM_USER_COUNT_EVENT_COMMAND: u16 = 2009;
 
+/// Four-byte `SetRoomMusic` 4000 body the paired CREATE leg sees right
+/// after the 2004 answer (exe wire sha256 `3e368ba4…`, journey-matrix
+/// `create` pack). The exe's Waiting send sites stage the room song in
+/// global `0x7789d8` before calling the packet helper with opcode 4000
+/// (files `0xade65`/`0xadf4b` live, `0xb47ed`/`0xb48d3` normal); the
+/// 4001 handler at file `0x15f2d0` pins the `u16 id`, `u8 difficulty`,
+/// `u8 speed` order. Which catalog row supplies `0x0361` on this leg
+/// stays OPEN: no winedbg read of the global at create OK was taken.
+const CREATED_ROOM_MUSIC_ECHO: SetRoomMusic = SetRoomMusic {
+    music_id: 0x0361,
+    difficulty: 0,
+    speed: 1,
+};
+
 /// The result word a 4011 broadcast carries (`i32`, Memoryer
 /// `StartGameEventData.Result`): `None` for a body too short to hold
 /// one — the bare broadcast our rigs send, which reads as a start.
@@ -2116,6 +2130,26 @@ impl OnlineSession {
         self.confirm_song_select();
     }
 
+    /// Send the exe's post-create music echo. The 2004 commit stages
+    /// the same song values the 4000 body names, then the 4001 answer
+    /// restages them through [`Self::apply_waiting_music_changed`].
+    fn send_created_room_music_echo(&mut self) {
+        let echo = CREATED_ROOM_MUSIC_ECHO;
+        self.game
+            .set_room_music(echo.music_id, echo.difficulty, echo.speed);
+        if let Some(room) = self.joined_room.as_mut() {
+            room.music_id = echo.music_id;
+            room.difficulty = echo.difficulty;
+            room.speed = echo.speed;
+        }
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::SetRoomMusic.id(), &echo.encode_body())
+        {
+            tracing::warn!(%source, "create-room music echo send failed");
+        }
+    }
+
     /// Drain one queued create-room commit (ticket #269): the shell's
     /// dialog Commit queues `pending_create_room` (the 2004 body); this
     /// bridge moves the committed title through the existing host path
@@ -2135,6 +2169,7 @@ impl OnlineSession {
         match self.create_room_with_request(&body) {
             Ok(_) => {
                 let _ = self.game.enter_screen(Screen::Waiting);
+                self.send_created_room_music_echo();
             }
             Err(source) => {
                 tracing::warn!(%source, "create room failed; staying in Room");
@@ -4872,6 +4907,23 @@ pub(super) mod session_tests {
         let frame = read_frame(stream);
         assert_eq!(frame.id, UpdateGameStats::COMMAND);
         UpdateGameStats::decode_body(&frame.payload).unwrap()
+    }
+
+    /// Close the post-create ladder on the scripted gateway: read the
+    /// 4000 body pinned by the paired exe tap, answer 4001, and expect
+    /// the client's 4025 music-state announcement.
+    fn answer_create_music_echo(stream: &mut TcpStream) {
+        let frame = read_frame(stream);
+        assert_eq!(frame.id, Request::SetRoomMusic.id());
+        assert_eq!(frame.payload, [0x61, 0x03, 0x00, 0x01]);
+        let echo = WaitingMusicChanged {
+            music_id: 0x0361,
+            difficulty: 0,
+            speed: 1,
+        };
+        stream.write_all(&echo.encode()).unwrap();
+        let state = read_frame(stream);
+        assert_eq!(state.id, Request::UpdateMusicState.id());
     }
 
     /// Assert the fake server hears nothing for a beat (stats silence).
@@ -13674,6 +13726,7 @@ pub(super) mod session_tests {
             stream
                 .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
                 .unwrap();
+            answer_create_music_echo(&mut stream);
             assert_quiet(&mut stream);
         });
 
@@ -13698,6 +13751,9 @@ pub(super) mod session_tests {
         assert!(session.game_mut().room_dialog().is_none());
 
         paint_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(0x0361)
+        });
 
         assert_eq!(session.screen(), Screen::Waiting);
         assert_eq!(
@@ -13705,6 +13761,113 @@ pub(super) mod session_tests {
             Some("x")
         );
 
+        server.join().unwrap();
+    }
+
+    /// Ticket #852: after the CREATE 2004 answer the 7.55 client sends
+    /// a four-byte `SetRoomMusic` 4000 and folds the 4001 answer back
+    /// into the staged room song. Paired tap `journey-matrix/create`
+    /// (exe wire sha256 `3e368ba4…`) logs `C2S 4000 hex=61030001`.
+    /// Live caller chain: staged CREATE sheet -> OK -> `flush_create_room`
+    /// -> 2004/2005 + 2002/2003 -> 4000 -> `apply_waiting_music_changed`
+    /// -> `ScreenGame::set_room_music` -> `announce_music_state` 4025.
+    #[test]
+    fn create_commit_sends_the_4000_echo_and_folds_4001_into_room_music() {
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::message::{CreateResult, CreateRoomResponse, CreatedRoom};
+        use o2jam_net::{RoomList, RoomListEntry, SetRoomMusic};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE;
+        use std::collections::HashMap;
+
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Request::CreateRoom.id());
+            let created = CreateRoomResponse {
+                result: CreateResult::Success,
+                info: Some(CreatedRoom {
+                    number: 42,
+                    premium: false,
+                    password: String::new(),
+                    has_password: false,
+                    min_level: 0,
+                    max_level: 0,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(
+                    CreateRoomResponse::COMMAND,
+                    &created.encode_body(),
+                ))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Request::GetChannelInfo.id());
+            let list = RoomList {
+                rooms: vec![RoomListEntry {
+                    number: 42,
+                    state_code: 1,
+                    title: "ECHOTEST".to_owned(),
+                    has_password: false,
+                    music_id: 0,
+                    difficulty: 0,
+                    key_mode: 0,
+                    game_mode: 0,
+                    speed: 1,
+                    capacity: 8,
+                    user_count: 1,
+                    min_level: 0,
+                    max_level: 0,
+                    skills: Vec::new(),
+                    premium: false,
+                    room_type: 0,
+                }],
+            };
+            stream
+                .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
+                .unwrap();
+            answer_create_music_echo(&mut stream);
+            assert_quiet(&mut stream);
+        });
+
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: "CREATE".to_owned(),
+            code: CREATE_ROOM_CREATE_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 30,
+                h: 30,
+            },
+        }];
+        session
+            .game_mut()
+            .load_create_room_scene(placements, HashMap::new());
+        session.game_mut().open_create_room_dialog();
+        for letter in "ECHOTEST".chars() {
+            session.game_mut().push_room_dialog_char(letter);
+        }
+        session.game_mut().click_room_dialog(20, 20);
+        paint_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(0x0361)
+        });
+
+        let room = session.joined_room.as_ref().expect("host room staged");
+        assert_eq!(
+            SetRoomMusic {
+                music_id: room.music_id,
+                difficulty: room.difficulty,
+                speed: room.speed,
+            },
+            SetRoomMusic {
+                music_id: 0x0361,
+                difficulty: 0,
+                speed: 1,
+            }
+        );
         server.join().unwrap();
     }
 
@@ -13822,6 +13985,7 @@ pub(super) mod session_tests {
             stream
                 .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
                 .unwrap();
+            answer_create_music_echo(&mut stream);
             assert_quiet(&mut stream);
         });
 
@@ -13851,6 +14015,9 @@ pub(super) mod session_tests {
         }
         session.game_mut().click_room_dialog(20, 20);
         paint_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.room_music_id() == Some(0x0361)
+        });
 
         server.join().unwrap();
     }
