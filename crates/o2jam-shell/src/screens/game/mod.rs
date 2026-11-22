@@ -156,6 +156,13 @@ use winit::keyboard::KeyCode;
 /// never reaches the armed phase before both.
 pub const LOADING_GATE_PHASES: usize = 4;
 
+/// One-based mode-3 record in `Tutorial.ojm` that the tutorial state's
+/// entry helper cues (`bgsplit-01.ogg`, first of the 12 marker ids in
+/// `docs/ojn-bit26.md`). The exe loads the bank at file `0xf0a50` and
+/// calls its playback helper at file `0xf0ab0`; which shipped sample
+/// sounds remains OPEN (next step `N-AUDIO`, owned-sink A/B).
+const TUTORIAL_OJM_BGM_RECORD: i32 = 1;
+
 /// The one press-kind word returned by [`ScreenGame::press_kind_at`].
 /// It names the staged control under a point, never its wire outcome:
 /// the session press module decides networked vs local and owns the
@@ -1105,6 +1112,17 @@ struct AudioRig {
     bank: HashMap<u32, PcmSamples>,
     bgm: SceneBgm,
     bgm_bank: Vec<Option<PcmSamples>>,
+    tutorial_bgm_bank: Vec<Option<PcmSamples>>,
+}
+
+/// The staged bank a scene-BGM cue resolves its record against.
+/// The channel and its keep-running policy stay shared; only the bank
+/// changes when the tutorial state cues its own `Tutorial.ojm`.
+enum SceneBgmBank {
+    /// `Music/BGM.ojm`, named by every [`Screen::bgm_cue`] entry.
+    Scene,
+    /// `Tutorial.ojm` mode-3 records, cued on the tutorial entry.
+    TutorialOjm,
 }
 
 /// Team index under native pixel (`x`, `y`): the staged team-button
@@ -1459,6 +1477,7 @@ impl ScreenGame {
             bank,
             bgm: SceneBgm::new(),
             bgm_bank: Vec::new(),
+            tutorial_bgm_bank: Vec::new(),
         });
         self
     }
@@ -1476,6 +1495,28 @@ impl ScreenGame {
         }
         self.apply_scene_bgm();
         self
+    }
+
+    /// Stage the mode-3 records of `Tutorial.ojm` as the tutorial's
+    /// own BGM bank. The exe's state-enter helper loads this bank and
+    /// starts its playback helper before chart time begins (files
+    /// `0xf0a48`/`0xf0a50`/`0xf0ab0`, REA `ev_c9875194…`). Staging
+    /// never cues: [`Self::visit_side`] cues entry, and an attach during
+    /// an open visit calls [`Self::recue_tutorial_ojm_if_open`].
+    pub fn set_tutorial_ojm_bank(&mut self, bank: Vec<Option<PcmSamples>>) -> &mut Self {
+        if let Some(rig) = self.audio.as_mut() {
+            rig.tutorial_bgm_bank = bank;
+        }
+        self
+    }
+
+    /// Re-cue the tutorial entry record while a Tutorial visit is open.
+    /// A bank attach mid-visit replaces the bank the entry cue resolves
+    /// against, so the attach call sites apply that cue explicitly.
+    pub fn recue_tutorial_ojm_if_open(&mut self) {
+        if self.side == Some(SideScreen::Tutorial) {
+            self.apply_tutorial_ojm_cue();
+        }
     }
 
     /// Stage decoded `bgEffect.ojm` samples by exe cache slot. An
@@ -1520,6 +1561,19 @@ impl ScreenGame {
     /// share record 9, and a shared track must not restart from
     /// sample 0 on every emblem click.
     fn apply_bgm_cue(&mut self, cue: (i32, bool)) {
+        self.apply_bgm_cue_from(cue, SceneBgmBank::Scene);
+    }
+
+    /// Cue the tutorial state's own OJM bank at entry, exactly where
+    /// the exe's state helper calls its OJM playback helper (file
+    /// `0xf0ab0`). `SideScreen::Tutorial` still has no `BGM.ojm`
+    /// record; its `-1` scene cue is replaced by this one.
+    fn apply_tutorial_ojm_cue(&mut self) {
+        self.apply_bgm_cue_from((TUTORIAL_OJM_BGM_RECORD, true), SceneBgmBank::TutorialOjm);
+    }
+
+    /// Apply one `(id, loop)` pair over the named staged bank.
+    fn apply_bgm_cue_from(&mut self, cue: (i32, bool), source: SceneBgmBank) {
         // Read the mix before borrowing the rig mutably below.
         let gain = self.in_song_mix().scene_bgm_gain();
         let Some(rig) = self.audio.as_mut() else {
@@ -1530,8 +1584,13 @@ impl ScreenGame {
             backend,
             bgm,
             bgm_bank,
+            tutorial_bgm_bank,
             ..
         } = rig;
+        let bank = match source {
+            SceneBgmBank::Scene => bgm_bank.as_slice(),
+            SceneBgmBank::TutorialOjm => tutorial_bgm_bank.as_slice(),
+        };
         // The BGMusic volume (`Sound`/`GameBGVolume`, default 255 is
         // unity) scales the lobby cue: the Sound tab moves the live
         // scene mix (a gain change re-cues, the only path that
@@ -1543,7 +1602,7 @@ impl ScreenGame {
             gain,
         };
         let sounding = backend.scene_bgm_playing();
-        match bgm.cue(request, bgm_bank, sounding) {
+        match bgm.cue(request, bank, sounding) {
             CueOutcome::KeepRunning => {}
             CueOutcome::Restart(pcm) => {
                 let scaled = scale_scene_bgm(pcm, gain);
@@ -6780,20 +6839,30 @@ impl ScreenGame {
     }
 
     /// Open a side screen from a lobby; rejects other origins and
-    /// remembers the lobby to return to. Entry cues the side
-    /// screen's scene music (see [`SideScreen::bgm_cue`]); a
-    /// rejected visit cues nothing.
+    /// remembers the lobby to return to. A tutorial visit also yields
+    /// to an armed Loading gate, so a start never collides with the
+    /// side visit. Entry cues the side screen's scene music (see
+    /// [`SideScreen::bgm_cue`]); a rejected visit cues nothing.
     pub fn visit_side(&mut self, side: SideScreen) -> bool {
         if self.side.is_some() || !can_visit_side(self.flow.current(), side) {
+            return false;
+        }
+        // Spec #313 story 20: the FIRSTSTEP arm calls `0x495110` with
+        // no static refusal (`0x48fd20`, ev `ev_ac6983f7…`), so gate
+        // precedence is ASSUMED until `N-LOADING` watches the pending
+        // state at `0x478c50`/`0x477990`.
+        if side == SideScreen::Tutorial && self.loading_gate_ready() {
             return false;
         }
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
         self.billing_failure_notice = false;
         self.mount_staged_side_art(side);
-        self.apply_bgm_cue(side.bgm_cue());
         if side == SideScreen::Tutorial {
+            self.apply_tutorial_ojm_cue();
             self.tutorial_key_lights.clear();
+        } else {
+            self.apply_bgm_cue(side.bgm_cue());
         }
         if side == SideScreen::MyRoom {
             // The wave-2 paired taps show no 5017/5018 on MyRoom or
@@ -24785,6 +24854,16 @@ mod game_tests {
         bank
     }
 
+    /// One-slot synthetic `Tutorial.ojm` bank: record 1's constant
+    /// sample names the cued record. Made-up audio; no game data.
+    fn tutorial_cue_bank() -> Vec<Option<PcmSamples>> {
+        vec![Some(PcmSamples {
+            samples: vec![1; 441],
+            sample_rate: 44_100,
+            channels: 1,
+        })]
+    }
+
     /// Null sink that logs each scene-BGM push as its marker sample
     /// (`-1` for a stop), so a test can see which records the shell
     /// cued and when.
@@ -33768,6 +33847,57 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Room);
     }
 
+    #[test]
+    fn firststep_press_loses_to_an_armed_loading_gate() {
+        // Spec #313 story 20. Live chain: boot -> Room -> staged FIRSTSTEP
+        // -> `ScreenGame::ingest_snapshot` -> `click_dispatch` ->
+        // `click_room_control` -> `enter_room_side_with_enter_shop` ->
+        // `visit_side(Tutorial)`. Statics pin one pending-state word in the
+        // exe (`0x478c50` writes parent +0x54; `0x477990` consumes it) and
+        // an unconditional FIRSTSTEP arm (`0x495110`); they do not pin
+        // which of a start and a side visit wins in one frame. Conservative
+        // ASSUMED order until `N-LOADING`: a qualified pack with both frames
+        // and a shared trace id. Seam suffices here because the host dispatch
+        // boundary is the whole decision: no display or wire is involved.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 0,
+        });
+        game.catalog_songs = vec![super::super::side::staged_song(757)];
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        game.set_loading_status(LoadingStatus {
+            progress: 1.0,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        });
+        assert!(game.loading_gate_ready(), "song start gate is armed");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(
+            game.side(),
+            None,
+            "FIRSTSTEP must not mount Tutorial while the gate is armed"
+        );
+        assert_eq!(game.tutorial_chart_globals(), None, "no entry globals");
+        assert_eq!(game.screen(), Screen::Room, "the gate keeps its host");
+
+        game.clear_loading();
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(
+            game.side(),
+            Some(SideScreen::Tutorial),
+            "the same press enters once the gate is idle"
+        );
+    }
+
     /// Filter tabs select the list family locally (ticket #416). The
     /// 2002 parameter the exe may send on a tab press stays OPEN — no
     /// pack pins one — so this guard covers the staged-rect click and
@@ -33834,20 +33964,73 @@ mod game_tests {
     }
 
     #[test]
-    fn firststep_tutorial_exit_click_returns_to_room_and_recues_its_bgm() {
-        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
-        // click → Tutorial → bottom-right exit press → opening Room.
-        // Boot1 input log `cee8b7d5…1913` clicks `(777,567)`; the next
-        // frame `ed1bf56e…7b46` is the Room board with no modal.
+    fn firststep_tutorial_entry_cues_the_pinned_tutorial_ojm_record() {
+        // Live chain: main.rs::run_play -> setup_chart_audio ->
+        // set_tutorial_ojm_bank -> boot -> Planet -> Channel -> Room
+        // -> staged FIRSTSTEP click -> ScreenGame::visit_side ->
+        // tutorial entry cue -> AudioBackend::set_scene_bgm. The state
+        // helper at exe file 0xf0950 pushes "Tutorial.ojm" at 0xf0a48,
+        // loads it at 0xf0a50, then calls the OJM play helper at
+        // 0xf0ab0 (REA ev_c9875194…, ev_9f2d0d8…, ev_e25488ee…).
+        // Chart markers 0x04000001..0x040000C pin the 12 mode-3
+        // records; which one sounds stays OPEN (N-AUDIO A/B).
+        use o2jam_audio::AudioError;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct CueQueueProbe {
+            peaks: Rc<RefCell<Vec<i32>>>,
+        }
+        impl AudioBackend for CueQueueProbe {
+            fn play_pcm(&mut self, _pcm: &PcmSamples) -> Result<(), AudioError> {
+                Ok(())
+            }
+            fn set_scene_bgm(
+                &mut self,
+                pcm: Option<&PcmSamples>,
+                _repeat: bool,
+            ) -> Result<(), AudioError> {
+                let peak = pcm.map_or(0, |pcm| {
+                    pcm.samples
+                        .iter()
+                        .map(|sample| i32::from(*sample).abs())
+                        .max()
+                        .unwrap_or(0)
+                });
+                self.peaks.borrow_mut().push(peak);
+                Ok(())
+            }
+            fn samples_played(&self) -> u64 {
+                0
+            }
+        }
+
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/Tutorial.ojm");
+        let Ok(bytes) = std::fs::read(&path) else {
+            println!("skip: no install-root Tutorial.ojm");
+            return;
+        };
+        let tables = o2jam_file::parse_new_variant_entries(&bytes).expect("parse Tutorial.ojm");
+        let first = tables.mode3.first().expect("bgsplit-01 record");
+        let body = first.sample_bytes(&bytes).expect("bgsplit-01 bytes");
+        let pcm = o2jam_audio::decode_vorbis(body).expect("decode bgsplit-01");
+        let peak = pcm
+            .samples
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(peak > 0, "the shipped first BGM record carries sound");
+
+        let peaks = Rc::new(RefCell::new(Vec::new()));
+        let probe = CueQueueProbe {
+            peaks: Rc::clone(&peaks),
+        };
         let mut game = ScreenGame::new();
-        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
-        let mut bank = vec![None; 10];
-        bank[2] = Some(o2jam_audio::PcmSamples {
-            samples: vec![3; 441],
-            sample_rate: 44_100,
-            channels: 1,
-        });
-        game.stage_scene_bgm(bank);
+        game.with_audio(Box::new(probe), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[3]));
+        game.set_tutorial_ojm_bank(vec![Some(pcm)]);
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
         game.menu_key(MenuKey::Back, true);
@@ -33870,7 +34053,69 @@ mod game_tests {
             ROOM_CONTROL_TEST_CLICK.1,
         ));
         assert_eq!(game.side(), Some(SideScreen::Tutorial));
-        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+        assert_eq!(
+            game.scene_bgm_selection(),
+            Some(BgmSelection {
+                record: 1,
+                repeat: true
+            }),
+            "Tutorial.ojm record 1 is cued at entry"
+        );
+        assert_eq!(
+            peaks.borrow().last().copied(),
+            Some(peak),
+            "the cued record's PCM reaches the backend queue"
+        );
+    }
+
+    #[test]
+    fn firststep_tutorial_exit_click_returns_to_room_and_recues_its_bgm() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial → bottom-right exit press → opening Room.
+        // Boot1 input log `cee8b7d5…1913` clicks `(777,567)`; the next
+        // frame `ed1bf56e…7b46` is the Room board with no modal. Boot
+        // stages both banks: Tutorial.ojm record 1 sounds on entry and
+        // the exit press re-cues BGM.ojm record 3.
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        let mut bank = vec![None; 10];
+        bank[2] = Some(o2jam_audio::PcmSamples {
+            samples: vec![3; 441],
+            sample_rate: 44_100,
+            channels: 1,
+        });
+        game.stage_scene_bgm(bank);
+        game.set_tutorial_ojm_bank(tutorial_cue_bank());
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: None,
+                rect: ROOM_CONTROL_TEST_RECT,
+            }],
+            HashMap::new(),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(
+            game.scene_bgm_selection(),
+            Some(BgmSelection {
+                record: 1,
+                repeat: true
+            }),
+            "Tutorial.ojm record 1 plays before the exit press"
+        );
 
         game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
         assert_eq!(game.side(), None, "exit leaves the side visit");
@@ -33886,16 +34131,25 @@ mod game_tests {
         // `cee8b7d5…1913` and frame `ed1bf56e…7b46` pin the click and
         // the resulting board; boot2 repeats. Live chain: boot ->
         // Channel -> Room -> staged FIRSTSTEP click -> Tutorial ->
-        // exit hit test -> `leave_side` -> Room entry BGM cue.
+        // exit hit test -> `leave_side` -> Room entry BGM cue. The
+        // staged Tutorial.ojm bank supplies record 1 before the press.
         let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
         game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
         game.stage_scene_bgm(marker_bank(&[3]));
+        game.set_tutorial_ojm_bank(tutorial_cue_bank());
         game.ingest_snapshot(&InputSnapshot::click_at(
             ROOM_CONTROL_TEST_CLICK.0,
             ROOM_CONTROL_TEST_CLICK.1,
         ));
         assert_eq!(game.side(), Some(SideScreen::Tutorial));
-        assert_eq!(game.scene_bgm_selection(), None, "tutorial cues silence");
+        assert_eq!(
+            game.scene_bgm_selection(),
+            Some(BgmSelection {
+                record: 1,
+                repeat: true
+            }),
+            "Tutorial.ojm record 1 plays before the exit press"
+        );
 
         game.ingest_snapshot(&InputSnapshot::click_at(777, 567));
         assert_eq!(game.side(), None, "the side visit is gone");
