@@ -2838,10 +2838,24 @@ fn paint_dialog_layer(
     origin: (i32, i32),
     index: usize,
 ) {
-    let Some(layer) = figure.layer(index) else {
+    paint_dialog_layer_at_anchor(frame, placement, figure, origin, index, index);
+}
+
+/// One staged record painted at another staged record's anchor.
+/// The caller uses this to cover the footprint of a face whose
+/// archive anchor differs from the base face's anchor.
+fn paint_dialog_layer_at_anchor(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figure: &AvatarFigure,
+    origin: (i32, i32),
+    index: usize,
+    anchor_index: usize,
+) {
+    let (Some(layer), Some(anchor)) = (figure.layer(index), figure.layer(anchor_index)) else {
         return;
     };
-    let at = dialog_layer_origin(placement, layer.dx, layer.dy);
+    let at = dialog_layer_origin(placement, anchor.dx, anchor.dy);
     let (view_x, view_y) = anchor_in_frame(origin.0 + at.0, origin.1 + at.1, frame.w, frame.h);
     blit_rgb555(
         frame,
@@ -2936,25 +2950,45 @@ pub(crate) fn paint_dialog_frame_record(
     code: u32,
     record: usize,
 ) {
-    let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
+    let Some((placed, figure, origin)) = dialog_frame_parts(art, code) else {
         return;
     };
+    paint_dialog_layer(frame, placed, figure, origin, record);
+}
+
+/// Repaint one staged control record at another record's anchor.
+/// The 7.55 create-room mode bodies author their selected face one
+/// pixel above the base face; painting the base at that anchor first
+/// erases the whole stale face before its own anchored repaint.
+/// Every anchor comes from staged records, never a pixel literal.
+pub(crate) fn paint_dialog_frame_record_at_anchor_of(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    code: u32,
+    record: usize,
+    anchor_record: usize,
+) {
+    let Some((placed, figure, origin)) = dialog_frame_parts(art, code) else {
+        return;
+    };
+    paint_dialog_layer_at_anchor(frame, placed, figure, origin, record, anchor_record);
+}
+
+/// Placement, body, and sheet origin of one staged dialog control.
+/// The sheet frame is scenery and never repaints here: its record is
+/// already absolute, so adding the dialog origin would paint a
+/// second copy of the whole sheet (#729).
+fn dialog_frame_parts(
+    art: &SceneArt,
+    code: u32,
+) -> Option<(&ScenePlacement, &AvatarFigure, (i32, i32))> {
+    let placed = art.placements.iter().find(|placed| placed.code == code)?;
     if is_dialog_backdrop(placed) {
-        return;
+        return None;
     }
-    let Some(sprite) = placed.sprite.as_deref() else {
-        return;
-    };
-    let Some(figure) = art.figures.get(sprite) else {
-        return;
-    };
-    paint_dialog_layer(
-        frame,
-        placed,
-        figure,
-        dialog_origin(&art.placements),
-        record,
-    );
+    let sprite = placed.sprite.as_deref()?;
+    let figure = art.figures.get(sprite)?;
+    Some((placed, figure, dialog_origin(&art.placements)))
 }
 
 /// Repaint one record on a parent-relative staged sheet.
