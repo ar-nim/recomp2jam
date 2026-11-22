@@ -47,7 +47,15 @@ Active non-self codes cover `0x01..0xBA` with no gaps/dups, so
 ## Entry and exit evidence
 
 `IDC_BUTTON_SSHOP_BACK` + `IDC_BUTTON_SSHOP_GOMYROOM` name
-back/myroom targets; no `EXIT` id exists in-block. The tapped BACK
+back/myroom targets; no `EXIT` id exists in-block.
+
+Two Room/MyRoom controls pick the same runtime state 3 that mounts this
+block: Room `0x13200008` (`FUN_0048fd20`, file `0x8fd20`, EV
+`ev_8ba1098e…`) and MyRoom `0x15200003` (`FUN_004a3ee0`, file
+`0xa3ee0`, EV `ev_138a6bae…`). The Room case sends 5006 right after
+the pick; the MyRoom case sends no frame. The live entry guard
+`live_itemshop_entry_mounts_the_exe_shop_state_from_room_and_myroom`
+drives both aims and checks the staged `STATE_SHOP` board pixels. The tapped BACK
 frame (`~/scratch/evidence-shops/gifted-boot/exe/shop-back.png`,
 `ff522720…ef29b270`, wire `94b2ea8f…a2508`) leaves the side and emits
 `C2S 5007` with an empty body, followed by `5028 → 5029`. The full-

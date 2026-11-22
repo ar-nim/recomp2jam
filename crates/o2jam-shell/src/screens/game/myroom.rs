@@ -210,6 +210,17 @@ impl ScreenGame {
                     self.outbox.pending_exit_shop = Some(ExitShop);
                 }
             }
+            Some(MyRoomAction::OpenShop) => {
+                // GOSHOP picks the same runtime state as Room ITEMSHOP:
+                // FUN_004a3ee0 case 0x15200003 (file 0xa3ee0) calls
+                // ChangeState(3), the pick FUN_0048fd20 case 0x13200008
+                // (file 0x8fd20) makes before sending 5006. This site
+                // sends no frame, so a scene change owns the whole arm.
+                // The shell rejects nested sides, so leave MyRoom first.
+                if self.leave_side() {
+                    self.visit_side(SideScreen::Shop);
+                }
+            }
             Some(action) => self.apply_myroom_action(action),
             None => {}
         }
@@ -264,6 +275,8 @@ impl ScreenGame {
                 self.post_myroom_notice(MyRoomNotice::WebAvatar);
             }
 
+            // Scene-changing arms own their leave and visit in
+            // `click_myroom_side`; nothing here may enter a nested side.
             MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }
@@ -530,7 +543,7 @@ impl ScreenGame {
     /// ride [`Self::click_myroom_side`]; vacate clears the selected worn
     /// slot and restages but queues nothing (send shape OPEN,
     /// `docs/myroom.md`); BACK queues the pinned 5007 exit, GOSHOP
-    /// changes state without an extra send (#802).
+    /// mounts the Item Shop state without an extra send (#802, #856).
     pub(super) fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {

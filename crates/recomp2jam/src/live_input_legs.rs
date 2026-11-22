@@ -22,10 +22,13 @@ mod live_input_leg_tests {
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+    use o2jam_shell::screens::game::ScreenGame;
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
-    use o2jam_shell::screens::side::{SideScreen, INFORMATION_OK_CODE};
-    use o2jam_shell::staging::{read_install_archives, stage_dialog, Dialog, StageContext};
+    use o2jam_shell::screens::side::{SideScreen, INFORMATION_OK_CODE, MYROOM_GOSHOP_CODE};
+    use o2jam_shell::staging::{
+        read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
+    };
     use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, Screen};
 
     use crate::{
@@ -821,5 +824,148 @@ mod live_input_leg_tests {
             }
             finish(session, gateway.server);
         }
+    }
+
+    /// Painted frame from the same live path the window drives.
+    fn painted_frame(session: &mut OnlineSession) -> Vec<u32> {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits a buffer index");
+        let mut buf = vec![0u32; width * height];
+        session.paint(&mut o2jam_render::Frame {
+            buf: &mut buf,
+            w: width,
+            h: height,
+        });
+        buf
+    }
+
+    /// Board samples from the staged `STATE_SHOP` art. A full frame
+    /// from a bare game with only that art in its side slots keeps the
+    /// check on the mounted block, never on a literal colour.
+    fn staged_shop_samples() -> Vec<u32> {
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let art = stage_state(&archive, State::Shop, StageContext::default())
+            .art
+            .expect("STATE_SHOP stages with installed bytes");
+        let mut game = ScreenGame::new();
+        game.load_side_scene(art.placements, art.figures);
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(game.enter_screen(lobby), "staged walk reaches {lobby:?}");
+        }
+        assert!(game.visit_side(SideScreen::Shop));
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits a buffer index");
+        let mut buf = vec![0u32; width * height];
+        game.paint(&mut o2jam_render::Frame {
+            buf: &mut buf,
+            w: width,
+            h: height,
+        });
+        SHOP_SAMPLE_POINTS
+            .iter()
+            .map(|&(x, y)| buf[y * width + x])
+            .collect()
+    }
+
+    /// Staged board points away from captions and the avatar pane.
+    const SHOP_SAMPLE_POINTS: [(usize, usize); 6] = [
+        (400, 100),
+        (100, 100),
+        (300, 450),
+        (600, 450),
+        (50, 400),
+        (700, 80),
+    ];
+
+    fn assert_mounts_item_shop(session: &mut OnlineSession, samples: &[u32], entry: &str) {
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::Shop),
+            "{entry} must mount the Item Shop side state"
+        );
+        let frame = painted_frame(session);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");
+        for (index, &(x, y)) in SHOP_SAMPLE_POINTS.iter().enumerate() {
+            assert_eq!(
+                frame[y * width + x],
+                samples[index],
+                "{entry} paints the staged STATE_SHOP board at ({x},{y})"
+            );
+        }
+    }
+
+    /// Ticket #856 (wave-2 leg 2). The exe's Room ITEMSHOP handler
+    /// (`FUN_0048fd20` case `0x13200008`, file `0x8fd20`) and its
+    /// MyRoom GOSHOP handler (`FUN_004a3ee0` case `0x15200003`, file
+    /// `0xa3ee0`) both call `ChangeState(3)` before the 5006 send in
+    /// the Room case: one runtime state pick, one staged Item Shop
+    /// block. The guard drives both entries from boot and checks the
+    /// same staged board pixels on each.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot
+    ///   -> ScreenGame::click_room_control -> visit_side(Shop)
+    ///   -> mount_staged_side_art -> paint_side (Room ITEMSHOP at
+    ///      the staged `(422,17)` rect), then
+    ///   -> ScreenGame::click_myroom_side -> MyRoomAction::OpenShop
+    ///   -> leave_side -> visit_side(Shop) -> mount_staged_side_art
+    ///      (MyRoom GOSHOP at the staged `0x15200003` rect).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_itemshop_entry_mounts_the_exe_shop_state_from_room_and_myroom() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let samples = staged_shop_samples();
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let tabs = room_top_tabs();
+        let room_tab = &tabs[1];
+        assert_tab_aim_is_staged(&mut session, room_tab);
+        session.ingest_snapshot(&InputSnapshot::click_at(room_tab.aim.0, room_tab.aim.1));
+        assert_mounts_item_shop(&mut session, &samples, "Room ITEMSHOP (422,17)");
+        wait_for_enter_shop(&gateway.reports, room_tab.id);
+
+        let mut back = InputSnapshot::new();
+        back.push_edge(InputEdge::Menu {
+            key: o2jam_shell::MenuKey::Back,
+            down: true,
+        });
+        session.ingest_snapshot(&back);
+        assert_eq!(session.game_mut().side(), None, "BACK leaves the shop side");
+
+        session.ingest_snapshot(&InputSnapshot::click_at(517, 16));
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::MyRoom),
+            "Room MYROOM tab opens the avatar room"
+        );
+        // The aim comes from the staged GOSHOP rect, never a literal.
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let art = stage_state(&archive, State::MyRoom, StageContext::default())
+            .art
+            .expect("STATE_MYROOM stages with installed bytes");
+        let goshop = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == MYROOM_GOSHOP_CODE)
+            .expect("STATE_MYROOM stages the GOSHOP control");
+        let aim = (
+            goshop.rect.x + i32::try_from(goshop.rect.w).expect("rect width fits i32") / 2,
+            goshop.rect.y + i32::try_from(goshop.rect.h).expect("rect height fits i32") / 2,
+        );
+        session.ingest_snapshot(&InputSnapshot::click_at(aim.0, aim.1));
+        assert_mounts_item_shop(&mut session, &samples, "MyRoom GOSHOP");
+
+        finish(session, gateway.server);
     }
 }

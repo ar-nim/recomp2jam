@@ -30423,9 +30423,9 @@ mod game_tests {
         // holding, gift cell pick (claim with no staged rows queues
         // nothing), the caption landing nowhere, VACATE clearing the
         // selected worn slot with no wire send (send shape OPEN) and
-        // GOSHOP as a labeled no-op (nested sides rejected), and BACK
-        // returning to the lobby last. Slot-filter semantics stay
-        // OPEN (`docs/myroom.md`).
+        // GOSHOP changing to the Item Shop state with no extra wire
+        // (exe case `0x15200003`), and BACK returning to the lobby
+        // last. Slot-filter semantics stay OPEN (`docs/myroom.md`).
         let mut game = myroom_open_overlay();
         // Entry queues the 5017 gift-list fetch (pinned by
         // `myroom_entry_queues_gift_list_fetch`); the sweep drains it
@@ -30459,11 +30459,16 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(61, 41));
         assert_eq!(
             game.side(),
-            Some(SideScreen::MyRoom),
-            "GOSHOP keeps the room"
+            Some(SideScreen::Shop),
+            "GOSHOP mounts the Item Shop state"
         );
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
+        // The rest of the sweep belongs to MyRoom; re-enter through the
+        // same lobby gate a player uses on the way back.
+        assert!(game.leave_side());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        assert!(game.take_gift_list_request().is_some());
         game.ingest_snapshot(&InputSnapshot::click_at(11, 11));
         assert_eq!(game.myroom().selected_slot(), 3);
         game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
