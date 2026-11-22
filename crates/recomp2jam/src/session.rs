@@ -143,7 +143,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
-use o2jam_net::gift::{GetGiftMessageList, GetGiftMessageListResponse, GiftClaimReply, GiftType};
+use o2jam_net::gift::{GiftClaimReply, GiftType};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
@@ -486,16 +486,6 @@ struct MyRoomReplyAttempt {
     deadline: Instant,
 }
 
-/// Pending gift-list fetch (ticket #201): the 5017 send plus the 5018
-/// answer resolve on the per-frame poll. The 5018 body is exe-ignored
-/// (`docs/gifts.md`); the drain only clears the attempt. A timeout
-/// clears it so the next MyRoom entry retries it.
-#[derive(Debug, Clone, Copy)]
-struct GiftListAttempt {
-    /// When the silent server stops getting the benefit of the doubt.
-    deadline: Instant,
-}
-
 /// Pending gift-claim attempt (ticket #201): the 5023 send plus the
 /// 5024 answer resolve on the per-frame poll. The reply carries only
 /// a verdict, so the claimed gift id rides here for the success
@@ -653,9 +643,6 @@ pub struct OnlineSession {
     /// Live song-shop buy (`None` while no buy commit is in
     /// flight; the per-frame [`Self::poll_music_buy`] owns it).
     music_buy_attempt: Option<MusicBuyAttempt>,
-    /// Live gift-list fetch (`None` while no MyRoom entry fetch is in
-    /// flight; the per-frame [`Self::poll_gift_list`] owns it).
-    gift_list_attempt: Option<GiftListAttempt>,
     /// Live gift claim (`None` while no MOVE claim is in flight; the
     /// per-frame [`Self::poll_gift_claim`] owns it).
     gift_claim_attempt: Option<GiftClaimAttempt>,
@@ -751,7 +738,6 @@ impl OnlineSession {
             shop_buy_attempt: None,
             wallet_refresh_expected: None,
             music_buy_attempt: None,
-            gift_list_attempt: None,
             gift_claim_attempt: None,
             equip_attempt: None,
             myroom_reply_attempts: Vec::new(),
@@ -3064,72 +3050,6 @@ impl OnlineSession {
         Some(attempt)
     }
 
-    fn flush_gift_list(&mut self) {
-        if self.gift_list_attempt.is_some() {
-            return;
-        }
-        if self.game.take_gift_list_request().is_some() {
-            if let Err(source) = self.gateway.send_frame(GetGiftMessageList::COMMAND, &[]) {
-                tracing::warn!(%source, "gift list send failed");
-            } else {
-                self.gift_list_attempt = Some(GiftListAttempt {
-                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
-                });
-            }
-        }
-    }
-
-    /// Per-frame gift-list section on the MyRoom side: move the
-    /// pending 5017 attempt under the short pending drain. Off the
-    /// MyRoom side the attempt drops, and past the deadline it warns
-    /// and clears, keeping the side so the next entry retries it.
-    fn poll_gift_list(&mut self) {
-        if self.game.side() != Some(SideScreen::MyRoom) {
-            if self.gift_list_attempt.take().is_some() {
-                tracing::debug!("gift list left behind leaving the MyRoom side; dropping it");
-            }
-            return;
-        }
-        let Some(attempt) = self.gift_list_attempt.take() else {
-            return;
-        };
-        if Instant::now() > attempt.deadline {
-            tracing::warn!("gift list timed out with no server answer; staying on MyRoom");
-            return;
-        }
-        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "gift list", |session| {
-            if let Some(kept) = session.drain_gift_list(attempt) {
-                session.gift_list_attempt = Some(kept);
-            }
-        });
-    }
-
-    /// Move one gift-list attempt leg: drain until the socket goes
-    /// quiet. The 5018 body is exe-ignored (`docs/gifts.md`), so the
-    /// drain only clears the attempt — no staged data changes.
-    /// Returns the attempt while it still awaits an answer.
-    fn drain_gift_list(&mut self, attempt: GiftListAttempt) -> Option<GiftListAttempt> {
-        loop {
-            match self.gateway.next_frame() {
-                Ok(frame) if frame.id == 5018 => {
-                    if GetGiftMessageListResponse::decode_body(&frame.payload).is_err() {
-                        tracing::debug!(id = frame.id, "dropping undecodable gift list reply");
-                    }
-                    return None;
-                }
-                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
-                Ok(frame) => {
-                    tracing::debug!(
-                        id = frame.id,
-                        "skipping non-gift-list frame in gift list drain"
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-        Some(attempt)
-    }
-
     fn flush_gift_claim(&mut self) {
         if self.gift_claim_attempt.is_some() {
             return;
@@ -4172,7 +4092,6 @@ impl OnlineSession {
             || self.select_attempt.is_some()
             || self.shop_buy_attempt.is_some()
             || self.music_buy_attempt.is_some()
-            || self.gift_list_attempt.is_some()
             || self.gift_claim_attempt.is_some()
             || self.equip_attempt.is_some()
     }
@@ -6230,52 +6149,44 @@ pub(super) mod session_tests {
     }
 
     #[test]
-    fn myroom_gift_list_fetch_round_trips_through_scripted_gateway() {
-        // Live caller chain:
-        //   OnlineSession::paint (GameLoop, the windowed frame entry
-        //   main.rs::run_play drives) -> flush_gift_list (5017 send)
-        //   -> poll_gift_list -> drain_gift_list (5018, exe-ignored body).
-        // Tier 2 scripted gateway. Synthetic table + character only:
-        // no archives read (CI-safe).
-        use o2jam_net::frame::encode_frame;
-        use o2jam_net::gift::GetGiftMessageListResponse;
+    fn myroom_entry_sends_no_gift_list_fetch_on_the_scripted_gateway() {
+        // Ticket #857. Live caller chain:
+        //   main.rs::run_online -> OnlineSession::paint -> poll_wire ->
+        //   poll_attempts -> flush_gift_list -> C2S 5017 -> S2C 5018.
+        // The paired wave-2 taps show no 5017/5018 on either side entry,
+        // and the 7.55 builder has no call site (`docs/gifts.md`), so
+        // this invented leg must leave the wire. Tier 2 scripted gateway;
+        // synthetic table and character, no archives read (CI-safe).
         use o2jam_shell::screens::side::SideScreen;
         use std::collections::HashMap;
 
-        let (port, server) = fake_gateway(|mut stream| {
-            let frame = read_frame(&mut stream);
-            assert_eq!(frame.id, 5017);
-            assert!(frame.payload.is_empty());
-            let reply = GetGiftMessageListResponse {
-                invalid: false,
-                messages: Vec::new(),
-            };
-            stream
-                .write_all(&encode_frame(5018, &reply.encode_body()))
-                .unwrap();
+        let (mut session, tap, ready, server) = scripted_client(Vec::new(), |session| {
+            session.game.menu_key(MenuKey::Confirm, true);
+            session.game.menu_key(MenuKey::Confirm, true);
+            assert_eq!(session.game.screen(), Screen::Waiting);
+            session
+                .game
+                .set_myroom_items(o2jam_file::AvatarItemTable { rows: Vec::new() });
+            session
+                .game
+                .set_myroom_character(o2jam_net::CharacterInfo::default());
+            session.game.load_side_scene(Vec::new(), HashMap::new());
+            assert!(session.game.visit_side(SideScreen::MyRoom));
         });
+        ready.recv().unwrap();
+        assert_eq!(session.game.side(), Some(SideScreen::MyRoom));
 
-        let mut game = ScreenGame::new();
-        game.menu_key(MenuKey::Back, true);
-        game.click_planet(136, 88);
-        game.menu_key(MenuKey::Confirm, true);
-        game.menu_key(MenuKey::Confirm, true);
-        assert_eq!(game.screen(), Screen::Waiting);
-        game.set_myroom_items(o2jam_file::AvatarItemTable { rows: Vec::new() });
-        game.set_myroom_character(o2jam_net::CharacterInfo::default());
-        game.load_side_scene(Vec::new(), HashMap::new());
-        assert!(game.visit_side(SideScreen::MyRoom));
-
-        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        let mut session = OnlineSession::new(game, gateway);
-        assert!(session.gift_list_attempt.is_none());
-
-        paint_frame(&mut session);
-        paint_until(&mut session, |s| s.gift_list_attempt.is_none());
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        drop(session);
         server.join().unwrap();
-
-        assert!(session.gift_list_attempt.is_none());
-        assert!(session.gift_claim_attempt.is_none());
+        let sent: Vec<u16> = tap.try_iter().collect();
+        assert_eq!(
+            sent.iter().filter(|&&id| id == 5017).count(),
+            0,
+            "the exe sends no 5017 on MyRoom entry (#857): {sent:?}"
+        );
     }
 
     #[test]
@@ -6287,50 +6198,29 @@ pub(super) mod session_tests {
         // Tier 2 scripted gateway; the 5004 body shape is statically
         // pinned in docs/equip.md (the exe press itself stays OPEN).
         use o2jam_net::frame::encode_frame;
-        use o2jam_net::gift::GetGiftMessageListResponse;
         use o2jam_net::shop::{EquipItem, EquipItemResponse};
         use o2jam_shell::screens::side::SideScreen;
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(|mut stream| {
-            // The equip leg now also starts at the bag-cell pick, so
-            // the session's per-frame flushes can put 5004 before the
-            // entry's 5017. Answer both in arrival order.
-            let mut saw_equip = false;
-            let mut saw_gift_list = false;
-            while !saw_equip || !saw_gift_list {
-                let frame = read_frame(&mut stream);
-                match frame.id {
-                    5017 => {
-                        let empty = GetGiftMessageListResponse {
-                            invalid: false,
-                            messages: Vec::new(),
-                        };
-                        stream
-                            .write_all(&encode_frame(5018, &empty.encode_body()))
-                            .unwrap();
-                        saw_gift_list = true;
-                    }
-                    5004 => {
-                        let equip = EquipItem::decode_body(&frame.payload).unwrap();
-                        assert_eq!((equip.slot, equip.item_id), (0, 1));
-                        let reply = EquipItemResponse {
-                            result: 0,
-                            tail: Some(o2jam_net::shop::EquipTail {
-                                slot_select: 0,
-                                reserved_a: 0,
-                                entry_id: 1,
-                                reserved_b: 0,
-                            }),
-                        };
-                        stream
-                            .write_all(&encode_frame(5005, &reply.encode_body()))
-                            .unwrap();
-                        saw_equip = true;
-                    }
-                    other => panic!("unexpected frame {other}"),
-                }
-            }
+            // The side entry queues no fetch (#857), so the equip
+            // commit is the only request on this gateway.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5004);
+            let equip = EquipItem::decode_body(&frame.payload).unwrap();
+            assert_eq!((equip.slot, equip.item_id), (0, 1));
+            let reply = EquipItemResponse {
+                result: 0,
+                tail: Some(o2jam_net::shop::EquipTail {
+                    slot_select: 0,
+                    reserved_a: 0,
+                    entry_id: 1,
+                    reserved_b: 0,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(5005, &reply.encode_body()))
+                .unwrap();
         });
 
         use o2jam_render::Rect;
@@ -6409,16 +6299,6 @@ pub(super) mod session_tests {
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(|mut stream| {
-            use o2jam_net::gift::GetGiftMessageListResponse;
-            let entry = read_frame(&mut stream);
-            assert_eq!(entry.id, 5017);
-            let empty = GetGiftMessageListResponse {
-                invalid: false,
-                messages: Vec::new(),
-            };
-            stream
-                .write_all(&encode_frame(5018, &empty.encode_body()))
-                .unwrap();
             let frame = read_frame(&mut stream);
             assert_eq!(frame.id, 5023);
             let claim = ClaimGift::decode_body(&frame.payload).unwrap();
@@ -6522,15 +6402,6 @@ pub(super) mod session_tests {
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(move |mut stream| {
-            use o2jam_net::gift::GetGiftMessageListResponse;
-            assert_eq!(read_frame(&mut stream).id, 5017);
-            let empty = GetGiftMessageListResponse {
-                invalid: false,
-                messages: Vec::new(),
-            };
-            stream
-                .write_all(&encode_frame(5018, &empty.encode_body()))
-                .unwrap();
             let claim_frame = read_frame(&mut stream);
             assert_eq!(claim_frame.id, 5023);
             // Pinned gift-completion request: type Item, gift 7, item 1,
@@ -6607,32 +6478,10 @@ pub(super) mod session_tests {
         use std::collections::HashMap;
 
         let (port, server) = fake_gateway(|mut stream| {
-            use o2jam_net::gift::GetGiftMessageListResponse;
-            // The MyRoom send flush runs before the gift-list flush,
-            // so answer whichever request arrives first.
-            let mut saw_sort = false;
-            let mut saw_list = false;
-            while !saw_sort || !saw_list {
-                let frame = read_frame(&mut stream);
-                match frame.id {
-                    5017 => {
-                        let empty = GetGiftMessageListResponse {
-                            invalid: false,
-                            messages: Vec::new(),
-                        };
-                        stream
-                            .write_all(&encode_frame(5018, &empty.encode_body()))
-                            .unwrap();
-                        saw_list = true;
-                    }
-                    5038 => {
-                        assert!(frame.payload.is_empty(), "RefershBag has no fields");
-                        stream.write_all(&encode_frame(5039, &[])).unwrap();
-                        saw_sort = true;
-                    }
-                    other => panic!("unexpected frame {other}"),
-                }
-            }
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5038);
+            assert!(frame.payload.is_empty(), "RefershBag has no fields");
+            stream.write_all(&encode_frame(5039, &[])).unwrap();
         });
 
         let area = |code: u32, x: i32| ScenePlacement {

@@ -124,7 +124,7 @@ use o2jam_file::{
     AvatarItemTable, ChartMask, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry,
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
-use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
+use o2jam_net::gift::ClaimGift;
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
@@ -6691,12 +6691,6 @@ impl ScreenGame {
         self.outbox.take_gift_claim()
     }
 
-    /// Gift-list fetch for the session bridge, if any (5017; queued
-    /// on avatar-room entry). One take sends once.
-    pub fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
-        self.outbox.take_gift_list_request()
-    }
-
     /// Restage the worn figure after the equipment table changed
     /// (ticket #30 stale-figure leftover): the Room lobby slot and
     /// the Result banner re-stack from the staged avatar source like
@@ -6770,11 +6764,10 @@ impl ScreenGame {
             self.tutorial_key_lights.clear();
         }
         if side == SideScreen::MyRoom {
-            // Entry gift-list fetch (5017): the wire shape is
-            // exe-pinned (`docs/gifts.md`); queueing it on entry is
-            // ours-by-design — the exe entry path is unpinned — and
-            // stays labeled until the rig names the entry fetch.
-            self.outbox.pending_gift_list = true;
+            // The wave-2 paired taps show no 5017/5018 on MyRoom or
+            // Item Shop entry; the 7.55 builder has no call site.
+            // No gift-list fetch is queued on entry (#857). Re-add it
+            // only when a pinned cue names the send leg.
             // Entry tab word with a pending gift: the committed exe
             // trace `fixtures/input-trace/giftbox-claim.json` reaches
             // gift cell 0 (sequence 3) with no PRESENT BOX press, so
@@ -17145,11 +17138,9 @@ mod game_tests {
         // every session-bridge seam stays empty on this press.
         // Archives absent -> N/A (synthetic table, no install-root read).
         let mut game = myroom_open_overlay();
-        assert!(game.take_gift_list_request().is_some());
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
-        assert_eq!(game.take_gift_list_request(), None);
     }
 
     /// Minimal sprite55 body (mirrors the avatar-figure builders): a
@@ -17586,10 +17577,13 @@ mod game_tests {
     }
 
     #[test]
-    fn myroom_entry_queues_gift_list_fetch() {
+    fn myroom_entry_queues_no_wire_call() {
+        // The exe's paired MyRoom tap sends only 5006 on entry, and
+        // no 5017/5018 (#857). The shell stages the side without a
+        // gift-list outbox; no session-bridge leg is queued.
         let mut game = myroom_open_overlay();
-        assert!(game.take_gift_list_request().is_some());
-        assert!(game.take_gift_list_request().is_none());
+        assert!(game.take_equip_send().is_none());
+        assert!(game.take_gift_claim().is_none());
     }
 
     #[test]
@@ -18679,7 +18673,6 @@ mod game_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
-        let _ = game.take_gift_list_request(); // entry fetch, not the press
         let paint = |game: &mut ScreenGame| {
             let mut buf = vec![0u32; 800 * 600];
             game.paint_at(
@@ -18713,7 +18706,6 @@ mod game_tests {
         assert!(!game.messenger_liveness_open(), "OK clears the sheet");
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
-        assert_eq!(game.take_gift_list_request(), None);
     }
 
     #[test]
@@ -18768,7 +18760,6 @@ mod game_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
-        let _ = game.take_gift_list_request(); // side entry, not the press
         assert!(!game.messenger_liveness_open(), "no sheet before the press");
         game.ingest_snapshot(&InputSnapshot::click_at(644, 580));
         assert!(
@@ -18857,11 +18848,9 @@ mod game_tests {
             );
         }
         let mut game = myroom_open_overlay();
-        assert!(game.take_gift_list_request().is_some());
         game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
-        assert_eq!(game.take_gift_list_request(), None);
         let _ = MYROOM_VACATE_CODE;
     }
 
@@ -18951,7 +18940,6 @@ mod game_tests {
         let mut game = payment_open_overlay();
         assert!(game.take_equip_send().is_none());
         assert!(game.take_gift_claim().is_none());
-        assert!(game.take_gift_list_request().is_none());
         assert!(game.take_create_room().is_none());
         assert!(game.take_join().is_none());
         assert!(game.take_music_send().is_none());
@@ -25280,7 +25268,6 @@ mod game_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
-        let _ = game.take_gift_list_request(); // entry fetch, not the press
         let host_pushes = pushes.borrow().clone();
         let host_cue = game.scene_bgm_selection();
         assert_eq!(host_cue.map(|cue| cue.record), Some(5), "MyRoom cue");
@@ -30427,10 +30414,8 @@ mod game_tests {
         // returning to the lobby last. Slot-filter semantics stay
         // OPEN (`docs/myroom.md`).
         let mut game = myroom_open_overlay();
-        // Entry queues the 5017 gift-list fetch (pinned by
-        // `myroom_entry_queues_gift_list_fetch`); the sweep drains it
-        // so later takes prove the chrome added nothing.
-        assert!(game.take_gift_list_request().is_some());
+        // No entry fetch exists (#857), so each later take proves
+        // that only the chrome press could have queued a wire leg.
         game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         assert_eq!(
             game.take_equip_send(),
@@ -30450,7 +30435,6 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(400, 368));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
-        assert_eq!(game.take_gift_list_request(), None);
         assert_eq!(
             game.myroom().selected_slot(),
             0,
@@ -30522,7 +30506,6 @@ mod game_tests {
         }
         assert!(game.take_equip_send().is_none());
         assert!(game.take_gift_claim().is_none());
-        assert!(game.take_gift_list_request().is_none());
         assert!(game.take_create_room().is_none());
         assert!(game.take_join().is_none());
         assert!(game.take_music_send().is_none());
@@ -30551,7 +30534,6 @@ mod game_tests {
             }
             assert!(game.take_equip_send().is_none());
             assert!(game.take_gift_claim().is_none());
-            assert!(game.take_gift_list_request().is_none());
             assert!(game.take_create_room().is_none());
             assert!(game.take_join().is_none());
             assert!(game.take_music_send().is_none());
@@ -31417,7 +31399,7 @@ mod game_tests {
         stage_waiting_song(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
 
-        // Avatar-room arms: entry queues the 5017 fetch, the bag
+        // Avatar-room arms: entry queues no wire (#857), the bag
         // APPLY queues 5004, the gift MOVE queues 5023.
         game.set_myroom_items(myroom_test_table());
         // Bag arms first with no gift pending (the entry hook defaults
@@ -31738,7 +31720,6 @@ mod game_tests {
         assert!(game.take_music_send().is_some());
         assert!(game.take_equip_send().is_some());
         assert!(game.take_gift_claim().is_some());
-        assert!(game.take_gift_list_request().is_some());
         assert!(game.take_shop_buy().is_some());
         assert!(game.take_music_buy().is_some());
         assert!(game.take_create_room().is_some());
@@ -31754,7 +31735,6 @@ mod game_tests {
         assert!(game.take_music_send().is_none());
         assert!(game.take_equip_send().is_none());
         assert!(game.take_gift_claim().is_none());
-        assert!(game.take_gift_list_request().is_none());
         assert!(game.take_shop_buy().is_none());
         assert!(game.take_music_buy().is_none());
         assert!(game.take_create_room().is_none());

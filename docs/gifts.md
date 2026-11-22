@@ -191,6 +191,16 @@ missing-user for 5041.
 
 ## OPEN
 
+- No 5017 send leg exists in our client (#857). The 7.55 builder
+  case `0x1399` sits in `FUN_00491190` (VA `0x491190`, file
+  `0x91974`; REA/Ghidra 12.2 evidence
+  `ev_655edbde789f77d40a8c4ad4ab272a801cbf98f9666a0d26731df2148a12e920`),
+  but its only xref is the shared vtable slot `0x647c20`, and a
+  byte scan finds no call-site immediate `99 13 00 00`. Both
+  wave-2 paired side-entry taps show no exe 5017/5018. Re-add the
+  request only with a pinned caller and trigger; a server-side
+  5018 probe (`db1a395d…`) is not a client cue. Next step: one
+  paired tap with a seeded gift box that observes the exe send.
 - Whether the server ever sends 5041 unprompted on 7.55 (no
 dispatch exists, so the client would drop it).
 - `5040` recipient-exists gating lives in web `gift_input.aspx`

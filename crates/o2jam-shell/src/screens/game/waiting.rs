@@ -1,7 +1,7 @@
 //! Queued session-bridge sends behind the shell screens: the
 //! wire-queue outbox the session seam drains (#139 cluster 1).
 
-use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
+use o2jam_net::gift::ClaimGift;
 use o2jam_net::play::{SetRoomArena, SetRoomMusic};
 use o2jam_net::shop::{
     EnterShop, EquipItem, ExitShop, RefreshBag, SyncItemPurchase, SyncMusicPurchase,
@@ -148,8 +148,6 @@ pub(crate) struct PendingOutbox {
     pub(crate) pending_equip: Option<EquipItem>,
     /// Committed gift claim awaiting the session (5023; MOVE owns it).
     pub(crate) pending_gift_claim: Option<ClaimGift>,
-    /// Gift-list fetch awaiting the session (5017; queued on entry).
-    pub(crate) pending_gift_list: bool,
     /// MyRoom request frames awaiting the session bridge (5038 and
     /// the special-item confirm family).
     pub(crate) pending_myroom_sends: Vec<MyRoomWireSend>,
@@ -303,16 +301,6 @@ impl PendingOutbox {
     #[must_use]
     pub(crate) fn has_pending_myroom_sends(&self) -> bool {
         !self.pending_myroom_sends.is_empty()
-    }
-    /// Gift-list fetch for the session bridge, if any (5017; queued
-    /// on avatar-room entry). One take sends once.
-    pub(crate) fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
-        if self.pending_gift_list {
-            self.pending_gift_list = false;
-            Some(GetGiftMessageList)
-        } else {
-            None
-        }
     }
     /// Queued cart buy for the session bridge, if any (5000). One
     /// body per `BUYITEM` commit; the seam drains it.

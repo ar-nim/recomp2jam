@@ -391,8 +391,12 @@ its source, never to "the data":
   skip), page turns clamp, names paint into staged MYBAGITEM
   rects. Guards: `myroom_bag_pages_hold_ten_owned_rows`,
   `myroom_bag_pager_turns_over_staged_inventory`.
-- Gift flows: entry queues `GetGiftMessageList` 5017 (shape
-  exe-pinned, timing ours-by-design); box pager + pick over
+- Gift flows: no side-entry fetch. The 7.55 5017 builder exists
+  (VA `0x491190` / file `0x91974`, case `0x1399`) but has no call
+  site: the only xref is its shared vtable slot `0x647c20`, and a
+  byte scan finds no `push $0x1399` site; both wave-2 paired taps
+  send no 5017/5018 (#857). Re-add the fetch only when a pinned
+  cue names its caller and trigger; do not invent one. Box pager + pick over
   staged item/music gifts (names resolved from parsed data);
   MOVE queues `ClaimGift` 5023 (shape exe-pinned;
   non-attributive). Server proofs ride the take-seam stub —
@@ -470,11 +474,11 @@ its source, never to "the data":
   claimed gift from its staged box run and appends an item gift's
   resource to the staged inventory (music gifts only leave the box);
   the session bridge (`poll_gift_claim`/`drain_gift_claim`) folds a
-  successful 5024 verdict through it. Scripted-gateway round trips:
-  5017/5018 entry fetch (5018 body exe-ignored, drain-only) and
-  5023/5024 claim-into-bag. Guards:
+  successful 5024 verdict through it. Scripted-gateway round trip:
+  5023/5024 claim-into-bag; no 5017/5018 entry fetch (#857).
+  Guards:
   `myroom_gift_claim_lands_item_in_staged_bag`,
-  `myroom_gift_list_fetch_round_trips_through_scripted_gateway`,
+  `myroom_entry_sends_no_gift_list_fetch_on_the_scripted_gateway`,
   `myroom_gift_claim_round_trips_and_lands_in_bag_through_scripted_gateway`.
 - P0 verdicts recorded per control (`myroom_p0_verdict`): WEBAVATAR,
   CONFERENCE, BAGSORT, MESSENGER queue nothing; ALARM/PCROOMMARK are
@@ -494,8 +498,13 @@ its source, never to "the data":
    button (does the bag filter at all, and by which slot set).
 2. Apply/MOVE control choice (ours-by-design). Next step: rig
    walk of the myroom apply/claim gestures.
-3. Entry gift-list fetch timing (ours-by-design). Next step: rig
-   or gateway replay naming the entry fetch.
+3. Entry gift-list fetch: REMOVED (#857). Wave-2 paired taps show
+   no exe 5017/5018 on MyRoom or Item Shop entry, and no exe call
+   site pins a gift-present cue. Re-add only with a pinned caller
+   and trigger (a paired tap that sends 5017 with known gift state,
+   or a static call site), never from a guessed cue. Next step:
+   one paired tap with a seeded gift box that sees the exe send
+   5017, plus statics for its caller.
 4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
    RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10, NOTICE content).
    WINRATION value source pinned (wins/battles), format ours-by-design;

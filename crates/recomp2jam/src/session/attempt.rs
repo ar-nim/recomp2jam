@@ -1,7 +1,7 @@
 //! The single attempt module behind the seven wire legs.
 //!
 //! Every per-frame wire leg (channel login, room join, song select,
-//! shop buy, music buy, gift list, gift claim) runs its send/drain
+//! shop buy, music buy, gift claim) runs its send/drain
 //! through [`OnlineSession::with_drain_timeout`], and the whole set
 //! moves as one unit via [`OnlineSession::poll_attempts`]. The rules
 //! that keep a silent gateway from freezing the frame loop live here
@@ -20,7 +20,7 @@ use super::*;
 use std::time::Duration;
 
 impl OnlineSession {
-    /// Run all seven wire legs in their pinned order. Call sites use
+    /// Run all wire legs in their pinned order. Call sites use
     /// this seam instead of naming the individual polls.
     /// Current gateway read timeout (for guards).
     #[allow(dead_code)]
@@ -37,8 +37,6 @@ impl OnlineSession {
         self.poll_equip();
         self.flush_myroom_sends();
         self.poll_myroom_replies();
-        self.flush_gift_list();
-        self.poll_gift_list();
         self.flush_gift_claim();
         self.poll_gift_claim();
         self.poll_channel_login();
