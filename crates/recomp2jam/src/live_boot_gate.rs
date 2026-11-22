@@ -53,6 +53,24 @@ mod live_boot_gate_tests {
         decode_frame(&bytes).unwrap()
     }
 
+    /// Drive one native canvas click through the game loop: the same
+    /// press/release snapshots the window shell sends for a pointer.
+    fn click_canvas(session: &mut impl GameLoop, x: i32, y: i32) {
+        session.ingest_snapshot(&InputSnapshot::press_at(x, y));
+        session.ingest_snapshot(&InputSnapshot::release_at(x, y));
+    }
+
+    /// Paint the open planet modal into a fresh native canvas.
+    fn paint_options_frame(session: &mut crate::session::OnlineSession) -> Vec<u32> {
+        let mut frame = vec![0u32; 800 * 600];
+        session.game_mut().paint(&mut RenderFrame {
+            buf: &mut frame,
+            w: 800,
+            h: 600,
+        });
+        frame
+    }
+
     /// The 7.55 interface archive holds the dialog sheets the gate
     /// asserts; without it the gate skips (CI has no game data).
     fn archives_present() -> bool {
@@ -716,6 +734,77 @@ mod live_boot_gate_tests {
             h: 600,
         });
         assert_ne!(sound_frame, key_frame, "the painter shows the open sheet");
+        server.join().unwrap();
+    }
+
+    /// Ticket #854: driven tab switches must flip the painted sheet.
+    /// Live chain: main.rs::run_online -> assemble_online_session ->
+    /// live_boot_gate boot -> GameLoop::ingest_snapshot ->
+    /// ScreenGame::apply_pointer_down -> click_dispatch -> click_planet
+    /// -> click_planet_modal -> click_options_dialog ->
+    /// OptionsDialog::click -> PlanetOptionTab::switch_tab ->
+    /// paint_planet_options. Real `Dialog_Option_*.bnd` children are
+    /// parent-relative: origin (217,42) + rect. The journey Sound aim
+    /// (405,123) is the *selected* Sound tab's own centre on the exe
+    /// first-open sheet, so a no-op there is correct; from the Game
+    /// sheet the same aim is Game SOUNDSET. Game aim (509,123) is
+    /// Sound GAMESET. The Key tab's paired exe frame stays OPEN (#854).
+    #[test]
+    fn live_boot_driven_tab_clicks_repaint_sound_and_game_sheets() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        session
+            .game_mut()
+            .menu_key(o2jam_shell::MenuKey::Back, true);
+        assert_eq!(session.screen(), Screen::Planet);
+        click_canvas(&mut session, 729, 580);
+        assert_eq!(
+            session.game_mut().planet_modal(),
+            Some(PlanetModal::Options)
+        );
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Sound
+        );
+
+        let sound_frame = paint_options_frame(&mut session);
+        click_canvas(&mut session, 509, 123);
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Game,
+            "the staged Sound GAMESET child switches to Game"
+        );
+        let game_frame = paint_options_frame(&mut session);
+        assert_ne!(sound_frame, game_frame, "the Game sheet reaches the canvas");
+
+        click_canvas(&mut session, 405, 123);
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Sound,
+            "the staged Game SOUNDSET child switches back to Sound"
+        );
+        let sound_again = paint_options_frame(&mut session);
+        assert_ne!(game_frame, sound_again, "the Sound sheet repaints");
+
+        click_canvas(&mut session, 300, 125);
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Key,
+            "the staged Sound KEYSET child switches to Key"
+        );
+        let key_frame = paint_options_frame(&mut session);
+        assert_ne!(sound_again, key_frame, "the Key sheet repaints");
+        // Paired exe Key-tab frame stays OPEN (#854): this guard proves
+        // the driven Rust leg only, not exe pixel parity for that sheet.
         server.join().unwrap();
     }
 
