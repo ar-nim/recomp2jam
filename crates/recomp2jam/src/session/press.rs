@@ -10,6 +10,10 @@
 
 use super::*;
 use o2jam_shell::screens::game::PressKind;
+use o2jam_shell::screens::side::{
+    ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
+    ROOM_MYROOM_BUTTON_CODE,
+};
 
 /// How the session handles one pointer edge: eaten by the gate or
 /// passed through to the game. The resident echo's matching release
@@ -110,9 +114,43 @@ impl OnlineSession {
         PressDisposition::Local
     }
 
+    /// Staged Room top-tab geometry at the instant of a press, read
+    /// from the same placements the painter and click router consume
+    /// (live-click parity diagnosis, #864).
+    fn staged_room_top_tabs(&self) -> Vec<(u32, o2jam_render::Rect)> {
+        let codes = [
+            ROOM_ITEMSHOP_BUTTON_CODE,
+            ROOM_MYROOM_BUTTON_CODE,
+            ROOM_FIRSTSTEP_BUTTON_CODE,
+            ROOM_MUSICSHOP_BUTTON_CODE,
+        ];
+        self.game
+            .scene_placements(Screen::Room)
+            .iter()
+            .filter(|placed| codes.contains(&placed.code))
+            .map(|placed| (placed.code, placed.rect))
+            .collect()
+    }
+
     /// Resolve one press against the game's single press word.
     fn dispatch_pointer_down(&mut self, x: i32, y: i32) -> PressDisposition {
-        match self.game.press_kind_at(x, y) {
+        let kind = self.game.press_kind_at(x, y);
+        let staged_top_tabs =
+            if tracing::enabled!(tracing::Level::DEBUG) && self.game.screen() == Screen::Room {
+                self.staged_room_top_tabs()
+            } else {
+                Vec::new()
+            };
+        tracing::debug!(
+            x,
+            y,
+            screen = ?self.game.screen(),
+            ?kind,
+            ?staged_top_tabs,
+            pending_room = self.pending_room.is_some(),
+            "session pointer-down routing"
+        );
+        match kind {
             PressKind::ChannelEnter(channel) => self.dispatch_channel_press(channel, x, y),
             PressKind::RoomRow { number, title } => self.dispatch_room_press(&title, number, x, y),
             PressKind::WaitingConfirm => {
@@ -160,10 +198,12 @@ impl OnlineSession {
         PressDisposition::Swallow
     }
 
-    /// A miss on Room is swallowed only while a join is pending;
-    /// everywhere else it stays local.
+    /// A local Room press is swallowed only while a join exchange is
+    /// actually in flight. A CLI `--join-room` intent that has not
+    /// been confirmed is not in flight: swallowing it would eat every
+    /// staged top-tab click until Confirm (#864).
     fn dispatch_local_press(&self) -> PressDisposition {
-        if self.game.screen() == Screen::Room && self.pending_room.is_some() {
+        if self.game.screen() == Screen::Room && self.join_attempt.is_some() {
             return PressDisposition::Swallow;
         }
         PressDisposition::Local

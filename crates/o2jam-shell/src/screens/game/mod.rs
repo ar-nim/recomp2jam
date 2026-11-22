@@ -4311,6 +4311,29 @@ impl ScreenGame {
         })
     }
 
+    /// Log the staged Room control geometry and the code the router
+    /// picked for one press (live-click parity diagnosis, #864). The
+    /// hit test stays in `room_control_at`; this only reports it.
+    fn trace_room_press_routing(&self, x: i32, y: i32) {
+        if !tracing::enabled!(tracing::Level::DEBUG) {
+            return;
+        }
+        let placements = self
+            .scene_art(Screen::Room)
+            .map_or(&[][..], |art| art.placements.as_slice());
+        let staged: Vec<_> = placements
+            .iter()
+            .filter(|placed| {
+                ROOM_CONTROLS
+                    .iter()
+                    .any(|control| control.code == placed.code)
+            })
+            .map(|placed| (placed.code, placed.rect))
+            .collect();
+        let routed = self.room_control_at(x, y).map(|control| control.code);
+        tracing::debug!(x, y, side = ?self.side, ?staged, ?routed, "room press routing");
+    }
+
     /// Staged room chrome control under the pointer (`None` off every
     /// control, off the Room Scene, or while a dialog, modal, or side
     /// Scene covers the lobby — clicks route to those layers first,
@@ -6221,6 +6244,9 @@ impl ScreenGame {
         // Every other scene keeps its down-dispatch (no press-split
         // evidence there; the room-scene quickjoin arm is the named
         // next capture, `docs/hover.md`).
+        if self.flow.current() == Screen::Room {
+            self.trace_room_press_routing(x, y);
+        }
         self.click_dispatch(x, y);
     }
 
