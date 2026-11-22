@@ -24,6 +24,15 @@ Both frames show `배경음악 Vol`, `게임음악/효과음 Vol (F2/F1)`,
 stand-in (first in `ControlList_Interface.txt` file order) is
 refuted; this pin replaces it. Tab-switch captures remain OPEN.
 
+The driven live-boot guard
+`live_boot_driven_tab_clicks_repaint_sound_and_game_sheets` (#854) presses
+the gear, then drives `(509,123)` (Sound GAMESET), `(405,123)` (Game
+SOUNDSET) and `(300,125)` (Sound KEYSET) through `GameLoop::ingest_snapshot`,
+requiring the painted sheet to change each time. With Sound first-open,
+`(405,123)` is the *selected* tab's dead zone, so the journey note's
+"Sound click inert" is expected, not a dispatch fault. A paired exe
+Key-tab frame stays OPEN (#854).
+
 ## What the dialog does
 
 - Key tab: the dialog opens in **3K** (exe constructor `0x438080`;

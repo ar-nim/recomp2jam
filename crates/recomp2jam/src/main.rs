@@ -607,6 +607,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         connect::connect_and_login_with_room_stage(&connect_options, &owned_ids)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(&mut game, report.character.as_ref());
+    stage_online_wallet(&mut game, report.cash_sync.as_ref());
     stage_channel_list_after_relay_gate(&mut game, report.channels, relay_down);
     stage_online_rooms(&mut game, report.rooms);
     let pending_room = opts
@@ -1561,6 +1562,18 @@ fn stage_online_identity(
     // so the live board is never empty after the avatar archive lands,
     // even on the default boot that fetches no character (no channel).
     game.set_decoded_avatar_source(&source);
+}
+
+/// Fold the channel-entry 5029 answer into the boot wallet. The exe
+/// reads it before 2010/2011 (#850); the shop-BACK path applies the
+/// same two words through `ScreenGame::apply_shop_cash_point`.
+fn stage_online_wallet(
+    game: &mut o2jam_shell::ScreenGame,
+    cash_sync: Option<&o2jam_net::wallet::SyncCashPointResponse>,
+) {
+    if let Some(cash) = cash_sync {
+        game.apply_shop_cash_point(cash);
+    }
 }
 
 /// Song index under `install-root` (the 7.55 catalog the select-music
