@@ -2,10 +2,10 @@
 //! side screen (#139 cluster 3).
 
 use super::super::side::{
-    lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
-    shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
-    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood,
-    ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
+    exe_new_arrivals_goods, lanking_page_window, shop_checkout_decision, shop_goods,
+    shop_next_planet_index, shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate,
+    CheckoutMode, CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender,
+    ShopGood, ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
     TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
     SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
     SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
@@ -184,8 +184,22 @@ impl ShopState {
     /// the item page, the preview pick, and the owned-panel page;
     /// the cart keeps its checks.
     pub(crate) fn set_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
+        self.reset_catalog(shop_goods(table));
+    }
+
+    /// Stage the catalog the exe shows on state-3 entry: the
+    /// new-arrivals buckets in reverse id order, not raw file order.
+    /// Live callers reach this through
+    /// `ScreenGame::stage_exe_item_shop_catalog`.
+    pub(crate) fn stage_exe_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
+        self.reset_catalog(exe_new_arrivals_goods(table));
+    }
+
+    /// One catalog landing resets the browse faces; the cart keeps
+    /// its checks across a re-stage.
+    fn reset_catalog(&mut self, goods: Vec<ShopGood>) {
         self.panel = ShopPanel::MyBag;
-        self.shop_goods = shop_goods(table);
+        self.shop_goods = goods;
         self.shop_page = 0;
         self.preview = None;
         self.bag_page = 0;

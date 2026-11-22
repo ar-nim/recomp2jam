@@ -29,7 +29,8 @@ mod live_boot_gate_tests {
     use o2jam_shell::screens::game::PlanetModal;
     use o2jam_shell::screens::paint::{unbound_scene_placements, CHANNEL_DIALOG_SPRITE};
     use o2jam_shell::screens::side::{
-        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE, MYROOM_VACATE_CODE,
+        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
+        MYROOM_VACATE_CODE, SHOP_BUYITEM_CODE, SHOP_CHILD_ORIGIN_Y, SHOP_ITEMBUY_FIRST_CODE,
     };
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::staging::{
@@ -1255,6 +1256,136 @@ mod live_boot_gate_tests {
             "default boot stages no avatar pane without a fetched hero (never invented)"
         );
         server.join().unwrap();
+    }
+
+    /// Ticket #861: the Room -> Item Shop entry must show the exe's
+    /// new-arrivals avatar catalog, not the raw `Itemdata_Korea.dat`
+    /// order (wave-3 leg 6, `w3-itemshop-*-fixed`, entry SSIM 0.1237).
+    /// Exe statics: `FUN_004984d0` (state 3 init, file `0x97f60`)
+    /// leaves category word `+0x58/0x17` at `0xc`; the filter arm
+    /// `FUN_0049ead0` (`0x9ead0`) walks the item buckets through
+    /// `FUN_0052dc90` (`0x52dc90`, submenu `11 -> 1`, each vector back
+    /// to front), keeps records whose worn slot `(record+6 >> 7) & 0xf`
+    /// matches the gender word or is `2`, then `FUN_0049ee90`
+    /// (`0x9ee90`) paints eight cards from that vector. Live caller
+    /// chain: main.rs::run_play -> setup_online ->
+    /// connect_and_login_with_transport -> stage_online_identity ->
+    /// ScreenGame::stage_exe_item_shop_catalog ->
+    /// ShopState::stage_exe_catalog -> ShopState::visible_goods.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_boot_default_stages_exe_new_arrivals_avatar_catalog() {
+        if !install_root().join("O2Jam/Image/avatar.opa").exists() {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels: vec![] }.encode())
+                .unwrap();
+        });
+        let mut game = o2jam_shell::ScreenGame::new();
+        let host = Some("127.0.0.1".to_owned());
+        let user_id = Some(7);
+        let token = Some("gate".to_owned());
+        let transport = setup_online(
+            &mut game, true, &host, user_id, &token, None, port, None, None, None, "", None, 0, 0,
+            0,
+        )
+        .unwrap()
+        .expect("online setup returns the live transport");
+        let (gateway, _, _) = transport;
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let goods = session.game_mut().shop_visible_goods();
+        let first_page: Vec<_> = goods
+            .iter()
+            .take(4)
+            .map(|good| (good.name.as_str(), good.price))
+            .collect();
+        assert_eq!(
+            first_page,
+            [
+                ("블루", 4500),
+                ("투스", 4500),
+                ("해피쥴리", 4500),
+                ("콘트루리", 4500),
+            ],
+            "the live Item Shop must stage the exe new-arrivals outfits"
+        );
+        server.join().unwrap();
+    }
+
+    /// Ticket #861 (BUYITEM leg): with the exe catalog staged, one
+    /// staged 담기 press and one staged BUYITEM press must mount the
+    /// confirmation sheet. The row press uses the staged `ITEMBUY1`
+    /// rect plus the pinned +70 px child origin; BUYITEM uses its own
+    /// staged rect — no literal aims. Live caller chain:
+    ///   main.rs::stage_online_identity ->
+    ///   ScreenGame::stage_exe_item_shop_catalog -> visit_side(Shop)
+    ///   -> mount_staged_side_art (STATE_SHOP) ->
+    ///   ScreenGame::click_shop -> ShopState::apply_action(CartBuy)
+    ///   -> shop_purchase_web_open -> paint_side (sheet overlay).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_shop_buyitem_mounts_the_confirmation_sheet() {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing install-root interface archive");
+            return;
+        };
+        let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let art = stage_state(&archive, State::Shop, StageContext::default())
+            .art
+            .expect("STATE_SHOP stages with installed bytes");
+        let mut game = o2jam_shell::ScreenGame::new();
+        game.set_decoded_avatar_source(&source);
+        game.stage_exe_item_shop_catalog(source.table());
+        game.load_side_scene(art.placements, art.figures);
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(game.enter_screen(lobby), "staged walk reaches {lobby:?}");
+        }
+        assert!(game.visit_side(SideScreen::Shop));
+        let row = game
+            .staged_side_control_rect(SHOP_ITEMBUY_FIRST_CODE)
+            .expect("ITEMBUY1 rides the staged STATE_SHOP block");
+        game.click_shop(
+            row.x + i32::try_from(row.w / 2).expect("row width fits a click"),
+            row.y
+                + i32::try_from(row.h / 2).expect("row height fits a click")
+                + SHOP_CHILD_ORIGIN_Y,
+        );
+        assert_eq!(game.shop_cart().len(), 1, "one avatar good enters the cart");
+        let buy = game
+            .staged_side_control_rect(SHOP_BUYITEM_CODE)
+            .expect("BUYITEM rides the staged STATE_SHOP block");
+        game.click_shop(
+            buy.x + i32::try_from(buy.w / 2).expect("buy width fits a click"),
+            buy.y + i32::try_from(buy.h / 2).expect("buy height fits a click"),
+        );
+        assert!(
+            game.shop_purchase_web_open(),
+            "BUYITEM mounts the confirmation sheet instead of staying on the browser"
+        );
     }
 
     /// Ticket #196: the channel-login boot must reach the avatar pane.

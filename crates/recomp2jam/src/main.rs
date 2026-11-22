@@ -1562,6 +1562,12 @@ fn stage_online_identity(
     // so the live board is never empty after the avatar archive lands,
     // even on the default boot that fetches no character (no channel).
     game.set_decoded_avatar_source(&source);
+    // #861: the Item Shop's state-3 catalog is the exe's new-arrivals
+    // bucket walk (FUN_0049ead0 -> FUN_0052dc90 -> FUN_0049ee90),
+    // not the raw Itemdata_Korea.dat order staged above. The Room
+    // ITEMSHOP and MyRoom GOSHOP arms both mount state 3, so this one
+    // landing feeds both entries. Seam-only setters keep raw order.
+    game.stage_exe_item_shop_catalog(source.table());
 }
 
 /// Fold the channel-entry 5029 answer into the boot wallet. The exe

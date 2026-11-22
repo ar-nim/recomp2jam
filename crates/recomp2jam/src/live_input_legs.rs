@@ -881,6 +881,14 @@ mod live_input_leg_tests {
             .art
             .expect("STATE_SHOP stages with installed bytes");
         let mut game = ScreenGame::new();
+        // The baseline stages the same catalog the live boot stages:
+        // the #861 new-arrivals goods change the card pixels, and the
+        // guard must keep pinning the mounted scene, not a stale
+        // face-catalog frame.
+        if let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) {
+            game.set_decoded_avatar_source(&source);
+            game.stage_exe_item_shop_catalog(source.table());
+        }
         game.load_side_scene(art.placements, art.figures);
         for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
             assert!(game.enter_screen(lobby), "staged walk reaches {lobby:?}");
