@@ -13776,7 +13776,10 @@ pub(super) mod session_tests {
             assert_eq!(create.title, "EMPTYPS");
             assert_eq!(create.key_mode, KeyMode::SevenKeys);
             assert!(!create.has_password);
-            assert!(create.password.is_empty());
+            // exe 7.55 sends the literal password text `1` (`0x31`)
+            // when the lock flag is clear, and zero level bounds.
+            assert_eq!(create.password, "1");
+            assert_eq!((create.min_level, create.max_level), (0, 0));
             let created = CreateRoomResponse {
                 result: CreateResult::Success,
                 info: Some(CreatedRoom {
