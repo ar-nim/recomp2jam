@@ -1855,6 +1855,31 @@ pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
         .collect()
 }
 
+/// Decode the tutorial's own bank (`Music/Tutorial.ojm`) mode-3
+/// records into the slot order the chart's 12 bit-26 marker ids name
+/// (`docs/ojn-bit26.md`). The exe's tutorial state-enter helper loads
+/// `Tutorial.ojm` at file `0xf0a50` and calls its playback helper at
+/// `0xf0ab0` before chart time; this bank feeds that entry cue. Missing
+/// or unparsable data yields no records, so CI stays green without an
+/// install and no substitute sample ever sounds.
+pub(crate) fn load_tutorial_ojm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Music/Tutorial.ojm");
+    let Ok(bytes) = std::fs::read(&path) else {
+        tracing::debug!("tutorial bank missing; its entry cue stays silent");
+        return Vec::new();
+    };
+    let Ok(tables) = o2jam_file::parse_new_variant_entries(&bytes) else {
+        tracing::debug!("tutorial bank unparsable; its entry cue stays silent");
+        return Vec::new();
+    };
+    tables
+        .mode3
+        .iter()
+        .map(|entry| decode_bgm_record(&bytes, entry))
+        .collect()
+}
+
 /// Decode the first boot bank (`Music/bgEffect.ojm`) into the exe's UI
 /// effect slots. The fetcher writes each mode-2 entry's ordinal into the
 /// field the UI bank loader reads as an id (#718 correction to
@@ -1923,6 +1948,7 @@ fn setup_chart_audio(
     let bgm_bank = load_scene_bgm_bank();
     game.with_audio(backend, bank);
     game.stage_scene_bgm(bgm_bank);
+    game.stage_tutorial_ojm_bank(load_tutorial_ojm_bank());
     game.stage_ui_effect_bank(load_ui_effect_bank());
     let (cue_id, cue_repeat) = scene_bgm_cue(o2jam_shell::Screen::Avi);
     tracing::info!(?cue_id, ?cue_repeat, "launch BGM cued");
@@ -2582,8 +2608,8 @@ mod scene_bgm_tests {
     use o2jam_shell::Screen;
 
     use super::{
-        boot_bank_path, load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue,
-        BOOT_BGM_BANK_FILES, SCENE_BGM_BANK_INDEX,
+        boot_bank_path, load_scene_bgm_bank, load_tutorial_ojm_bank, scene_bgm_cue,
+        side_scene_bgm_cue, BOOT_BGM_BANK_FILES, SCENE_BGM_BANK_INDEX,
     };
 
     /// Ten-slot bank (records 1..=10) holding one synthetic track in
@@ -2746,6 +2772,24 @@ mod scene_bgm_tests {
             assert!(!pcm.unwrap().samples.is_empty());
         }
         assert_eq!(bgm.play_scene_music(19, false, &bank), None);
+    }
+
+    #[test]
+    fn tutorial_bank_decodes_the_twelve_shipped_mode3_records() {
+        // Live chain: main.rs::run_play -> setup_chart_audio ->
+        // load_tutorial_ojm_bank -> ScreenGame::stage_tutorial_ojm_bank
+        // -> FIRSTSTEP entry cue. Archival guard: skips in a bare CI
+        // worktree; no fallback sample is invented for a missing bank.
+        let bank = load_tutorial_ojm_bank();
+        if bank.is_empty() {
+            println!("skip: no install-root Tutorial.ojm");
+            return;
+        }
+        assert_eq!(bank.len(), 12, "bgsplit-01..12 in fetch order");
+        assert!(
+            bank.iter().all(Option::is_some),
+            "every shipped BGM split decodes"
+        );
     }
 }
 

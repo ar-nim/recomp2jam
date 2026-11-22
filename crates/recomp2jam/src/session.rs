@@ -1334,8 +1334,11 @@ impl OnlineSession {
         self.game.with_audio(backend, bank);
         // Scene BGM stages with the key bank: boot already cued
         // Avi in the windowed setup, and the song attach re-cues
-        // the current screen through the same table.
+        // the current screen through the same table. The tutorial's
+        // own bank rides along for the FIRSTSTEP entry cue.
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
+        self.game
+            .stage_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
         tracing::info!(entries, "key sounds attached");
     }
 
@@ -1366,6 +1369,8 @@ impl OnlineSession {
         self.game
             .with_audio(backend, std::collections::HashMap::new());
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
+        self.game
+            .stage_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
         self.game.stage_ui_effect_bank(crate::load_ui_effect_bank());
     }
 
