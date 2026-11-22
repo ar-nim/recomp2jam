@@ -22508,6 +22508,48 @@ mod game_tests {
     }
 
     #[test]
+    fn key_tab_save_rejects_zero_or_duplicate_binds_before_writing() {
+        // Live caller chain: pointer -> ScreenGame::ingest_snapshot ->
+        // OptionsDialog::click -> OptionsDialog::save -> save_to_dir.
+        // Exe validators 0x439170 / 0x4394c0 require nonzero,
+        // distinct active binds (3K skips index 1). Message text OPEN.
+        let root = std::env::temp_dir().join(format!(
+            "recomp2jam-options-validation-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_options(&root);
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(PlanetOptionTab::Key.save_code(), 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        let profile = root.join("option.ini");
+
+        game.options_mut().set_three_key_dik(0, 0x36);
+        click_button(&mut game, 100, 100);
+        assert!(!profile.exists(), "a duplicate 3K bind blocks SAVE");
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::Options),
+            "a rejected SAVE leaves the dialog open"
+        );
+
+        game.options_mut().set_three_key_dik(0, 0x2A);
+        game.options_mut().set_three_key_dik(2, 0);
+        click_button(&mut game, 100, 100);
+        assert!(!profile.exists(), "a zero 3K bind blocks SAVE");
+
+        game.options_mut().set_three_key_dik(2, 0x36);
+        click_button(&mut game, 100, 100);
+        assert!(profile.exists(), "distinct nonzero binds still commit");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn options_save_commits_beside_the_install_root() {
         let root = std::env::temp_dir().join(format!("recomp2jam-options-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();

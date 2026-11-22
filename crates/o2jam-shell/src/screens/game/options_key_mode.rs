@@ -26,10 +26,6 @@ const THREE_KEY_CAPTIONS: std::ops::RangeInclusive<u32> =
 const SEVEN_KEY_CAPTIONS: std::ops::RangeInclusive<u32> =
     OPTION_KEY_LANE_FIRST..=OPTION_KEY_LANE_FIRST + 6;
 
-/// 3K index 1 (`0x25209009`) shares its staged rect with index 2;
-/// the exe repaint skips it (`0x439780`).
-const SKIPPED_THREE_KEY_LANE: usize = 1;
-
 /// Is one staged control visible and clickable in this mode?
 /// Controls outside both families (tabs, SAVE, mode buttons) stay.
 #[must_use]
@@ -55,29 +51,31 @@ pub(super) fn caption_lane(code: u32, three_key: bool) -> Option<usize> {
     is_armable_lane(lane, three_key).then_some(lane)
 }
 
-/// Can a lane be armed and written in this mode? The 3K family
-/// skips index 1 (its duplicate staged rect).
+/// Lanes that carry a caption, an arm, and a validated bind in
+/// each mode: 3K skips index 1 (its duplicate staged rect).
 #[must_use]
-pub(super) fn is_armable_lane(lane: usize, three_key: bool) -> bool {
+pub(super) fn active_lane_indexes(three_key: bool) -> &'static [usize] {
+    const THREE_KEY: [usize; 3] = [0, 2, 3];
+    const SEVEN_KEY: [usize; 7] = [0, 1, 2, 3, 4, 5, 6];
     if three_key {
-        lane < 4 && lane != SKIPPED_THREE_KEY_LANE
+        &THREE_KEY
     } else {
-        lane < 7
+        &SEVEN_KEY
     }
 }
 
-/// Next armed lane after a successful write. 7K wraps over seven
-/// lanes; 3K wraps over its kept indexes 0, 2, 3 (`0x4395e0`).
+/// Can a lane be armed and written in this mode?
+#[must_use]
+pub(super) fn is_armable_lane(lane: usize, three_key: bool) -> bool {
+    active_lane_indexes(three_key).contains(&lane)
+}
+
+/// Next armed lane after a successful write (`0x4395e0` / `0x438e80`).
 #[must_use]
 pub(super) fn next_armed_lane(lane: usize, three_key: bool) -> usize {
-    if !three_key {
-        return (lane + 1) % 7;
-    }
-    match lane {
-        0 => 2,
-        2 => 3,
-        _ => 0,
-    }
+    let active = active_lane_indexes(three_key);
+    let position = active.iter().position(|&active_lane| active_lane == lane);
+    active[(position.unwrap_or(0) + 1) % active.len()]
 }
 
 fn belongs_to_family(code: u32, three_key: bool) -> bool {

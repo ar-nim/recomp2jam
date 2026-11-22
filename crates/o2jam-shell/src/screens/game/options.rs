@@ -176,17 +176,40 @@ impl OptionsDialog {
 
     /// Persist the settings beside the remembered install root (the
     /// tab SAVE commit path). Without a root the settings stay in
-    /// memory with a warning — the scene never fails.
+    /// memory with a warning — the scene never fails. Exe validators
+    /// `0x439170` / `0x4394c0` reject zero or duplicate active binds
+    /// before any write; their message text stays OPEN.
     ///
     /// # Errors
     ///
-    /// `io::Error` when the profile write or rename fails.
+    /// `io::Error` when the binds are invalid or the profile write
+    /// or rename fails.
     pub(super) fn save(&self) -> io::Result<()> {
         let Some(root) = self.root.as_ref() else {
             tracing::warn!("options SAVE without an install root; settings stay in memory");
             return Ok(());
         };
+        if !self.active_binds_are_valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "key binds must be nonzero and distinct",
+            ));
+        }
         self.settings.save_to_dir(root)
+    }
+
+    /// Exe SAVE rule: each active bind is nonzero and no two active
+    /// binds match. Inactive 3K index 1 is ignored by `0x4394c0`.
+    fn active_binds_are_valid(&self) -> bool {
+        let is_three_key = self.settings.three_key();
+        let binds = self.settings.lane_dik_for_mode(is_three_key);
+        let active = options_key_mode::active_lane_indexes(is_three_key);
+        active.iter().enumerate().all(|(position, &lane)| {
+            binds[lane] != 0
+                && !active[..position]
+                    .iter()
+                    .any(|&earlier| binds[earlier] == binds[lane])
+        })
     }
 
     /// Staged hit for one options-dialog code on the open tab
