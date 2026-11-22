@@ -100,12 +100,11 @@ impl OnlineSession {
                 return PressDisposition::Swallow;
             }
         }
-        // Pre-refactor gate behavior: the Waiting confirm face ran
-        // `confirm_waiting` on both edges of a click. The golden
-        // sequences pin that quirk; changing it belongs to a behavior
-        // ticket, not to this pure move.
+        // The confirm fires on the press edge only. Swallowing its
+        // release keeps the matching up edge out of the game, but a
+        // second `confirm_waiting` here would queue a second ready
+        // toggle for one physical click (#860).
         if self.game.press_kind_at(x, y) == PressKind::WaitingConfirm {
-            self.confirm_waiting();
             return PressDisposition::Swallow;
         }
         PressDisposition::Local
@@ -387,9 +386,9 @@ mod tests {
     }
 
     #[test]
-    fn waiting_confirm_golden_press_sequence_pins_the_two_edge_gate() {
+    fn waiting_confirm_golden_press_sequence_sends_one_ready_toggle() {
         // Live chain: window snapshot -> OnlineSession::ingest_snapshot
-        // -> Waiting confirm dispatch -> Ready 4008 (one echo only).
+        // -> Waiting confirm dispatch -> one Ready 4008 per click pair.
         use o2jam_net::Ready;
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
             let frame = read_frame(&mut stream);
@@ -420,7 +419,7 @@ mod tests {
             &trace,
             &[
                 "start|waiting|5e691c903f11151b|login=false|join=false|echo=None|ready=false",
-                "click|waiting|5e691c903f11151b|login=false|join=false|echo=None|ready=false",
+                "click|waiting|d973da17ffa8667a|login=false|join=false|echo=None|ready=true",
             ],
         );
     }
@@ -569,6 +568,64 @@ mod tests {
         session.ingest_snapshot(&InputSnapshot::click_at(150, 130));
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn one_ready_click_pair_posts_one_4008_and_the_host_start_reaches_loading() {
+        // Ticket #860, matched READY aim from wave 3. Evidence:
+        // w3-waiting-exe-c / w3-waiting-rust-b, w3-compare/waiting-wire.json
+        // (4008 1 vs 2; 4011 one-side only; start frame SSIM 0.1568).
+        // Live chain: main.rs::run_play -> window snapshot -> GameLoop::ingest_snapshot
+        // -> OnlineSession::ingest_snapshot -> swallow_networked_edge
+        // -> dispatch_pointer_edge(PointerDown/PointerUp) -> confirm_waiting
+        // -> confirm_guest_ready -> C2S 4008; host S2C 4011 -> poll_start
+        // -> ScreenGame::force_advance_to_loading.
+        // Seam stages the confirm rect instead of reading install-root;
+        // the pointer edges are the ones one physical click produces.
+        use o2jam_net::frame::encode_frame;
+        use std::io::Read;
+        use std::sync::mpsc;
+
+        let (first_tx, first_rx) = mpsc::channel();
+        let (extra_tx, extra_rx) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
+            let first = read_frame(&mut stream);
+            first_tx.send(first).unwrap();
+            // The host starts only after seeing the guest's single READY.
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let mut next_header = [0u8; 4];
+            let extra_frame = stream.read_exact(&mut next_header).is_ok();
+            extra_tx.send(extra_frame).unwrap();
+        });
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![o2jam_shell::avatar::ScenePlacement {
+                role: o2jam_shell::avatar::PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_READY".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: o2jam_render::Rect {
+                    x: 680,
+                    y: 143,
+                    w: 1,
+                    h: 1,
+                },
+            }],
+            std::collections::HashMap::new(),
+        );
+
+        session.ingest_snapshot(&InputSnapshot::click_at(680, 143));
+        let first = first_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(first.id, 4008, "one READY click sends the ready toggle");
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        let extra_frame = extra_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!extra_frame, "one click pair must queue exactly one 4008");
+        server.join().unwrap();
     }
 
     #[test]
