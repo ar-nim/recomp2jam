@@ -637,7 +637,8 @@ mod tests {
 
     use super::*;
     use o2jam_game::{build_level_chart, CoolStreak, Judgement, PillStock, Score, Sequencer};
-    use o2jam_shell::InputSnapshot;
+    use o2jam_render::Rect;
+    use o2jam_shell::{AvatarFigure, FigureLayer, InputSnapshot};
 
     /// The tutorial's own chart drives the rated sink without a key
     /// press: B22 pins autoplay BGM markers to the rating-event sink
@@ -703,6 +704,171 @@ mod tests {
         assert_eq!(score.counts.iter().sum::<u32>() as usize, due_count);
         assert_eq!(score.counts[0] as usize, due_count, "every note rated Cool");
         assert!(score.points > 0, "autoplay produced a score");
+    }
+
+    /// Onsets for the chart-timed replay: the installed `Tutorial.ojn`
+    /// when game data is present, a pinned synthetic pair otherwise.
+    /// Both arms exercise the same press/painter path; only the ink
+    /// origin changes.
+    fn tutorial_replay_onsets() -> Vec<(u8, u64, u32)> {
+        let synthetic = vec![(2, 5_000, 1), (5, 9_000, 1)];
+        let Ok(bytes) = std::fs::read(install_root().join("O2Jam/Music/Tutorial.ojn")) else {
+            return synthetic;
+        };
+        crate::loading::tutorial_chart_onsets(&bytes).unwrap_or(synthetic)
+    }
+
+    /// A chart time outside every note window, just before the first
+    /// onset so the note is still in the lookahead while the press is
+    /// off-note.
+    fn off_note_press_ms(onsets: &[(u8, u64, u32)]) -> u64 {
+        let anchor = onsets.first().map_or(5_000, |&(_, at_ms, _)| at_ms);
+        let before = anchor.saturating_sub(500);
+        if before > 0
+            && onsets
+                .iter()
+                .all(|&(_, at_ms, _)| before.abs_diff(at_ms) > 25)
+        {
+            before
+        } else {
+            anchor + 500
+        }
+    }
+
+    /// One staged tutorial key kit: the rest frame is white, the four
+    /// pressed frames are red, so a cap swap is a pixel read.
+    fn tutorial_key_kit() -> (
+        Vec<o2jam_shell::avatar::ScenePlacement>,
+        HashMap<String, AvatarFigure>,
+    ) {
+        use o2jam_shell::avatar::PlacementRole;
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for lane in 0..7usize {
+            let name = format!("KeyEffect_Tutorial_{}.ojs", lane + 1);
+            let mut figure = AvatarFigure::default();
+            for frame in 0..5 {
+                let word = if frame == 0 { 0x7FFFu16 } else { 0xF800u16 };
+                let pixels = word.to_le_bytes().repeat(16);
+                figure.push_layer(FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                    dx: 100 + (lane as i32) * 20,
+                    dy: 487,
+                    colorkey: 0,
+                });
+            }
+            placements.push(o2jam_shell::avatar::ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: 0,
+                sprite: Some(name.clone()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            });
+            figures.insert(name, figure);
+        }
+        (placements, figures)
+    }
+
+    /// #516: an off-note press in the Tutorial lights its key cap and
+    /// leaves COOL/BAD/GOOD/MISS at zero. Live chain: boot -> Channel ->
+    /// Room with its B7 FIRSTSTEP rect -> staged FIRSTSTEP click ->
+    /// Tutorial -> chart-timed note frame -> snapshot lane press ->
+    /// painter and tally. The REA boundary is `docs/captures/n-judge.md`:
+    /// only the Playing update reaches the judgement scheduler; the
+    /// Tutorial update cannot tally a key. Boot-2 key frames pin the
+    /// lit cap with a zero HUD.
+    #[test]
+    fn firststep_tutorial_off_note_press_lights_the_cap_without_tallying() {
+        let onsets = tutorial_replay_onsets();
+        assert!(!onsets.is_empty(), "the replay needs a chart onset");
+        let press_ms = off_note_press_ms(&onsets);
+        assert!(
+            onsets
+                .iter()
+                .all(|&(_, at_ms, _)| press_ms.abs_diff(at_ms) > 25),
+            "the press must be off-note"
+        );
+
+        let mut walk = E2eWalker::seeded(None).expect("seeded walker");
+        walk.dismiss_splash().expect("splash dismisses");
+        walk.enter_channel().expect("channel opens");
+        walk.enter_room_lobby().expect("room lobby opens");
+        let game = &mut walk.game;
+        // B7 FIRSTSTEP rect `(660,1)-(720,33)`; the synthetic placement
+        // keeps the click live with data hidden, where real art is absent.
+        game.load_scene(
+            Screen::Room,
+            vec![o2jam_shell::avatar::ScenePlacement {
+                role: o2jam_shell::avatar::PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP".to_owned(),
+                code: 0x1320_0032,
+                sprite: None,
+                rect: Rect {
+                    x: 660,
+                    y: 1,
+                    w: 60,
+                    h: 32,
+                },
+            }],
+            HashMap::new(),
+        );
+        let (placements, figures) = tutorial_key_kit();
+        game.load_tutorial_scene(placements, figures);
+        game.ingest_snapshot(&InputSnapshot::click_at(689, 16));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(
+            game.tutorial_chart_globals().map(|row| row.song_id),
+            Some(8888)
+        );
+
+        let paint = |game: &mut ScreenGame, now_ms: u64| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            buf
+        };
+        // Latch the chart origin before the replay clock moves.
+        let _ = paint(game, 0);
+        game.stage_tutorial_chart(&onsets);
+        let with_notes = paint(game, press_ms);
+        game.stage_tutorial_chart(&[]);
+        let without_notes = paint(game, press_ms);
+        assert_ne!(
+            with_notes, without_notes,
+            "the staged note must be in flight"
+        );
+        assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
+
+        game.stage_tutorial_chart(&onsets);
+        let lane = usize::from(onsets[0].0);
+        let cap_pixel = 487 * 800 + 100 + lane * 20;
+        game.ingest_snapshot(&InputSnapshot::lane_key(lane, true));
+        let pressed = paint(game, 30);
+        assert_ne!(
+            pressed[cap_pixel], without_notes[cap_pixel],
+            "key cap lights"
+        );
+        assert_eq!(
+            game.live_play().score().counts,
+            [0, 0, 0, 0],
+            "off-note key art never tallies"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::lane_key(lane, false));
+        let released = paint(game, 30);
+        assert_eq!(released[cap_pixel], without_notes[cap_pixel], "cap clears");
+        assert_eq!(game.live_play().score().counts, [0, 0, 0, 0]);
     }
 
     /// The one walk fixture: a primary trace and its replay proof.
