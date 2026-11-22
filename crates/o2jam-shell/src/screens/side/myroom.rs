@@ -65,6 +65,15 @@ pub const MYROOM_GIFT_CELLS: usize = 5;
 pub const MYROOM_GIFT_LEFT_CODE: u32 = 0x1520_0048;
 /// Gift pager RIGHT button (`Myroom_Btn_GiftRight.ojs`).
 pub const MYROOM_GIFT_RIGHT_CODE: u32 = 0x1520_0049;
+/// GIFTBOX_BACK body (`Myroom_GiftBox.ojs`): tab-owned chrome in
+/// `FUN_004a8ba0` (file `0xa8ba0`, EV `ev_c1d8c405…`). Its extra frame
+/// call is not decoded by that evidence; only its tab ownership is used.
+pub const MYROOM_GIFT_BACK_CODE: u32 = 0x1550_0047;
+/// First gift page-number digit (`Myroom_GiftPageNum.ojs`): the exe's
+/// tab painter stages frame 1 for MY BAG and frame 2 for PRESENT BOX.
+pub const MYROOM_GIFT_PAGE_FIRST_CODE: u32 = 0x1550_0054;
+/// Gift page-number digit count (`0x15500054..57`).
+pub const MYROOM_GIFT_PAGE_DIGITS: u32 = 4;
 /// Gift claim button (`Myroom_Btn_GiftMove.ojs`: moves the
 /// selected gift into the bag). The control choice is
 /// ours-by-design — no exe click sequence is pinned — while the
@@ -260,6 +269,9 @@ pub fn myroom_panel_kept(placed: &ScenePlacement, panel: MyRoomPanel) -> bool {
 /// Lower-panel tab whose rows the painter inks. The exe gift-tab
 /// frame (`6e29e51a…`) hides the bag grid and shows the gift list;
 /// the pinned MY BAG press (`8515a7e5…`) does not switch it back.
+/// This enum is the local image of the exe's tab word `0x779924`:
+/// `Bag` is word 0 and `Gifts` is any non-zero word. `FUN_004a8ba0`
+/// (file `0xa8ba0`, EV `ev_c1d8c405…`) enables one control set per word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MyRoomLowerTab {
     /// Owned-item grid under the MY BAG tab (default on entry).
@@ -267,6 +279,46 @@ pub enum MyRoomLowerTab {
     Bag,
     /// Gift rows under the PRESENT BOX tab.
     Gifts,
+}
+
+/// Which tab word enables one staged control. The ten bag cells and
+/// BAGSORT answer word 0; GIFTBOX_BACK, both gift pagers, the five gift
+/// cells and the four gift page digits answer non-zero (`FUN_004a8ba0`,
+/// file `0xa8ba0`, EV `ev_c1d8c405…`). Other chrome — tabs, bag pager,
+/// avatar, worn wells — stays live on both faces. OPEN: no live frame
+/// pair pins the enabled/hidden chrome yet; this is the static pin only.
+#[must_use]
+pub const fn myroom_control_tab(code: u32) -> Option<MyRoomLowerTab> {
+    let in_bag_cells =
+        code >= MYROOM_BAG_FIRST_CODE && code < MYROOM_BAG_FIRST_CODE + MYROOM_BAG_CELLS_U32;
+    let in_gift_cells =
+        code >= MYROOM_GIFT_FIRST_CODE && code < MYROOM_GIFT_FIRST_CODE + MYROOM_GIFT_CELLS_U32;
+    let in_gift_digits = code >= MYROOM_GIFT_PAGE_FIRST_CODE
+        && code < MYROOM_GIFT_PAGE_FIRST_CODE + MYROOM_GIFT_PAGE_DIGITS;
+    if in_bag_cells || code == MYROOM_BAGSORT_CODE {
+        Some(MyRoomLowerTab::Bag)
+    } else if in_gift_cells
+        || in_gift_digits
+        || code == MYROOM_GIFT_LEFT_CODE
+        || code == MYROOM_GIFT_RIGHT_CODE
+        || code == MYROOM_GIFT_BACK_CODE
+    {
+        Some(MyRoomLowerTab::Gifts)
+    } else {
+        None
+    }
+}
+
+/// Whether a staged control paints and dispatches on this tab.
+/// Controls owned by the other tab are hidden and inert; untabbed
+/// chrome stays live (owner rule `f38f3`: geometry still comes from
+/// the staged `.bnd`, only liveness comes from the tab word).
+#[must_use]
+pub fn myroom_tab_kept(placed: &ScenePlacement, tab: MyRoomLowerTab) -> bool {
+    match myroom_control_tab(placed.code) {
+        Some(owner) => owner == tab,
+        None => true,
+    }
 }
 
 /// One pager step: which end of the row run the press moves toward.
@@ -382,18 +434,28 @@ const MYROOM_GIFT_CELLS_U32: u32 = 5;
 /// Well-image count as `u32` for code arithmetic without casts.
 const MYROOM_SLOT_WELLS_U32: u32 = MYROOM_SLOT_WELLS as u32;
 
-/// Avatar-room action under native pixel (`x`, `y`): the staged
-/// `.bnd` placement whose code dispatches and whose rect contains
-/// the point. Cell indices count the hit placement among its own
-/// family in staged order (file order on staged art), so the painter
-/// and the clicker share the same cells with no literals. `None`
-/// outside every dispatching placement — unstaged clicks land
-/// nowhere (no fallback literals, ADR-0003).
+/// Avatar-room action under native pixel (`x`, `y`) on one lower tab:
+/// the staged `.bnd` placement whose code dispatches and whose rect
+/// contains the point. Tab-owned controls from the other face are
+/// hidden and inert (`0x779924` tab word, `FUN_004a8ba0`).
+/// Cell indices count the hit placement among its own family in
+/// staged order (file order on staged art), so the painter and the
+/// clicker share the same cells with no literals. `None` outside
+/// every dispatching placement — unstaged clicks land nowhere
+/// (no fallback literals, ADR-0003).
 #[must_use]
-pub fn myroom_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<MyRoomAction> {
+pub fn myroom_action_at(
+    placements: &[ScenePlacement],
+    tab: MyRoomLowerTab,
+    x: i32,
+    y: i32,
+) -> Option<MyRoomAction> {
     let mut bag_seen = 0usize;
     let mut gift_seen = 0usize;
     for placed in placements {
+        if !myroom_tab_kept(placed, tab) {
+            continue;
+        }
         let Some(action) = myroom_action_for_code(placed.code) else {
             continue;
         };

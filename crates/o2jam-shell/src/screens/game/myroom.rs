@@ -12,14 +12,14 @@ use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::paint::{
-    myroom_notice_board_frame, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
-    paint_screen,
+    myroom_notice_board_frame, myroom_page_number_frame, paint_myroom_data, paint_myroom_figure,
+    paint_myroom_slot_icons, paint_screen,
 };
 use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
     myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_record_slot,
-    myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab,
+    myroom_tab_kept, myroom_wallet_captions, myroom_worn_well_items, MyRoomAction, MyRoomLowerTab,
     MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState, SideScreen, MYROOM_BAG_CELLS,
     MYROOM_NOTICE_TEXT_CODE,
 };
@@ -197,7 +197,7 @@ impl ScreenGame {
         if self.side != Some(SideScreen::MyRoom) {
             return;
         }
-        let action = myroom_action_at(&self.side_placements, x, y);
+        let action = myroom_action_at(&self.side_placements, self.myroom.lower_tab(), x, y);
         match action {
             Some(MyRoomAction::BackToLobby) => {
                 // The exe's BACK case changes state and sends 5007
@@ -532,11 +532,15 @@ impl ScreenGame {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
                 let panel = self.myroom.panel();
+                let tab = self.myroom.lower_tab();
                 art.paint_backdrop_live_selected(
                     frame,
                     Screen::Myroom,
-                    |placed| myroom_panel_kept(placed, panel),
-                    |placed| myroom_notice_board_frame(placed, &art.figures),
+                    |placed| myroom_panel_kept(placed, panel) && myroom_tab_kept(placed, tab),
+                    |placed| {
+                        myroom_notice_board_frame(placed, &art.figures)
+                            .or_else(|| myroom_page_number_frame(placed, tab, &art.figures))
+                    },
                 );
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
                 self.paint_myroom_overlay(frame, &art.placements, &art.figures);
