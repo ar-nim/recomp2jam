@@ -8,11 +8,12 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
-    lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, song_installed,
-    sort_lanking_songs, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
-    MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
-    MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE,
-    MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
+    lanking_page_window, lanking_songs, music_shop_rank_header_key, music_shop_rows,
+    shop_page_count, song_installed, sort_lanking_songs, LankingSong, LankingSort, MusicShopAction,
+    MusicShopFace, MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
+    MSHOP_BPM_SORT_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DIFF_SORT_CODE,
+    MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
+    MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -92,6 +93,10 @@ pub(crate) struct MusicShopState {
     /// this marks a client-only press inside the staged rect — never
     /// a standing, a sort, or a wire request (#408).
     pub(crate) music_shop_top100_pressed: Option<u32>,
+    /// Pressed rank-table header (`0x1A20007E..83`, exe state `+0x538`).
+    /// The six rank vectors and their 5011 wire source are unpinned; only
+    /// the selector and the search/page reset are recorded (#828).
+    pub(crate) music_shop_rank_key: Option<u32>,
     /// Last staged song-shop preview plate control code. The exe
     /// clears `0x1A200003`/`0x1A500002` on a page turn; our shell has
     /// no live producer for those art plates, so this records the
@@ -167,6 +172,7 @@ impl MusicShopState {
         self.music_shop_cart_page = 0;
         self.music_shop_selected_row = None;
         self.music_shop_top100_pressed = None;
+        self.music_shop_rank_key = None;
         self.music_shop_search_active = false;
         self.music_shop_search_hits.clear();
     }
@@ -382,6 +388,11 @@ impl MusicShopState {
         self.music_shop_top100_pressed
     }
 
+    /// Rank-table header selected by the last press, if any (#828).
+    pub(crate) fn rank_key(&self) -> Option<u32> {
+        self.music_shop_rank_key
+    }
+
     /// Stage the TOP100 entry state recorded by `FUN_004c6d70`: it
     /// looks up `0x1A20007D` and writes 0 into the control property at
     /// `+0x20` (setter `FUN_00409bd0`). A fresh entry therefore carries
@@ -572,6 +583,12 @@ impl MusicShopState {
             }
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
+                if music_shop_rank_header_key(code).is_some() {
+                    self.music_shop_rank_key = Some(code);
+                    self.music_shop_search_active = false;
+                    self.music_shop_page = 0;
+                    self.music_shop_selected_row = None;
+                }
                 MusicShopEffect::None
             }
             MusicShopAction::Face(face) => {
@@ -695,6 +712,18 @@ impl MusicShopState {
             }
             MusicShopAction::Sort(sort) => {
                 self.music_shop_sort = Some(sort);
+                // TITLE/DIFF/BPM double as rank headers (`0x80..82`);
+                // the lanking-only ARTIST key selects no rank table.
+                let header = match sort {
+                    LankingSort::Title => Some(MSHOP_TITLE_SORT_CODE),
+                    LankingSort::Diff => Some(MSHOP_DIFF_SORT_CODE),
+                    LankingSort::Bpm => Some(MSHOP_BPM_SORT_CODE),
+                    LankingSort::Artist => None,
+                };
+                if header.is_some() {
+                    self.music_shop_rank_key = header;
+                }
+                self.music_shop_search_active = false;
                 self.music_shop_page = 0;
                 self.music_shop_selected_row = None;
                 self.music_shop_top100_pressed = None;

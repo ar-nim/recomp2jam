@@ -146,6 +146,17 @@ compares the eight staged header rects before and after a leave/re-entry
 and asserts no 5010. OPEN: the `+0x20` property name, any nonzero
 writer, and a 5011 rank-wire source.
 
+### TOP100 header rank keys (#828)
+
+The six header keys `0x1A20007E..83` (3KEY/7KEY/TITLE/DIFF/BPM/PRICE)
+clear the search flag and page and record one rank-table selector
+(exe state `+0x538`, routed through `FUN_004d66b0`). TITLE/DIFF/BPM
+keep their catalog sorts beside the selector; the vectors at state
+`+0x1c0..0x210` are not staged. Guard:
+`music_shop_rank_headers_select_their_table_and_clear_the_search`.
+OPEN: vector contents, wire source, and a header press with the board
+visible (#408 covers chrome only).
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).

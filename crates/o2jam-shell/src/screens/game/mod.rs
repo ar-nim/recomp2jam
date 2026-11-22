@@ -7554,6 +7554,14 @@ impl ScreenGame {
         self.music_shop.top100_pressed()
     }
 
+    /// Rank-table header key selected by the last press (`0x7E..83`,
+    /// exe state `+0x538`). Only the selector is recorded; the six
+    /// rank vectors and their wire source stay OPEN (#828).
+    #[must_use]
+    pub fn music_shop_rank_key(&self) -> Option<u32> {
+        self.music_shop.rank_key()
+    }
+
     /// Last staged song-shop preview plate code (#814). No live
     /// producer is pinned yet; the pager clear is.
     #[must_use]
@@ -9343,20 +9351,21 @@ mod game_tests {
         MSHOP_MYALL_LEFT_CODE, MSHOP_MYALL_RIGHT_CODE, MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
         MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_PLAYTIME_SORT_CODE, MSHOP_OWNED_ROWS,
         MSHOP_OWNED_TITLE_SORT_CODE, MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE,
-        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_SEARCH_CODE,
-        MSHOP_SEARCH_EDIT_CODE, MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
-        MSHOP_TITLE_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE,
-        MSHOP_WON_BUY_CODE, MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_CELLS,
-        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
-        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
-        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
-        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
-        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_GROUP_CODES, SHOP_EXTMENU_ON_CODE,
-        SHOP_EXTMENU_SIDE_CODES, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
-        SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE, MSHOP_RANK_3KEY_CODE,
+        MSHOP_RANK_7KEY_CODE, MSHOP_RANK_PRICE_CODE, MSHOP_SEARCH_CODE, MSHOP_SEARCH_EDIT_CODE,
+        MSHOP_SELECT_ALL_CODE, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TITLE_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_BUY_CODE,
+        MSHOP_WON_PRICE_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE,
+        ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE, SHOP_BAG_CELLS, SHOP_BAG_LEFT_CODE,
+        SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE,
+        SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE, SHOP_BOY_CODE, SHOP_BUYITEM_CODE,
+        SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_LEFT_CODE,
+        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_CATEGORY_BUTTONS,
+        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
+        SHOP_EXTMENU_GROUP_CODES, SHOP_EXTMENU_ON_CODE, SHOP_EXTMENU_SIDE_CODES,
+        SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE,
+        SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
         SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
         SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
         SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
@@ -27141,6 +27150,63 @@ mod game_tests {
             .map(|row| row.song.song_id)
             .collect();
         assert_eq!(owned, vec![757]);
+    }
+
+    #[test]
+    fn music_shop_rank_headers_select_their_table_and_clear_the_search() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // ScreenGame::visit_side(MusicShop) -> GameLoop::mouse_click ->
+        // click_music_shop -> music_shop_action_at ->
+        // MusicShopState::apply_action(Top100Chrome | Sort). Exe
+        // FUN_004c7f70 cases 0x7E..83 clear search flag/page and call
+        // FUN_004d66b0 (ev_74dbde37...), which selects one of six rank
+        // vectors by state +0x538. Vector contents and wire source stay
+        // OPEN; only the selector is recorded here (#828).
+        let mut game = open_music_shop_board(7);
+        for (code, x, y) in [
+            (MSHOP_RANK_3KEY_CODE, 18, 84),
+            (MSHOP_RANK_7KEY_CODE, 75, 84),
+            (MSHOP_RANK_PRICE_CODE, 310, 84),
+            (MSHOP_SEARCH_CODE, 400, 20),
+        ] {
+            game.side_placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect { x, y, w: 50, h: 20 },
+            });
+        }
+        for letter in "Tune".chars() {
+            game.push_music_shop_search_char(letter);
+        }
+        game.click_music_shop(425, 30);
+        assert!(game.music_shop_search_active());
+        game.click_music_shop(340, 542);
+        assert_eq!(game.music_shop_page(), 1, "catalog is on page two");
+
+        for (code, x, y, name) in [
+            (MSHOP_RANK_3KEY_CODE, 43, 94, "3KEY"),
+            (MSHOP_RANK_7KEY_CODE, 101, 94, "7KEY"),
+            (MSHOP_TITLE_SORT_CODE, 160, 94, "TITLE"),
+            (MSHOP_DIFF_SORT_CODE, 222, 94, "DIFF"),
+            (MSHOP_BPM_SORT_CODE, 280, 94, "BPM"),
+            (MSHOP_RANK_PRICE_CODE, 335, 94, "PRICE"),
+        ] {
+            game.click_music_shop(x, y);
+            assert_eq!(game.music_shop_rank_key(), Some(code), "{name} header");
+            assert!(!game.music_shop_search_active(), "{name} clears the flag");
+            assert_eq!(game.music_shop_page(), 0, "{name} resets the page");
+            game.click_music_shop(340, 542);
+        }
+
+        game.click_music_shop(273, 10);
+        assert_eq!(
+            game.music_shop_rank_key(),
+            Some(MSHOP_RANK_PRICE_CODE),
+            "TOP100 itself selects no rank table"
+        );
+        assert!(game.take_music_buy().is_none(), "headers queue no 5010");
     }
 
     #[test]

@@ -1848,6 +1848,30 @@ pub enum MusicShopFace {
 pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
 pub const MSHOP_DIFF_SORT_CODE: u32 = 0x1A20_0081;
 pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
+/// TOP100 rank-table header keys (`0x1A20007E..83`): 3KEY, 7KEY,
+/// TITLE, DIFF, BPM, PRICE. `FUN_004c7f70` routes all six to
+/// `FUN_004d66b0` (VA `0x4d66b0`, `ev_74dbde37…`), which selects one
+/// of six rank vectors by state `+0x538`. TITLE/DIFF/BPM double as the
+/// sort codes above; the vectors' contents and wire source stay OPEN
+/// (next step: a 5011 rank wire pin and a board-visible press frame).
+pub const MSHOP_RANK_HEADER_FIRST_CODE: u32 = 0x1A20_007E;
+pub const MSHOP_RANK_HEADER_LAST_CODE: u32 = 0x1A20_0083;
+pub const MSHOP_RANK_3KEY_CODE: u32 = MSHOP_RANK_HEADER_FIRST_CODE;
+pub const MSHOP_RANK_7KEY_CODE: u32 = MSHOP_RANK_HEADER_FIRST_CODE + 1;
+pub const MSHOP_RANK_PRICE_CODE: u32 = MSHOP_RANK_HEADER_LAST_CODE;
+
+/// Rank-table selector behind one header code (`None` outside the six).
+/// Only the selector is recorded; the six vectors at state
+/// `+0x1c0/+0x1d0/+0x1e0/+0x1f0/+0x200/+0x210` stay unpinned (#828).
+#[must_use]
+pub const fn music_shop_rank_header_key(code: u32) -> Option<u32> {
+    if code >= MSHOP_RANK_HEADER_FIRST_CODE && code <= MSHOP_RANK_HEADER_LAST_CODE {
+        Some(code)
+    } else {
+        None
+    }
+}
+
 /// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
 pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
 pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
