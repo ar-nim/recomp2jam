@@ -1650,6 +1650,18 @@ impl PlayingView {
         curtain: LaneCurtain,
     ) {
         self.paint_highway_shell(frame, geom);
+        self.paint_notes_over_staged(frame, geom, curtain);
+    }
+
+    /// Falling notes only, over an already-blitted staged backdrop.
+    /// The Tutorial owns its own receptors/key caps, so it borrows
+    /// just this note pass from Playing instead of the highway shell.
+    pub fn paint_notes_over_staged(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        curtain: LaneCurtain,
+    ) {
         for (lane, y) in self.visible(geom) {
             // Per-lane column clip (A34): a note survives only inside
             // its own staged column and the curtain's y-band spans.

@@ -339,6 +339,24 @@ pub fn check_bank_entry(entry: &OjmEntry) -> Result<(), FileError> {
     o2jam_file::validate_sample_format(entry)
 }
 
+/// Playable onsets of the shipped `Tutorial.ojn` Easy slice.
+///
+/// The exe's tutorial entry writes song id 8888 (`S-PLAY-B3`) and its
+/// Init constructs the same `CNewNote` highway as Playing (`0x4f0950`
+/// → `0x56f6a0`/`0x56ff30`). Routing these onsets through
+/// [`ScreenGame::load_chart`] gives the Tutorial painter the shared
+/// staged-note seam. `None` keeps a missing or wrong chart silent.
+#[must_use]
+pub fn tutorial_chart_onsets(bytes: &[u8]) -> Option<Vec<(u8, u64, u32)>> {
+    let prepared = prepare_chart(bytes, 0).ok()?;
+    if prepared.song_id != 8_888 {
+        return None;
+    }
+    let events = o2jam_file::parse_ojn_level_events(bytes, 0).ok()?;
+    let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
+    Some(chart.hit_onsets_ms())
+}
+
 /// Decode one OGG body into the bank, skipping undecodable streams.
 ///
 /// Loading gate 4 (`0x54d460`): only mono/stereo decodes enter the bank.

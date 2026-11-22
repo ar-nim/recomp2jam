@@ -55,7 +55,7 @@ use super::super::avatar::{
 use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
 use super::super::playing::{
-    paint_staged_jam_label, HighwayGeometry, LivePlay, PlaySkin, PlayingHudLayout,
+    paint_staged_jam_label, HighwayGeometry, LivePlay, PlaySkin, PlayingHudLayout, PlayingView,
 };
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
@@ -162,6 +162,34 @@ pub const LOADING_GATE_PHASES: usize = 4;
 /// calls its playback helper at file `0xf0ab0`; which shipped sample
 /// sounds remains OPEN (next step `N-AUDIO`, owned-sink A/B).
 const TUTORIAL_OJM_BGM_RECORD: i32 = 1;
+
+/// Exe page-deadline table at VA `0x67e2c0` (file `0x27e2c0`), read
+/// from the pinned 7.55 binary. The tutorial setup at `0x4f0d30`
+/// scales each entry by `192 / (bpm * 48 / 60)` and adds `1.4` s.
+/// `Tutorial.ojn` carries BPM 100 at header `+16`, so one unit is
+/// 2.4 s. Page 0 is entry; pages 1..=12 follow the shipped bit-26
+/// marker ids.
+const TUTORIAL_PAGE_BEATS: [f32; 13] = [
+    1.5, 13.0, 24.0, 29.0, 38.0, 45.0, 52.0, 62.0, 67.0, 75.0, 80.0, 87.0, 94.0,
+];
+const TUTORIAL_PAGE_LEAD_S: f32 = 1.4;
+const TUTORIAL_CHART_BPM: f32 = 100.0;
+
+/// One page deadline in chart ms, or `None` past the 13 pinned pages.
+fn tutorial_page_deadline_ms(page: usize) -> Option<u32> {
+    // Page 0 is entry; page 1 uses the first pinned deadline.
+    let beat = *TUTORIAL_PAGE_BEATS.get(page.checked_sub(1)?)?;
+    let seconds = (240.0 / TUTORIAL_CHART_BPM) * beat + TUTORIAL_PAGE_LEAD_S;
+    let millis = seconds * 1_000.0;
+    #[allow(clippy::cast_precision_loss)]
+    let upper_bound = u32::MAX as f32;
+    if millis <= 0.0 || millis >= upper_bound {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rounded = millis.round() as u32;
+    Some(rounded)
+}
 
 /// The one press-kind word returned by [`ScreenGame::press_kind_at`].
 /// It names the staged control under a point, never its wire outcome:
@@ -1027,6 +1055,16 @@ pub struct ScreenGame {
     /// No judgement or score state: the boot2 key frames keep every
     /// tally at zero.
     tutorial_key_lights: TutorialKeyLights,
+    /// Tutorial's copy of the staged Playing note entities. Kept apart
+    /// from [`Self::playing`] so a side visit never resets a live
+    /// Playing chart or its score.
+    tutorial_notes: PlayingView,
+    /// First painted frame of the current Tutorial visit; chart time
+    /// for its notes and page markers is relative to this stamp.
+    tutorial_clock_start_ms: Option<u64>,
+    /// Current tutorial page. The exe's update at `0x4f19e0` re-cues
+    /// the mode-3 record on every page crossing.
+    tutorial_page: usize,
     /// Lanking board state (the catalog, sort, pages, board, and
     /// pick; #139 cluster 2): every `lanking_*` word lives here;
     /// the hash fold reads it for the six hashed words.
@@ -1435,6 +1473,9 @@ impl ScreenGame {
             side_origin: None,
             tutorial_chart_globals: None,
             tutorial_key_lights: TutorialKeyLights::default(),
+            tutorial_notes: PlayingView::default(),
+            tutorial_clock_start_ms: None,
+            tutorial_page: 0,
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
@@ -1570,6 +1611,42 @@ impl ScreenGame {
     /// record; its `-1` scene cue is replaced by this one.
     fn apply_tutorial_ojm_cue(&mut self) {
         self.apply_bgm_cue_from((TUTORIAL_OJM_BGM_RECORD, true), SceneBgmBank::TutorialOjm);
+    }
+
+    /// Stage the Tutorial chart's playable onsets into its note view.
+    /// No score, life or Playing-chart state is touched: the exe's
+    /// tutorial uses the same note entities but never joins a live
+    /// Playing run.
+    pub fn stage_tutorial_chart(&mut self, onsets: &[(u8, u64, u32)]) {
+        self.tutorial_notes = PlayingView::new(
+            onsets
+                .iter()
+                .map(|&(lane, at_ms, _)| (lane, at_ms))
+                .collect(),
+        );
+    }
+
+    /// Chart time of the current Tutorial paint. The paint clock is
+    /// monotonic; the first Tutorial frame latches the visit start so
+    /// the staged chart and the exe's page deadlines share one origin.
+    fn tutorial_chart_ms(&mut self, now_ms: u64) -> u64 {
+        let start = self.tutorial_clock_start_ms.get_or_insert(now_ms);
+        now_ms.saturating_sub(*start)
+    }
+
+    /// Advance the tutorial's mode-3 record whenever chart time passes
+    /// a pinned page deadline (`0x4f19e0` → `FUN_0042f870`). Page N
+    /// selects record N; the one-second re-cue in the exe keeps a
+    /// looping sample alive and needs no extra cue on this side.
+    fn advance_tutorial_page(&mut self, chart_ms: u64) {
+        while let Some(deadline_ms) = tutorial_page_deadline_ms(self.tutorial_page + 1) {
+            if u64::from(deadline_ms) > chart_ms {
+                break;
+            }
+            self.tutorial_page += 1;
+            let record = i32::try_from(self.tutorial_page).unwrap_or(i32::MAX);
+            self.apply_bgm_cue_from((record, true), SceneBgmBank::TutorialOjm);
+        }
     }
 
     /// Apply one `(id, loop)` pair over the named staged bank.
@@ -6904,6 +6981,8 @@ impl ScreenGame {
         self.billing_failure_notice = false;
         self.mount_staged_side_art(side);
         if side == SideScreen::Tutorial {
+            self.tutorial_clock_start_ms = None;
+            self.tutorial_page = 0;
             self.apply_tutorial_ojm_cue();
             self.tutorial_key_lights.clear();
         } else {
@@ -7006,6 +7085,8 @@ impl ScreenGame {
         }
         if side == SideScreen::Tutorial {
             self.tutorial_key_lights.clear();
+            self.tutorial_clock_start_ms = None;
+            self.tutorial_page = 0;
         }
         self.billing_failure_notice = false;
 
@@ -8394,12 +8475,25 @@ impl ScreenGame {
                 music_shop_tooltip_kept(placed, hovered)
             });
         } else if self.side == Some(SideScreen::Tutorial) {
+            let chart_ms = self.tutorial_chart_ms(now_ms);
+            self.advance_tutorial_page(chart_ms);
             paint_tutorial_scene(
                 frame,
                 &self.side_placements,
                 &self.side_figures,
                 &self.tutorial_key_lights,
                 now_ms,
+            );
+            // The exe gives the tutorial the same CNewNote entities as
+            // Playing (Init `0x4f0950` calls `0x56f6a0`/`0x56ff30`).
+            // Draw that shared staged-note view over the tutorial art;
+            // no separate tutorial note renderer or invented geometry.
+            let geom = HighwayGeometry::centered(frame.w, frame.h);
+            self.tutorial_notes.advance_to(chart_ms);
+            self.tutorial_notes.paint_notes_over_staged(
+                frame,
+                &geom,
+                o2jam_render::LaneCurtain::Full,
             );
         } else if self.side == Some(SideScreen::Shop) {
             // The entry face is MY BAG and the tooltip stays hidden
@@ -34121,6 +34215,65 @@ mod game_tests {
             peaks.borrow().last().copied(),
             Some(peak),
             "the cued record's PCM reaches the backend queue"
+        );
+    }
+
+    /// #863 row 22: the exe's tutorial update advances the OJM record
+    /// when chart time passes a page deadline (update `0x4f19e0`,
+    /// `FUN_0042f870` sets `+0x134` to `page-1`). A static record-1
+    /// loop keeps the selection at 1 and fails here. Live chain:
+    /// boot → Planet → Channel → Room → FIRSTSTEP → Tutorial paint
+    /// at the page-2 deadline (13 * 2.4 s + 1.4 s ≈ 32.6 s at BPM 100).
+    #[test]
+    fn tutorial_ojm_advances_at_the_pinned_page_deadline() {
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let effects = Rc::new(RefCell::new(Vec::new()));
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.with_audio(cue_log_backend(&pushes, &effects), HashMap::new());
+        let bank = (1..=12)
+            .map(|marker| {
+                Some(o2jam_audio::PcmSamples {
+                    samples: vec![marker; 441],
+                    sample_rate: 44_100,
+                    channels: 1,
+                })
+            })
+            .collect();
+        game.set_tutorial_ojm_bank(bank);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.scene_bgm_selection().map(|cue| cue.record), Some(1));
+
+        let paint_at = |game: &mut ScreenGame, now_ms: u64| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+        };
+        paint_at(&mut game, 0);
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(1),
+            "page 1 holds the entry record"
+        );
+        paint_at(&mut game, 33_000);
+        assert_eq!(
+            game.scene_bgm_selection().map(|cue| cue.record),
+            Some(2),
+            "page 2 cues the second mode-3 record"
+        );
+        assert_eq!(
+            pushes.borrow().as_slice(),
+            &[1, 2],
+            "the backend receives the entry cue then the page-2 sample"
         );
     }
 

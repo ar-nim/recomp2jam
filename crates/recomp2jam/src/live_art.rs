@@ -263,6 +263,13 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_state(archive, State::Tutorial, StageContext::default()).art {
         game.load_tutorial_scene(art.placements, art.figures);
     }
+    // The tutorial chart's 51 Easy notes feed the same staged-note
+    // seam Playing uses. Missing game data keeps the highway empty.
+    if let Ok(bytes) = std::fs::read(install_root().join("O2Jam/Music/Tutorial.ojn")) {
+        if let Some(onsets) = crate::loading::tutorial_chart_onsets(&bytes) {
+            game.stage_tutorial_chart(&onsets);
+        }
+    }
     let mode = live_playing_mode(game);
     let chart_slot = game
         .selected_music()

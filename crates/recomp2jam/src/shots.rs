@@ -362,6 +362,16 @@ pub(crate) fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
         return false;
     };
     game.load_side_scene(placements, figures);
+    if side == SideScreen::Tutorial {
+        // Same live-call chain as `live_art::stage_playing_scenes`:
+        // the shipped chart's onsets ride the Playing staged-note
+        // seam so the Tutorial painter has notes in flight.
+        if let Ok(bytes) = std::fs::read(install_root().join("O2Jam/Music/Tutorial.ojn")) {
+            if let Some(onsets) = crate::loading::tutorial_chart_onsets(&bytes) {
+                game.stage_tutorial_chart(&onsets);
+            }
+        }
+    }
     if side == SideScreen::Payment {
         let installed = read_install_archives(&install_root());
         if let Some(interface) = installed.interface {
@@ -2573,6 +2583,68 @@ mod tests {
                 "leaving {side:?} must restore the lobby frame"
             );
         }
+    }
+
+    /// #863 row 21, data-free half: the staged-note seam must ink the
+    /// lane even with no install art, so CI proves the paint path.
+    #[test]
+    fn tutorial_note_seam_inks_a_falling_note_without_install_data() {
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        game.load_side_scene(Vec::new(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Tutorial));
+        let empty = paint_native_frame(&mut game, 0);
+        game.stage_tutorial_chart(&[(6, 25_000, 1)]);
+        let painted = paint_native_frame(&mut game, 24_000);
+        let inked = (150..350)
+            .flat_map(|row| (165..193).map(move |column| row * 800 + column))
+            .filter(|&at| empty[at] != painted[at])
+            .count();
+        assert!(inked > 0, "the note seam paints without game data");
+    }
+
+    /// #863 row 21: a chart onset must ink the staged highway in the
+    /// tutorial, not just be rated in a seam. Live chain: boot →
+    /// Planet → Channel → Room → FIRSTSTEP → Tutorial → staged note
+    /// view → painter. The missing paint leaves both frames identical.
+    #[test]
+    fn tutorial_chart_notes_ink_the_highway_when_due() {
+        let chart_path = install_root().join("O2Jam/Music/Tutorial.ojn");
+        let Ok(bytes) = std::fs::read(&chart_path) else {
+            println!("skip: missing Tutorial.ojn");
+            return;
+        };
+        let Some(onsets) = crate::loading::tutorial_chart_onsets(&bytes) else {
+            println!("skip: unreadable Tutorial.ojn");
+            return;
+        };
+        if !side_stage_data(SideScreen::Tutorial).is_some() {
+            println!("skip: missing tutorial art");
+            return;
+        };
+        let Some(&(lane, at_ms, _)) = onsets.iter().find(|(_, at, _)| *at > 3_000) else {
+            println!("skip: chart has no late onset");
+            return;
+        };
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        assert!(stage_side_art(&mut game, SideScreen::Tutorial));
+        assert!(game.visit_side(SideScreen::Tutorial));
+        let empty = paint_native_frame(&mut game, 0);
+        // One second ahead of a real onset: inside the 2 s lookahead.
+        let painted = paint_native_frame(&mut game, at_ms - 1_000);
+        let (x, w) = o2jam_shell::playing::NATIVE_LANES[usize::from(lane)];
+        let inked = (150..350)
+            .flat_map(move |row| {
+                (x..x + i32::try_from(w).unwrap_or(0)).map(move |column| (row, column))
+            })
+            .filter(|&(row, column)| {
+                let at =
+                    usize::try_from(row).unwrap_or(0) * 800 + usize::try_from(column).unwrap_or(0);
+                empty[at] != painted[at]
+            })
+            .count();
+        assert!(inked > 0, "a chart note paints ink in its staged lane");
     }
 
     /// Install-guarded real-art guard for the seven tutorial receptor
