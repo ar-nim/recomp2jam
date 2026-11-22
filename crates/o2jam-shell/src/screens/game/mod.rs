@@ -6832,12 +6832,25 @@ impl ScreenGame {
         }
     }
 
+    /// Whether an in-flight song start owns the next state change.
+    /// The exe's FIRSTSTEP arm calls `0x495110` with no static refusal
+    /// (`0x48fd20`, ev `ev_ac6983f7…`), so this precedence is ASSUMED
+    /// until an `N-LOADING` pack watches the pending-state word at
+    /// `0x478c50`/`0x477990`. See spec #313 story 20.
+    fn loading_transition_is_armed(&self) -> bool {
+        self.loading_gate_ready()
+    }
+
     /// Open a side screen from a lobby; rejects other origins and
-    /// remembers the lobby to return to. Entry cues the side
-    /// screen's scene music (see [`SideScreen::bgm_cue`]); a
-    /// rejected visit cues nothing.
+    /// remembers the lobby to return to. A tutorial visit also yields
+    /// to an armed Loading gate, so a start never collides with the
+    /// side visit. Entry cues the side screen's scene music (see
+    /// [`SideScreen::bgm_cue`]); a rejected visit cues nothing.
     pub fn visit_side(&mut self, side: SideScreen) -> bool {
         if self.side.is_some() || !can_visit_side(self.flow.current(), side) {
+            return false;
+        }
+        if side == SideScreen::Tutorial && self.loading_transition_is_armed() {
             return false;
         }
         self.side_origin = Some(self.flow.current());
@@ -33821,6 +33834,57 @@ mod game_tests {
         assert!(game.leave_side());
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn firststep_press_loses_to_an_armed_loading_gate() {
+        // Spec #313 story 20. Live chain: boot -> Room -> staged FIRSTSTEP
+        // -> `ScreenGame::ingest_snapshot` -> `click_dispatch` ->
+        // `click_room_control` -> `enter_room_side_with_enter_shop` ->
+        // `visit_side(Tutorial)`. Statics pin one pending-state word in the
+        // exe (`0x478c50` writes parent +0x54; `0x477990` consumes it) and
+        // an unconditional FIRSTSTEP arm (`0x495110`); they do not pin
+        // which of a start and a side visit wins in one frame. Conservative
+        // ASSUMED order until `N-LOADING`: a qualified pack with both frames
+        // and a shared trace id. Seam suffices here because the host dispatch
+        // boundary is the whole decision: no display or wire is involved.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 0,
+        });
+        game.catalog_songs = vec![super::super::side::staged_song(757)];
+        game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        game.set_loading_status(LoadingStatus {
+            progress: 1.0,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        });
+        assert!(game.loading_gate_ready(), "song start gate is armed");
+
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(
+            game.side(),
+            None,
+            "FIRSTSTEP must not mount Tutorial while the gate is armed"
+        );
+        assert_eq!(game.tutorial_chart_globals(), None, "no entry globals");
+        assert_eq!(game.screen(), Screen::Room, "the gate keeps its host");
+
+        game.clear_loading();
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(
+            game.side(),
+            Some(SideScreen::Tutorial),
+            "the same press enters once the gate is idle"
+        );
     }
 
     /// Filter tabs select the list family locally (ticket #416). The
