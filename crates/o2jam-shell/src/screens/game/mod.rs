@@ -15961,6 +15961,103 @@ mod game_tests {
         assert_eq!(after[hair_pixel], before[hair_pixel], "slot gets no frame");
     }
 
+    /// MyRoom side with all eleven art-less slot selectors, one bag
+    /// cell, and one gift cell. Slot rects are synthetic but their
+    /// codes are the shipped `0x15200005..0F` run.
+    fn myroom_all_slot_button_overlay() -> (ScreenGame, Vec<ScenePlacement>) {
+        use super::super::side::{MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_BUTTONS};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let mut placements: Vec<ScenePlacement> = (0..MYROOM_SLOT_BUTTONS)
+            .map(|index| {
+                let code = super::super::side::MYROOM_SLOT_FIRST_CODE
+                    + u32::try_from(index).expect("eleven slot buttons");
+                myroom_hit_placement(
+                    code,
+                    10 + 50 * i32::try_from(index).expect("small index"),
+                    10,
+                )
+            })
+            .collect();
+        placements.push(myroom_hit_placement(
+            super::super::side::MYROOM_BAG_FIRST_CODE,
+            10,
+            50,
+        ));
+        placements.push(myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 60, 50));
+        game.load_side_scene(placements.clone(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, placements)
+    }
+
+    #[test]
+    fn myroom_slot_presses_leave_the_bag_and_gift_state_untouched() {
+        // Live caller chain (#796, OPEN grade):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(SelectSlot)
+        //   -> MyRoomState::record_slot_press.
+        // The hair-slot negative pin is `25c5997e…`; REA `FUN_004a3ee0`
+        // (file `0xa3ee0`) has no case for `0x15200005..0F`. Until the
+        // #530 per-slot sweep exists, every press records only the
+        // cursor: no bag filter, gift target, or wire body is invented.
+        let mut cursor_only = MyRoomState::new();
+        cursor_only.record_slot_press(1);
+        assert_eq!(cursor_only.selected_slot(), 1);
+        assert_eq!(cursor_only.bag_page(), 0);
+        assert_eq!(cursor_only.gift_page(), 0);
+
+        let (mut game, placements) = myroom_all_slot_button_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 50));
+        let before = game.myroom();
+        let mut before_buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut before_buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            before,
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+
+        for index in 0..super::super::side::MYROOM_SLOT_BUTTONS {
+            let x = 10 + 50 * i32::try_from(index).expect("small index");
+            game.ingest_snapshot(&InputSnapshot::click_at(x, 10));
+            let after = game.myroom();
+            assert_eq!(
+                after.selected_slot(),
+                u8::try_from(index).expect("eleven slot buttons")
+            );
+            assert_eq!(after.bag_page(), before.bag_page());
+            assert_eq!(after.bag_cell(), before.bag_cell());
+            assert_eq!(after.gift_page(), before.gift_page());
+            assert_eq!(after.gift_cell(), before.gift_cell());
+            assert_eq!(after.lower_tab(), before.lower_tab());
+        }
+
+        let mut after_buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut after_buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            game.myroom(),
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+        assert_eq!(after_buf, before_buf, "slot presses paint no new rows");
+    }
+
     #[test]
     fn myroom_slot_and_gift_picks_keep_staged_frames_without_amber() {
         // Live caller chain as above. The exe pins no frame on a slot

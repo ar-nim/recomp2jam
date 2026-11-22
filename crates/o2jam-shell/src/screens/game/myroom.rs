@@ -220,7 +220,7 @@ impl ScreenGame {
     /// behind this seam and stay labeled ASSUMED, never exe proof.
     fn apply_myroom_action(&mut self, action: MyRoomAction) {
         match action {
-            MyRoomAction::SelectSlot(slot) => self.myroom.select_slot(slot),
+            MyRoomAction::SelectSlot(slot) => self.myroom.record_slot_press(slot),
             MyRoomAction::ShowBagTab => {
                 // Exe3 `8515a7e5…`: the MY BAG press leaves the gift
                 // panel open, so no lower-tab or panel state changes.

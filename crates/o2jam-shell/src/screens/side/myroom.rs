@@ -595,9 +595,15 @@ impl MyRoomState {
         self.messenger_state = state;
     }
 
-    /// Record a slot-button press; past the eleventh button the
-    /// press lands nowhere (button ordinals are `0..11`).
-    pub fn select_slot(&mut self, slot: u8) {
+    /// Record one slot-selector press as the local cursor. The exe has
+    /// no `FUN_004a3ee0` case for `0x15200005..0F` (file `0xa3ee0`), and
+    /// the hair-slot frame `25c5997e…` leaves the bag rows and cursor
+    /// alone. No bag filter, equip target, or wire body is inferred from
+    /// a button name: the other ten codes have no static handler or live
+    /// frame. OPEN next step: the #530 per-slot press sweep with bag
+    /// frames and a paired 2001 body per press. Past the eleventh button
+    /// the press lands nowhere (ordinals are `0..11`).
+    pub fn record_slot_press(&mut self, slot: u8) {
         if usize::from(slot) < MYROOM_SLOT_BUTTONS {
             self.selected_slot = slot;
         }

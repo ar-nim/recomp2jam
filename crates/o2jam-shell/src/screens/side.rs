@@ -7472,10 +7472,10 @@ mod side_tests {
         assert_eq!(state.selected_slot(), 0);
         assert_eq!(state.bag_page(), 0);
         assert_eq!(state.bag_cell(), None);
-        state.select_slot(3);
+        state.record_slot_press(3);
         assert_eq!(state.selected_slot(), 3);
         // Past the eleventh button the press lands nowhere.
-        state.select_slot(11);
+        state.record_slot_press(11);
         assert_eq!(state.selected_slot(), 3);
         // Page turns clamp to the staged page count.
         state.turn_bag_page(MyRoomStep::Next, 3);
@@ -8935,7 +8935,7 @@ mod side_tests {
         });
 
         let mut selection = MyRoomState::new();
-        selection.select_slot(4);
+        selection.record_slot_press(4);
         selection.turn_bag_page(MyRoomStep::Next, myroom_bag_pages(&inventory, &table));
         selection.pick_bag_cell(Some(1));
         selection.turn_gift_page(MyRoomStep::Next, 1);
