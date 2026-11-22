@@ -1002,3 +1002,27 @@ not silently dropped; the owner approves each removal in the Memory UI.
 | `9e297` | winedbg launch and stopped-state read discipline | Wine leg (#240); `docs/wine-boot.md` |
 | `635dc` | `pgrep -f`/`pkill -f` self-match; use recorded PIDs | Commit-or-lose-it rule; Two-path architecture |
 | `d5ebf` | One shared Memoryer; scenario delta needs wire and log proof | Memoryer liveness, identity, and dumps (#345) |
+
+## Self-verify: render before you claim (retro #870, 2026-11-22)
+
+A human is never the integration test. Before claiming ANY player-facing
+behavior done, the implementing agent verifies the real output itself:
+
+1. **Render-over-time** — drive the actual surface headlessly and assert
+   the pixels change where the behavior manifests:
+   `ScreenGame::paint_at(&mut game, t_ms)` at t=0/20/50 s, diff the
+   frame buffers (the live_art harness in `crates/recomp2jam/src/live_art.rs`
+   is the reference pattern). A frozen chart, a sheet that never paints,
+   a scene that never changes — all die here, without a rig and without
+   a human. (2026-11-22: the tutorial clock bug survived because only
+   seam guards ran; two byte-identical frames at +20 s/+50 s would have
+   killed it at birth.)
+2. **Audio-over-time** — assert the cue/sample index from the backend
+   (the BgmSelection record + repeat), not the seam call that queued it.
+3. **Live-path reachability** — exercise the real input chain
+   (`ingest_snapshot` / the window path), not only the seam dispatch.
+   Guards that click `click_dispatch` directly have repeatedly passed
+   while the live path never reached the handler (#853/#856/#861 lineage).
+
+If the harness cannot express the check, the ticket stays open naming
+the missing harness — never closed on seam-green with a hope.

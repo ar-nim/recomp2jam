@@ -345,3 +345,18 @@ exceeds 3 skips, every batch had 2 exemplars posted before delegation,
 every reported PASS/FAIL was re-run by the senior, every cited artifact
 was opened by the reviewer before citation, and every respawn
 was triggered by a poisoned premise (not by a narrow correction).
+
+## Standard brief lines (retro batch 2026-11-22)
+
+Every implementer/rig brief carries, verbatim:
+
+- "Self-verify before done: render-over-time via `paint_at` (frames must
+  change where the behavior manifests), audio-over-time via the backend
+  cue index, and the live input path exercised — seam-green alone never
+  closes. See docs/rig-runbook.md § Self-verify." (owner principle #870)
+- "Archive-gated tests must RUN, not skip, in your worktree: use
+  `INSTALL_DATA_POOL=` to claim a private data slot when the shared
+  symlink is absent, and report the skip count in your final report."
+  (lesson 0a77d)
+- "If your fix touches a spec, `bash scripts/close-spec.sh <N>` must
+  exit 0 before the close comment is written." (retro #869)

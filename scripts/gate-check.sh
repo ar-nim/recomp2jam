@@ -99,10 +99,39 @@ run_fmt_clippy() {
     cargo clippy --workspace --all-targets -- -D warnings
 }
 
+# Skip-budget canaries (retro #870 companion, 2026-11-22): archive-gated
+# canary tests must RUN when install-root is present and SKIP cleanly
+# when it is hidden. A canary that silently skips in the present arm
+# means a data-less worktree reported false green and a semantic
+# conflict can reach main (lesson 0a77d).
+CANARY_PRESENT=(
+    "live_art::live_art_tests::live_matches_declaration_on_walked_screens_when_archives_present"
+)
+
+assert_canaries() {
+    local arm="$1" log="$2"
+    local canary
+    if [ "$arm" = present ]; then
+        for canary in "${CANARY_PRESENT[@]}"; do
+            if ! grep -qF "test $canary ... ok" "$log"; then
+                echo "skip-budget: canary '$canary' did NOT run in the present arm" >&2
+                echo "  (archive-gated tests silently skipping with data present = false green)" >&2
+                exit 1
+            fi
+        done
+        echo "skip-budget: ${#CANARY_PRESENT[@]} canary(ies) ran in the present arm"
+    fi
+}
+
 run_workspace_suite() {
     step "cargo test --workspace (install-root present)"
     export O2JAM_INSTALL_ROOT="$PRESENT_ROOT"
-    cargo test --workspace -- "${SUITE_SKIPS[@]}"
+    local log
+    log="$(mktemp -t gate-present.XXXXXX.log)"
+    if ! cargo test --workspace -- "${SUITE_SKIPS[@]}" 2>&1 | tee "$log"; then
+        exit 1
+    fi
+    assert_canaries present "$log"
 }
 
 run_hidden_suite() {

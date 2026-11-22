@@ -1077,11 +1077,30 @@ mod live_art_tests {
             walk_to(&mut expected, target);
             walk_to(&mut live, target);
             assert_eq!(expected.screen(), live.screen());
-            assert_eq!(
-                painted_pixels(&mut expected, 0),
-                painted_pixels(&mut live, 0),
-                "live diverges from the declaration on {target:?}"
-            );
+            let expected_pixels = painted_pixels(&mut expected, 0);
+            let live_pixels = painted_pixels(&mut live, 0);
+            if expected_pixels != live_pixels {
+                let diffs: Vec<String> = (0..expected_pixels.len())
+                    .filter(|&k| expected_pixels[k] != live_pixels[k])
+                    .take(5)
+                    .map(|k| {
+                        format!(
+                            "px {k} (x={}, y={}): {:#x} vs {:#x}",
+                            k % 800,
+                            k / 800,
+                            expected_pixels[k],
+                            live_pixels[k]
+                        )
+                    })
+                    .collect();
+                panic!(
+                    "live diverges from the declaration on {target:?} ({} diffs; first: {})",
+                    (0..expected_pixels.len())
+                        .filter(|&k| expected_pixels[k] != live_pixels[k])
+                        .count(),
+                    diffs.join("; ")
+                );
+            }
         }
         let mut expected = declaration_game().expect("guarded game");
         let mut live = live_game();
