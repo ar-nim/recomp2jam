@@ -111,6 +111,7 @@ supply sizes only.
 | paint.rs:2333 `WAITING_CHAT_CARET_INSET` | (5,5) | none: caret chrome | reference photo (caret at (25,568)) | OPEN | Rig: exe caret placement |
 | paint.rs:2335 `WAITING_CHAT_CARET_SIZE` | (2,10) | none | same photo | OPEN | same |
 | paint.rs `WAITING_CAPTION_INK_BEARING` | (6,7) | none: GDI cell bearing, not a layout rect | 7.55 Wine capture `~/scratch/ab-wait.png`: `MUSICNAME` rect origin `(573,15)`, first title ink `(579,22)`; no scrim behind title or `SPEED_NUM` chip (owner re-check #274, 2026-11-18) | DONE (presentation) | Keep; rect still comes from `State_Waiting.bnd`; bearing offsets the bare ink only |
+| paint/waiting.rs `SEAT_TEAM_PLATE_Y_OFFSET` | +22 | no `.bnd` rect: the paired frame contradicts the parsed rect by 22 px | `State_Waiting.bnd` r44 `(0,134,123,150)` under `EXTEND2` `(179,55)` yields `(179,189)`, but the exe 7.55 frame `~/scratch/p559-badge-ab4/exe/artifacts/screenshots/member-downloading.png` paints the `Wait_ReadyWindow.ojs` frame-1 plate at x=179..301, y=211..226; Rust `~/scratch/av-sweep/waiting/rust2/states/member-downloading.png` paints it at y=189..204 (#842) | DONE (exe oracle, 2026-11-22) | Keep: the painter consumes the staged clone rect and adds only this exe-pinned y offset for the team plate; contradiction with the parsed rect is documented, not silently resolved |
 
 ## Channel chat (paint.rs:2497–2499)
 

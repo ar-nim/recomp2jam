@@ -1060,6 +1060,42 @@ fn waiting_seat_clone_live(placed: &ScenePlacement, seats: &[StagedSeat]) -> boo
     indicator.frame(seat).is_some()
 }
 
+/// Exe anchor of the seat team/name plate, relative to its staged clone
+/// rect. The paired frame `p559-badge-ab4/exe/.../member-downloading.png`
+/// paints the plate at x=179..301, y=211..226; the `Interface1.opi`
+/// clone `(179,55)+(0,134)` paints it at y=189, so the exe is 22 px
+/// lower against the same body. No other seat indicator carries this
+/// correction (ticket #842).
+const SEAT_TEAM_PLATE_Y_OFFSET: i32 = 22;
+
+/// Exe-corrected y offset of one indicator in the current frame: the
+/// native pin scales with the frame like every other staged anchor.
+#[must_use]
+fn seat_mark_y_offset(indicator: SeatIndicator, frame: &Frame<'_>) -> i32 {
+    match indicator {
+        SeatIndicator::TeamPlate => {
+            anchor_in_frame(0, SEAT_TEAM_PLATE_Y_OFFSET, frame.w, frame.h).1
+        }
+        _ => 0,
+    }
+}
+
+/// Blit origin of one seat indicator: the staged clone rect plus its
+/// sprite record anchor, with the exe's team-plate correction.
+fn seat_mark_origin(
+    indicator: SeatIndicator,
+    dest: Rect,
+    layer: &FigureLayer,
+    frame: &Frame<'_>,
+) -> (i32, i32) {
+    (
+        dest.x.saturating_add(layer.dx),
+        dest.y
+            .saturating_add(layer.dy)
+            .saturating_add(seat_mark_y_offset(indicator, frame)),
+    )
+}
+
 /// Paint every armed seat indicator at its clone rect with the seat's
 /// frame. The clone base pass already painted frame 0 there, so this
 /// pass owns the live frame; unarmed bodies were filtered out above.
@@ -1091,13 +1127,8 @@ pub(crate) fn paint_waiting_seat_marks(
             continue;
         };
         let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
-        blit_rgb555(
-            frame,
-            &layer.image.view(),
-            dest.x + layer.dx,
-            dest.y + layer.dy,
-            Some(layer.colorkey),
-        );
+        let (x, y) = seat_mark_origin(indicator, dest, layer, frame);
+        blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
     }
 }
 
