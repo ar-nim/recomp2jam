@@ -2408,11 +2408,11 @@ mod tests {
             bar,
             o2jam_render::Rect {
                 x: 489,
-                y: 556,
+                y: 560,
                 w: 254,
                 h: 10
             },
-            "the staged TIMEBAR rect is bnd r2"
+            "ticket #843: the staged TIMEBAR rect must ride the capture-pinned row"
         );
         let paint_at = |now_ms: u64| {
             let mut scene = AvatarScene::default();
