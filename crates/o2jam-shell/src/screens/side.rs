@@ -39,7 +39,7 @@ mod myroom_status;
 pub use self::myroom::*;
 pub use self::myroom_freeinfo::{myroom_freeinfo_captions, MyRoomPassInfo};
 pub use self::myroom_notice::MyRoomNotice;
-pub use self::myroom_status::{next_up_threshold, NEXT_UP_THRESHOLDS};
+pub use self::myroom_status::{myroom_rank_caption, next_up_threshold, NEXT_UP_THRESHOLDS};
 
 /// Item-shop block (`CStateShop`, 164 decl entries).
 pub const SHOP_BLOCK: &str = "STATE_SHOP";
@@ -7935,6 +7935,21 @@ mod side_tests {
             caption_text(&captions, MYROOM_PENALTY_LEVEL_CODE),
             Some("Lv 3")
         );
+    }
+
+    #[test]
+    fn myroom_status_prints_the_web_served_rank_with_the_exe_format() {
+        // Seam suffices: the rank caption is a pure format of the staged
+        // web word. The exe's `0x768b78` writer is untraced (OPEN), so no
+        // 2001 wire field is claimed; the word is staged explicitly.
+        // Static oracle: `FUN_004a7a80` (file `0xa7a80`, EV
+        // `ev_4ba373ad…`) inks `0x1540003d` only for a nonzero rank word,
+        // with the cp949 format `" %d 등"` at file `0x249474` (the
+        // ticket's `만` is a transcription error; exe bytes win).
+        use super::myroom_rank_caption;
+        assert_eq!(myroom_rank_caption(Some(7)).as_deref(), Some(" 7 등"));
+        assert_eq!(myroom_rank_caption(Some(0)), None);
+        assert_eq!(myroom_rank_caption(None), None);
     }
 
     #[test]

@@ -11,8 +11,8 @@ use crate::screen::Screen;
 use crate::screens::side::{
     myroom_action_for_code, MyRoomAction, MyRoomLowerTab, MyRoomState, MYROOM_AVATAR_CODE,
     MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_PAGE_DIGITS,
-    MYROOM_GIFT_PAGE_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_SELECT_CODE,
-    MYROOM_SLOT_IMAGE_FIRST_CODE,
+    MYROOM_GIFT_PAGE_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_PCROOMMARK_CODE,
+    MYROOM_SELECT_CODE, MYROOM_SLOT_IMAGE_FIRST_CODE,
 };
 use o2jam_render::{scale_rect_to_frame, Frame, Rect};
 
@@ -56,6 +56,37 @@ pub fn myroom_page_number_frame(
     };
     let sprite = placed.sprite.as_deref()?;
     figures.get(sprite)?.layer(index).map(|_| index)
+}
+
+/// PC-room mark liveness for one staged placement. `FUN_004a3730`
+/// (VA `0x4a3730`, file `0xa3730`, EV
+/// `ev_1b8cb1354f11145172bc8bdb441a1e311a2176cd19b4f64a09b67ab1df39c30f`)
+/// looks up `0x1550006a` and stages its frame 1 only when the pass word
+/// `0x768b34` is exactly `1` or `0x800`; every other word has no else
+/// arm and paints no mark. Our client reads the same word from the
+/// staged [`MyRoomPassInfo`](crate::screens::side::MyRoomPassInfo);
+/// its wire writer stays OPEN.
+#[must_use]
+pub fn myroom_pc_room_mark_kept(placed: &ScenePlacement, pass_word: Option<u32>) -> bool {
+    let is_pc_room = pass_word.is_some_and(|word| word == 1 || word == 0x800);
+    placed.code != MYROOM_PCROOMMARK_CODE || is_pc_room
+}
+
+/// Frame the exe stages on the PC-room mark image control. `None`
+/// leaves unrelated placements and unpainted bodies on their normal
+/// staged stack; a mark without a second frame never claims pixels.
+#[must_use]
+pub fn myroom_pc_room_mark_frame(
+    placed: &ScenePlacement,
+    pass_word: Option<u32>,
+    figures: &HashMap<String, AvatarFigure>,
+) -> Option<usize> {
+    const MARK_FRAME: usize = 1;
+    if placed.code != MYROOM_PCROOMMARK_CODE || !myroom_pc_room_mark_kept(placed, pass_word) {
+        return None;
+    }
+    let sprite = placed.sprite.as_deref()?;
+    figures.get(sprite)?.layer(MARK_FRAME).map(|_| MARK_FRAME)
 }
 
 /// Avatar room: staged bound art, flat card fallback.

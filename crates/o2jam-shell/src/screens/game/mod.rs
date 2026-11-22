@@ -58,30 +58,30 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
     information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit,
-    myroom_notice_board_frame, myroom_page_number_frame, paint_avi_scene,
-    paint_billing_failure_notice, paint_cash_charge_frame, paint_channel_chat,
-    paint_dialog_frame_record, paint_dialog_scene, paint_information_message, paint_lanking_board,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
-    paint_music_shop_cashfillup_notice, paint_music_shop_face, paint_music_shop_genre_frames,
-    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
+    myroom_pc_room_mark_kept, paint_avi_scene, paint_billing_failure_notice,
+    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
+    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
+    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
+    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
+    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -914,6 +914,10 @@ pub struct ScreenGame {
     /// Staged pass/membership state behind the FREEINFO lines. The
     /// wire writer of the exe's `0x768b34` word stays OPEN.
     myroom_pass: MyRoomPassInfo,
+    /// Web-served rank word read by the exe at `0x768b78` for the
+    /// STATUS rank cell. No wire writer is pinned (OPEN), so callers
+    /// stage it explicitly; `None` inks nothing.
+    myroom_rank_word: Option<i32>,
     /// NOTICE_TEXT caption value. The exe's writer is untraced, so
     /// One-OK sheet over MyRoom (MESSENGER press, special-item reply,
     /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
@@ -1320,6 +1324,7 @@ impl ScreenGame {
             myroom_counts: [0; 17],
 
             myroom_pass: MyRoomPassInfo::default(),
+            myroom_rank_word: None,
 
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1962,6 +1967,14 @@ impl ScreenGame {
     /// staged word the exe's blank case holds.
     pub fn set_myroom_pass(&mut self, pass: MyRoomPassInfo) -> &mut Self {
         self.myroom_pass = pass;
+        self
+    }
+
+    /// Stage the web-served rank word for the STATUS rank cell. The
+    /// exe's writer of `0x768b78` is untraced (OPEN): staging is the
+    /// whole source seam, and no 2001 field is inferred.
+    pub fn set_myroom_rank_word(&mut self, word: Option<i32>) -> &mut Self {
+        self.myroom_rank_word = word;
         self
     }
 
@@ -8057,14 +8070,22 @@ impl ScreenGame {
         if self.side == Some(SideScreen::MyRoom) {
             let panel = self.myroom.panel();
             let tab = self.myroom.lower_tab();
+            let pass_word = self.myroom_pass.word;
             paint_scene_figures_selected(
                 frame,
                 &self.side_placements,
                 &self.side_figures,
-                |placed| myroom_panel_kept(placed, panel) && myroom_tab_kept(placed, tab),
+                |placed| {
+                    myroom_panel_kept(placed, panel)
+                        && myroom_tab_kept(placed, tab)
+                        && myroom_pc_room_mark_kept(placed, pass_word)
+                },
                 |placed| {
                     myroom_notice_board_frame(placed, &self.side_figures)
                         .or_else(|| myroom_page_number_frame(placed, tab, &self.side_figures))
+                        .or_else(|| {
+                            myroom_pc_room_mark_frame(placed, pass_word, &self.side_figures)
+                        })
                 },
             );
         } else if self.side == Some(SideScreen::MusicShop) {
@@ -15862,12 +15883,23 @@ mod game_tests {
         }
     }
 
+    /// Staged rank TEXT rect: a distinct corner so a rank paint guard
+    /// can attribute every changed pixel to the rank cell alone.
+    fn myroom_rank_rect() -> Rect {
+        Rect {
+            x: 700,
+            y: 10,
+            w: 40,
+            h: 20,
+        }
+    }
+
     fn myroom_open_overlay() -> ScreenGame {
         use super::super::side::{
             MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
             MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
             MYROOM_GIFT_RIGHT_CODE, MYROOM_GIFT_TAB_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE,
-            MYROOM_NICKNAME_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
+            MYROOM_NICKNAME_CODE, MYROOM_RANK_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
         };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -15890,6 +15922,7 @@ mod game_tests {
             myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
             myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
             myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
+            myroom_hit_placement(MYROOM_RANK_CODE, myroom_rank_rect().x, myroom_rank_rect().y),
         ];
         game.load_side_scene(placements, HashMap::new());
         assert!(game.visit_side(SideScreen::MyRoom));
@@ -17881,6 +17914,181 @@ mod game_tests {
     }
 
     #[test]
+    fn myroom_status_inks_the_staged_rank_word_in_its_bnd_rect() {
+        // Live caller chain (paint):
+        //   GameLoop::paint -> ScreenGame::paint_side -> paint_myroom_overlay
+        //   -> myroom_rank_caption -> paint_myroom_data.
+        // Feed seam: the exe's `0x768b78` web writer is untraced (OPEN),
+        // so callers stage the word explicitly; no 2001 field is claimed.
+        // Pure shell state with synthetic art, so no install-root skip.
+        use super::super::side::MYROOM_RANK_CODE;
+        let _ = MYROOM_RANK_CODE;
+        let mut game = myroom_open_overlay();
+        game.show_myroom_panel(MyRoomPanel::Status);
+        let before = paint_myroom_panel(&mut game);
+        game.set_myroom_rank_word(Some(7));
+        let after = paint_myroom_panel(&mut game);
+        let rank = myroom_rank_rect();
+        let changed: Vec<usize> = (0..after.len())
+            .filter(|index| before[*index] != after[*index])
+            .collect();
+        assert!(!changed.is_empty(), "the staged rank word must ink");
+        assert!(
+            changed.iter().all(|index| {
+                let x = (index % 800) as i32;
+                let y = (index / 800) as i32;
+                x >= rank.x
+                    && x < rank.x + rank.w as i32
+                    && y >= rank.y
+                    && y < rank.y + rank.h as i32
+            }),
+            "rank ink must stay inside its staged rect"
+        );
+    }
+
+    /// Paint the STATUS nickname cell with one staged name. The rect is
+    /// the exe's 121-pixel fit width (file `0xa7a80`, EV
+    /// `ev_4ba373ad…`); no geometry is copied from the archive here.
+    fn myroom_nickname_paint(name: &str) -> Vec<u32> {
+        use super::super::side::MYROOM_NICKNAME_CODE;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(CharacterInfo {
+            nickname: name.to_owned(),
+            ..myroom_test_character(Vec::new())
+        });
+        let rect = Rect {
+            x: 10,
+            y: 100,
+            w: 121,
+            h: 20,
+        };
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_NICKNAME_CODE,
+                sprite: None,
+                rect,
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.show_myroom_panel(MyRoomPanel::Status);
+        paint_myroom_panel(&mut game)
+    }
+
+    /// Two-frame PCROOMMARK body: frame 0 red at the staged origin,
+    /// frame 1 green one 20-pixel canvas to the right. Offsetting them
+    /// distinguishes a single staged frame from the all-layer stack.
+    /// The placement code and rect are synthetic; no archive data.
+    fn myroom_pc_room_overlay() -> (ScreenGame, Rect) {
+        use super::super::side::{MyRoomPassInfo, MYROOM_PCROOMMARK_CODE};
+        use crate::avatar::FigureLayer;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_pass(MyRoomPassInfo::default());
+        let rect = Rect {
+            x: 700,
+            y: 40,
+            w: 20,
+            h: 20,
+        };
+        let layer = |word: u16, dx: i32| FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(
+                &vec![word.to_le_bytes(); 20 * 20].concat(),
+                20,
+                20,
+            )
+            .expect("solid frame"),
+            dx,
+            dy: rect.y,
+            colorkey: 0xFFFF,
+        };
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(layer(0xF800, rect.x));
+        figure.push_layer(layer(0x07E0, rect.x + 20));
+        game.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "PCRoomMark.ojs".to_owned(),
+                code: MYROOM_PCROOMMARK_CODE,
+                sprite: Some("PCRoomMark.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([("PCRoomMark.ojs".to_owned(), figure)]),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, rect)
+    }
+
+    /// Pixel pairs at the frame-0 and frame-1 canvas centres.
+    fn myroom_pc_room_pixels(word: Option<u32>) -> (u32, u32) {
+        use super::super::side::MyRoomPassInfo;
+        let (mut game, rect) = myroom_pc_room_overlay();
+        game.set_myroom_pass(MyRoomPassInfo {
+            word,
+            ..MyRoomPassInfo::default()
+        });
+        let buf = paint_myroom_panel(&mut game);
+        let at = |x: i32| buf[((rect.y + 10) as usize) * 800 + x as usize];
+        (at(rect.x + 10), at(rect.x + 30))
+    }
+
+    #[test]
+    fn myroom_pc_room_mark_stages_frame_one_only_for_the_exe_pass_words() {
+        // Live caller chain: GameLoop::paint -> ScreenGame::paint_side
+        // -> paint_scene_figures_selected -> myroom_pc_room_mark_kept /
+        // myroom_pc_room_mark_frame. The same staged pass word feeds
+        // FREEINFO (#800); its wire writer stays OPEN.
+        // Static oracle: FUN_004a3730 (file `0xa3730`, EV
+        // `ev_1b8cb135…`) looks up `0x1550006a` and stages frame 1 for
+        // `0x768b34 == 1 || == 0x800` only; every other word paints
+        // no mark. Pure synthetic paint, so no install-root skip.
+        // The green RGB555 layer expands to (8,255,0) in XRGB8888.
+        let green = pack_xrgb(8, 255, 0);
+        for word in [Some(1), Some(0x800)] {
+            let (frame_zero, frame_one) = myroom_pc_room_pixels(word);
+            assert_eq!(frame_one, green, "word {word:?} stages frame 1");
+            assert_eq!(frame_zero, 0, "frame 0 must not stack beneath frame 1");
+        }
+        for word in [None, Some(0), Some(2), Some(0x7FF)] {
+            assert_eq!(
+                myroom_pc_room_pixels(word),
+                (0, 0),
+                "word {word:?} stages no mark"
+            );
+        }
+    }
+
+    #[test]
+    fn myroom_status_fits_a_long_nickname_inside_121_pixels() {
+        // Live caller chain: GameLoop::paint -> ScreenGame::paint_side
+        // -> paint_myroom_overlay -> myroom_identity_captions
+        // -> paint_myroom_data -> paint_text_into_rect.
+        // The exe's 121-pixel fit loop is file `0xa7a80` (EV
+        // `ev_4ba373ad…`); our modern font rasterizer fits into the
+        // staged rect instead of the exe's glyph advances (owner pin).
+        // Pure seam paint with synthetic art, so no install-root skip.
+        let short = myroom_nickname_paint("A");
+        let long =
+            myroom_nickname_paint("가나다라마바사아자차카타파하가나다라마바사아자차카타파하");
+        let changed: Vec<usize> = (0..long.len())
+            .filter(|index| short[*index] != long[*index])
+            .collect();
+        assert!(!changed.is_empty(), "a longer name must ink");
+        assert!(
+            changed.iter().all(|index| {
+                let x = (index % 800) as i32;
+                let y = (index / 800) as i32;
+                (10..131).contains(&x) && (100..120).contains(&y)
+            }),
+            "a long nickname must fit its 121-pixel rect"
+        );
+    }
+
+    #[test]
     fn myroom_info_plate_leaves_unpinned_money_rank_guild_skills_notice_blank() {
         // Live caller chain: same 2001 staging + paint overlay as the
         // win-rate guard above; this guard pins the OPEN boundary.
@@ -18423,10 +18631,14 @@ mod game_tests {
         );
         assert_eq!(myroom_p0_verdict(MYROOM_WEBAVATAR_CODE), None);
 
+        // #811 retires the PCROOMMARK verdict: the staged pass word
+        // now controls frame 1 of the pinned image control.
+        assert_eq!(myroom_action_for_code(MYROOM_PCROOMMARK_CODE), None);
+        assert_eq!(myroom_p0_verdict(MYROOM_PCROOMMARK_CODE), None);
+
         for code in [
             MYROOM_ALARM_CODE,
             MYROOM_ALARM_POPUP_CODE,
-            MYROOM_PCROOMMARK_CODE,
             MYROOM_NOTICE_TEXT_CODE,
             MYROOM_NOTICEBOARD_CODE,
         ] {

@@ -214,6 +214,24 @@ the 2001 word that feeds `0x77cd20` and settle the index/field mapping.
 Guards: `myroom_status_next_up_prints_the_level_threshold_not_the_experience`
 and `myroom_status_prints_the_exe_number_and_penalty_formats`.
 
+Ticket #810 adds the remaining STATUS words from the same dossier:
+nickname fits its staged rect (the exe's 121-pixel fit loop), bonus
+prints `"%d PT"` from `0x768b58`, penalty count/level print `"%d"` /
+`"Lv %d"` from `0x76fc64/66`, and rank `0x1540003d` prints the exe's
+`" %d 등"` for a nonzero web-served word `0x768b78`. Our nickname,
+level, exp, next-up, bonus and penalties already ink from the staged
+2001 character; rank is staged explicitly via
+`ScreenGame::set_myroom_rank_word` because that word's writer is OPEN.
+A fresh REA 6.9.0 / Ghidra 12.2 dossier for `FUN_004a7a80` is
+`ev_4ba373ad8aab8b9cb9f8adfae1ac6e8860fce4277d9bc5b22368a3b8283218ef`;
+a raw read of file `0x249474` confirms `b5 ee` = `등` (the #180 row's
+`만` is a transcription error). Guards:
+`myroom_status_prints_the_web_served_rank_with_the_exe_format`,
+`myroom_status_inks_the_staged_rank_word_in_its_bnd_rect` and
+`myroom_status_fits_a_long_nickname_inside_121_pixels`. OPEN: pair a
+known-rank exe STATUS frame with the wire field that feeds `0x768b78`;
+no such live capture exists, so the staged word is never inferred here.
+
 ## Gift pager wrap/clamp (ticket #806, 2026-11-22)
 
 `FUN_004a3ee0` cases `0x15200048/49` (file `0xa3ee0`,
@@ -296,6 +314,27 @@ OPEN, so no unverified pass is claimed. Presentation guard:
 `myroom_staged_pass_inks_the_pinned_freeinfo_lines`; copy guards in
 `screens/side/myroom_freeinfo.rs`. A known-pass exe capture is the next
 evidence step.
+
+## PC-room mark (ticket #811, 2026-11-23)
+
+`FUN_004a3730` (VA `0x4a3730`, file `0xa3730`, fresh REA 6.9.0 /
+Ghidra 12.2 dossier
+`ev_1b8cb1354f11145172bc8bdb441a1e311a2176cd19b4f64a09b67ab1df39c30f`,
+exe sha256 `83a04541…72c823b`) stages the avatar at `0x15700012`, then
+tests pass word `0x768b34` for exactly `1` or `0x800`. Only those two
+words look up PCROOMMARK `0x1550006a` and set its view/frame words to
+frame 1; all other words have no else arm, so no mark is staged.
+
+Our painters (`ScreenGame::paint_side` and `paint_myroom`) read the
+already-staged `MyRoomPassInfo.word` (#800): the mark is kept only for
+`1`/`0x800` and its second frame is selected there; every other word hides
+the placement. The staged body carries no invented geometry, and the old
+P0 image-only verdict is retired. Guard:
+`myroom_pc_room_mark_stages_frame_one_only_for_the_exe_pass_words`
+(synthetic two-frame body, no install-root skip).
+OPEN: one live PC-room and one non-PC-room frame with the paired pass
+word; the wire writer of `0x768b34` remains untraced, so no pass is
+inferred from a 2001 field.
 
 ## Special-item replies (ticket #799 body, 2026-11-22)
 
