@@ -181,6 +181,52 @@ as BUYITEM plus the cart pagers and our hit-tested cart BUYITEM remains
 never as a hit-tested control. OPEN: one tapped row-buy leg with a wire
 tap.
 
+### BUYITEM/GIFTITEM checkout ladder (#834)
+
+Exe pin: `FUN_004c7f70` file offset `0xc7f70` / VA `0x4c7f70`, `ev_26ac6479f93f777bfb153eb934528aa7402ad891416924b47151ebd69b7f7917`
+(7.55, 5,029,888 B, sha256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`).
+Cases `0x1A20005D` (cart BUYITEM) and `0x1A200073` (GIFTITEM) share a
+web-busy gate (`FUN_00556680(0)`), a nonzero bag count (`FUN_0053bbb0`,
+`ev_d57f3748610bfe89e92da468450013d52f4c723678b9babb72b74ffeb7d27d37`),
+a cash comparison of bag `+0x14` (`FUN_0053c010`,
+`ev_03b9f5cc0fa08e3ee260ad78758d1eb4ed3f77b492106f59377c7b6323ed2ab5`)
+against globals `0x768B4C/50/54`, and a gem comparison of bag `+0x18`
+(`FUN_0053c030`,
+`ev_8ab0e3da33d7a249ea4197c6dbd00cd1080fd47f2a80c1b5e8fbe371365af952`)
+against `0x768B44`. A shortfall posts `결제할 오투캐쉬(O2CASH)가 부족합니다.`
+(VA `0x648B38`, `ev_334e0ed297f83886f1713c114ff70ac7c1066528514feeb2b8adbb8b15f4a957`;
+host control `0x1A200009`) or `결제할 잼(GEM)이 부족합니다.`
+(VA `0x64A66C`, hosted on the pressed control). Otherwise the arm writes
+state `+0x14D` = 1/2 and sends opcode `0x1397` (5015) over vtable `+0x5C`.
+Bag totals come from the stage-3 prices added in #833 (`FUN_0053ad10`,
+`ev_a4b34e12badfb6148eb37e4989e196e7b9d3373d4c04939b36cf75735383cd46`):
+code `0x43` adds the won price to cash, `0x47` the gem price. Discount
+fields the exe reads there have no staged source, so no discount is
+invented; an unstaged price makes the decision UNPINNED.
+
+The two item-validity checks that precede the comparisons
+(VA `0x648cc8` gender mismatch, `0x64a690` already-owned item) are not
+modeled: both name item properties, not songs. The gem shortfall also
+calls `FUN_0053acd0` to clear the exe bag; our bag stays intact so the
+notice and its staged price source can be inspected. Both gaps stay OPEN.
+CONTRADICTION preserved: the qualified live shop taps emitted no
+5000-family opcode, so the existing 5010 row/cart buy arm is kept and
+the 5015 send is staged behind the ladder, with a scripted-gateway wire
+leg but no tapped payment frame.
+
+Guards:
+`a_music_shop_buy_press_writes_mode_one_and_queues_the_5015`,
+`a_music_shop_gift_press_writes_mode_two_and_queues_the_5015`,
+`a_music_shop_gem_shortfall_posts_its_notice_and_queues_nothing`,
+`a_music_shop_cash_shortfall_posts_its_notice_and_queues_nothing`,
+`a_busy_web_gate_makes_the_music_shop_payment_silent`,
+`music_shop_cash_needs_all_three_wallet_words_to_be_short`,
+`an_unstaged_music_bag_price_keeps_the_checkout_unpinned`,
+`an_empty_music_bag_makes_the_checkout_silent`,
+`a_music_shop_cart_buy_sends_one_empty_5015_after_the_checkout_ladder`.
+OPEN next step: one tapped failed/successful payment leg with the 5015
+frame and 5011 answer; the 5011 verdict stays untraced.
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).

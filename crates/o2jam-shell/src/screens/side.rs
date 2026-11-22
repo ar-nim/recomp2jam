@@ -1302,6 +1302,76 @@ fn wallets_allow(cart: &[ShopGood], wallet: &WalletState) -> bool {
     !(total > o2 && total > i64::from(music_cash)) && !(total > o2 && total > i64::from(item_cash))
 }
 
+/// Bag totals the music-shop ladder reads from the bag object through
+/// `FUN_0053c010` (cash, `+0x14`) and `FUN_0053c030` (gem, `+0x18`).
+/// `FUN_0053ad10` adds the won price for code `0x43` and the gem price
+/// for `0x47` (`ev_a4b34e12…`); `None` means no staged price source.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MusicShopBagTotals {
+    /// Sum of won-priced bag rows.
+    pub cash: Option<u32>,
+    /// Sum of gem-priced bag rows.
+    pub gem: Option<u32>,
+}
+
+/// Staged gates around the music-shop BUYITEM/GIFTITEM arm
+/// (`ev_26ac6479…`, file `0xc7f70`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MusicShopCheckoutGate {
+    /// `FUN_00556680(0)` nonzero: the press posts nothing.
+    pub web_busy: bool,
+    /// `FUN_0053bbb0()` bag-row count; zero ends the arm silently.
+    pub bag_count: usize,
+}
+
+/// Outcome of one music-shop BUYITEM/GIFTITEM press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicShopCheckoutDecision {
+    /// Write state `+0x14D` (1 buy, 2 gift) and send 5015.
+    Approved(CheckoutMode),
+    /// A gate blocked the press with no notice.
+    Silent,
+    /// A gate posted one of the two pinned shortfall notices.
+    Notice(MusicShopNotice),
+    /// A wallet or price word is missing; no exe claim is made.
+    Unpinned,
+}
+
+/// Apply the exe's shared cash/gem ladder to staged music-bag totals.
+/// The two item-validity checks that precede it (`0x648cc8`, `0x64a690`)
+/// name item gender and ownership, not songs, so they are not modeled
+/// here (OPEN: a tapped song row that posts either notice).
+#[must_use]
+pub fn music_shop_checkout_decision(
+    totals: &MusicShopBagTotals,
+    wallet: &WalletState,
+    gate: &MusicShopCheckoutGate,
+    mode: CheckoutMode,
+) -> MusicShopCheckoutDecision {
+    if gate.web_busy || gate.bag_count == 0 {
+        return MusicShopCheckoutDecision::Silent;
+    }
+    let (Some(cash), Some(gem)) = (totals.cash, totals.gem) else {
+        return MusicShopCheckoutDecision::Unpinned;
+    };
+    let (Some(o2_cash), Some(music_cash), Some(item_cash), Some(gem_balance)) = (
+        wallet.o2_cash,
+        wallet.music_cash,
+        wallet.item_cash,
+        wallet.gem,
+    ) else {
+        return MusicShopCheckoutDecision::Unpinned;
+    };
+    let cash = i64::from(cash);
+    if cash > i64::from(o2_cash) && (cash > i64::from(music_cash) || cash > i64::from(item_cash)) {
+        return MusicShopCheckoutDecision::Notice(MusicShopNotice::InsufficientCash);
+    }
+    if i64::from(gem) > i64::from(gem_balance) {
+        return MusicShopCheckoutDecision::Notice(MusicShopNotice::InsufficientGem);
+    }
+    MusicShopCheckoutDecision::Approved(mode)
+}
+
 /// Gem wallet against the summed staged gem prices. An unstaged gem
 /// word is a missing source, never an invented price.
 fn gem_allows(cart: &[ShopGood], wallet: &WalletState) -> bool {
@@ -1782,10 +1852,18 @@ pub const MSHOP_BAG_GEM_CODE: u16 = 0x47;
 /// BUYITEM stays `0x5D`. This marker records the ticket's vtable-invoked
 /// code only; it is never hit-tested (#833).
 pub const MSHOP_BUYITEM_INVOKE_CODE: u32 = 0x1A20_005F;
+/// GIFTITEM cart control (`0x1A200073`, `MShop_Btn_Cart_GiftItem.ojs`).
+/// Case `0x73` shares BUYITEM's cash/gem ladder but writes mode 2
+/// (`ev_26ac6479…`, #834).
+pub const MSHOP_GIFT_CODE: u32 = 0x1A20_0073;
 /// Pinned notice words for the row-buy ladder (VA `0x64a5f0` with
 /// `%d` = ten bag entries, and VA `0x6486a4`).
 pub const MSHOP_CART_FULL_NOTICE: &str = "장바구니에 담을 수 있는 곡의 개수는 최대 10개 입니다.";
 pub const MSHOP_DUPLICATE_ITEM_NOTICE: &str = "중복된 아이템을 쇼핑백에 담을 수 없습니다.";
+/// O2CASH shortfall posted by BUYITEM/GIFTITEM (VA `0x648B38`).
+pub const MSHOP_CASH_SHORTFALL_NOTICE: &str = "결제할 오투캐쉬(O2CASH)가 부족합니다.";
+/// Gem shortfall posted by BUYITEM/GIFTITEM (VA `0x64A66C`).
+pub const MSHOP_GEM_SHORTFALL_NOTICE: &str = "결제할 잼(GEM)이 부족합니다.";
 /// Shop-list pager (`IDC_BUTTON_MSHOP_MSALL_LEFT/RIGHT`): left
 /// steps back, right steps forward (ASSUMED pairing — same named
 /// next step as lanking).
@@ -2068,6 +2146,10 @@ pub enum MusicShopNotice {
     CartFull,
     /// Row buy repeated a song already in the bag (VA `0x6486a4`).
     DuplicateCartItem,
+    /// BUYITEM/GIFTITEM O2CASH shortfall (VA `0x648B38`).
+    InsufficientCash,
+    /// BUYITEM/GIFTITEM gem shortfall (VA `0x64A66C`).
+    InsufficientGem,
 }
 
 impl MusicShopNotice {
@@ -2085,6 +2167,8 @@ impl MusicShopNotice {
             Self::MessengerLoading => MSHOP_MESSENGER_LOADING_NOTICE,
             Self::CartFull => MSHOP_CART_FULL_NOTICE,
             Self::DuplicateCartItem => MSHOP_DUPLICATE_ITEM_NOTICE,
+            Self::InsufficientCash => MSHOP_CASH_SHORTFALL_NOTICE,
+            Self::InsufficientGem => MSHOP_GEM_SHORTFALL_NOTICE,
         }
     }
 
@@ -2275,6 +2359,9 @@ pub enum MusicShopAction {
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
+    /// Cart `GIFTITEM` (`0x1A200073`) runs the shared payment ladder
+    /// with mode 2; no 5010 is queued for the gift arm (#834).
+    CartGift,
     /// Cart-list pager stepped back.
     CartPrev,
     /// Cart-list pager stepped forward.
@@ -2350,6 +2437,7 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_MYALL_RIGHT_CODE => Some(MusicShopAction::MyNext),
         MSHOP_EXIT_CODE => Some(MusicShopAction::BackToLobby),
         MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
+        MSHOP_GIFT_CODE => Some(MusicShopAction::CartGift),
         MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
         MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),
         _ => music_shop_owned_row(code).or_else(|| music_shop_row(code)),
@@ -9434,6 +9522,81 @@ mod side_tests {
         assert_eq!(load_tutorial_backdrop(&archive).unwrap().len(), 1);
         assert!(load_tutorial_backdrop(b"garbage").is_none());
         assert!(load_tutorial_backdrop(&archive_blob(&[])).is_none());
+    }
+
+    #[test]
+    fn music_shop_cash_needs_all_three_wallet_words_to_be_short() {
+        // seam: the exe ladder is a pure comparison of the staged bag
+        // totals with globals 0x768B4C/50/54 and 0x768B44
+        // (ev_26ac6479…); the click guards own the live chain.
+        let totals = MusicShopBagTotals {
+            cash: Some(60),
+            gem: Some(5),
+        };
+        let gate = MusicShopCheckoutGate {
+            web_busy: false,
+            bag_count: 1,
+        };
+        let mut short = WalletState {
+            gem: Some(100),
+            o2_cash: Some(50),
+            music_cash: Some(40),
+            item_cash: Some(200),
+            ..WalletState::default()
+        };
+        assert_eq!(
+            music_shop_checkout_decision(&totals, &short, &gate, CheckoutMode::Buy),
+            MusicShopCheckoutDecision::Notice(MusicShopNotice::InsufficientCash)
+        );
+
+        short.music_cash = Some(300);
+        short.item_cash = Some(300);
+        assert_eq!(
+            music_shop_checkout_decision(&totals, &short, &gate, CheckoutMode::Buy),
+            MusicShopCheckoutDecision::Approved(CheckoutMode::Buy)
+        );
+    }
+
+    #[test]
+    fn an_unstaged_music_bag_price_keeps_the_checkout_unpinned() {
+        // seam: no price source means no exe comparison can be claimed.
+        let totals = MusicShopBagTotals {
+            cash: None,
+            gem: Some(5),
+        };
+        let gate = MusicShopCheckoutGate {
+            web_busy: false,
+            bag_count: 1,
+        };
+        let wallet = WalletState {
+            gem: Some(100),
+            o2_cash: Some(500),
+            ..WalletState::default()
+        };
+        assert_eq!(
+            music_shop_checkout_decision(&totals, &wallet, &gate, CheckoutMode::Buy),
+            MusicShopCheckoutDecision::Unpinned
+        );
+    }
+
+    #[test]
+    fn an_empty_music_bag_makes_the_checkout_silent() {
+        // seam: FUN_0053bbb0's zero count ends both exe arms with no
+        // post and no send (ev_26ac6479…).
+        let totals = MusicShopBagTotals::default();
+        let gate = MusicShopCheckoutGate {
+            web_busy: false,
+            bag_count: 0,
+        };
+        assert_eq!(
+            music_shop_checkout_decision(
+                &totals,
+                &WalletState::default(),
+                &gate,
+                CheckoutMode::Gift
+            ),
+            MusicShopCheckoutDecision::Silent
+        );
     }
 
     #[test]

@@ -8,14 +8,16 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OjnMidParamEntry};
 use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
-    lanking_page_window, lanking_songs, music_shop_rank_header_key, music_shop_rows,
-    shop_page_count, song_installed, sort_lanking_songs, LankingSong, LankingSort, MusicShopAction,
-    MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState, MusicShopNotice, MusicShopPrice,
-    MusicShopRow, OwnedSort, MSHOP_BAG_GEM_CODE, MSHOP_BAG_WON_CODE, MSHOP_BPM_SORT_CODE,
-    MSHOP_BUYITEM_INVOKE_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_CONFERENCE_CODE,
-    MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MESSENGER_CODE,
-    MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE,
-    MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
+    lanking_page_window, lanking_songs, music_shop_checkout_decision, music_shop_rank_header_key,
+    music_shop_rows, shop_page_count, song_installed, sort_lanking_songs, CheckoutMode,
+    LankingSong, LankingSort, MusicShopAction, MusicShopBagTotals, MusicShopCheckoutDecision,
+    MusicShopCheckoutGate, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
+    MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort, WalletState, MSHOP_BAG_GEM_CODE,
+    MSHOP_BAG_WON_CODE, MSHOP_BPM_SORT_CODE, MSHOP_BUYITEM_INVOKE_CODE, MSHOP_CART_BUY_CODE,
+    MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_CASH_FILLUP_CODE, MSHOP_CONFERENCE_CODE,
+    MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GIFT_CODE,
+    MSHOP_MESSENGER_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
+    MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -173,6 +175,14 @@ pub(crate) struct MusicShopState {
     /// Songs completed by that transfer. The worker advances the
     /// visible index at `0x77a868+0x9c` once per finished song.
     pub(crate) music_shop_download_index: usize,
+    /// Payment mode word at state `+0x14D`: BUYITEM writes 1 and
+    /// GIFTITEM writes 2 before the virtual 5015 send (#834). Unlike
+    /// the item shop's `+0x969`, this word lives on the music-shop
+    /// state object.
+    pub(crate) music_shop_payment_mode: Option<CheckoutMode>,
+    /// Web-busy gate from `FUN_00556680(0)`; a busy result ends both
+    /// payment arms before any comparison (#834).
+    pub(crate) music_shop_checkout_gate: MusicShopCheckoutGate,
 }
 
 impl MusicShopState {
@@ -292,6 +302,82 @@ impl MusicShopState {
     pub(crate) fn note_download_completion(&mut self, count: usize) {
         if self.music_shop_download_active {
             self.music_shop_download_index = self.music_shop_download_index.saturating_add(count);
+        }
+    }
+
+    /// Payment mode word written by the last approved BUYITEM/GIFTITEM
+    /// press (state `+0x14D`).
+    pub(crate) fn payment_mode(&self) -> Option<CheckoutMode> {
+        self.music_shop_payment_mode
+    }
+
+    /// Stage the web-busy gate read before the payment comparisons.
+    pub(crate) fn stage_payment_web_busy(&mut self, busy: bool) {
+        self.music_shop_checkout_gate.web_busy = busy;
+    }
+
+    /// Bag totals the exe compares with the three cash globals and the
+    /// gem global. Unstaged prices leave the matching total unknown,
+    /// never a zero the exe did not read.
+    fn bag_totals(&self) -> MusicShopBagTotals {
+        let mut cash = Some(0u32);
+        let mut gem = Some(0u32);
+        for (song_id, code) in &self.music_shop_bag_item_codes {
+            let Some(price) = self.music_shop_prices.get(song_id) else {
+                cash = if *code == MSHOP_BAG_WON_CODE {
+                    None
+                } else {
+                    cash
+                };
+                gem = if *code == MSHOP_BAG_GEM_CODE {
+                    None
+                } else {
+                    gem
+                };
+                continue;
+            };
+            match *code {
+                MSHOP_BAG_WON_CODE => cash = cash.map(|sum| sum.saturating_add(price.won)),
+                MSHOP_BAG_GEM_CODE => gem = gem.map(|sum| sum.saturating_add(price.gem)),
+                _ => {}
+            }
+        }
+        MusicShopBagTotals { cash, gem }
+    }
+
+    /// Control whose staged rect hosts a shortfall notice. The exe
+    /// posts the cash word on CASHFILLUP (`0x1A200009`) and the gem
+    /// word on the pressed control (`ev_26ac6479…`).
+    fn checkout_notice_host(notice: MusicShopNotice, mode: CheckoutMode) -> u32 {
+        match (notice, mode) {
+            (MusicShopNotice::InsufficientCash, _) => MSHOP_CASH_FILLUP_CODE,
+            (MusicShopNotice::InsufficientGem, CheckoutMode::Buy) => MSHOP_CART_BUY_CODE,
+            (MusicShopNotice::InsufficientGem, CheckoutMode::Gift) => MSHOP_GIFT_CODE,
+            // Other notices are posted by other arms, never here.
+            _ => MSHOP_CART_BUY_CODE,
+        }
+    }
+
+    /// Apply the BUYITEM/GIFTITEM ladder and report whether the caller
+    /// must queue the empty 5015. A refused press only posts its
+    /// pinned notice; the mode word is written on approval alone.
+    pub(crate) fn approve_checkout(&mut self, mode: CheckoutMode, wallet: &WalletState) -> bool {
+        let totals = self.bag_totals();
+        let gate = MusicShopCheckoutGate {
+            bag_count: self.bag_count(),
+            ..self.music_shop_checkout_gate
+        };
+        match music_shop_checkout_decision(&totals, wallet, &gate, mode) {
+            MusicShopCheckoutDecision::Approved(approved) => {
+                self.music_shop_payment_mode = Some(approved);
+                true
+            }
+            MusicShopCheckoutDecision::Notice(notice) => {
+                let host = Self::checkout_notice_host(notice, mode);
+                self.post_notice(notice, host);
+                false
+            }
+            MusicShopCheckoutDecision::Silent | MusicShopCheckoutDecision::Unpinned => false,
         }
     }
 
@@ -867,6 +953,7 @@ impl MusicShopState {
                 MusicShopEffect::None
             }
             MusicShopAction::CartBuy => MusicShopEffect::Buy,
+            MusicShopAction::CartGift => MusicShopEffect::None,
             MusicShopAction::CartRemove(slot) => {
                 if let Some(song) = self.visible_cart().get(slot) {
                     let song_id = song.song_id;

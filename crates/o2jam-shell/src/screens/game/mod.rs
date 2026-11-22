@@ -7779,6 +7779,19 @@ impl ScreenGame {
         self.music_shop.buyitem_invoked()
     }
 
+    /// Payment mode word (`+0x14D`) written by the last approved
+    /// music-shop BUYITEM/GIFTITEM press (#834).
+    #[must_use]
+    pub fn music_shop_payment_mode(&self) -> Option<super::side::CheckoutMode> {
+        self.music_shop.payment_mode()
+    }
+
+    /// Stage the web-busy gate read before the music-shop payment
+    /// comparisons (`FUN_00556680(0)`).
+    pub fn stage_music_shop_payment_web_busy(&mut self, busy: bool) {
+        self.music_shop.stage_payment_web_busy(busy);
+    }
+
     /// Entries added through the row-buy arm, not through a row pick.
     #[must_use]
     pub fn music_shop_bag_count(&self) -> usize {
@@ -7892,6 +7905,15 @@ impl ScreenGame {
             }
             return;
         }
+        // Only the cart BUYITEM/GIFTITEM controls run the payment
+        // ladder. A row buy invokes BUYITEM through the exe's vtable,
+        // but our hit-tested cart BUYITEM is `0x5D`; #833 records that
+        // marker without a payment claim.
+        let checkout_mode = match action {
+            MusicShopAction::CartBuy => Some(super::side::CheckoutMode::Buy),
+            MusicShopAction::CartGift => Some(super::side::CheckoutMode::Gift),
+            _ => None,
+        };
         match self.music_shop.apply_action(action) {
             MusicShopEffect::Buy => {
                 self.billing_failure_notice = false;
@@ -7904,6 +7926,18 @@ impl ScreenGame {
             }
             MusicShopEffect::CancelDownloads => self.music_download.clear(),
             MusicShopEffect::None => {}
+        }
+        if let Some(mode) = checkout_mode {
+            self.run_music_shop_checkout(mode);
+        }
+    }
+
+    /// Run the BUYITEM/GIFTITEM ladder and queue its static 5015 send
+    /// when every staged gate passes. The existing 5010 music-buy arm
+    /// and the scripted 5011 answer stay untouched (#834).
+    fn run_music_shop_checkout(&mut self, mode: super::side::CheckoutMode) {
+        if self.music_shop.approve_checkout(mode, &self.wallet) {
+            self.outbox.pending_start_payment = Some(StartPayment);
         }
     }
 
@@ -28052,6 +28086,145 @@ mod game_tests {
         assert_eq!(game.music_shop_bag_count(), 10, "the cap holds");
         assert_eq!(game.music_shop_bag_item_code(767), None);
         assert!(game.take_music_buy().is_none(), "the cap buys nothing");
+    }
+
+    /// Fund the four wallet words the music-shop checkout compares,
+    /// then stage both a gem-priced and a won-priced catalog song.
+    fn open_funded_music_checkout() -> ScreenGame {
+        let mut game = open_music_shop_board(2);
+        game.stage_music_shop_prices(&[
+            o2jam_file::OjnMidParamEntry {
+                song_id: 757,
+                param_a: 100,
+                param_b: 40,
+                anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+            },
+            o2jam_file::OjnMidParamEntry {
+                song_id: 758,
+                param_a: 100,
+                param_b: 0,
+                anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+            },
+        ]);
+        game.wallet = WalletState {
+            gem: Some(500),
+            o2_cash: Some(500),
+            music_cash: Some(500),
+            item_cash: Some(500),
+            ..WalletState::default()
+        };
+        game
+    }
+
+    #[test]
+    fn a_music_shop_buy_press_writes_mode_one_and_queues_the_5015() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_live_art -> visit_side(MusicShop)
+        //   -> GameLoop::mouse_click -> click_music_shop(BuyRow, CartBuy)
+        //   -> MusicShopState::approve_checkout -> PendingOutbox
+        //   -> OnlineSession::poll_wire -> flush_start_payment -> 5015.
+        // Exe FUN_004c7f70 case 0x1A20005D: bag totals vs globals
+        // 0x768B4C/50/54 and 0x768B44, then state +0x14D = 1 and
+        // virtual 0x1397 (ev_26ac6479…). The qualified tap is OPEN.
+        let mut game = open_funded_music_checkout();
+        game.click_music_shop(350, 160);
+        game.click_music_shop(424, 529);
+
+        assert_eq!(
+            game.music_shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Buy)
+        );
+        assert_eq!(game.take_start_payment(), Some(StartPayment));
+        assert_eq!(game.take_start_payment(), None, "one press sends once");
+    }
+
+    #[test]
+    fn a_music_shop_gift_press_writes_mode_two_and_queues_the_5015() {
+        // Same live chain as BUYITEM, with case 0x1A200073: only the
+        // mode word differs (+0x14D = 2). The gift control is staged
+        // at the seam; no per-row gift wire shape is claimed.
+        let mut game = open_funded_music_checkout();
+        game.click_music_shop(350, 160);
+        game.take_music_buy();
+        game.side_placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_MSHOP_CART_GIFTITEM".to_owned(),
+            code: super::super::side::MSHOP_GIFT_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 500,
+                y: 30,
+                w: 40,
+                h: 20,
+            },
+        });
+
+        game.click_music_shop(510, 40);
+
+        assert_eq!(
+            game.music_shop_payment_mode(),
+            Some(super::super::side::CheckoutMode::Gift)
+        );
+        assert_eq!(game.take_start_payment(), Some(StartPayment));
+        assert_eq!(game.take_music_buy(), None, "gift does not queue a 5010");
+    }
+
+    #[test]
+    fn a_music_shop_gem_shortfall_posts_its_notice_and_queues_nothing() {
+        // Same click chain; the gem total (bag +0x18) exceeds global
+        // 0x768B44, so the exe posts VA 0x64A66C before the send.
+        let mut game = open_funded_music_checkout();
+        game.wallet.gem = Some(10);
+        game.click_music_shop(350, 160);
+        game.click_music_shop(424, 529);
+
+        assert_eq!(
+            game.music_shop_notice().map(|(notice, _)| notice),
+            Some(MusicShopNotice::InsufficientGem)
+        );
+        assert_eq!(game.music_shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
+    }
+
+    #[test]
+    fn a_music_shop_cash_shortfall_posts_its_notice_and_queues_nothing() {
+        // Same click chain; the won-priced total (bag +0x14) exceeds
+        // all three cash globals 0x768B4C/50/54, so the exe posts
+        // VA 0x648B38 (hosted on CASHFILLUP 0x1A200009).
+        let mut game = open_funded_music_checkout();
+        game.wallet.o2_cash = Some(5);
+        game.wallet.music_cash = Some(5);
+        game.wallet.item_cash = Some(5);
+        game.click_music_shop(350, 176);
+        game.click_music_shop(424, 529);
+
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((
+                MusicShopNotice::InsufficientCash,
+                super::super::side::MSHOP_CASH_FILLUP_CODE
+            ))
+        );
+        assert_eq!(
+            game.music_shop_notice().unwrap().0.text(),
+            super::super::side::MSHOP_CASH_SHORTFALL_NOTICE
+        );
+        assert_eq!(game.music_shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
+    }
+
+    #[test]
+    fn a_busy_web_gate_makes_the_music_shop_payment_silent() {
+        // Same click chain; a nonzero `FUN_00556680(0)` ends both exe
+        // arms before any comparison, so no notice and no mode write.
+        let mut game = open_funded_music_checkout();
+        game.click_music_shop(350, 160);
+        game.stage_music_shop_payment_web_busy(true);
+        game.click_music_shop(424, 529);
+
+        assert_eq!(game.music_shop_notice(), None);
+        assert_eq!(game.music_shop_payment_mode(), None);
+        assert_eq!(game.take_start_payment(), None);
     }
 
     #[test]
