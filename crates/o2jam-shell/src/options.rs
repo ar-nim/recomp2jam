@@ -84,6 +84,15 @@ pub const OPTION_LANES: usize = 7;
 /// S D F Space J K L.
 pub const DEFAULT_LANE_DIK: [u8; OPTION_LANES] = [0x1F, 0x20, 0x21, 0x39, 0x24, 0x25, 0x26];
 
+/// Separate three-key bind table: the exe constructor `0x438080`
+/// selects 3K and capture `play-02-key-rest` pins 3KEY_1 to L Shift
+/// (DIK `0x2A`). The same capture shows R Shift and Enter in the 3K
+/// set; their slot order (indexes 2 and 3) is an OPEN stand-in until
+/// a per-button capture pins it. Index 1 is the skipped duplicate
+/// caption rect (`0x439780`). This table is in-memory only: the ini
+/// `Key` section holds the seven-key table.
+pub const DEFAULT_THREE_KEY_DIK: [u8; OPTION_LANES] = [0x2A, 0x00, 0x36, 0x1C, 0x00, 0x00, 0x00];
+
 /// Default lane keys resolving [`DEFAULT_LANE_DIK`].
 pub const DEFAULT_LANE_KEYS: [KeyCode; OPTION_LANES] = [
     KeyCode::KeyS,
@@ -477,6 +486,8 @@ pub struct OptionsSettings {
     lane_dik: [u8; OPTION_LANES],
     /// Resolved lane keys answering in the lanes.
     lane_keys: [KeyCode; OPTION_LANES],
+    /// In-memory three-key bind table (see [`DEFAULT_THREE_KEY_DIK`]).
+    three_key_dik: [u8; OPTION_LANES],
     /// `Sound`/`GameBGVolume` (BGMusic slider, ours-by-design map).
     bgm_music: u8,
     /// `Sound`/`BGVolume` (BGEffect slider, ours-by-design map).
@@ -499,8 +510,8 @@ pub struct OptionsSettings {
     /// `Option_Game_EffectHigh/Normal/Low` selection (0/1/2):
     /// in-memory only — no ini key was found, never persisted.
     effect_level: u8,
-    /// 3-key vs 7-key key-mode buttons: selection state only, the
-    /// lane-count behavior stays OPEN.
+    /// 3-key vs 7-key key-mode buttons: exe constructor `0x438080`
+    /// selects 3K on a fresh boot, matching capture `play-02-key-rest`.
     three_key: bool,
     /// Key-test checkbox: selection state only, no behavior yet.
     key_test: bool,
@@ -511,6 +522,7 @@ impl Default for OptionsSettings {
         Self {
             lane_dik: DEFAULT_LANE_DIK,
             lane_keys: DEFAULT_LANE_KEYS,
+            three_key_dik: DEFAULT_THREE_KEY_DIK,
             bgm_music: DEFAULT_SOUND_VOLUME,
             bg_effect: DEFAULT_SOUND_VOLUME,
             game_music: DEFAULT_SOUND_VOLUME,
@@ -521,7 +533,7 @@ impl Default for OptionsSettings {
             note_tail: DEFAULT_NOTE_TAIL,
             longnote_mode: DEFAULT_LONGNOTE_MODE,
             effect_level: 1,
-            three_key: false,
+            three_key: true,
             key_test: false,
         }
     }
@@ -653,6 +665,35 @@ impl OptionsSettings {
     #[must_use]
     pub const fn lane_dik(&self) -> [u8; OPTION_LANES] {
         self.lane_dik
+    }
+
+    /// Raw DIK codes for the active key-count family. The exe's
+    /// repaint readers `0x439000` / `0x439780` use different arrays;
+    /// this keeps both tables behind one selector.
+    #[must_use]
+    pub const fn lane_dik_for_mode(&self, three_key: bool) -> [u8; OPTION_LANES] {
+        if three_key {
+            self.three_key_dik
+        } else {
+            self.lane_dik
+        }
+    }
+
+    /// In-memory three-key DIK table (the exe's mode-specific key
+    /// array read by repaint `0x439780`).
+    #[must_use]
+    pub const fn three_key_dik(&self) -> [u8; OPTION_LANES] {
+        self.three_key_dik
+    }
+
+    /// Write one DIK into the in-memory three-key table. The caller
+    /// owns the exe's arm-advance rule and lane-armability filter.
+    pub fn set_three_key_dik(&mut self, lane: usize, dik: u8) -> bool {
+        let Some(slot) = self.three_key_dik.get_mut(lane) else {
+            return false;
+        };
+        *slot = dik;
+        true
     }
 
     /// Rebind one lane: only keys with a DirectInput code stick, so

@@ -23,9 +23,10 @@ use super::super::side::{
     OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, OPTION_SOUND_KEYSET,
     PLANET_OPTION_FIRST_TAB,
 };
+use super::options_key_mode;
 use super::ui_effect::UiEffectId;
 use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
-use crate::options::OptionsSettings;
+use crate::options::{dik_of_keycode, OptionsSettings};
 use o2jam_render::{Frame, Rgb555Image};
 
 /// What one options click asks the game to do: close the modal and/or
@@ -138,18 +139,31 @@ impl OptionsDialog {
         self.rebind = None;
     }
 
-    /// Bind a mapped key to the armed lane and disarm it.
+    /// Write a mapped key into the active mode's bind table, then
+    /// advance the arm like the exe rebind handlers `0x438e80` /
+    /// `0x4395e0`: the DIK lands at `+0x18a + armed`, and an unmapped
+    /// key or invalid arm leaves both the table and the arm alone.
     pub(super) fn rebind_armed_lane(
         &mut self,
         lane: usize,
         code: winit::keyboard::KeyCode,
     ) -> bool {
-        if self.settings.rebind_lane(lane, code) {
-            self.rebind = None;
-            true
-        } else {
-            false
+        let is_three_key = self.settings.three_key();
+        if self.rebind != Some(lane) || !options_key_mode::is_armable_lane(lane, is_three_key) {
+            return false;
         }
+        let Some(dik) = dik_of_keycode(code) else {
+            return false;
+        };
+        let written = if is_three_key {
+            self.settings.set_three_key_dik(lane, dik)
+        } else {
+            self.settings.rebind_lane(lane, code)
+        };
+        if written {
+            self.rebind = Some(options_key_mode::next_armed_lane(lane, is_three_key));
+        }
+        written
     }
 
     /// Load `option.ini` beside `install_root` at boot and remember
@@ -162,23 +176,53 @@ impl OptionsDialog {
 
     /// Persist the settings beside the remembered install root (the
     /// tab SAVE commit path). Without a root the settings stay in
-    /// memory with a warning — the scene never fails.
+    /// memory with a warning — the scene never fails. Exe validators
+    /// `0x439170` / `0x4394c0` reject zero or duplicate active binds
+    /// before any write; their message text stays OPEN.
     ///
     /// # Errors
     ///
-    /// `io::Error` when the profile write or rename fails.
+    /// `io::Error` when the binds are invalid or the profile write
+    /// or rename fails.
     pub(super) fn save(&self) -> io::Result<()> {
         let Some(root) = self.root.as_ref() else {
             tracing::warn!("options SAVE without an install root; settings stay in memory");
             return Ok(());
         };
+        if !self.active_binds_are_valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "key binds must be nonzero and distinct",
+            ));
+        }
         self.settings.save_to_dir(root)
+    }
+
+    /// Exe SAVE rule: each active bind is nonzero and no two active
+    /// binds match. Inactive 3K index 1 is ignored by `0x4394c0`.
+    fn active_binds_are_valid(&self) -> bool {
+        let is_three_key = self.settings.three_key();
+        let binds = self.settings.lane_dik_for_mode(is_three_key);
+        let active = options_key_mode::active_lane_indexes(is_three_key);
+        active.iter().enumerate().all(|(position, &lane)| {
+            binds[lane] != 0
+                && !active[..position]
+                    .iter()
+                    .any(|&earlier| binds[earlier] == binds[lane])
+        })
     }
 
     /// Staged hit for one options-dialog code on the open tab
     /// (`false` while the tab's sheet is unstaged — unstaged
-    /// dialogs answer no button, Escape still closes them).
+    /// dialogs answer no button, Escape still closes them). The Key
+    /// tab hides the inactive lane family through the same filter
+    /// the painter uses, so hidden buttons cannot be armed.
     fn hit(&self, code: u32, x: i32, y: i32) -> bool {
+        if self.tab == PlanetOptionTab::Key
+            && !options_key_mode::is_visible(code, self.settings.three_key())
+        {
+            return false;
+        }
         self.staged_art()
             .filter(|art| art.has_figures())
             .is_some_and(|art| dialog_rect_hit(&art.placements, code, x, y))
@@ -245,9 +289,9 @@ impl OptionsDialog {
 
     /// Key-tab value buttons: `KEY1..KEY7` arm their lane for
     /// rebind (the next mapped key press sticks), `3KEY_1..4` arm
-    /// lanes 0..3 the same way (the 3-key lane mapping stays
-    /// OPEN), `3KEY`/`7KEY` record the key-count selection, and
-    /// `KEYTEST` flips its checkbox (both selection-only, OPEN).
+    /// the kept 3K lanes (index 1 is skipped at its duplicate rect),
+    /// `3KEY`/`7KEY` select the key-count family, and `KEYTEST`
+    /// flips its checkbox (selection-only, OPEN).
     fn click_key_tab(&mut self, x: i32, y: i32) {
         for lane in 0..7u32 {
             if self.hit(OPTION_KEY_LANE_FIRST + lane, x, y) {
@@ -256,7 +300,9 @@ impl OptionsDialog {
             }
         }
         for lane in 0..4u32 {
-            if self.hit(OPTION_KEY_3KEY_FIRST + lane, x, y) {
+            let armable = usize::try_from(lane)
+                .is_ok_and(|index| options_key_mode::is_armable_lane(index, true));
+            if armable && self.hit(OPTION_KEY_3KEY_FIRST + lane, x, y) {
                 self.rebind = usize::try_from(lane).ok();
                 return;
             }

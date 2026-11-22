@@ -10,6 +10,7 @@ mod musicshop;
 mod myroom;
 mod options;
 mod options_key_labels;
+mod options_key_mode;
 mod planet;
 mod result_records;
 mod room_fuse;
@@ -8367,7 +8368,9 @@ impl ScreenGame {
                             frame,
                             dialog.staged_art(),
                             options_key_labels::KeyCaptions {
-                                lane_dik: dialog.settings().lane_dik(),
+                                lane_dik: dialog
+                                    .settings()
+                                    .lane_dik_for_mode(dialog.settings().three_key()),
                                 three_key: dialog.settings().three_key(),
                                 armed_lane: dialog.rebind_armed(),
                             },
@@ -21957,7 +21960,7 @@ mod game_tests {
         // rewrites), the Sound slider step moving 8 -> the exe's 4,
         // and #590's first-knob GameBGVolume/BGVolume coupling.
         assert_eq!(
-            hash, 0x529D_C34E_9757_FA02,
+            hash, 0xB509_D740_6096_FAE6,
             "options outputs drifted: {observed}"
         );
     }
@@ -21974,10 +21977,13 @@ mod game_tests {
         open_options(&mut game);
         // The gear opens Sound (#359); this guard exercises Key.
         game.switch_option_tab(PlanetOptionTab::Key);
+        // Exe #839: the Key sheet opens in 3K; these are 7K buttons.
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 100, 100);
         assert_eq!(game.option_rebind_armed(), Some(0));
         assert!(game.capture_raw_key(KeyCode::KeyA, true));
-        assert_eq!(game.option_rebind_armed(), None);
+        // Exe 0x438e80 advances the arm instead of clearing it (#839).
+        assert_eq!(game.option_rebind_armed(), Some(1));
         assert_eq!(game.options().lane_keys()[0], KeyCode::KeyA);
         assert_eq!(
             game.lane_bindings().map(|binds| binds[0]),
@@ -22020,6 +22026,7 @@ mod game_tests {
         stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         for (lane, code) in binds.iter().enumerate() {
             let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
             click_button(&mut game, x, 100);
@@ -22040,22 +22047,23 @@ mod game_tests {
     }
 
     #[test]
-    fn three_key_lane_buttons_arm_lanes_zero_through_three() {
+    fn three_key_lane_buttons_arm_the_kept_family_lanes() {
         // Live chain: main.rs::run_online -> run_windowed_session ->
         // window::InputHandler::route_key -> GameLoop::capture_raw_key
         // -> ScreenGame::options_dialog.rebind_armed_lane ->
-        // OptionsSettings::rebind_lane. `3KEY_1..4` sits at the four
-        // staged rects next to `KEY1..7` on the exe Key sheet; each
-        // click arms the lane with the same rebind capture. Which four
-        // playable lanes the 3-key mode uses stays OPEN (no exe pin).
+        // OptionsSettings::set_three_key_dik. Exe 0x4395e0 skips
+        // 3K index 1 (the duplicate staged rect) and advances the arm.
         use super::super::side::OPTION_KEY_3KEY_FIRST;
         use winit::keyboard::KeyCode;
-        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC, KeyCode::KeyV];
-        let buttons: Vec<(u32, i32, i32)> = (0..4u32)
+        let lanes = [0u32, 2, 3];
+        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC];
+        let expected_dik = [0x2Cu8, 0x2D, 0x2E];
+        let buttons: Vec<(u32, i32, i32)> = lanes
+            .iter()
             .map(|lane| {
                 (
                     OPTION_KEY_3KEY_FIRST + lane,
-                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100 + 40 * i32::try_from(*lane).unwrap_or(0),
                     100,
                 )
             })
@@ -22064,21 +22072,29 @@ mod game_tests {
         stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
-        for (lane, code) in binds.iter().enumerate() {
+        for (slot, (&lane, code)) in lanes.iter().zip(binds.iter()).enumerate() {
             let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
             click_button(&mut game, x, 100);
             assert_eq!(
                 game.option_rebind_armed(),
-                Some(lane),
-                "3KEY{} arms lane {lane}",
-                lane + 1
+                usize::try_from(lane).ok(),
+                "3K lane {lane} arms from its staged button"
             );
             assert!(game.capture_raw_key(*code, true));
+            let next = [2usize, 3, 0][slot];
+            assert_eq!(game.option_rebind_armed(), Some(next), "arm advances");
+        }
+        let three_key_dik = game.options().three_key_dik();
+        for (lane, dik) in lanes.iter().zip(expected_dik) {
+            assert_eq!(
+                three_key_dik[*lane as usize], dik,
+                "the 3K table holds the rebound DIK for lane {lane}"
+            );
         }
         assert_eq!(
-            game.options().lane_keys()[..4],
-            binds,
-            "the first four lanes answer the 3KEY binds"
+            game.options().lane_dik()[0],
+            0x1F,
+            "3K rebinds never overwrite the seven-key table"
         );
     }
 
@@ -22093,6 +22109,7 @@ mod game_tests {
         );
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 140, 100);
         assert_eq!(game.option_rebind_armed(), Some(1));
         assert!(
@@ -22491,6 +22508,48 @@ mod game_tests {
     }
 
     #[test]
+    fn key_tab_save_rejects_zero_or_duplicate_binds_before_writing() {
+        // Live caller chain: pointer -> ScreenGame::ingest_snapshot ->
+        // OptionsDialog::click -> OptionsDialog::save -> save_to_dir.
+        // Exe validators 0x439170 / 0x4394c0 require nonzero,
+        // distinct active binds (3K skips index 1). Message text OPEN.
+        let root = std::env::temp_dir().join(format!(
+            "recomp2jam-options-validation-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_options(&root);
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(PlanetOptionTab::Key.save_code(), 100, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        let profile = root.join("option.ini");
+
+        game.options_mut().set_three_key_dik(0, 0x36);
+        click_button(&mut game, 100, 100);
+        assert!(!profile.exists(), "a duplicate 3K bind blocks SAVE");
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::Options),
+            "a rejected SAVE leaves the dialog open"
+        );
+
+        game.options_mut().set_three_key_dik(0, 0x2A);
+        game.options_mut().set_three_key_dik(2, 0);
+        click_button(&mut game, 100, 100);
+        assert!(!profile.exists(), "a zero 3K bind blocks SAVE");
+
+        game.options_mut().set_three_key_dik(2, 0x36);
+        click_button(&mut game, 100, 100);
+        assert!(profile.exists(), "distinct nonzero binds still commit");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn options_save_commits_beside_the_install_root() {
         let root = std::env::temp_dir().join(format!("recomp2jam-options-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -22508,6 +22567,7 @@ mod game_tests {
         );
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 100, 100);
         assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyA, true));
         game.switch_option_tab(PlanetOptionTab::Sound);
@@ -22518,7 +22578,13 @@ mod game_tests {
             "rebound A persists as its DirectInput code: {text}"
         );
         let reloaded = crate::options::OptionsSettings::load_from_dir(&root);
-        assert_eq!(reloaded, *game.options(), "a restart keeps them");
+        // The key-count selection is in-memory only (#839); compare
+        // the profile fields that SAVE actually commits.
+        assert_eq!(
+            reloaded.to_ini_text(),
+            game.options().to_ini_text(),
+            "a restart keeps the persisted fields"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -34115,6 +34181,7 @@ mod game_tests {
         stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         // Paint parity (guards #132): the KEY3 lane button's art must
         // paint at its staged rect, so visible art and the hit rect
         // coincide. Isolate the dialog paint (no board backdrop) so
