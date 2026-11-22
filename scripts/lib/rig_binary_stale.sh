@@ -190,8 +190,13 @@ selftest_failed_stat_probe_fails_loudly() {
 stale_selftest_fixture_launcher() {
   local repo_root="$1"
   mkdir -p "$repo_root/scripts/lib"
+  local lib_file
   cp "$RIG_BINARY_STALE_SCRIPTS_DIR/play-local.sh" "$repo_root/scripts/play-local.sh"
-  cp "$RIG_BINARY_STALE_SCRIPTS_DIR"/lib/* "$repo_root/scripts/lib/"
+  for lib_file in "$RIG_BINARY_STALE_SCRIPTS_DIR"/lib/*; do
+    if [ -f "$lib_file" ]; then
+      cp "$lib_file" "$repo_root/scripts/lib/"
+    fi
+  done
   cat >> "$repo_root/scripts/lib/play-local-seams.sh" <<'STUBS'
 
 rig_check_install_root() { return 0; }
@@ -214,6 +219,31 @@ selftest_play_local_refuses_stale_binary_from_launcher() {
   echo "rig-binary-stale: PASS play-local-refuses-stale-binary-from-launcher"
 }
 
+selftest_fixture_copy_ignores_lib_subdirectories() {
+  local source_scripts fixture_root saved_scripts_dir
+  source_scripts="$(mktemp -d)"
+  RIG_BINARY_STALE_SELFTEST_DIRS+=("$source_scripts")
+  fixture_root="$(mktemp -d)"
+  RIG_BINARY_STALE_SELFTEST_DIRS+=("$fixture_root")
+  mkdir -p "$source_scripts/lib/__pycache__"
+  printf '#!/bin/sh\nexit 0\n' > "$source_scripts/play-local.sh"
+  printf '# stub\n' > "$source_scripts/lib/play-local-seams.sh"
+
+  saved_scripts_dir="$RIG_BINARY_STALE_SCRIPTS_DIR"
+  RIG_BINARY_STALE_SCRIPTS_DIR="$source_scripts"
+  if ! stale_selftest_fixture_launcher "$fixture_root"; then
+    RIG_BINARY_STALE_SCRIPTS_DIR="$saved_scripts_dir"
+    echo 'rig-binary-stale: FAIL fixture-copy-with-lib-subdirectory' >&2
+    return 1
+  fi
+  RIG_BINARY_STALE_SCRIPTS_DIR="$saved_scripts_dir"
+  [ -f "$fixture_root/scripts/lib/play-local-seams.sh" ] || {
+    echo 'rig-binary-stale: FAIL fixture-copy-missing-lib' >&2
+    return 1
+  }
+  echo 'rig-binary-stale: PASS fixture-copy-ignores-lib-subdirectories'
+}
+
 selftest_play_local_accepts_tests_only_binary_from_launcher() {
   local repo_root result status output
   repo_root="$(stale_selftest_repo tests-only)"
@@ -234,6 +264,7 @@ main() {
       selftest_crate_commit_marks_binary_stale
       selftest_failed_git_probe_fails_loudly
       selftest_failed_stat_probe_fails_loudly
+      selftest_fixture_copy_ignores_lib_subdirectories
       selftest_play_local_refuses_stale_binary_from_launcher
       selftest_play_local_accepts_tests_only_binary_from_launcher
       echo "rig-binary-stale: selftest OK" ;;
