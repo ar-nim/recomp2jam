@@ -295,30 +295,37 @@ RED proof: removing the mirror's promotion loop leaves the seat clear
 but fails on the promoted member's master flag; restoring passes.
 Synthetic gateway; hidden install-root is N/A.
 
-## #559 DOWNLOAD badges — guardable arm landed, A/B still BLOCKED (2026-11-21)
+## #559 DOWNLOAD badges — 4035 arm after #838, A/B still BLOCKED (2026-11-22)
 
 Wire pins in `docs/music-availability.md` §2 and the #291 DOWNLOAD
 cell: matched-ab-339 `4037 0004` proof `0580bc8d…`, p343 proof
-`20fbe170…`, plus 4026/4037/3009 and 4039. The staged seat badge and
-bar are guarded by `downloading_state_and_progress_from_the_gateway_stage_the_seat`
-and `start_stays_closed_while_a_peer_reports_downloading` (commit
-`16c2b9a`). The remaining guardable readouts are now pinned by
-`ready_state_clears_the_seats_download_progress_and_opens_start`: 4039
-progress must clear when the same seat's 4037 reports Ready, so the
-badge mirror and the START verdict do not disagree. RED proof: removing
-the clear in `ScreenGame::set_member_music_state` leaves the stale 42 %
-on the ready seat and the guard fails; restoring passes.
+`20fbe170…`, plus 4026/4037/3009 and 4039. The c958cc2 paint arm
+(4037 state + 4039 progress) is REFUTED by boot-wave3: exe member frames
+stay badge-free at 42 %/100 %, while the #773 proxy frame for S2C
+`4035 0200000104` paints the local seat. Statics: the 4035 case in each
+Waiting dispatcher (normal `0x4b1d42`, live `0x4aba51`; REA
+`ev_18a485d7…` / `ev_0593bf27…`) calls the seat refresh and, for the local
+member, `StartMusicDownload`; the 4037 case only refreshes/retries.
+
+Guards: `acquire_music_4035_arms_only_the_local_badge_from_the_gateway`,
+`ready_4035_clears_the_local_badge_from_the_gateway` and
+`acquire_music_4035_paints_the_local_seat_badge_and_bar` pin the arm;
+`music_state_4037_and_progress_4039_leave_the_local_badge_unarmed_from_the_gateway`
+and `music_state_4037_and_progress_4039_leave_the_seat_chrome_dark` pin
+the negative. Live chain: session frame ingest -> `poll_waiting_chat` ->
+`drain_waiting_chat` -> `apply_acquire_music` -> `answer_acquire_music`
+-> `ScreenGame::arm_local_download_badge` -> `paint_at` ->
+`paint_waiting_scene_with_confirm` -> `staged_seats` ->
+`paint_waiting_seat_marks`. The 4039 readout guard
+`ready_state_clears_the_seats_download_progress_and_opens_start` still
+pins 4037 Ready clearing the wire percentage, not the paint arm.
 
 BLOCKED: the player-visible A/B claim still needs one qualified
-two-client capture — exe 7.55 (sha256 `83a04541…72c823b`) and Rust
-frames of the *same* Waiting room with the *same* 07E8 badge slice lit
-by a 4037 `0004` on the same peer seat, before either client's START
-verdict, with the matched `~/scratch/p559-badge-ab/{exe,rust}/`
-manifest plus a gateway tap showing 4037/4039. The existing matched
-packs (`0580bc8d…`, `20fbe170…`) pin the wire and the badge art, but
-do not carry equal 07E8 slices in a verdict window. Until that pair
-exists, no pixel-equality claim is made and the #291 story row stays
-unchecked.
+two-client capture with exe 7.55 (sha256 `83a04541…72c823b`) and Rust
+frames of the *same* Waiting room on the 4035 arm, before either
+client's START verdict, with a gateway tap showing 4035/4037/4039.
+Until that pair exists, no pixel-equality claim is made and the #291
+story row stays unchecked.
 
 
 ## #291 enrichment — key-mode auto-pick (#757)

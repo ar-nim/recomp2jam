@@ -712,9 +712,13 @@ pub struct ScreenGame {
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
     /// `4039` download percentage per waiting seat (`None` until the
-    /// server reports one). Its presence arms the seat's badge and bar
-    /// (#559 refutation); the bar's fill mapping still stays OPEN.
+    /// server reports one). Wire state only after #838: the exe's
+    /// member-progress frames never paint the seat badge or bar.
     member_download_progress: [Option<u8>; 8],
+    /// S2C `4035` local-seat paint arm (#838). The qualified #773 frame
+    /// paints the local badge and bar when the named member has a
+    /// non-Ready download state; `4037`/`4039` never touch this flag.
+    local_download_badge_armed: bool,
     /// One-based channel number for the waiting `CHNUM` digit wells
     /// (`1003 channel_id + 1`), staged on resident channel login.
     waiting_channel_number: Option<u16>,
@@ -1278,6 +1282,7 @@ impl ScreenGame {
             relay_down_pending_channels: Vec::new(),
             relay_down_notice_pending: false,
             member_download_progress: [None; 8],
+            local_download_badge_armed: false,
             catalog_songs: Vec::new(),
             catalog_bpm: Vec::new(),
             catalog_chart_files: HashMap::new(),
@@ -2345,6 +2350,7 @@ impl ScreenGame {
         }
         self.waiting = Some(room);
         self.announced_room_master_id = None;
+        self.local_download_badge_armed = false;
         self.chat.clear_waiting();
         // A new room means new seats: drop the old per-seat figures,
         // then peers wear their wire equipment as soon as the snapshot
@@ -2477,6 +2483,27 @@ impl ScreenGame {
             .get(usize::from(member_id))
             .copied()
             .flatten()
+    }
+
+    /// Arm the local seat's download badge and bar from S2C `4035`.
+    /// The p773 proxy frame `4035 0200000104` shows this arm on the
+    /// member whose seat the event names, and only on that seat.
+    pub fn arm_local_download_badge(&mut self) -> &mut Self {
+        self.local_download_badge_armed = true;
+        self
+    }
+
+    /// Clear the local `4035` arm when a later `4035` names the local
+    /// member Ready. `4037`/`4039` never call either method (#838).
+    pub fn clear_local_download_badge(&mut self) -> &mut Self {
+        self.local_download_badge_armed = false;
+        self
+    }
+
+    /// Whether the local seat's `4035` download badge stands.
+    #[must_use]
+    pub fn local_download_badge_armed(&self) -> bool {
+        self.local_download_badge_armed
     }
 
     /// Staged music state of one occupied waiting seat (`None` without
@@ -8543,7 +8570,7 @@ impl ScreenGame {
             chat_channel: self.waiting_chat_channel(),
             messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
             wait_stamp_lit: self.waiting_stamp_lit_at(now_ms),
-            member_download_progress: self.member_download_progress,
+            local_download_badge_armed: self.local_download_badge_armed,
             local_name: self
                 .myroom_character
                 .as_ref()
@@ -13564,46 +13591,48 @@ mod game_tests {
     }
 
     #[test]
-    fn download_badge_stays_dark_on_4037_state_without_4039_progress() {
-        // Live chain: `OnlineSession::apply_member_music_state` (the
-        // 4037 `0004` arm in p559-badge-ab4) -> `ScreenGame` seat mirror
-        // -> `paint_at` -> `paint_waiting` ->
-        // `paint_waiting_scene_with_confirm` -> `staged_seats` ->
-        // `paint_waiting_seat_marks`. The exe seat stays badge-free on
-        // that arm; no 4039 frame was sent in the matched capture.
-        let mut game = waiting_download_badge_game();
-        game.set_member_music_state(1, o2jam_net::MusicState::Downloading.code());
-
-        let frame = paint_waiting_frame(&mut game, 800, 600);
-
-        assert_eq!(frame[127 * 800 + 190], 0, "4037 alone paints no badge");
-        assert_eq!(frame[163 * 800 + 208], 0, "4037 alone paints no bar");
-    }
-
-    #[test]
-    fn download_badge_lights_when_4039_progress_follows_4037_state() {
-        // Same live chain as the refutation guard, now with the second
-        // wire arm: `OnlineSession::apply_download_progress` (4039) ->
-        // `ScreenGame::set_member_download_progress` -> `paint_at` ->
-        // `paint_waiting_scene_with_confirm` -> the two seat bodies.
+    fn music_state_4037_and_progress_4039_leave_the_seat_chrome_dark() {
+        // Live chain: session frame ingest -> `OnlineSession::apply_member_music_state`
+        // (4037) / `apply_download_progress` (4039) -> `ScreenGame` seat
+        // mirror -> `paint_at` -> `paint_waiting_scene_with_confirm` ->
+        // `staged_seats` -> `paint_waiting_seat_marks`. The boot-wave3
+        // exe member-progress frames stay badge-free at 42 % and 100 %.
         let mut game = waiting_download_badge_game();
         game.set_member_music_state(1, o2jam_net::MusicState::Downloading.code());
         game.set_member_download_progress(1, 42);
 
         let frame = paint_waiting_frame(&mut game, 800, 600);
 
+        assert_eq!(frame[127 * 800 + 190], 0, "4037 paints no badge");
+        assert_eq!(frame[163 * 800 + 208], 0, "4039 paints no bar");
+        assert_eq!(frame[127 * 800 + 48], 0, "local badge stays dark");
+        assert_eq!(frame[163 * 800 + 66], 0, "local bar stays dark");
+    }
+
+    #[test]
+    fn acquire_music_4035_paints_the_local_seat_badge_and_bar() {
+        // Live chain: session frame ingest -> `OnlineSession::apply_acquire_music`
+        // -> `answer_acquire_music` -> `ScreenGame::arm_local_download_badge`
+        // -> `paint_at` -> `paint_waiting_scene_with_confirm` -> `staged_seats`
+        // -> `paint_waiting_seat_marks`. The p773 proxy frame
+        // `4035 0200000104` paints the local seat only.
+        let mut game = waiting_download_badge_game();
+        game.arm_local_download_badge();
+
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+
         assert_eq!(
-            frame[127 * 800 + 190],
+            frame[127 * 800 + 48],
             pack_xrgb(0xFF, 0, 0),
-            "4039 arms the peer badge"
+            "4035 arms the local badge"
         );
         assert_eq!(
-            frame[163 * 800 + 208],
+            frame[163 * 800 + 66],
             pack_xrgb(0, 0xFF, 0),
-            "4039 arms the peer bar"
+            "4035 arms the local bar"
         );
-        assert_eq!(frame[127 * 800 + 48], 0, "own seat stays badge-free");
-        assert_eq!(frame[163 * 800 + 66], 0, "own seat stays bar-free");
+        assert_eq!(frame[127 * 800 + 190], 0, "peer badge stays dark");
+        assert_eq!(frame[163 * 800 + 208], 0, "peer bar stays dark");
     }
 
     fn waiting_ambient_game(member_id: u8, peer_playing: bool) -> ScreenGame {
