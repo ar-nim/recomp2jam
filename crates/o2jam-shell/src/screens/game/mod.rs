@@ -108,9 +108,10 @@ use super::side::{
     ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
     CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE,
     O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
+    ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
+    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -131,7 +132,7 @@ use o2jam_net::rooms::{
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    ChangeName, EquipItem, RefreshBag, SellItem, SyncItemPurchase, SyncMusicPurchase,
+    ChangeName, EnterShop, EquipItem, RefreshBag, SellItem, SyncItemPurchase, SyncMusicPurchase,
     SyncMusicPurchaseResponse,
 };
 use o2jam_net::wallet::{StartPayment, SyncCashPointResponse};
@@ -190,7 +191,7 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 /// memory without limit (PERF-07: `usize`, never `as`).
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
 
-use RoomControlAction::{Back, Create, Options, RoomFilter, Side, TutorialEntry};
+use RoomControlAction::{Back, Create, EnterShopSide, Options, RoomFilter, Side, TutorialEntry};
 
 /// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +204,11 @@ enum RoomControlAction {
     Options,
     /// Visit the side screen the control already names.
     Side(SideScreen),
+    /// Enter one of the Room shop-family sides. The exe's entry
+    /// dispatch posts empty `EnterShop` 5006 alongside the scene change
+    /// (journey 5/7 wire taps); the queue is owned by this arm so a
+    /// side opened from another scene invents no wire.
+    EnterShopSide(SideScreen),
     /// Enter tutorial through the exe-pinned FIRSTSTEP helper: the
     /// side state plus the chart globals `0x495110` writes first.
     TutorialEntry,
@@ -313,10 +319,26 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     // docs/captures/static-play/pins.md): chart globals plus the
     // `CStateTutorial` side state. The Planet plate is dead in the
     // exe and stays OPEN under `PLANET_TUTORIAL_PLATE_NEXT_STEP`.
-    routed(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", Side(SideScreen::Shop)),
-    routed(0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", Side(SideScreen::MyRoom)),
-    routed(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", TutorialEntry),
-    routed(0x1320_0037, "IDC_BUTTON_SROOM_MUSICSHOP", Side(SideScreen::MusicShop)),
+    routed(
+        ROOM_ITEMSHOP_BUTTON_CODE,
+        "IDC_BUTTON_SROOM_ITEMSHOP",
+        EnterShopSide(SideScreen::Shop),
+    ),
+    routed(
+        ROOM_MYROOM_BUTTON_CODE,
+        "IDC_BUTTON_SROOM_MYROOM",
+        EnterShopSide(SideScreen::MyRoom),
+    ),
+    routed(
+        ROOM_FIRSTSTEP_BUTTON_CODE,
+        "IDC_BUTTON_SROOM_FIRSTSTEP",
+        TutorialEntry,
+    ),
+    routed(
+        ROOM_MUSICSHOP_BUTTON_CODE,
+        "IDC_BUTTON_SROOM_MUSICSHOP",
+        EnterShopSide(SideScreen::MusicShop),
+    ),
     // `MYBAND` opens the ranking board: the band standings board the tree
     // ships is `SideScreen::Lanking` (the room has no band view). The
     // exe hides the button on room setup, so `room_control_at` holds
@@ -4133,6 +4155,14 @@ impl ScreenGame {
             RoomControlAction::Side(side) => {
                 self.visit_side(side);
             }
+            // Room shop-family entry: the side visit is local, the
+            // entry packet is not. Queue 5006 only when the visit was
+            // accepted, so an occupied side never invents a wire frame.
+            RoomControlAction::EnterShopSide(side) => {
+                if self.visit_side(side) {
+                    self.outbox.pending_enter_shop = Some(EnterShop);
+                }
+            }
             // Room control `0x13200032` follows the exe chain
             // `0x4902bb` → `0x495110` → `ChangeState(0xb)`: set the
             // pinned tutorial globals before entering the side state,
@@ -7415,6 +7445,12 @@ impl ScreenGame {
     /// session sends the empty body once and clears the queue.
     pub fn take_exit_shop(&mut self) -> Option<o2jam_net::shop::ExitShop> {
         self.outbox.take_exit_shop()
+    }
+
+    /// Queued shop entry for the session bridge, if any (5006). The
+    /// Room top-tab dispatch queues it and the bridge sends it once.
+    pub fn take_enter_shop(&mut self) -> Option<EnterShop> {
+        self.outbox.take_enter_shop()
     }
 
     /// Queued BAGSORT refresh for the session bridge, if any (5038).
