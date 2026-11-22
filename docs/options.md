@@ -26,12 +26,18 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
 
 ## What the dialog does
 
-- Key tab: `KEY1..KEY7` clicks arm the lane; the next mapped key
-  press sticks (only keys with a DirectInput code — unmapped keys
-  are refused so every persisted `KEY_n` stays exe-readable).
-  `3KEY_1..4` arm lanes 0..3 the same way (the 3-key lane mapping
-  stays OPEN). `3KEY`/`7KEY` and `KEYTEST` record selection state
-  only (behavior OPEN).
+- Key tab: the dialog opens in **3K** (exe constructor `0x438080`;
+  capture `play-02-key-rest`). `3KEY`/`7KEY` switch the staged-code
+  family shown and clickable: selector, board panel, and lane
+  captions (`0x4383d0`). Lanes arm from staged rects; a successful
+  mapped key press writes the active mode's bind table and advances
+  the arm (7K wraps over seven lanes, 3K over indexes 0, 2, 3;
+  `0x438e80` / `0x4395e0`). 3K index 1 shares a staged rect with
+  index 2 and is skipped by repaint `0x439780`. Unmapped keys are
+  refused, and SAVE rejects zero or duplicate active binds before
+  writing (`0x439170` / `0x4394c0`). OPEN: the 3K default slot order
+  for R Shift / Enter, exact panel animation frames, SAVE message
+  text, and whether the key-count selection persists.
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
   `BGVolume` / `NoteBGVolume` / `NoteKeyVolume` by the exe-pinned 4
   inside 0–255. The first knob moves `GameBGVolume` and `BGVolume`
