@@ -1,0 +1,11 @@
+{
+  "direction": "S2C",
+  "opcode": 1003,
+  "action": "rotate_u16_rows",
+  "count_at": 0,
+  "row_at": 4,
+  "stride": 13,
+  "field_at": 2,
+  "shift": 5,
+  "evidence": "~/scratch/digits-rig/proxy.py: each ChannelList row's wire channel_id rotates by +5 mod row count; other bytes pass unchanged"
+}
