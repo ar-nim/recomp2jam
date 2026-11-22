@@ -7,7 +7,9 @@ use super::super::side::{
     CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood,
     ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
     TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
+    SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LUCKYBAG_CATEGORY_CODE,
+    SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE,
+    SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
     SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
@@ -146,6 +148,13 @@ pub(crate) struct ShopState {
     messenger_state: ShopMessengerState,
     /// Notice posted by the last MESSENGER press.
     messenger_notice: Option<ShopMessengerNotice>,
+    /// Submenu control forced by LUCKYBAG (`0x14208015`).
+    selected_submenu: Option<u32>,
+    /// Object byte `+0x16` written by LUCKYBAG. It is not the
+    /// GIRL/BOY gender byte `+0x18`.
+    lucky_gender_byte: Option<u8>,
+    /// Object flag `+0x8d5` set by SHOPMASTER.
+    shopmaster_flag: bool,
     /// Staged confirmation-pair result for the vacate ladder.
     vacate_confirmed: bool,
     /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
@@ -484,6 +493,21 @@ impl ShopState {
         self.messenger_notice
     }
 
+    /// Submenu control forced by the last LUCKYBAG press.
+    pub(crate) fn selected_submenu(&self) -> Option<u32> {
+        self.selected_submenu
+    }
+
+    /// Object byte `+0x16` written by LUCKYBAG.
+    pub(crate) fn lucky_gender_byte(&self) -> Option<u8> {
+        self.lucky_gender_byte
+    }
+
+    /// Object flag `+0x8d5` staged by SHOPMASTER.
+    pub(crate) fn shopmaster_flag(&self) -> bool {
+        self.shopmaster_flag
+    }
+
     /// Stage the confirmation-pair result for the vacate ladder.
     pub(crate) fn stage_vacate_confirmed(&mut self, confirmed: bool) {
         self.vacate_confirmed = confirmed;
@@ -680,6 +704,31 @@ impl ShopState {
             ShopAction::Conference => {
                 // Static arm `0x142000b6`: type `0x14`, no text.
                 self.chrome_notice = Some(ShopChromeNotice::Conference);
+                false
+            }
+            ShopAction::LuckyBag => {
+                // Static arm `0x14600086` (`ev_f3ad15be…`): hide the
+                // nonempty 12x3 cells, force planet 12, byte `+0x16`,
+                // the SET tab and submenu `0x14208015`, ink the planet
+                // caption when armed, then reseed twice and reset the
+                // three layout words.
+                self.planet_hidden_cells = self.planet_grid_nonzero;
+                self.planet_grid_nonzero = 0;
+                self.planet_index = SHOP_LUCKYBAG_PLANET_INDEX;
+                self.lucky_gender_byte = Some(SHOP_LUCKYBAG_GENDER_BYTE);
+                self.shop_category = SHOP_LUCKYBAG_CATEGORY_CODE
+                    .checked_sub(SHOP_CATEGORY_FIRST_CODE)
+                    .and_then(|slot| usize::try_from(slot).ok());
+                self.selected_submenu = Some(SHOP_LUCKYBAG_SUBMENU_CODE);
+                self.planet_caption_arg = self.planet_caption_armed.then_some(self.planet_index);
+                self.lucky_view = true;
+                self.planet_reseeds = self.planet_reseeds.saturating_add(2);
+                self.planet_layout_flags = SHOP_PLANET_LAYOUT_FLAGS;
+                false
+            }
+            ShopAction::ShopMaster => {
+                // Static arm `0x14600053`: only the `+0x8d5` flag.
+                self.shopmaster_flag = true;
                 false
             }
             ShopAction::OpenMessenger => {

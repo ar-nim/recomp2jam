@@ -900,6 +900,18 @@ pub const fn shop_next_planet_index(current: u8, action: ShopAction) -> u8 {
         _ => current,
     }
 }
+/// LUCKYBAG (`0x14600086`): the static arm (`ev_f3ad15be…`,
+/// file `0x99760`) forces planet `0xc`, object byte `+0x16` to 0,
+/// the SET tab and submenu `0x14208015`, hides the nonempty planet
+/// cells and reseeds the layout. Caption text stays OPEN.
+pub const SHOP_LUCKYBAG_CODE: u32 = 0x1460_0086;
+pub const SHOP_LUCKYBAG_PLANET_INDEX: u8 = 0xc;
+pub const SHOP_LUCKYBAG_GENDER_BYTE: u8 = 0;
+pub const SHOP_LUCKYBAG_CATEGORY_CODE: u32 = 0x1420_100A;
+pub const SHOP_LUCKYBAG_SUBMENU_CODE: u32 = 0x1420_8015;
+/// SHOPMASTER (`0x14600053`): the static arm sets object flag
+/// `+0x8d5`; its caption source stays OPEN.
+pub const SHOP_SHOPMASTER_CODE: u32 = 0x1460_0053;
 /// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
 /// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
 /// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
@@ -1376,6 +1388,10 @@ pub enum ShopAction {
     /// MESSENGER (`0x142000b8`): advance the two alarm lamps and
     /// post the notice selected by global `0x7684d8`. No wire here.
     OpenMessenger,
+    /// LUCKYBAG (`0x14600086`): force the lucky planet, tab and submenu.
+    LuckyBag,
+    /// SHOPMASTER (`0x14600053`): set object flag `+0x8d5`.
+    ShopMaster,
     /// Owned bag cell (`0x1460003d..46`): select the paged index
     /// and post the category notice.
     SelectBagItem(usize),
@@ -1486,6 +1502,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
         SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
         SHOP_MESSENGER_CODE => Some(ShopAction::OpenMessenger),
+        SHOP_LUCKYBAG_CODE => Some(ShopAction::LuckyBag),
+        SHOP_SHOPMASTER_CODE => Some(ShopAction::ShopMaster),
         SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
         SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),

@@ -6833,6 +6833,24 @@ impl ScreenGame {
         self.shop.stage_messenger_state(state);
     }
 
+    /// Submenu control forced by the last LUCKYBAG press.
+    #[must_use]
+    pub fn shop_selected_submenu(&self) -> Option<u32> {
+        self.shop.selected_submenu()
+    }
+
+    /// Object byte `+0x16` staged by LUCKYBAG.
+    #[must_use]
+    pub fn shop_lucky_gender_byte(&self) -> Option<u8> {
+        self.shop.lucky_gender_byte()
+    }
+
+    /// Object flag `+0x8d5` staged by SHOPMASTER.
+    #[must_use]
+    pub fn shop_master_flag(&self) -> bool {
+        self.shop.shopmaster_flag()
+    }
+
     /// Alarm-lamp rects from the staged shop board (no invented art).
     #[must_use]
     pub fn shop_messenger_lamp_rects(&self) -> Vec<Rect> {
@@ -25780,6 +25798,57 @@ mod game_tests {
                 .and_then(|n| n.notice_control()),
             Some(SHOP_MESSENGER_NOTICE_CONTROL)
         );
+    }
+
+    #[test]
+    fn shop_luckybag_and_shopmaster_stage_their_view_flags_between_bag_faces() {
+        use super::super::side::{
+            SHOP_LUCKYBAG_CODE, SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE,
+            SHOP_PLANET_LAYOUT_FLAGS, SHOP_SHOPMASTER_CODE,
+        };
+        // Live caller chain (once these controls stage):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(LUCKYBAG 0x14600086 / SHOPMASTER 0x14600053 /
+        //   MYCART_POS 0x1460006e / MYBACK_POS 0x1460006d) ->
+        //   ShopState::apply_action.
+        // Static pin `ev_f3ad15be…`: LUCKYBAG sets planet `0xc`, byte
+        // `+0x16` to 0, the SET tab and submenu `0x14208015`, hides the
+        // nonempty 12x3 cells, inks the planet caption, then reseeds
+        // twice and resets the three layout words. SHOPMASTER sets
+        // `+0x8d5`. The bag faces clear/set `+0x8cd`; #722 frame
+        // `c84b952f…` pins the row-pick switch. OPEN: qualified
+        // LUCKYBAG/SHOPMASTER frames and their caption text sources.
+        let mut game = shop_chrome_board();
+        stage_shop_control(&mut game, SHOP_LUCKYBAG_CODE, 700);
+        stage_shop_control(&mut game, SHOP_SHOPMASTER_CODE, 740);
+        game.stage_shop_planet_grid(5);
+        game.stage_shop_planet_caption(true);
+
+        game.click_shop(710, 40);
+
+        assert_eq!(game.shop_planet_index(), SHOP_LUCKYBAG_PLANET_INDEX);
+        assert_eq!(game.shop_category(), Some(0), "SET tab");
+        assert_eq!(
+            game.shop_selected_submenu(),
+            Some(SHOP_LUCKYBAG_SUBMENU_CODE)
+        );
+        assert_eq!(game.shop_lucky_gender_byte(), Some(0));
+        assert_eq!(game.shop_gender(), None, "byte +0x16 is not byte +0x18");
+        assert_eq!(game.shop_planet_hidden_cells(), 5);
+        assert_eq!(
+            game.shop_planet_caption_arg(),
+            Some(SHOP_LUCKYBAG_PLANET_INDEX)
+        );
+        assert_eq!(game.shop_planet_reseeds(), 2);
+        assert_eq!(game.shop_planet_layout_flags(), SHOP_PLANET_LAYOUT_FLAGS);
+
+        game.click_shop(750, 40);
+        assert!(game.shop_master_flag());
+
+        game.click_shop(560, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        game.click_shop(580, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::MyBag);
     }
 
     #[test]
