@@ -408,7 +408,7 @@ impl PlayingHudLayout {
             .iter()
             .map(|placement| {
                 let rect = match placement.sprite.as_deref() {
-                    Some(HUD_LIFE_BAND_SPRITE) => self.life_band,
+                    Some(HUD_LIFE_BAND_SPRITE) => self.life_band.map(life_band_clone_view_rect),
                     Some(HUD_JAM_BAR_SPRITE) => self.jam_bar,
                     Some(HUD_JAM_LABEL_SPRITE) => self.jam_label,
                     _ => None,
@@ -431,6 +431,21 @@ fn translate_rect(rect: Rect, (dx, dy): (i32, i32)) -> Rect {
         x: rect.x.saturating_add(dx),
         y: rect.y.saturating_add(dy),
         ..rect
+    }
+}
+
+/// View rect that lands the life band's record anchor on `pinned`.
+///
+/// A clone blits at its rect origin plus the record anchor. The
+/// band's anchor is absolute (`HUD_LIFE_BAND_NATIVE`), so the pinned
+/// ink origin must cancel that anchor before it goes to the clone
+/// path — otherwise the band blits at the anchor twice and leaves
+/// the gauge empty (#846).
+fn life_band_clone_view_rect(pinned: Rect) -> Rect {
+    Rect {
+        x: pinned.x.saturating_sub(HUD_LIFE_BAND_NATIVE.x),
+        y: pinned.y.saturating_sub(HUD_LIFE_BAND_NATIVE.y),
+        ..pinned
     }
 }
 
@@ -3784,9 +3799,21 @@ impl AvatarScene {
 #[cfg(test)]
 mod live_play_tests {
     use super::*;
-    use crate::avatar::PlacementRole;
-    use o2jam_game::{HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
+    use crate::avatar::{paint_foreground_placements, PlacementRole};
+    use o2jam_game::{Judgement, HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
     use o2jam_render::{has_ink_near, near_xrgb};
+    use std::collections::HashMap;
+
+    /// Pinned ink box of the exe's right life band at 800x600.
+    const LIFE_BAND_INK: Rect = Rect {
+        x: 241,
+        y: 267,
+        w: 4,
+        h: 233,
+    };
+    const MISSES_TO_PARTIAL_LIFE: usize = 6;
+    const PARTIAL_LIFE: u16 = 700;
+    const MIN_ORANGE_PIXELS: usize = 100;
 
     fn hud_placement(name: &str) -> ScenePlacement {
         ScenePlacement {
@@ -3801,6 +3828,23 @@ mod live_play_tests {
             },
             role: PlacementRole::Single,
         }
+    }
+
+    /// Count the staged band's amber ink inside one native box.
+    fn count_orange_pixels(pixels: &[u32], box_rect: Rect) -> usize {
+        let frame_w = 800;
+        (box_rect.y..box_rect.y + box_rect.h as i32)
+            .flat_map(move |row| {
+                (box_rect.x..box_rect.x + box_rect.w as i32)
+                    .map(move |col| pixels[row as usize * frame_w + col as usize])
+            })
+            .filter(|pixel| {
+                pixel & 0xFF == 0
+                    && (pixel >> 16) & 0xFF >= 200
+                    && ((pixel >> 8) & 0xFF) >= 40
+                    && ((pixel >> 8) & 0xFF) <= 170
+            })
+            .count()
     }
 
     #[test]
@@ -3855,13 +3899,55 @@ mod live_play_tests {
             assert_eq!(rewritten.sprite, original.sprite);
             assert_eq!(rewritten.role, PlacementRole::Clone);
         }
-        for (rewritten, expected) in
-            pinned
-                .iter()
-                .zip([layout.life_band, layout.jam_bar, layout.jam_label])
-        {
+        assert_eq!(
+            pinned[0].rect,
+            life_band_clone_view_rect(layout.life_band.expect("life band pin")),
+            "the life band clone cancels its absolute record anchor"
+        );
+        for (rewritten, expected) in pinned[1..].iter().zip([layout.jam_bar, layout.jam_label]) {
             assert_eq!(rewritten.rect, expected.expect("staged pin"));
         }
+    }
+
+    #[test]
+    fn life_band_paints_orange_ink_inside_the_pinned_rect() {
+        // Live chain: main.rs::run_play -> ScreenGame::paint ->
+        // ScreenGame::paint_playing -> PlayingHudLayout::from_placements
+        // -> pinned_placements -> paint_foreground_placements.
+        // The #843 clone must land the staged band at its pinned rect;
+        // a clone whose rect includes the record anchor blits it twice.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Playing1.opi");
+        let Ok(archive) = std::fs::read(&path) else {
+            println!("skip: missing install-root Playing1.opi");
+            return;
+        };
+        let figure =
+            crate::avatar::load_archive_sprite_for_stage(&archive, HUD_LIFE_BAND_SPRITE, None)
+                .expect("staged life band body must decode");
+        let staged = [hud_placement(HUD_LIFE_BAND_SPRITE)];
+        let hud = PlayingHudLayout::from_placements(&staged);
+        let figures = HashMap::from([(HUD_LIFE_BAND_SPRITE.to_owned(), figure)]);
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        for _ in 0..MISSES_TO_PARTIAL_LIFE {
+            live.rate(Judgement::Miss);
+        }
+        assert_eq!(live.life(), PARTIAL_LIFE, "a partially filled life word");
+        let mut buf = vec![0u32; 800 * 600];
+        {
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            paint_foreground_placements(&mut frame, &hud.pinned_placements(&staged), &figures);
+            live.paint_avatar_scene_with_placements(&mut frame, None, 0, Some(&staged));
+        }
+        let orange = count_orange_pixels(&buf, LIFE_BAND_INK);
+        assert!(
+            orange > MIN_ORANGE_PIXELS,
+            "the orange band must paint inside the pinned x241..245/y267..500 rect, found {orange} pixels"
+        );
     }
 
     #[test]
