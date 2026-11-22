@@ -30,3 +30,17 @@ original code is stored here.
 - Guard:
   `tutorial_chart_advances_on_visit_wall_time_when_song_samples_are_parked`
   names the live chain from boot to `GameLoop::paint`.
+
+## Live proof (standard boot, no room join)
+
+Pack `~/scratch/fix868/runs/tutorial-proof`, trace `FIX868-TUTORIAL-01`,
+build `e358a87b…a0284fb70888` from commit `719bf8f…` (details and hashes
+in the pack's `report.md`). Plain Xvfb boot → Channel → Room → FIRSTSTEP;
+no `--join-room`, one unchanged Memoryer
+(`37333/1795246022`), ffmpeg `x11grab`, `PASS  house sink route accepted`.
+The lane crop changes 176 pixels (>16/255) at +48 s and +49 s; a blue
+note from the shipped chart's 49.2 s onset is in flight in lane 5. The
++20 s and +50 s shots stay identical to entry because they fall outside
+the note's 2 s lookahead window, not because the clock is frozen — a
+diagnostic build logged chart time and page index crossing 5 s and 33 s
+deadlines through +50 s (`~/scratch/fix868/runs/tutorial-diag`).
