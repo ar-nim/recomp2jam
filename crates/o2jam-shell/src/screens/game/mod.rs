@@ -191,7 +191,9 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 /// memory without limit (PERF-07: `usize`, never `as`).
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
 
-use RoomControlAction::{Back, Create, EnterShopSide, Options, RoomFilter, Side, TutorialEntry};
+use RoomControlAction::{
+    Back, Create, EnterShopSide, MessengerLiveness, Options, RoomFilter, Side, TutorialEntry,
+};
 
 /// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +214,9 @@ enum RoomControlAction {
     /// Enter tutorial through the exe-pinned FIRSTSTEP helper: the
     /// side state plus the chart globals `0x495110` writes first.
     TutorialEntry,
+    /// MESSENGER press: mount the wave-2 one-OK liveness sheet over
+    /// the Room board. No Messenger opcode is evidenced (#859).
+    MessengerLiveness,
     /// Select one of the staged mode-filter tabs; the row list changes
     /// locally while the exe's 2002 parameter stays unpinned (#416).
     RoomFilter(RoomListFilter),
@@ -351,12 +356,14 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
     unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
     unwired(0x1320_003D, "IDC_BUTTON_SROOM_CONFERENCE", HANDLER_STEP),
-    // The host code lives in the Messenger family declaration; the
-    // press itself stays unwired until an exe Room pack pins it (#629).
-    unwired(
+    // Wave-2 tap `w2-messenger-exe` (frame `0ac774e9…`) pins this
+    // host press to the one-OK liveness sheet. The B8/B6 MyRoom
+    // sheet is the same exe response family; no Messenger wire frame
+    // is pinned on either host (#859).
+    routed(
         MessengerHost::Room.control_code(),
         "IDC_BUTTON_SROOM_MESSENGER",
-        HANDLER_STEP
+        MessengerLiveness,
     ),
     // The block spells this code `0x1320C04B` (the `0xC0` nibble rides in
     // the low word), unlike its neighbours.
@@ -4193,6 +4200,12 @@ impl ScreenGame {
                 if self.enter_room_side_with_enter_shop(SideScreen::Tutorial) {
                     self.tutorial_chart_globals = Some(TUTORIAL_CHART_GLOBALS);
                 }
+            }
+            // The pinned MESSENGER host posts the one-OK sheet. The
+            // shared notice owns the next press until OK; no wire is
+            // queued because Memoryer has no Messenger endpoint.
+            RoomControlAction::MessengerLiveness => {
+                self.post_myroom_notice(MyRoomNotice::MessengerUnavailable);
             }
             // No evidenced target: record the press and its next
             // evidence step — never a silent drop.
@@ -8693,6 +8706,12 @@ impl ScreenGame {
         // sheet with the exe's no-response string (#367).
         if self.room_no_response_dialog_open() {
             paint_room_no_response_dialog(frame, self.relay_down_art.as_ref());
+        }
+        // The MESSENGER host press mounts the wave-2 one-OK sheet on
+        // the same staged Information art; the pinned copy replaces
+        // its text, so the Room board stays visible behind it (#859).
+        if let Some(notice) = self.myroom_notice.as_ref() {
+            paint_information_message(frame, self.relay_down_art.as_ref(), &notice.message());
         }
         // The options dialog layers over the lobby exactly as over
         // the Planet board (EXIT/Escape closes back onto Room).
@@ -18730,14 +18749,16 @@ mod game_tests {
 
     #[test]
     fn messenger_host_press_paths_name_the_pinned_arm_and_the_open_arms() {
-        // Spec #315 story 16: the five host MESSENGER codes are pinned
-        // by the shipped ControlList. Only the MyRoom arm has a
-        // qualified exe press pack (B8: one-OK liveness sheet); the
-        // other four stay labeled `N-HOST` gaps, never inferred from
-        // the shared sheet family or from a filename.
-        // Live caller chain (pinned arm): boot -> Waiting -> MyRoom
+        // Spec #315 story 16 plus ticket #859: the five host MESSENGER
+        // codes are pinned by the shipped ControlList. MyRoom (B8)
+        // and Room (wave-2 `w2-messenger-exe`) have qualified press
+        // packs pinning the one-OK liveness sheet; the other three
+        // stay `N-HOST` gaps, never inferred from the sheet family.
+        // Live caller chain (pinned arms): boot -> Waiting -> MyRoom
         // side -> staged MESSENGER code -> click_dispatch ->
-        // MyRoomAction::MessengerLiveness -> messenger_liveness_open.
+        // MyRoomAction::MessengerLiveness -> messenger_liveness_open;
+        // boot -> Room -> staged MESSENGER code -> click_room_control
+        // -> RoomControlAction::MessengerLiveness -> the same notice.
         use super::super::side::MYROOM_MESSENGER_CODE;
         use crate::screens::messenger::MESSENGER_HOSTS;
         let expected = [
@@ -18751,12 +18772,13 @@ mod game_tests {
         for (host, (declared, code)) in MESSENGER_HOSTS.into_iter().zip(expected) {
             assert_eq!(host, declared, "host order in the declaration");
             assert_eq!(host.control_code(), code, "{host:?} ControlList code");
+            let pinned = matches!(host, MessengerHost::Room | MessengerHost::MyRoom);
             assert_eq!(
                 host.exe_response_pin().is_some(),
-                host == MessengerHost::MyRoom,
+                pinned,
                 "{host:?} must not claim an unpinned response"
             );
-            if host != MessengerHost::MyRoom {
+            if !pinned {
                 assert!(
                     host.next_evidence().contains("N-HOST"),
                     "{host:?} names its capture step"
@@ -18767,6 +18789,10 @@ mod game_tests {
         assert_eq!(
             MessengerHost::MyRoom.exe_response_pin(),
             Some("B8 one-OK liveness sheet")
+        );
+        assert_eq!(
+            MessengerHost::Room.exe_response_pin(),
+            Some("W2 one-OK liveness sheet")
         );
 
         let mut game = ScreenGame::new();

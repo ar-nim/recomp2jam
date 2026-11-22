@@ -10,9 +10,10 @@
 use super::side::{myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE};
 
 /// One lobby hosting the Messenger control family. The five codes
-/// come from the spec #315 evidence map; only MyRoom has a qualified
-/// exe press pack, so the other four name a capture step instead of
-/// a response (tickets #629/#646/#648/#650/#652).
+/// come from the spec #315 evidence map. MyRoom (B8/B6) and Room
+/// (wave-2 `w2-messenger-exe`) have qualified press packs that pin a
+/// one-OK liveness sheet; the other three name a capture step instead
+/// of a response (tickets #648/#650/#652).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessengerHost {
     /// Room board (`IDC_BUTTON_SROOM_MESSENGER`).
@@ -45,26 +46,28 @@ impl MessengerHost {
     #[must_use]
     pub const fn exe_response_pin(self) -> Option<&'static str> {
         match self {
+            Self::Room => Some("W2 one-OK liveness sheet"),
             Self::MyRoom => Some("B8 one-OK liveness sheet"),
-            Self::Room | Self::Shop | Self::Waiting | Self::MusicShop => None,
+            Self::Shop | Self::Waiting | Self::MusicShop => None,
         }
     }
 
-    /// Next evidence step for an unpinned host arm. The pinned arm
-    /// keeps the pack name instead, so a guard can tell them apart.
+    /// Next evidence step for an unpinned host arm. A pinned arm keeps
+    /// its pack name instead, so a guard can tell them apart.
     #[must_use]
     pub const fn next_evidence(self) -> &'static str {
         match self {
-            Self::Room | Self::Shop | Self::Waiting | Self::MusicShop => {
+            Self::Room => "W2 pack w2-messenger-exe pins the liveness sheet",
+            Self::MyRoom => "B8 pack f9d4a695...f8b pins the liveness sheet",
+            Self::Shop | Self::Waiting | Self::MusicShop => {
                 "N-HOST: qualified exe press frame and input log on this host board"
             }
-            Self::MyRoom => "B8 pack f9d4a695...f8b pins the liveness sheet",
         }
     }
 }
 
-/// All five host controls in spec order. Four arms stay OPEN (`N-HOST`),
-/// so this table names codes and evidence, not live dispatch.
+/// All five host controls in spec order. Three arms stay OPEN
+/// (`N-HOST`), so this table names codes and evidence, not live dispatch.
 pub const MESSENGER_HOSTS: [MessengerHost; 5] = [
     MessengerHost::Room,
     MessengerHost::Shop,

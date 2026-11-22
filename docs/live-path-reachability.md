@@ -112,17 +112,20 @@ and the 4021/4022 tap in the same manifest.
 | scene BACK/exits (`#734` class) | `live_click_waiting_back_sends_the_room_leave_from_boot` |
 | dialog OK/dismiss | `live_click_dialog_ok_releases_the_held_channel_rows` |
 | Waiting join/ready/start/back | `live_click_guest_ready_then_back_from_boot`, `live_click_master_start_then_back_from_boot` |
-| Messenger host P0 (#631, tier-1) | `live_room_messenger_press_reaches_its_labeled_p0_from_boot` |
+| Messenger host sheet (#631/#859, tier-1) | `live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot` |
 
-`live_room_messenger_press_reaches_its_labeled_p0_from_boot` boots through
-`connect::connect_and_login_with_transport`, walks to the Room board through
-pointer snapshots only, then presses the staged `IDC_BUTTON_SROOM_MESSENGER`
-rect by its parsed code `0x13200048`. The chain ends at
-`ScreenGame::click_room_control` → `RoomControlAction::Unwired`; the guard
-asserts the labeled P0 record, no side screen or liveness sheet, and no wire
-frame. This is one live caller chain into the Messenger family, not a
-exe mount pin: the four unpinned hosts stay `N-HOST` (#646/#648/#650/#652)
-and the master arm stays `N-MASTER` (#644).
+`live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot` boots
+through `connect::connect_and_login_with_transport`, walks to the Room board
+through pointer snapshots only, then presses the staged
+`IDC_BUTTON_SROOM_MESSENGER` rect by its parsed code `0x13200048`. The chain
+ends at `ScreenGame::click_room_control` →
+`RoomControlAction::MessengerLiveness` → `ScreenGame::post_myroom_notice`
+→ `ScreenGame::paint_room` → `paint_information_message`. The guard asserts
+the one-OK liveness sheet, changed pixels, OK dismissal, no side screen, and
+no wire frame. Wave-2 pack `w2-messenger-exe` (frame `0ac774e9…`) pins the
+Room mount; the three other unpinned hosts stay `N-HOST` (#648/#650/#652).
+The closed master-only premise of #644/#646 stays closed: this guard pins a
+local sheet on the Room board, not a role-specific side-board path.
 
 ## Worked example: #191, #192, #193
 
