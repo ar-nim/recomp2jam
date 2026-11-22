@@ -29,6 +29,8 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")/lib" && pwd)/rig-client-identity.sh"
 # shellcheck source=lib/play-local-seams.sh
 . "$(cd "$(dirname "$0")/lib" && pwd)/play-local-seams.sh"
+# shellcheck source=lib/rig_binary_stale.sh
+. "$(cd "$(dirname "$0")/lib" && pwd)/rig_binary_stale.sh"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEMORYER_DIR="${MEMORYER_DIR:-$HOME/memoryer-local}"
@@ -117,18 +119,9 @@ case "$PROFILE" in
   *) echo "play-local: PLAY_LOCAL_PROFILE must be release|debug (got '$PROFILE')" >&2; exit 2 ;;
 esac
 BIN="$REPO_ROOT/target/$PROFILE/recomp2jam"
-# Test-only changes must not mark the BINARY stale: cargo build does not
-# rebuild the release binary for test files, so the seam's timestamp query
-# excludes every tests/ tree (owner report 2026-11-21).
-HEAD_TS="$(play_local_head_commit_timestamp "$REPO_ROOT")"
-if [ -x "$BIN" ]; then
-  BIN_TS="$(play_local_binary_timestamp "$BIN")"
-  if play_local_binary_is_stale "$HEAD_TS" "$BIN_TS"; then
-    echo "play-local: $PROFILE binary is stale (built before checkout HEAD ${HEAD_TS})" >&2
-    echo "play-local: rebuild first: cargo build --profile $PROFILE --manifest-path \"$REPO_ROOT/Cargo.toml\"" >&2
-    exit 1
-  fi
-fi
+# The lib owns the binary-relevant path scope and refuses a failed timestamp
+# probe instead of treating it as a current binary (#748).
+rig_binary_stale_guard "$REPO_ROOT" "$PROFILE" "$BIN" || exit 1
 
 [ "$CHECK_ONLY" = 1 ] && { echo "play-local: preflight OK"; exit 0; }
 
