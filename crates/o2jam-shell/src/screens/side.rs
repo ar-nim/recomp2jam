@@ -1218,11 +1218,40 @@ pub enum CheckoutNotice {
     BagSpaceShort,
     /// Maximum bag with special item `0x5bc` (string VA `0x648b88`).
     SpecialItemAtMaximum,
-    /// O2CASH shortfall (string VA `0x648b38`).
+    /// O2CASH shortfall (string VA `0x648b38`). The item-shop BUYITEM
+    /// arm posts this caption on the type-2 MESSAGE sheet, not on a web
+    /// page (#867).
     InsufficientCash,
     /// Gem shortfall; the exe clears the cart (string VA `0x648b14`).
     InsufficientGem,
 }
+
+/// Caption the item-shop BUYITEM arm posts on its native MESSAGE sheet
+/// (#867): the CP949 bytes at exe VA `0x648b38` / file `0x248b38`.
+/// REA: caption byte scan `ev_87979b92…831b3c7`; post site VA `0x499f43`.
+pub const SHOP_O2CASH_SHORTFALL_CP949: &[u8] = &[
+    0xb0, 0xe1, 0xc1, 0xa6, 0xc7, 0xd2, 0x20, 0xbf, 0xc0, 0xc5, 0xf5, 0xc4, 0xb3, 0xbd, 0xac, 0x28,
+    0x4f, 0x32, 0x43, 0x41, 0x53, 0x48, 0x29, 0xb0, 0xa1, 0x20, 0xba, 0xce, 0xc1, 0xb7, 0xc7, 0xd5,
+    0xb4, 0xcf, 0xb4, 0xd9, 0x2e, 0x20, 0xbf, 0xc0, 0xc5, 0xf5, 0xc4, 0xb3, 0xbd, 0xac, 0x28, 0x4f,
+    0x32, 0x43, 0x41, 0x53, 0x48, 0x29, 0xb8, 0xa6, 0x20, 0xc3, 0xe6, 0xc0, 0xfc, 0xc7, 0xcf, 0xbd,
+    0xc3, 0xb0, 0xda, 0xbd, 0xc0, 0xb4, 0xcf, 0xb1, 0xee, 0x3f,
+];
+
+/// Base MyRoom bag capacity the exe compares against cart size
+/// (#867): the `150개` in the max-bag notice at VA `0x648b88`.
+/// Expansion items change the global `0x77cce4`; no live expansion
+/// source is staged, so the base is the honest default.
+pub const SHOP_BASE_BAG_SLOTS: usize = 150;
+
+/// Host control code carried by the BUYITEM type-2 MESSAGE event
+/// (exe VA `0x499f48`; CHARGEMONEY `0x14200004`).
+pub const SHOP_CHARGE_CONFIRM_HOST_CODE: u32 = 0x1420_0004;
+
+/// The local sheet choice is not a game-TCP purchase. Paired exe taps
+/// show no `5000`/`5010` on the socket; the 5015 payment-start leg stays
+/// a static pin until a qualified OK press with a full wire tap exists.
+pub const SHOP_PURCHASE_WIRE_NEXT_STEP: &str =
+    "capture one qualified BUYITEM OK press with the game TCP and HTTP(S) taps";
 
 /// Staged inputs the exe reads before its 5015 send: web-busy gate
 /// `FUN_00556680(0)`, bag capacity `0x77cce4`, and the cart.

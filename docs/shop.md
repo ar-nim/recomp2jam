@@ -1,5 +1,49 @@
 # STATE_SHOP screen (7.55) — evidence log
 
+## Ticket #867 — BUYITEM posts the native MESSAGE sheet (2026-11-23)
+
+Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a04541…72c823b`; all offsets below are file offsets = VA − `0x400000`.
+
+The cart `BUYITEM` (`0x14200070`) is a case of `FUN_00499760`
+(`0x99760`): the code-minus-`0x14200003` byte table at `0x49c018`
+(index `0x6d` at file `0x9c085`) selects case entry `0x9c6c` from the
+dword table (`0x9bff4`). The O2CASH-shortfall arm at `0x9f41`–`0x9f55`
+posts queue event **type 2**, host control **`0x14200004`**
+(CHARGEMONEY), caption VA `0x648b38` / file `0x248b38`:
+`결제할 오투캐쉬(O2CASH)가 부족합니다. 오투캐쉬(O2CASH)를 충전하시겠습니까?`
+(REA Ghidra 12.2 / REA 6.9.0: `ev_8e533c73…49c4614` instruction
+walk, `ev_87979b92…831b3c7` caption byte scan, `ev_25d57d63…f6a8f`
+queue helper). `FUN_00478c90` (`0x78c90`) packs
+`(type << 16) | (host & 0xfff)` and enqueues the event; the pump's
+type-2 branch (`0x76e6a`, table `0x778b4`) allocates `CDQuestion1`
+(`Dialog_Question1.bnd`, the MESSAGE sheet with OK/CANCEL and
+TEXT codes `0x22200002`/`0x22200003`/`0x22400004`). The paired live
+frame (`~/scratch/boot-verify-3/buyitem`, sheet sha256
+`5c662b60…62d3c78`) paints that sheet at +0.5/+2/+5 s, with OK near
+`(345,385)` and CANCEL near `(448,385)`. The Cash Charge web view is
+the separate CASHFILLUP/charge-plate arm — not BUYITEM.
+
+Implementation: the live/boot BUYITEM ladder stages the base bag
+capacity 150 (pinned by the `150개` max-bag notice at file `0x248b88`)
+so the shortfall decision is reachable; `ScreenGame` mounts the staged
+`Dialog_Question1` art with the pinned caption, routes OK to a local
+commit and CANCEL to dismissal, and emits no purchase opcode. Guards:
+`live_boot_cart_row_buy_paints_the_native_message_sheet` drives the
+windowed chain from `stage_live_scenes` through `paint_side` and clicks
+both staged buttons; `live_shop_buyitem_mounts_the_confirmation_sheet`
+drives the installed catalog and staged rects; seam guards cover
+CASHFILLUP's separate charge view.
+
+**OPEN — purchase WIRE:** the OK/CANCEL choice is local. Qualified
+exe taps show no `5000`/`5001`/`5010`/`5011` for this leg; the static
+5015 payment-start send stays behind its gates. Next step: one
+qualified OK press with the game TCP and HTTP(S) taps plus a scripted
+gateway answer. `SHOP_PURCHASE_WIRE_NEXT_STEP` names this in code.
+
+The older local-web-surface rows below describe the #397-era stand-in
+and are kept as the recorded contradiction, not silently resolved.
+
 ## Ticket #861 — the goods-grid block (2026-11-22)
 
 Wave-3 leg 6 (`w3-itemshop-*-fixed`, entry SSIM 0.1237 at `70f9a33`)
@@ -34,9 +78,9 @@ guard drives the staged row and cart buttons to the sheet flag.
 
 OPEN: the paired tap's missing C2S 6001 is the generic 15 s watchdog
 (`FUN_00558b10`, EV `ev_5a705b…c3dfe`), not a shop-only frame; next
-step is a timed session keepalive with a wire diff. The BUYITEM sheet
-exists as the local web overlay (`#397`); the exe's native MESSAGE
-sheet art/text parity stays OPEN pending a paired press frame.
+step is a timed session keepalive with a wire diff. BUYITEM posts the
+native MESSAGE sheet (see #867 above); the old local web overlay claim
+was the #397-era stand-in. Purchase WIRE stays OPEN.
 
 
 Item shop (`CStateShop`, `0xA4`; shared `Payment`/`CMyBag`/`CCart`
@@ -125,7 +169,8 @@ staged scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x14022047` at
 (221,374)): its LEFT/RIGHT children (`0x48`/`0x49`) stage
 scroll-relative, so hit-testing offsets by the staged scroll
 origin — geometry from parsed rects, never literals. The cart
-`BUYITEM` (`0x70`) opens the local `구입 하기` web purchase surface;
+`BUYITEM` (`0x70`) posts the native MESSAGE sheet (#867); the old
+`구입 하기` web-purchase stand-in belonged to the #397-era model.
 W-a found no `C2S 5000` on the exe socket and the only `5001` was
 BACK-timed (#397). The static send file `0xf3fa8` is corroboration
 for a synthetic probe, not the exe buy path (`docs/shop-buy.md`).
@@ -200,9 +245,9 @@ room slot).
   `Dialog_Shopping_Add.bnd` rects in a hidden slot; no painter mounts
   them. The exe pin is the D4 row-pick face switch (MY BAG → SHOPPING
   BAG), so `ITEMBUY` checks the row and switches the face locally; the
-  W-a NULL pin shows `BUYITEM` opens the web purchase surface and
-  sends no game opcode. A sheet mount or a per-item add opcode would
-  be invented (`SHOPPINGBAG_ADD_NEXT_STEP`).
+  W-a NULL pin shows `BUYITEM` emits no game opcode; the exe posts a
+  native MESSAGE sheet (#867), not an add opcode.
+  A per-item add opcode would be invented (`SHOPPINGBAG_ADD_NEXT_STEP`).
   Guards: `cart_add_opens_the_cart_face_without_mounting_the_parked_sheet`,
   `shopping_bag_add_sheet_stages_seven_parent_relative_rects`.
 - Gem price (#395, partial): `ShopGood::gem_price` is an explicit

@@ -5516,16 +5516,17 @@ pub(super) mod session_tests {
         assert_eq!(session.game.side(), None);
     }
 
-    /// W-a NULL pin (#397, traces `W6FA-BUY-01/02`): a cart-row pick,
-    /// BUYITEM and the web page's `(345,385)` OK put no shop-buy opcode
-    /// on the game socket. Only the BACK leg's pinned `5007`/`5028`
+    /// W-a NULL pin (#397, traces `W6FA-BUY-01/02`) plus #867: a cart-row
+    /// pick, BUYITEM and the native MESSAGE sheet's OK put no shop-buy
+    /// opcode on the game socket. Only the BACK leg's pinned `5007`/`5028`
     /// pair follows. The 5001 seen in the exe tap was BACK-timed.
     ///
     /// Live caller chain:
     ///   main.rs::run_play -> OnlineSession::ingest_snapshot ->
     ///   click_side_screen -> click_shop(ToggleRow/CartBuy) ->
-    ///   open local web surface -> click_shop_purchase_web(BACK) ->
-    ///   flush_exit_shop -> GatewayConnection::send_frame(5007, 5028).
+    ///   shop_charge_confirm_open -> commit_shop_charge_confirm ->
+    ///   click_shop(BackToLobby) -> flush_exit_shop ->
+    ///   GatewayConnection::send_frame(5007, 5028).
     #[test]
     fn cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family() {
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
@@ -5589,9 +5590,11 @@ pub(super) mod session_tests {
         session.ingest_snapshot(&InputSnapshot::click_at(238, 263));
         assert_eq!(session.game.shop_cart(), vec![1]);
         session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
-        session.ingest_snapshot(&InputSnapshot::click_at(345, 385));
-
-        assert!(session.game.shop_purchase_web_open());
+        assert!(
+            session.game.shop_charge_confirm_open(),
+            "BUYITEM posts the native MESSAGE sheet"
+        );
+        session.game.commit_shop_charge_confirm();
         assert_eq!(session.game.take_shop_buy(), None, "no 5000 was queued");
         session.ingest_snapshot(&InputSnapshot::click_at(757, 580));
         paint_frame(&mut session);

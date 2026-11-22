@@ -894,11 +894,11 @@ mod tests {
 
     /// Live chain: window::WindowHandler → session::Session::ingest_snapshot →
     /// ScreenGame::ingest_snapshot → ShopState::toggle_row / cart row pick →
-    /// local web-purchase surface. The #194 close leg re-scoped by W-a:
-    /// the replay shows a staged cart and an opened web surface, not a
-    /// game-socket 5000.
+    /// native MESSAGE sheet (#867). The #194 close leg re-scoped by
+    /// W-a: the replay shows a staged cart and the exe's confirmation
+    /// sheet, not a game-socket 5000.
     #[test]
-    fn shop_row_cart_buyitem_replay_opens_the_purchase_surface() {
+    fn shop_row_cart_buyitem_replay_posts_the_native_message_sheet() {
         let trace = load_menu_trace("shop-row-cart-buyitem.json").expect("committed trace loads");
         let (first, _) = replay_twice(stage_shop_browser, &trace).expect("buy replay succeeds");
         assert_eq!(
@@ -911,8 +911,8 @@ mod tests {
         let (mut game, _) = replay_for_state(stage_shop_browser, &trace);
         assert_eq!(game.shop_cart(), vec![1, 2], "row toggles check the cart");
         assert!(
-            game.shop_purchase_web_open(),
-            "BUYITEM opens the local web purchase surface"
+            game.shop_charge_confirm_open(),
+            "BUYITEM posts the native MESSAGE sheet"
         );
         assert_eq!(
             game.take_shop_buy(),
