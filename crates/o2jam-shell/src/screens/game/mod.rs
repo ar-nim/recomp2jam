@@ -34,6 +34,7 @@ use self::myroom::{
     MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
     GIFT_MUSIC_FOLLOWUP_COMMAND, MYROOM_COUNT_CAP,
 };
+use super::side::MyRoomLowerTab;
 
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
@@ -46,8 +47,8 @@ pub use self::waiting::MyRoomWireSend;
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
-    avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
-    AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_worn_figure, ojn_cover_figure, paint_scene_figures_selected,
+    AvatarFigure, ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
 use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
@@ -56,7 +57,8 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit, paint_avi_scene,
+    information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit,
+    myroom_notice_board_frame, myroom_page_number_frame, paint_avi_scene,
     paint_billing_failure_notice, paint_cash_charge_frame, paint_channel_chat,
     paint_dialog_frame_record, paint_dialog_scene, paint_information_message, paint_lanking_board,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
@@ -85,23 +87,23 @@ use super::side::{
     can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
     default_room_title, lanking_action_at, music_shop_action_at, music_shop_tooltip_hovered,
     music_shop_tooltip_kept, myroom_equip_slot, myroom_panel_kept, myroom_record_slot,
-    paint_side_scene, paint_side_scene_live, paint_tutorial_scene, password_action_at,
-    planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
-    select_index_matches, select_music_rows, select_music_songs_with_labels,
-    select_row_column_text, select_row_hit, shop_action_at, shop_extmenu_kept, shop_panel_kept,
-    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
-    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
-    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
-    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
-    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet,
-    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
-    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_tutorial_scene,
+    password_action_at, planet_action_at, select_chrome_action_at, select_filter_button_id,
+    select_filter_choice_at, select_index_matches, select_music_rows,
+    select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
+    shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
+    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
+    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
+    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
+    GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
+    QUIT_OK_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
+    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -6590,6 +6592,25 @@ impl ScreenGame {
             // ours-by-design — the exe entry path is unpinned — and
             // stays labeled until the rig names the entry fetch.
             self.outbox.pending_gift_list = true;
+            // Entry tab word with a pending gift: the committed exe
+            // trace `fixtures/input-trace/giftbox-claim.json` reaches
+            // gift cell 0 (sequence 3) with no PRESENT BOX press, so
+            // the recorded exe state has the gift side live right
+            // after the Room -> MyRoom entry. The #807 pin gates gift
+            // chrome behind the tab word `0x779924`; we therefore
+            // default the word to the gift tab on entry when the
+            // staged character carries a gift. CONTRADICTION
+            // recorded, not resolved: the exe either auto-selects the
+            // gift tab on entry-with-gift or hit-tests gift cells
+            // word-independent. OPEN next step: the #530 per-slot/tab
+            // sweep naming which (statics: who writes `0x779924` on
+            // the MyRoom entry path).
+            let gifts_pending = self.myroom_character.as_ref().is_some_and(|character| {
+                !character.item_gifts.is_empty() || !character.music_gifts.is_empty()
+            });
+            if gifts_pending {
+                self.myroom.show_lower_tab(MyRoomLowerTab::Gifts);
+            }
         }
         if side == SideScreen::Shop {
             // The pane shows the equipped avatar on entry (a preview
@@ -7900,9 +7921,17 @@ impl ScreenGame {
     fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.side == Some(SideScreen::MyRoom) {
             let panel = self.myroom.panel();
-            paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
-                myroom_panel_kept(placed, panel)
-            });
+            let tab = self.myroom.lower_tab();
+            paint_scene_figures_selected(
+                frame,
+                &self.side_placements,
+                &self.side_figures,
+                |placed| myroom_panel_kept(placed, panel) && myroom_tab_kept(placed, tab),
+                |placed| {
+                    myroom_notice_board_frame(placed, &self.side_figures)
+                        .or_else(|| myroom_page_number_frame(placed, tab, &self.side_figures))
+                },
+            );
         } else if self.side == Some(SideScreen::MusicShop) {
             let hovered = self
                 .pointer
@@ -15631,8 +15660,8 @@ mod game_tests {
         use super::super::side::{
             MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
             MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
-            MYROOM_GIFT_RIGHT_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE, MYROOM_NICKNAME_CODE,
-            MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
+            MYROOM_GIFT_RIGHT_CODE, MYROOM_GIFT_TAB_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE,
+            MYROOM_NICKNAME_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
         };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -15654,10 +15683,19 @@ mod game_tests {
             myroom_hit_placement(MYROOM_GOSHOP_CODE, 60, 40),
             myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
             myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
+            myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
         ];
         game.load_side_scene(placements, HashMap::new());
         assert!(game.visit_side(SideScreen::MyRoom));
         game
+    }
+
+    /// Press the staged PRESENT BOX tab (synthetic rect `(600,10)`)
+    /// through the live click path. Gift-owned controls are hidden and
+    /// inert on the default MY BAG word, so gift legs switch it first.
+    fn myroom_enable_gift_tab(game: &mut ScreenGame) {
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 20));
+        assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
     }
 
     /// MyRoom side with the two lower-panel tabs (`MYBAG_POS`
@@ -15804,8 +15842,9 @@ mod game_tests {
     /// through staged rects, not through the panel state.
     fn myroom_selection_overlay(panel: MyRoomPanel) -> (ScreenGame, Rect) {
         use super::super::side::{
-            MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SELECT_CODE,
-            MYROOM_SLOTCOVER_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_USERINFO_CODE,
+            MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_TAB_CODE,
+            MYROOM_SELECT_CODE, MYROOM_SLOTCOVER_CODE, MYROOM_SLOT_FIRST_CODE,
+            MYROOM_USERINFO_CODE,
         };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -15837,6 +15876,16 @@ mod game_tests {
             placement(MYROOM_SLOT_FIRST_CODE + 1, None, shifted(cell, 600)),
             placement(MYROOM_BAG_FIRST_CODE, None, cell),
             placement(MYROOM_GIFT_FIRST_CODE, None, shifted(cell, 400)),
+            placement(
+                MYROOM_GIFT_TAB_CODE,
+                None,
+                Rect {
+                    x: 600,
+                    y: 10,
+                    w: 40,
+                    h: 20,
+                },
+            ),
             placement(MYROOM_SELECT_CODE, Some("Select.oji"), frame),
         ];
         let figures = HashMap::from([
@@ -15920,6 +15969,193 @@ mod game_tests {
             "the same frame body survives the panel-face filter"
         );
         assert_eq!(myroom_amber_pixels(&buf), 0);
+    }
+
+    /// MyRoom side with both tabs and the exe's tab-owned chrome: one
+    /// bag cell, BAGSORT, one gift cell, a gift pager, GIFTBOX_BACK,
+    /// and a three-layer page-number body. Layer 1 inks blue (bag
+    /// frame), layer 2 inks green (gift frame) at separate rects.
+    fn myroom_tab_chrome_overlay() -> (ScreenGame, Rect) {
+        use super::super::side::{
+            MYROOM_BAGSORT_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_TAB_CODE, MYROOM_GIFT_BACK_CODE,
+            MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE, MYROOM_GIFT_PAGE_FIRST_CODE,
+            MYROOM_GIFT_TAB_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let mut placements = Vec::new();
+        let mut add = |code: u32, id: &str, x: i32, sprite: Option<&str>| {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                sprite: sprite.map(str::to_owned),
+                code,
+                rect: Rect {
+                    x,
+                    y: 50,
+                    w: 20,
+                    h: 20,
+                },
+            });
+        };
+        add(MYROOM_BAG_TAB_CODE, "BAG_TAB", 10, None);
+        add(MYROOM_GIFT_TAB_CODE, "GIFT_TAB", 60, None);
+        add(MYROOM_BAG_FIRST_CODE, "BAG_CELL", 110, Some("BagCell.ojs"));
+        add(MYROOM_BAGSORT_CODE, "BAGSORT", 160, Some("BagSort.ojs"));
+        add(
+            MYROOM_GIFT_FIRST_CODE,
+            "GIFT_CELL",
+            210,
+            Some("GiftCell.ojs"),
+        );
+        add(
+            MYROOM_GIFT_LEFT_CODE,
+            "GIFT_PAGER",
+            260,
+            Some("GiftPager.ojs"),
+        );
+        add(
+            MYROOM_GIFT_BACK_CODE,
+            "GIFT_BACK",
+            310,
+            Some("GiftBack.ojs"),
+        );
+        let page_rect = Rect {
+            x: 360,
+            y: 50,
+            w: 20,
+            h: 20,
+        };
+        add(
+            MYROOM_GIFT_PAGE_FIRST_CODE,
+            "PAGE_NUMBER",
+            page_rect.x,
+            Some("PageNum.ojs"),
+        );
+        let figures = HashMap::from([
+            ("BagCell.ojs".to_owned(), solid_figure(20, 20, 0x001F)),
+            ("BagSort.ojs".to_owned(), solid_figure(20, 20, 0x001F)),
+            ("GiftCell.ojs".to_owned(), solid_figure(20, 20, 0x03E0)),
+            ("GiftPager.ojs".to_owned(), solid_figure(20, 20, 0x03E0)),
+            ("GiftBack.ojs".to_owned(), solid_figure(20, 20, 0x03E0)),
+            ("PageNum.ojs".to_owned(), myroom_three_layer_page_figure()),
+        ]);
+        game.load_side_scene(placements, figures);
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, page_rect)
+    }
+
+    /// Page-number body with layer 0 unused, layer 1 inked blue and
+    /// layer 2 inked green, so the tab frame choice is visible.
+    fn myroom_three_layer_page_figure() -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let layer = |word: u16| FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(
+                &vec![word.to_le_bytes(); 20 * 20].concat(),
+                20,
+                20,
+            )
+            .expect("page-number layer"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        };
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(layer(0x7C00));
+        figure.push_layer(layer(0x001F));
+        figure.push_layer(layer(0x03E0));
+        figure
+    }
+
+    #[test]
+    fn myroom_gift_tab_switches_the_enabled_controls_and_page_frame() {
+        // Live caller chain (#807, PINNED grade):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> ShowGiftTab
+        //   -> paint_side -> paint_scene_figures_selected -> tab chrome
+        //   filter and myroom_page_number_frame.
+        // FUN_004a8ba0 (file `0xa8ba0`, EV `ev_c1d8c405…`) enables the
+        // bag set at tab word 0 and the gift set at non-zero. The gift
+        // digits are hidden at word 0 but still stage frame 1 there;
+        // frame 2 is staged and shown at word non-zero. Live chrome/digit
+        // frame pair stays OPEN; this guard pins the static control set.
+        // seam: frame 1 is staged while hidden, so the frame index is
+        // checked at its pure selector, not through painted pixels.
+        use super::super::paint::myroom_page_number_frame;
+        use super::super::side::MYROOM_GIFT_PAGE_FIRST_CODE;
+        let page_placement = ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            sprite: Some("PageNum.ojs".to_owned()),
+            code: MYROOM_GIFT_PAGE_FIRST_CODE,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 20,
+            },
+        };
+        let page_figures =
+            HashMap::from([("PageNum.ojs".to_owned(), myroom_three_layer_page_figure())]);
+        assert_eq!(
+            myroom_page_number_frame(&page_placement, MyRoomLowerTab::Bag, &page_figures),
+            Some(1)
+        );
+        assert_eq!(
+            myroom_page_number_frame(&page_placement, MyRoomLowerTab::Gifts, &page_figures),
+            Some(2)
+        );
+
+        let (mut game, page_rect) = myroom_tab_chrome_overlay();
+        let ink = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        let before = paint_myroom_panel(&mut game);
+        assert_eq!(
+            ink(&before, 115, 55),
+            pack_xrgb(0, 0, 255),
+            "bag cell on entry"
+        );
+        assert_eq!(
+            ink(&before, page_rect.x + 5, page_rect.y + 5),
+            0,
+            "gift digits hidden on the bag tab"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(65, 55));
+        assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
+        let after = paint_myroom_panel(&mut game);
+        assert_eq!(ink(&after, 115, 55), 0, "bag cell art hidden");
+        assert_eq!(ink(&after, 165, 55), 0, "BAGSORT art hidden");
+        assert_eq!(
+            ink(&after, 215, 55),
+            pack_xrgb(0, 255, 0),
+            "gift cell art shown"
+        );
+        assert_eq!(
+            ink(&after, 265, 55),
+            pack_xrgb(0, 255, 0),
+            "gift pager art shown"
+        );
+        assert_eq!(
+            ink(&after, 315, 55),
+            pack_xrgb(0, 255, 0),
+            "GIFTBOX_BACK art shown"
+        );
+        assert_eq!(
+            ink(&after, page_rect.x + 5, page_rect.y + 5),
+            pack_xrgb(0, 255, 0),
+            "page frame 2 on the gift tab"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(115, 55));
+        assert_eq!(
+            game.myroom().bag_cell(),
+            None,
+            "hidden bag cell cannot dispatch"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(215, 55));
+        assert_eq!(game.myroom().gift_cell(), Some(0), "gift cell stays live");
     }
 
     #[test]
@@ -16007,6 +16243,103 @@ mod game_tests {
         assert_eq!(after[hair_pixel], before[hair_pixel], "slot gets no frame");
     }
 
+    /// MyRoom side with all eleven art-less slot selectors, one bag
+    /// cell, and one gift cell. Slot rects are synthetic but their
+    /// codes are the shipped `0x15200005..0F` run.
+    fn myroom_all_slot_button_overlay() -> (ScreenGame, Vec<ScenePlacement>) {
+        use super::super::side::{MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_BUTTONS};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(myroom_test_table());
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let mut placements: Vec<ScenePlacement> = (0..MYROOM_SLOT_BUTTONS)
+            .map(|index| {
+                let code = super::super::side::MYROOM_SLOT_FIRST_CODE
+                    + u32::try_from(index).expect("eleven slot buttons");
+                myroom_hit_placement(
+                    code,
+                    10 + 50 * i32::try_from(index).expect("small index"),
+                    10,
+                )
+            })
+            .collect();
+        placements.push(myroom_hit_placement(
+            super::super::side::MYROOM_BAG_FIRST_CODE,
+            10,
+            50,
+        ));
+        placements.push(myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 60, 50));
+        game.load_side_scene(placements.clone(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        (game, placements)
+    }
+
+    #[test]
+    fn myroom_slot_presses_leave_the_bag_and_gift_state_untouched() {
+        // Live caller chain (#796, OPEN grade):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(SelectSlot)
+        //   -> MyRoomState::record_slot_press.
+        // The hair-slot negative pin is `25c5997e…`; REA `FUN_004a3ee0`
+        // (file `0xa3ee0`) has no case for `0x15200005..0F`. Until the
+        // #530 per-slot sweep exists, every press records only the
+        // cursor: no bag filter, gift target, or wire body is invented.
+        let mut cursor_only = MyRoomState::new();
+        cursor_only.record_slot_press(1);
+        assert_eq!(cursor_only.selected_slot(), 1);
+        assert_eq!(cursor_only.bag_page(), 0);
+        assert_eq!(cursor_only.gift_page(), 0);
+
+        let (mut game, placements) = myroom_all_slot_button_overlay();
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 50));
+        let before = game.myroom();
+        let mut before_buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut before_buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            before,
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+
+        for index in 0..super::super::side::MYROOM_SLOT_BUTTONS {
+            let x = 10 + 50 * i32::try_from(index).expect("small index");
+            game.ingest_snapshot(&InputSnapshot::click_at(x, 10));
+            let after = game.myroom();
+            assert_eq!(
+                after.selected_slot(),
+                u8::try_from(index).expect("eleven slot buttons")
+            );
+            assert_eq!(after.bag_page(), before.bag_page());
+            assert_eq!(after.bag_cell(), before.bag_cell());
+            assert_eq!(after.gift_page(), before.gift_page());
+            assert_eq!(after.gift_cell(), before.gift_cell());
+            assert_eq!(after.lower_tab(), before.lower_tab());
+        }
+
+        let mut after_buf = vec![0u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut after_buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            game.myroom(),
+            &["BAG".to_owned()],
+            &["GIFT".to_owned()],
+            &[],
+        );
+        assert_eq!(after_buf, before_buf, "slot presses paint no new rows");
+    }
+
     #[test]
     fn myroom_slot_and_gift_picks_keep_staged_frames_without_amber() {
         // Live caller chain as above. The exe pins no frame on a slot
@@ -16022,6 +16355,7 @@ mod game_tests {
             buf.iter().any(|pixel| *pixel == pack_xrgb(0, 0, 255)),
             "the picked bag cell keeps the staged frame"
         );
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(510, 110));
         assert_eq!(game.myroom().gift_cell(), Some(0));
         let buf = paint_myroom_panel(&mut game);
@@ -16556,6 +16890,7 @@ mod game_tests {
                 item_id: 1,
                 sender: "Giver".to_owned(),
             });
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         assert_eq!(game.myroom().gift_cell(), Some(0));
         let claim = game
@@ -16796,6 +17131,7 @@ mod game_tests {
             .expect("staged character")
             .item_gifts
             .push(gift);
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         assert_eq!(game.myroom().gift_cell(), Some(0));
         game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
@@ -17241,6 +17577,7 @@ mod game_tests {
         // Pure shell state plus a synthetic frame: no archives read.
         let mut game = myroom_open_overlay();
         game.show_myroom_panel(MyRoomPanel::Status);
+        myroom_enable_gift_tab(&mut game);
         for (x, y) in [
             (10, 10),
             (100, 10),
@@ -17267,11 +17604,12 @@ mod game_tests {
         for pixel in pixels {
             hash_u64(&mut hash, u64::from(pixel));
         }
-        // #797 re-pin: the VACATE press now opens the exe's
-        // no-selection notice, which inks the Information sheet over
-        // the same staged rects; one screen, no wire.
+        // #797 re-pin: the VACATE press opens the exe's no-selection
+        // notice; #807 re-pin: the gift tab is switched before the
+        // gift cell press, so that cell stays live under the exe's
+        // tab-owned control set. Same screen, no wire.
         assert_eq!(
-            hash, 0x1E83_9DC1_2092_27CE,
+            hash, 13_048_635_776_834_777_667,
             "MyRoom ScreenGame cluster output drifted"
         );
     }
@@ -17542,7 +17880,9 @@ mod game_tests {
         // GIFT_LEFT rect -> click_myroom_side -> apply_myroom_action ->
         // MyRoomState::turn_gift_page -> painter shows last-page rows.
         // Page count comes from 6 gifts / 5 cells rounded up (= 2).
-        use super::super::side::{MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE};
+        use super::super::side::{
+            MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE, MYROOM_GIFT_TAB_CODE,
+        };
         use o2jam_net::GiftItemInfo;
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -17560,10 +17900,12 @@ mod game_tests {
             vec![
                 myroom_hit_placement(MYROOM_GIFT_LEFT_CODE, 100, 10),
                 myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
             ],
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MyRoom));
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(210, 20));
         assert_eq!(game.myroom().gift_cell(), Some(0));
 
@@ -18062,6 +18404,7 @@ mod game_tests {
         let equip = game.take_equip_send().expect("equip queued");
         assert_eq!((equip.slot, equip.item_id), (0, 1));
         // Gift: first box cell claims item gift 7 from Giver.
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         let claim = game.take_gift_claim().expect("claim queued");
@@ -28762,6 +29105,7 @@ mod game_tests {
         assert_eq!(game.myroom().bag_page(), 0);
         game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0, "bag PREV holds at the start");
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(351, 11));
         assert_eq!(game.myroom().gift_page(), 0, "gift NEXT holds on one page");
         game.ingest_snapshot(&InputSnapshot::click_at(301, 11));
@@ -29659,7 +30003,8 @@ mod game_tests {
         // sends feed the fold today; the rest ride along so a future
         // fold change re-pins here.
         use super::super::side::{
-            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_MOVE_CODE,
+            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_TAB_CODE,
+            MYROOM_MOVE_CODE,
         };
         use MenuKey;
         let mut game = ScreenGame::new();
@@ -29695,6 +30040,26 @@ mod game_tests {
         // Avatar-room arms: entry queues the 5017 fetch, the bag
         // APPLY queues 5004, the gift MOVE queues 5023.
         game.set_myroom_items(myroom_test_table());
+        // Bag arms first with no gift pending (the entry hook defaults
+        // the lower tab to the gift side only when a gift is pending):
+        // the bag cell pick and the APPLY that queues 5004.
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+                myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
+                myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
+                myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        // Gift arms: stage the pending gift, press PRESENT BOX (the
+        // MY BAG press is a pinned no-op, exe3 `8515a7e5…`, so only
+        // this direction switches), pick gift cell 0, MOVE 5023.
         let mut character = myroom_test_character((1..=12).collect());
         character.item_gifts.push(o2jam_net::GiftItemInfo {
             gift_id: 7,
@@ -29702,18 +30067,7 @@ mod game_tests {
             sender: "Giver".to_owned(),
         });
         game.set_myroom_character(character);
-        game.load_side_scene(
-            vec![
-                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
-                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
-                myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
-                myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
-            ],
-            HashMap::new(),
-        );
-        assert!(game.visit_side(SideScreen::MyRoom));
-        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
-        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        myroom_enable_gift_tab(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         assert!(game.leave_side());

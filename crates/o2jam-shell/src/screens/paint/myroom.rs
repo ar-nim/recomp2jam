@@ -10,7 +10,8 @@ use crate::avatar::{paint_placement_layer, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::side::{
     myroom_action_for_code, MyRoomAction, MyRoomLowerTab, MyRoomState, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_SELECT_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_PAGE_DIGITS,
+    MYROOM_GIFT_PAGE_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_SELECT_CODE,
     MYROOM_SLOT_IMAGE_FIRST_CODE,
 };
 use o2jam_render::{scale_rect_to_frame, Frame, Rect};
@@ -29,6 +30,32 @@ pub fn myroom_notice_board_frame(
     }
     let sprite = placed.sprite.as_deref()?;
     figures.get(sprite)?.layer(2).map(|_| 2)
+}
+
+/// Lower-panel page-number frame staged by the exe's tab painter
+/// (`FUN_004a8ba0`, file `0xa8ba0`, EV `ev_c1d8c405…`): frame 1 for
+/// MY BAG and frame 2 for PRESENT BOX on the four `0x15500054..57`
+/// digits. `None` for every other placement and when that body has no
+/// such layer, so the normal staged stack still paints. The bag pager's
+/// own digit run `0x1520002F..32` is untouched by that function and
+/// keeps its normal art. OPEN: no live frame pair pins the digit frame
+/// yet; only this static tab selection is claimed.
+#[must_use]
+pub fn myroom_page_number_frame(
+    placed: &ScenePlacement,
+    tab: MyRoomLowerTab,
+    figures: &HashMap<String, AvatarFigure>,
+) -> Option<usize> {
+    let offset = placed.code.checked_sub(MYROOM_GIFT_PAGE_FIRST_CODE)?;
+    if offset >= MYROOM_GIFT_PAGE_DIGITS {
+        return None;
+    }
+    let index = match tab {
+        MyRoomLowerTab::Bag => 1,
+        MyRoomLowerTab::Gifts => 2,
+    };
+    let sprite = placed.sprite.as_deref()?;
+    figures.get(sprite)?.layer(index).map(|_| index)
 }
 
 /// Avatar room: staged bound art, flat card fallback.

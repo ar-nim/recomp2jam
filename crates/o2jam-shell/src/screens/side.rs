@@ -7523,23 +7523,26 @@ mod side_tests {
             myroom_hit_placement(MYROOM_BAG_RIGHT_CODE, 300, 10),
         ];
         assert_eq!(
-            myroom_action_at(&placements, 11, 11),
+            myroom_action_at(&placements, MyRoomLowerTab::Bag, 11, 11),
             Some(MyRoomAction::SelectSlot(2))
         );
         assert_eq!(
-            myroom_action_at(&placements, 101, 11),
+            myroom_action_at(&placements, MyRoomLowerTab::Bag, 101, 11),
             Some(MyRoomAction::PickBagCell(0))
         );
         assert_eq!(
-            myroom_action_at(&placements, 201, 11),
+            myroom_action_at(&placements, MyRoomLowerTab::Gifts, 201, 11),
             Some(MyRoomAction::PickGiftCell(0))
         );
         assert_eq!(
-            myroom_action_at(&placements, 301, 11),
+            myroom_action_at(&placements, MyRoomLowerTab::Bag, 301, 11),
             Some(MyRoomAction::BagPage(MyRoomStep::Next))
         );
-        assert_eq!(myroom_action_at(&placements, 0, 0), None);
-        assert_eq!(myroom_action_at(&[], 11, 11), None);
+        assert_eq!(
+            myroom_action_at(&placements, MyRoomLowerTab::Bag, 0, 0),
+            None
+        );
+        assert_eq!(myroom_action_at(&[], MyRoomLowerTab::Bag, 11, 11), None);
     }
 
     #[test]
@@ -7568,10 +7571,10 @@ mod side_tests {
         assert_eq!(state.selected_slot(), 0);
         assert_eq!(state.bag_page(), 0);
         assert_eq!(state.bag_cell(), None);
-        state.select_slot(3);
+        state.record_slot_press(3);
         assert_eq!(state.selected_slot(), 3);
         // Past the eleventh button the press lands nowhere.
-        state.select_slot(11);
+        state.record_slot_press(11);
         assert_eq!(state.selected_slot(), 3);
         // Page turns clamp to the staged page count.
         state.turn_bag_page(MyRoomStep::Next, 3);
@@ -9031,7 +9034,7 @@ mod side_tests {
         });
 
         let mut selection = MyRoomState::new();
-        selection.select_slot(4);
+        selection.record_slot_press(4);
         selection.turn_bag_page(MyRoomStep::Next, myroom_bag_pages(&inventory, &table));
         selection.pick_bag_cell(Some(1));
         selection.turn_gift_page(MyRoomStep::Next, 1);
@@ -9057,6 +9060,7 @@ mod side_tests {
         });
         let hit = myroom_action_at(
             &[myroom_hit_placement(MYROOM_SLOT_FIRST_CODE + 2, 10, 10)],
+            MyRoomLowerTab::Bag,
             11,
             11,
         );
