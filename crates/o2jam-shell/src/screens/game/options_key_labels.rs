@@ -23,6 +23,12 @@ use super::options_key_mode;
 use o2jam_render::{blit_rgb555, fill_rect, pack_xrgb, Frame, Rect};
 
 const KEY_CAPTION_SPRITE: &str = "OptionKey_Keytext.ojs";
+/// The lit key-test panel. Its faces are held back while key test is
+/// unchecked; the dialog backdrop's own pad faces stay visible.
+const KEY_TEST_PANEL_SPRITE: &str = "OptionKey_3Keydown.ojs";
+/// The checked key-test body. The sheet authors no unchecked face:
+/// the empty box is baked into the backdrop.
+const KEY_TEST_CHECK_SPRITE: &str = "OptionKey_Checkbox.ojs";
 
 /// The `+0x198` DIK-order array (VAs `0x438080` fill, `0x439230` search):
 /// letters `Q..P`, `A..'`, `Z..RShift`, then LShift, Space and Enter.
@@ -72,23 +78,35 @@ pub(super) fn paint_option_key_tab(
 /// generic dialog painter would stack all frames at one rect, while
 /// the exe image control paints exactly the selected frame (VAs
 /// `0x439000` / `0x439780`).
+///
+/// An unchecked key test also holds back the lit panel and check
+/// body: the paired Key-rest frame shows the pad faces and empty box
+/// baked into the sheet backdrop, not the brighter test bodies.
 fn paint_dialog_without_captions(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     three_key: bool,
     settings: &crate::options::OptionsSettings,
 ) {
+    let key_test = settings.key_test();
     let visible_sheet = SceneArt {
         placements: art
             .placements
             .iter()
             .filter(|placed| placed.sprite.as_deref() != Some(KEY_CAPTION_SPRITE))
             .filter(|placed| options_key_mode::is_visible(placed.code, three_key))
+            .filter(|placed| key_test || !is_key_test_body(placed.sprite.as_deref()))
             .cloned()
             .collect(),
         figures: art.figures.clone(),
     };
     paint_planet_options(frame, Some(&visible_sheet), PlanetOptionTab::Key, settings);
+}
+
+/// Bodies the exe shows only while key test is checked. Both are
+/// staged controls, so the rest face still comes from the sheet.
+fn is_key_test_body(sprite: Option<&str>) -> bool {
+    matches!(sprite, Some(KEY_TEST_PANEL_SPRITE | KEY_TEST_CHECK_SPRITE))
 }
 
 /// Paint the active family's captions at their exe offset class.
@@ -188,6 +206,7 @@ fn paint_armed_stand_in(frame: &mut Frame<'_>, art: &SceneArt, three_key: bool, 
 mod tests {
     use super::super::super::side::{
         OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+        OPTION_KEY_TEST,
     };
     use super::super::{PlanetModal, ScreenGame};
     use super::*;
@@ -697,6 +716,112 @@ mod tests {
         assert!(
             glyph_mismatches(&buf, unbound, (318, 336)) > 0,
             "the loader-default Q frame must not stack on the bound glyph"
+        );
+    }
+
+    /// Paired Key-rest frame (`~/scratch/av-verify/options/compare-residual`):
+    /// the exe's pad faces are the ones baked into the sheet backdrop.
+    /// Our lit 3K panel overpaints them even with key test unchecked.
+    /// Live chain: planet gear -> PlanetModal::Options ->
+    /// ScreenGame::paint_planet_modal -> this painter.
+    #[test]
+    fn unchecked_key_test_keeps_the_exe_pad_faces_unlit() {
+        let Some(art) = key_art() else {
+            return;
+        };
+        let game = open_key_sheet(&art);
+        assert!(
+            !game.options().key_test(),
+            "a fresh 7.55 Key sheet has key test unchecked"
+        );
+        let painted = paint_live_key_tab(&game);
+        let captions = KeyCaptions {
+            lane_dik: game.options().lane_dik_for_mode(true),
+            three_key: true,
+            armed_lane: None,
+        };
+        let unlit_art = SceneArt {
+            placements: art
+                .placements
+                .iter()
+                .filter(|placed| {
+                    placed.sprite.as_deref() != Some(KEY_TEST_PANEL_SPRITE)
+                        && placed.sprite.as_deref() != Some(KEY_TEST_CHECK_SPRITE)
+                })
+                .cloned()
+                .collect(),
+            figures: art.figures.clone(),
+        };
+        let expected = paint_key_tab(&unlit_art, captions);
+        let panel = art
+            .figures
+            .get(KEY_TEST_PANEL_SPRITE)
+            .expect("3K panel stages");
+        let column = panel.layer(2).expect("third panel column decodes");
+        let origin = dialog_origin(&art.placements);
+        let width = i32::try_from(column.image.w).unwrap_or(i32::MAX);
+        let height = i32::try_from(column.image.h).unwrap_or(i32::MAX);
+        let pad = (
+            origin.0 + column.dx + width / 2,
+            origin.1 + column.dy + height - height / 8,
+        );
+        let at = pad.1 as usize * 800 + pad.0 as usize;
+        assert_eq!(
+            painted[at], expected[at],
+            "unchecked key test must leave the third pad on the backdrop face"
+        );
+    }
+
+    /// The check body is one staged frame. The exe's paired rest frame
+    /// shows the empty backdrop box, so the body must be held back.
+    /// Live chain: planet gear -> PlanetModal::Options ->
+    /// ScreenGame::paint_planet_modal -> this painter.
+    #[test]
+    fn unchecked_key_test_hides_the_staged_check_body() {
+        let Some(art) = key_art() else {
+            return;
+        };
+        let game = open_key_sheet(&art);
+        let painted = paint_live_key_tab(&game);
+        let check = art
+            .figures
+            .get(KEY_TEST_CHECK_SPRITE)
+            .expect("key-test check body stages");
+        let body = check.layer(0).expect("check body decodes");
+        let origin = dialog_origin(&art.placements);
+        assert!(
+            glyph_mismatches(&painted, body, (origin.0 + body.dx, origin.1 + body.dy)) > 0,
+            "unchecked key test must not paint the check body"
+        );
+    }
+
+    /// The check body is one staged frame; clicking the staged KEYTEST
+    /// rect flips the checkbox from the exe's unchecked rest state.
+    /// Live chain: winit pointer -> InputHandler::route_mouse_edge ->
+    /// GameLoop::ingest_snapshot -> ScreenGame::click_dispatch ->
+    /// click_planet_modal -> OptionsDialog::click_key_tab -> repaint.
+    #[test]
+    fn clicking_key_test_paints_the_staged_check_body() {
+        let Some(art) = key_art() else {
+            return;
+        };
+        let mut game = open_key_sheet(&art);
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_TEST, false));
+        assert!(
+            game.options().key_test(),
+            "the staged KEYTEST rect must flip the checkbox"
+        );
+        let painted = paint_live_key_tab(&game);
+        let check = art
+            .figures
+            .get(KEY_TEST_CHECK_SPRITE)
+            .expect("key-test check body stages");
+        let body = check.layer(0).expect("check body decodes");
+        let origin = dialog_origin(&art.placements);
+        assert_eq!(
+            glyph_mismatches(&painted, body, (origin.0 + body.dx, origin.1 + body.dy)),
+            0,
+            "checked key test must paint the staged check body"
         );
     }
 }

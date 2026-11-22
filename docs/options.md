@@ -35,7 +35,14 @@ refuted; this pin replaces it. Tab-switch captures remain OPEN.
   `0x438e80` / `0x4395e0`). 3K index 1 shares a staged rect with
   index 2 and is skipped by repaint `0x439780`. Unmapped keys are
   refused, and SAVE rejects zero or duplicate active binds before
-  writing (`0x439170` / `0x4394c0`). OPEN: the 3K default slot order
+  writing (`0x439170` / `0x4394c0`). The paired Key-rest frame
+  (`~/scratch/av-verify/options/compare-residual`, exe sha256
+  `80693114…384410b`) pins the unchecked chrome state: the key-test
+  checkbox shows the empty backdrop box, and all three pad faces are
+  the sheet's backdrop faces, not the lit `OptionKey_3Keydown.ojs`
+  columns (#845). The Key painter now holds those staged bodies back
+  while key test is unchecked; the checked state paints them from the
+  same staged controls. OPEN: the 3K default slot order
   for R Shift / Enter, exact panel animation frames, SAVE message
   text, and whether the key-count selection persists.
 - Sound tab: four Down/Up slider pairs step `GameBGVolume` /
