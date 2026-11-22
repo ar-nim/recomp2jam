@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "id": "row-vanish-582",
+  "ticket": 582,
+  "trace_id": "RV582-MASTER-DISBAND-01",
+  "source": "~/scratch/row-vanish-pack/attempt4 (master-disband, pass-through tap 15090)",
+  "aims": {
+    "normal-mode-ok": {
+      "ref": "normal-mode-ok",
+      "evidence": "lib/popup_state.py POPUP_AIMS; NORMAL-mode box OK, never blind Escape"
+    },
+    "back": {
+      "x": 751,
+      "y": 580,
+      "evidence": "W8 wa-pick-okback2; #582 attempt4 master-back.log SendInput BACK at (751, 580) -> C2S 3005 body 0000"
+    }
+  },
+  "steps": [
+    {
+      "id": "back-preprobe",
+      "action": "probe-popup",
+      "aim": "normal-mode-ok",
+      "time": "15:40:35",
+      "label": "BACK",
+      "phase": "pre-probe",
+      "blue": 0.811,
+      "scene": "waiting"
+    },
+    {
+      "id": "back-postprobe",
+      "action": "probe-popup",
+      "aim": "normal-mode-ok",
+      "time": "15:40:35",
+      "label": "BACK",
+      "phase": "post-probe",
+      "blue": 0.811,
+      "scene": "waiting"
+    },
+    {
+      "id": "popup-guard",
+      "action": "dismiss-popup",
+      "aim": "normal-mode-ok",
+      "max_tries": 2,
+      "text": "popup read from frame: dismiss at pinned OK before BACK"
+    },
+    {
+      "id": "observer-before",
+      "action": "wire-cue",
+      "direction": "S2C",
+      "opcode": 2003,
+      "body_contains": "525635383244495342414e44",
+      "text": "[15:40:33] 2003 BEFORE: count=100 titles=['RV582DISBAND']"
+    },
+    {
+      "id": "capture-before",
+      "action": "capture",
+      "name": "before",
+      "time": "15:40:33",
+      "evidence": {
+        "full": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/before.png",
+        "full_sha256": "3ecfd8f55743b05b4233145514312c228694e755f5ba83741927d6aac58bdb23",
+        "size": [1024, 768],
+        "crops": {
+          "row-grid": {
+            "path": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/crops/before-row-grid.png",
+            "box": [15, 72, 615, 368],
+            "sha256": "2c592846f7c770bfbe729e491f97fd6dec8a87b99d199d515d0fea09b42305f0"
+          },
+          "row-zero": {
+            "path": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/crops/before-row-zero.png",
+            "box": [25, 80, 313, 173],
+            "sha256": "bc828c12417f1a2e458dc1ea3e81af09f06d2f94b6ba207bbf1bd497f466d95b"
+          }
+        }
+      }
+    },
+    {
+      "id": "back-click",
+      "action": "click",
+      "aim": "back",
+      "time": "15:40:35",
+      "text": "SendInput BACK at (751, 580); cue=W8 wa-pick-okback2 C2S 3005 body 0000"
+    },
+    {
+      "id": "leave-3005",
+      "action": "wire-cue",
+      "direction": "C2S",
+      "opcode": 3005,
+      "text": "15:40:35 C2S opcode=3005 (0BBD) len=6 hex=000000000000"
+    },
+    {
+      "id": "removal-2007",
+      "action": "wire-cue",
+      "direction": "S2C",
+      "opcode": 2007,
+      "text": "15:40:35 S2C opcode=2007 (07D7) len=4 hex=00000000"
+    },
+    {
+      "id": "observer-after",
+      "action": "wire-cue",
+      "direction": "S2C",
+      "opcode": 2003,
+      "body_absent": "525635383244495342414e44",
+      "text": "[15:40:39] 2003 AFTER: count=100 titles=[]"
+    },
+    {
+      "id": "capture-after",
+      "action": "capture",
+      "name": "after",
+      "time": "15:40:39",
+      "evidence": {
+        "full": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/after.png",
+        "full_sha256": "69eefbd6a4c448a907a8b9e58c8b39ba40519e4e80dd4e1e6900e0510349575e",
+        "size": [1024, 768],
+        "crops": {
+          "row-grid": {
+            "path": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/crops/after-row-grid.png",
+            "box": [15, 72, 615, 368],
+            "sha256": "9bc75f421b38119cf78f824ce90d1fa139b9c0a9277d56f259a3f3e6e4b2238e"
+          },
+          "row-zero": {
+            "path": "/home/arnim/scratch/row-vanish-pack/attempt4/checkpoints/observer/crops/after-row-zero.png",
+            "box": [25, 80, 313, 173],
+            "sha256": "503d758b175443f705bf5436b417d4a4fa73acaa44e3f9d27280063a647ee985"
+          }
+        }
+      }
+    },
+    {
+      "id": "post-back-label",
+      "action": "note",
+      "time": "15:40:37",
+      "text": "post-BACK label=room"
+    }
+  ],
+  "proxy_rules": []
+}
