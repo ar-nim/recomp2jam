@@ -669,7 +669,7 @@ per fact: `sink`, `source`, `client`, `rate`, `channels`, `format`,
 `expect`, `state`, `started_at`, `stopped_at`, `duration_s`,
 `peak_dbfs`, `mean_dbfs`, `source_verified`, `route`, `sink_spec`,
 `resampling`, `client_streams`, `streams_normalized`, `muted_streams`,
-`on_default_sink`, `default_sink`, `run_sink_streams`,
+`audio_verdict`, `on_default_sink`, `default_sink`, `run_sink_streams`,
 `muted_run_sink_streams`, `client_stream_pid`, `client_stream_binary`,
 `foreign_process_streams`, `baseline_streams`,
 `baseline_streams_excluded`, `unattributed_default_streams`,
@@ -746,18 +746,57 @@ exit 12, `CONTAINMENT BREACH` on stderr, `route=default-sink-breach` in the
 sidecar, and the run is stopped immediately. The abort message and sidecar
 name the owning process id. The check polls for up to
 `RIG_AUDIO_ROUTE_TRIES` ticks (100, so 10 s): the native client opens its
-stream about 4 s into the boot, after chart and bank decode. Both
-`route=unseen` and `route=probe-only` stay provisional; check
-`foreign_process_streams`, `probe_streams`, and the snapshot before
-claiming the graph was empty. They are **not** proof of silence; the level
-sidecar (`expect`, `state`, `peak_dbfs`, `mean_dbfs`) and `rig-audio.sh
-verify` judge the artifact. The hermetic `scripts/rig-audio.sh selftest`
+stream about 4 s into the boot, after chart and bank decode.
+
+### Sidecar verdict vocabulary (#744)
+
+`scripts/lib/rig-audio-verdict.sh` is the one rule that reads a finished
+sidecar and yields a single `audio_verdict` word. The live chain is
+`scripts/rig-run.sh stop` → `scripts/run-manifest.sh verify` →
+`scripts/rig-audio.sh verify` → that rule; verify writes the word back to
+the sidecar and refuses a run whose verdict is `FAIL`. There is no separate
+verdict word per capture wave.
+
+| raw `route` | required sidecar facts | `audio_verdict` |
+|---|---|---|
+| `sink` | `client_streams >= 1`; no explicit breach | `PASS` |
+| `probe-only` | clean containment set; `probe_streams >= 1`, `client_streams=0`, empty `run_sink_streams` | `PASS` |
+| `default-sink-breach`, `foreign-sink` | any | `FAIL` |
+| any route | `preboot_breach != 0` or `on_default_sink != 0` | `FAIL` |
+| `unseen`, `unchecked` | no bound stream attributed and no explicit breach | `OPEN` |
+
+An explicit breach outranks the route word: even a stale `unseen` sidecar
+with `on_default_sink=1` is `FAIL`. The exact clean-containment metric set
+is `preboot_breach=0`, `on_default_sink=0`, and a readable `peak_dbfs` at or
+below the 0.0 dBFS full-scale ceiling (`-inf` and negative peaks also
+count). On `probe-only`, a missing or unparseable metric is `FAIL`, never a
+silent pass. The house `sink` route predates those fields: cited legacy
+packs keep their level-only `PASS`, with the explicit-breach rule above
+still applied. The two waves behind #744 (RV582, RH-HANDOFF-01) recorded
+`route=probe-only`, `probe_streams=1`,
+`client_streams=0`, empty `run_sink_streams`, `preboot_breach=0`,
+`on_default_sink=0`, and `peak_dbfs=0.0`; they are `PASS` without a caveat.
+Other cited probe-only packs with peaks such as `-1.1` dBFS stay valid too.
+Their raw `route` word is unchanged, so no pack needs re-citing.
+
+`OPEN` is not a contained verdict: an `unseen`/`unchecked` lane stays on the
+old level-only path and is **not** proof of silence; the level sidecar
+(`expect`, `state`, `peak_dbfs`, `mean_dbfs`) and `rig-audio.sh verify`
+judge the artifact. Check `foreign_process_streams`, `probe_streams`, and
+the snapshot before claiming the graph was empty. The hermetic
+`scripts/rig-audio.sh selftest`
 pins `wine-exe-run-sink` (green, `route=sink`), `wine-exe-default-sink`
 (red, breach + exit 12), `wine-exe-unbound-format-probe` (`probe-only`),
 `wine-exe-foreign-process-id` (a leftover is not attributed),
 `wine-exe-foreign-process-id-default-sink` (a leftover does not abort an
 innocent run), `wine-exe-unknown-pid-default-sink` (red), and
 `wine-exe-baseline-stream-excluded` (a pre-boot stream is not ours).
+`scripts/tests/test-rig-audio-verdict.sh` pins the verdict legs: a corked
+probe-only sidecar with clean metrics is `PASS`, the house `sink` route
+stays `PASS`, a bound default-sink stream is `FAIL` through the real
+`rig-audio.sh verify` chain, and a probe-only sidecar with a bound stream,
+a missing peak, or a pre-boot breach is refused. It runs from
+`scripts/tests/test-rig-run-class.sh`.
 `scripts/rig-run.sh selftest` adds `audio-preboot-stream-breach` (exit 12
 before the client is launched) and `audio-route-probe-then-playback`
 (polling continues until the bound stream reaches the run sink).
