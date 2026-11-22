@@ -213,18 +213,60 @@ pub const TUTORIAL_EXIT_HIT_RECT: Rect = Rect {
     h: 42,
 };
 
-/// First-page instruction bubble (`Guide_Text.ojs` record 0, anchor
-/// `(374,297)`, 322x156). The body stores 13 full pages; record 0 bakes
-/// the Korean lesson text and the `1/13` counter seen in the B7 exe
-/// frame (manifest `064bec85…3272d`, frame `612830b5…e77b8`), so no
-/// glyph rasterizer is involved. Later page timing is OPEN (#326).
+/// Instruction bubble (`Guide_Text.ojs`, anchor `(374,297)`, 322x156).
+/// The body stores 13 full pages; record 0 bakes the Korean lesson text
+/// and the `1/13` counter seen in the B7 exe frame (manifest
+/// `064bec85…3272d`, frame `612830b5…e77b8`), so no glyph rasterizer is
+/// involved. The exe's page writer selects record `page - 1` (#873).
 pub const TUTORIAL_INSTRUCTION_SPRITE: &str = "Guide_Text.ojs";
 
-/// Frame-0 coach figure (`Guide_Ani.ojs` record 0, anchor `(645,350)`,
-/// 138x183) in the same B7 frame. The 12 records are animation frames;
-/// their cadence is OPEN, so the exe-visible frame 0 is the only one
-/// painted.
+/// Coach figure (`Guide_Ani.ojs`, anchor `(645,350)`, 138x183). The 12
+/// records are one autonomous animation; the exe arms mode 3 with a
+/// 66 ms record step and wraps back to record 0 after record 11 (#873).
 pub const TUTORIAL_COACH_SPRITE: &str = "Guide_Ani.ojs";
+
+/// Number of lesson records in `Guide_Text.ojs`.
+const TUTORIAL_TEXT_RECORDS: usize = 13;
+/// Number of animation records in `Guide_Ani.ojs`.
+const TUTORIAL_COACH_RECORDS: u64 = 12;
+/// Record step armed by the exe at file `0x10edf` (VA `0x42f400`): the
+/// generic sprite tick (`0x42f040`) advances mode 3 every `0x42` ms and
+/// writes `record - 1` through `0x41e0f0`.
+const TUTORIAL_COACH_FRAME_MS: u64 = 0x42;
+
+/// Which staged sprite records the tutorial paint shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TutorialGuideFrames {
+    /// `Guide_Text.ojs` record: page N selects record N - 1.
+    pub instruction: usize,
+    /// `Guide_Ani.ojs` record from the pinned 66 ms animation step.
+    pub coach: usize,
+}
+
+impl TutorialGuideFrames {
+    /// Resolve the two guide records from the #868 page clock.
+    #[must_use]
+    pub fn for_page_and_chart_ms(page: usize, chart_ms: u64) -> Self {
+        let coach_step = (chart_ms / TUTORIAL_COACH_FRAME_MS) % TUTORIAL_COACH_RECORDS;
+        Self {
+            instruction: page.saturating_sub(1).min(TUTORIAL_TEXT_RECORDS - 1),
+            coach: usize::try_from(coach_step).unwrap_or(0),
+        }
+    }
+}
+
+/// One tutorial paint's clock and key state. Grouping them keeps the
+/// painter's interface small while the page clock stays owned by the
+/// caller that advances it.
+#[derive(Debug, Clone, Copy)]
+pub struct TutorialPaintState<'a> {
+    /// Records selected for this paint.
+    pub frames: TutorialGuideFrames,
+    /// Pressed/released lane caps for this paint.
+    pub key_lights: &'a TutorialKeyLights,
+    /// Wall clock used by the painted key-light step.
+    pub now_ms: u64,
+}
 
 /// Lit tutorial kit lanes. Each press starts a five-frame cap/glow
 /// animation; an up (or a scene exit) restores the rest frame. The
@@ -6224,25 +6266,31 @@ pub fn paint_side_scene_live(
 }
 
 /// Tutorial side painter: the full-canvas backdrop keeps its stacked
-/// art, the two guide bodies show only the exe-visible frame 0, and
-/// each of the seven kit bodies shows its rest frame or its current
-/// key-light frame. An image control swaps one surface per view;
-/// stacking all 13 text pages would cover `1/13` with page 13 (B7
-/// frame hash `612830b5…e77b8`). Geometry stays the parsed anchors.
+/// art, the lesson bubble shows the page's record, the coach shows its
+/// current 66 ms animation record, and each of the seven kit bodies
+/// shows its rest frame or its current key-light frame. An image
+/// control swaps one surface per view; stacking all 13 text pages would
+/// cover `1/13` with page 13 (B7 frame hash `612830b5…e77b8`). Geometry
+/// stays the parsed anchors.
 pub fn paint_tutorial_scene(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     figures: &HashMap<String, AvatarFigure>,
-    key_lights: &TutorialKeyLights,
-    now_ms: u64,
+    state: TutorialPaintState<'_>,
 ) {
+    let TutorialPaintState {
+        frames,
+        key_lights,
+        now_ms,
+    } = state;
     paint_scene_figures_selected(
         frame,
         placements,
         figures,
         |_| true,
         |placed| match placed.sprite.as_deref() {
-            Some(TUTORIAL_INSTRUCTION_SPRITE | TUTORIAL_COACH_SPRITE) => Some(0),
+            Some(TUTORIAL_INSTRUCTION_SPRITE) => Some(frames.instruction),
+            Some(TUTORIAL_COACH_SPRITE) => Some(frames.coach),
             Some(sprite) => {
                 tutorial_key_lane(sprite).map(|lane| key_lights.frame_index(lane, now_ms))
             }
@@ -6256,6 +6304,34 @@ mod side_tests {
     use super::*;
     use crate::avatar::PlacementRole;
     use o2jam_net::{GiftItemInfo, GiftMusicInfo};
+
+    #[test]
+    fn tutorial_guide_frames_pin_page_records_and_coach_wrap() {
+        assert_eq!(
+            TutorialGuideFrames::for_page_and_chart_ms(0, 0),
+            TutorialGuideFrames {
+                instruction: 0,
+                coach: 0,
+            },
+            "entry page keeps record 0"
+        );
+        assert_eq!(
+            TutorialGuideFrames::for_page_and_chart_ms(13, 11 * 0x42),
+            TutorialGuideFrames {
+                instruction: 12,
+                coach: 11,
+            },
+            "page 13 uses record 12 and the last coach record"
+        );
+        assert_eq!(
+            TutorialGuideFrames::for_page_and_chart_ms(14, 12 * 0x42),
+            TutorialGuideFrames {
+                instruction: 12,
+                coach: 0,
+            },
+            "past the last page/deadline both records clamp or wrap"
+        );
+    }
 
     /// Staged create-room placements mirroring the real 7.55 sheet:
     /// the `Dialog_CreateRoom.ojs` back at (188,71) plus the CREATE

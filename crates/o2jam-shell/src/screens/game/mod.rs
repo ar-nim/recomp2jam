@@ -105,13 +105,14 @@ use super::side::{
     PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
     SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
     SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialKeyLights, WalletRow, WalletState,
-    CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE,
-    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
-    ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
-    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
-    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
+    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
+    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
+    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -8529,8 +8530,14 @@ impl ScreenGame {
                 frame,
                 &self.side_placements,
                 &self.side_figures,
-                &self.tutorial_key_lights,
-                now_ms,
+                TutorialPaintState {
+                    frames: TutorialGuideFrames::for_page_and_chart_ms(
+                        self.tutorial_page,
+                        chart_ms,
+                    ),
+                    key_lights: &self.tutorial_key_lights,
+                    now_ms,
+                },
             );
             // The exe gives the tutorial the same CNewNote entities as
             // Playing (Init `0x4f0950` calls `0x56f6a0`/`0x56ff30`).
@@ -34617,6 +34624,100 @@ mod game_tests {
     }
 
     #[test]
+    fn tutorial_deadline_pages_select_lesson_records_and_coach_advances_per_exe_tick() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → Tutorial chart clock → `advance_tutorial_page` →
+        // `paint_tutorial_scene` → painted guide pixels. The exe stages
+        // `Guide_Text.ojs` on the page writer (`0x4f1bf0`, state `+0x914`)
+        // and `Guide_Ani.ojs` as a mode-3 66 ms animation (`0x4f0ec4`,
+        // `0x4f0edf`, state `+0x910`); both records are read off the
+        // painted frame, not off a seam call.
+        let guide_colors = |count: usize| {
+            (0..count)
+                .map(|record| {
+                    let word = (((record + 1) as u16) << 10) | 0x001F;
+                    let (red, _green, blue) = o2jam_render::expand_rgb555(word);
+                    (word, pack_xrgb(red, 0, blue))
+                })
+                .collect::<Vec<_>>()
+        };
+        let text_colors = guide_colors(13);
+        let coach_colors = guide_colors(12);
+        let guide_figure = |colors: &[(u16, u32)], x: i32, y: i32| {
+            let mut figure = AvatarFigure::default();
+            for &(word, _) in colors {
+                let pixels = [word.to_le_bytes(); 16].concat();
+                figure.push_layer(FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                    dx: x,
+                    dy: y,
+                    colorkey: 0xFFFF,
+                });
+            }
+            figure
+        };
+        let placement = |sprite: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+        };
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.load_tutorial_scene(
+            vec![
+                placement(TUTORIAL_INSTRUCTION_SPRITE),
+                placement(crate::screens::side::TUTORIAL_COACH_SPRITE),
+            ],
+            HashMap::from([
+                (
+                    TUTORIAL_INSTRUCTION_SPRITE.to_owned(),
+                    guide_figure(&text_colors, 374, 297),
+                ),
+                (
+                    crate::screens::side::TUTORIAL_COACH_SPRITE.to_owned(),
+                    guide_figure(&coach_colors, 645, 350),
+                ),
+            ]),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+
+        let paint = |game: &mut ScreenGame, now_ms: u64| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            (buf[298 * 800 + 375], buf[351 * 800 + 646])
+        };
+        assert_eq!(paint(&mut game, 0).0, text_colors[0].1);
+
+        // The first paint latches the chart origin. Page 2's pinned
+        // deadline is 32.6 s; at 33.0 s the bubble shows record 1
+        // (baked `2/13`). At the same chart time the coach has taken
+        // 500 × 66 ms ticks: 500 mod 12 = 8, so record 8 must paint.
+        let painted = paint(&mut game, 33_000);
+        assert_eq!(painted.0, text_colors[1].1, "page 2 selects record 1");
+        assert_eq!(
+            painted.1, coach_colors[8].1,
+            "coach follows the 66 ms cycle"
+        );
+    }
+
+    #[test]
     fn tutorial_visit_leaves_the_channel_board_unchanged() {
         // Spec #313 channel-observer story: a private side visit has no
         // board cell (`docs/captures/journey-audit/313-tutorial-story-matrix.md`
@@ -34649,13 +34750,14 @@ mod game_tests {
     }
 
     #[test]
-    fn tutorial_guide_art_has_no_wall_clock_timer_beyond_the_chart() {
-        // Spec #313 story 12: the tutorial adds no invented timer. The
-        // only cadence the exe pins is chart-derived (helper `0x495110`
-        // writes song id 8888 before `ChangeState(0xb)`; `S-PLAY-B3`),
-        // so guide art holds the B7 frame 0 across wall-clock paints.
-        // Live chain: boot -> Channel -> Room -> staged FIRSTSTEP ->
-        // Tutorial globals -> `paint_tutorial_scene` frame selector.
+    fn tutorial_guide_text_follows_chart_pages_not_wall_clock_or_keys() {
+        // Spec #313 story 12 with #873's page pin: the tutorial adds no
+        // invented timer. Only the chart-derived page counter advances
+        // the lesson body (helper `0x495110` writes song id 8888 before
+        // `ChangeState(0xb)`; `S-PLAY-B3`). At 45 s the chart has passed
+        // page 2's 32.6 s deadline, so record 1 paints; a lane key does
+        // not renumber pages. Live chain: boot -> Channel -> Room ->
+        // staged FIRSTSTEP -> Tutorial globals -> `paint_tutorial_scene`.
         let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
         let mut instruction = AvatarFigure::default();
         for word in [0x7C00u16, 0x03E0u16] {
@@ -34707,10 +34809,11 @@ mod game_tests {
             buf[298 * 800 + 375]
         };
         let frame_zero = pack_xrgb(255, 0, 0);
+        let frame_one = pack_xrgb(0, 255, 0);
         assert_eq!(paint(&mut game, 0), frame_zero);
-        assert_eq!(paint(&mut game, 45_000), frame_zero, "no wall-clock page");
+        assert_eq!(paint(&mut game, 45_000), frame_one, "chart page 2");
         game.lane_key(0, true);
-        assert_eq!(paint(&mut game, 45_000), frame_zero, "no key-driven page");
+        assert_eq!(paint(&mut game, 45_000), frame_one, "no key-driven page");
     }
 
     #[test]
