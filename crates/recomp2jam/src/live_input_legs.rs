@@ -11,18 +11,20 @@
 mod live_input_leg_tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
-    use std::sync::mpsc::{self, Receiver};
+    use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
     use std::thread::JoinHandle;
+    use std::time::Duration;
 
+    use o2jam_net::shop::EnterShop;
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{
-        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, Frame, Gender, JoinRoom,
-        JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
+        AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, EmptyMessage, Frame, Gender,
+        JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
-    use o2jam_shell::screens::side::INFORMATION_OK_CODE;
+    use o2jam_shell::screens::side::{SideScreen, INFORMATION_OK_CODE};
     use o2jam_shell::staging::{read_install_archives, stage_dialog, Dialog, StageContext};
     use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, Screen};
 
@@ -676,5 +678,148 @@ mod live_input_leg_tests {
     #[test]
     fn live_click_master_start_then_back_from_boot() {
         waiting_lifecycle_by_clicks(0, true, "IDC_BUTTON_SWAIT_START", Request::StartGame.id());
+    }
+
+    /// One staged top tab and the exe aim that lands inside its
+    /// `State_Room.bnd` rect. The rect ordinal is `(code & 0xFFF) - 1`
+    /// (owner rule `0c6c3`); the guard checks the staged rect, never a
+    /// literal painted geometry.
+    struct RoomTopTab {
+        code: u32,
+        id: &'static str,
+        aim: (i32, i32),
+        side: SideScreen,
+        enters_shop: bool,
+    }
+
+    /// The three shop-family tabs send `EnterShop` 5006 on entry; the
+    /// exe's FIRSTSTEP tap carries no 5006 (story 313 wire pack), so
+    /// the Tutorial arm keeps its local chart globals only.
+    fn room_top_tabs() -> [RoomTopTab; 4] {
+        [
+            RoomTopTab {
+                code: 0x1320_0037,
+                id: "IDC_BUTTON_SROOM_MUSICSHOP",
+                aim: (350, 16),
+                side: SideScreen::MusicShop,
+                enters_shop: true,
+            },
+            RoomTopTab {
+                code: 0x1320_0008,
+                id: "IDC_BUTTON_SROOM_ITEMSHOP",
+                aim: (422, 17),
+                side: SideScreen::Shop,
+                enters_shop: true,
+            },
+            RoomTopTab {
+                code: 0x1320_0009,
+                id: "IDC_BUTTON_SROOM_MYROOM",
+                aim: (517, 16),
+                side: SideScreen::MyRoom,
+                enters_shop: true,
+            },
+            RoomTopTab {
+                code: 0x1320_0032,
+                id: "IDC_BUTTON_SROOM_FIRSTSTEP",
+                aim: (689, 16),
+                side: SideScreen::Tutorial,
+                enters_shop: false,
+            },
+        ]
+    }
+
+    /// An entry frame can reach the recorder a beat after the paint;
+    /// wait for it, but fail with the tab id instead of hanging when a
+    /// dispatch omits the wire.
+    fn wait_for_enter_shop(reports: &Receiver<Frame>, tab_id: &str) {
+        loop {
+            match reports.recv_timeout(Duration::from_secs(3)) {
+                Ok(frame) if frame.id == EnterShop::COMMAND => {
+                    assert!(
+                        frame.payload.is_empty(),
+                        "{tab_id} must queue an empty C2S 5006"
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("{tab_id} must queue empty C2S 5006 within 3s")
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("gateway closed before {tab_id} sent 5006")
+                }
+            }
+        }
+    }
+
+    /// Check that the exe aim lands inside the staged `.bnd` rect the
+    /// pairing rule assigns to this control code.
+    fn assert_tab_aim_is_staged(session: &mut OnlineSession, tab: &RoomTopTab) {
+        let placement = session
+            .game_mut()
+            .scene_placements(Screen::Room)
+            .iter()
+            .find(|placed| placed.code == tab.code)
+            .unwrap_or_else(|| panic!("no staged placement for {:#x}", tab.code));
+        assert_eq!(placement.id, tab.id, "code pairs with its bnd control id");
+        let rect = placement.rect;
+        let right = rect.x + i32::try_from(rect.w).expect("rect width fits i32");
+        let bottom = rect.y + i32::try_from(rect.h).expect("rect height fits i32");
+        assert!(
+            tab.aim.0 >= rect.x && tab.aim.0 < right && tab.aim.1 >= rect.y && tab.aim.1 < bottom,
+            "exe aim {:?} misses staged rect {rect:?} of {}",
+            tab.aim,
+            tab.id
+        );
+    }
+
+    /// Journey 5/7 side-entry leg (#853). Every aim is pressed from a
+    /// freshly returned Room board, so one open side screen cannot
+    /// mask the next tab. The shop-family entries must also queue the
+    /// empty C2S 5006 that the exe wire tap logs on Music Shop and
+    /// MyRoom entry (`~/scratch/journey-matrix/musicshop/exe/wire/
+    /// room-stage.log`); Rust sent none before this fix.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_room_row
+    ///   -> ScreenGame::click_room_control -> ScreenGame::room_control_at
+    ///   -> RoomControlAction::EnterShopSide -> ScreenGame::visit_side
+    ///   -> PendingOutbox::pending_enter_shop -> OnlineSession::poll_wire
+    ///   -> flush_enter_shop -> C2S 5006.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_top_tabs_pair_by_bnd_ordinal_and_queue_enter_shop() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        for tab in room_top_tabs() {
+            // One fresh boot per aim: the side-sweep rig pressed all
+            // four aims in one live session without leaving the first
+            // side, which made the later three look inert. A fresh
+            // board also keeps each tap inside the gateway's quiet
+            // window (its read timeout is five seconds).
+            let gateway = spawn_live_leg_gateway(joined_room(0, true));
+            let mut session = boot_live_leg(gateway.port, false);
+            dismiss_splash(&mut session);
+            enter_room_by_clicks(&mut session);
+
+            assert_tab_aim_is_staged(&mut session, &tab);
+            session.ingest_snapshot(&InputSnapshot::click_at(tab.aim.0, tab.aim.1));
+            paint(&mut session);
+            assert_eq!(
+                session.game_mut().side(),
+                Some(tab.side),
+                "{} must open its staged side screen",
+                tab.id
+            );
+            if tab.enters_shop {
+                wait_for_enter_shop(&gateway.reports, tab.id);
+            }
+            finish(session, gateway.server);
+        }
     }
 }

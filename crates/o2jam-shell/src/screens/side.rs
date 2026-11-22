@@ -4946,6 +4946,17 @@ pub const ROOM_BACK_BUTTON_ID: &str = "IDC_BUTTON_SROOM_BACK";
 pub const ROOM_OPTION_BUTTON_CODE: u32 = 0x1320_000B;
 /// Room-option button control id (`IDC_BUTTON_SROOM_OPTION`).
 pub const ROOM_OPTION_BUTTON_ID: &str = "IDC_BUTTON_SROOM_OPTION";
+/// Room top-tab side entries. Each low word pairs with its
+/// `State_Room.bnd` rect through `(code & 0xFFF) - 1` (dossier
+/// `ev_3a869bb7…`, owner rule `0c6c3`), never through file order:
+/// `ITEMSHOP` rect 7 `(387,1)-(458,33)`, `MYROOM` rect 8
+/// `(484,1)-(555,33)`, `FIRSTSTEP` rect 49 `(660,1)-(720,33)`, and
+/// `MUSICSHOP` rect 54 `(314,1)-(385,33)`. The shop-family three also
+/// own the empty `EnterShop` 5006 their Room press emits.
+pub const ROOM_ITEMSHOP_BUTTON_CODE: u32 = 0x1320_0008;
+pub const ROOM_MYROOM_BUTTON_CODE: u32 = 0x1320_0009;
+pub const ROOM_FIRSTSTEP_BUTTON_CODE: u32 = 0x1320_0032;
+pub const ROOM_MUSICSHOP_BUTTON_CODE: u32 = 0x1320_0037;
 /// Password-dialog OK code (`0X28200004`, `Dialog_PasswordOK.ojs`).
 pub const PASSWORD_OK_CODE: u32 = 0x2820_0004;
 /// Password-dialog CANCEL code (`0X28200005`, `Dialog_PasswordNO.ojs`).

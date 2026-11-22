@@ -153,8 +153,8 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
-    EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag, SellItemResponse,
-    SyncItemPurchase, SyncItemPurchaseReply, SyncMusicPurchase,
+    EnterShop, EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag,
+    SellItemResponse, SyncItemPurchase, SyncItemPurchaseReply, SyncMusicPurchase,
 };
 use o2jam_net::wallet::{StartPayment, SyncCashPoint, SyncCashPointResponse};
 use o2jam_net::EmptyMessage;
@@ -2617,6 +2617,19 @@ impl OnlineSession {
         }
     }
 
+    /// Send one queued Room side entry (5006 empty body). The shell
+    /// has already opened the side screen; a failed send warns and
+    /// drops the queue, since the entry cannot be retried from a side
+    /// screen that is no longer the Room board.
+    fn flush_enter_shop(&mut self) {
+        if self.game.take_enter_shop().is_none() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(EnterShop::COMMAND, &[]) {
+            tracing::warn!(%source, "shop entry send failed after Room top-tab click");
+        }
+    }
+
     /// Send one queued BACK exit (5007 empty body). The shell has
     /// already returned to the lobby; a failed send warns and drops the
     /// queue, since the local transition cannot be retried by another
@@ -4154,6 +4167,7 @@ impl OnlineSession {
         self.flush_arena_send();
         self.flush_team_send();
         self.flush_channel_logout();
+        self.flush_enter_shop();
         self.flush_exit_shop();
         self.flush_refresh_bag();
         self.flush_start_payment();

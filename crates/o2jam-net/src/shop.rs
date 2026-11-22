@@ -196,6 +196,13 @@ impl WireMessage for EquipItemResponse {
 // the common tail (VA `0x4f4051`, file `0xf4051`) transmits it unchanged.
 empty_message!(SyncItemPurchase, 5000);
 
+// `EnterShop` 5006 is the empty C→S frame the exe emits on Room side
+// entry: the Music Shop tap (`~/scratch/journey-matrix/musicshop/exe/
+// wire/room-stage.log`, opcode `0x138E`, len 0) and the MyRoom leg
+// (`~/scratch/journey-matrix/shop-2/exe/wire/room-stage.log`) carry it
+// at the entry click. The opcode is named in `docs/net-protocol.md`.
+empty_message!(EnterShop, 5006);
+
 // `ExitShop` 5007 is the empty C→S frame the tapped BACK press emits
 // (frame `ff522720…ef29b270`, wire `94b2ea8f…a2508`, 20:35:18). The
 // opcode is named in `docs/net-protocol.md`; unlike 5000 there is no

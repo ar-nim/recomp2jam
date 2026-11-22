@@ -3,7 +3,9 @@
 
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList};
 use o2jam_net::play::{SetRoomArena, SetRoomMusic};
-use o2jam_net::shop::{EquipItem, ExitShop, RefreshBag, SyncItemPurchase, SyncMusicPurchase};
+use o2jam_net::shop::{
+    EnterShop, EquipItem, ExitShop, RefreshBag, SyncItemPurchase, SyncMusicPurchase,
+};
 use o2jam_net::wallet::StartPayment;
 use o2jam_net::{CreateRoom, ExitPlaying, ExitWaiting, JoinRoom, Ready, SetRoomTeam, StartGame};
 
@@ -129,6 +131,9 @@ pub(crate) struct PendingOutbox {
     /// Queued shop exit awaiting the session send (5007; the full-bleed
     /// BACK rect owns it).
     pub(crate) pending_exit_shop: Option<ExitShop>,
+    /// Queued Room side entry awaiting the session send (5006; the
+    /// three shop-family top tabs own it).
+    pub(crate) pending_enter_shop: Option<EnterShop>,
     /// Queued BAGSORT refresh awaiting the session send (5038; the
     /// static arm at file `0x9bfa8` owns it, live wire tap OPEN).
     pub(crate) pending_refresh_bag: Option<RefreshBag>,
@@ -318,6 +323,11 @@ impl PendingOutbox {
     /// BACK press sends once.
     pub(crate) fn take_exit_shop(&mut self) -> Option<ExitShop> {
         self.pending_exit_shop.take()
+    }
+    /// Queued shop entry for the session bridge, if any (5006). One
+    /// Room top-tab press sends once; a rejected visit queues nothing.
+    pub(crate) fn take_enter_shop(&mut self) -> Option<EnterShop> {
+        self.pending_enter_shop.take()
     }
     /// Queued bag refresh for the session bridge, if any (5038). One
     /// BAGSORT press sends once; the next press replaces an unsent one.
