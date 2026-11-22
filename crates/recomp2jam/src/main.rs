@@ -1948,7 +1948,7 @@ fn setup_chart_audio(
     let bgm_bank = load_scene_bgm_bank();
     game.with_audio(backend, bank);
     game.stage_scene_bgm(bgm_bank);
-    game.stage_tutorial_ojm_bank(load_tutorial_ojm_bank());
+    game.set_tutorial_ojm_bank(load_tutorial_ojm_bank());
     game.stage_ui_effect_bank(load_ui_effect_bank());
     let (cue_id, cue_repeat) = scene_bgm_cue(o2jam_shell::Screen::Avi);
     tracing::info!(?cue_id, ?cue_repeat, "launch BGM cued");
@@ -2777,7 +2777,7 @@ mod scene_bgm_tests {
     #[test]
     fn tutorial_bank_decodes_the_twelve_shipped_mode3_records() {
         // Live chain: main.rs::run_play -> setup_chart_audio ->
-        // load_tutorial_ojm_bank -> ScreenGame::stage_tutorial_ojm_bank
+        // load_tutorial_ojm_bank -> ScreenGame::set_tutorial_ojm_bank
         // -> FIRSTSTEP entry cue. Archival guard: skips in a bare CI
         // worktree; no fallback sample is invented for a missing bank.
         let bank = load_tutorial_ojm_bank();
