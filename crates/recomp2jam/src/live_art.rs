@@ -278,6 +278,7 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
         return;
     };
     game.load_scene(Screen::Playing, art.placements, art.figures);
+    game.stage_venue_theme();
     if let Some(skin) = PlaySkin::from_archive_for_stage(archive, Some(game.arena_stage())) {
         game.set_play_skin(skin);
     }
@@ -1034,6 +1035,10 @@ mod live_art_tests {
         if let Some(art) = stage_state(&playing, State::Playing, playing_ctx).art {
             expected.load_scene(Screen::Playing, art.placements, art.figures);
         }
+        // The venue theme resolver runs at runtime on the live path
+        // (stage_playing_scenes, #848); the declaration path applies
+        // the same resolver so the no-delta oracle holds.
+        expected.stage_venue_theme();
         if let Some(skin) =
             o2jam_shell::PlaySkin::from_archive_for_stage(&playing, Some(expected.arena_stage()))
         {

@@ -50,7 +50,7 @@ pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, paint_foreground_placements,
     paint_scene_figures_selected, AvatarFigure, ScenePlacement, AVATAR_BREATHING_TICK_MS,
-    LOADING_COVER_SPRITE,
+    LOADING_COVER_SPRITE, PLAYING_VENUE_THEME_SPRITE,
 };
 use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
@@ -1137,11 +1137,48 @@ fn scale_scene_bgm(pcm: &PcmSamples, gain: f32) -> PcmSamples {
     }
 }
 
+/// Highest numbered venue: the room applier at VA `0x4ad350` rejects
+/// low words above `0x24` (36) before storing the arena global.
+const MAX_ARENA_STAGE: u16 = 36;
+
 fn arena_stage_word(arena: i32) -> Option<u16> {
-    let word = u32::try_from(arena).ok()?;
+    // The picker's flag sets bit 31, so the wire word is a negative
+    // `i32`. `cast_unsigned` keeps its bits; `try_from` would reject it.
+    let word = arena.cast_unsigned();
     let high = word >> 16;
     let stage = if high != 0 { word & 0xFFFF } else { word };
-    u16::try_from(stage).ok().filter(|stage| *stage != 0)
+    u16::try_from(stage)
+        .ok()
+        .filter(|stage| (1..=MAX_ARENA_STAGE).contains(stage))
+}
+
+/// Venue theme image selected by a 4003 arena word. The waiting-map
+/// applier at VA `0x4b3a70` (file `0x4b3b61`/`0x4b3cee`, REA
+/// `ev_44839cdf8bcc8064a153bd9c3573e6df81e84a9106b3c66d572b68d0400a5946`)
+/// writes `SetFrame(stage % 3, 0 → 3)` to `IDC_IMAGE_SWAIT_NORMAL_MAP`; the
+/// setter `0x42f870` (REA
+/// `ev_49cf8f68fab9e64d620456258e4fb1e243c9a76f88d4a7177cbfaf3a2d7d1b11`)
+/// converts that one-based frame to the image index. The paired boots
+/// pin stage 25 → frame 0 and stage 30 → frame 2 (#848).
+#[must_use]
+pub fn venue_theme_frame(arena: i32) -> Option<usize> {
+    let stage = arena_stage_word(arena)?;
+    let set_frame = match stage % 3 {
+        0 => 3,
+        remainder => remainder,
+    };
+    Some(usize::from(set_frame - 1))
+}
+
+/// True for the Playing venue placement that the arena theme replaces:
+/// the `_` ref and its stage-numbered sibling share the stem.
+fn is_stage_venue_placement(placement: &ScenePlacement) -> bool {
+    placement.sprite.as_deref().is_some_and(|sprite| {
+        sprite
+            .strip_prefix('_')
+            .unwrap_or(sprite)
+            .starts_with("Playing_BG")
+    })
 }
 
 /// Loading-gate phase named by one staged walk fraction: the
@@ -2349,11 +2386,12 @@ impl ScreenGame {
     }
 
     /// Remember the joined room; Waiting paints its eight seats, and
-    /// the room's arena word sets the Playing backdrop stage (zero or
-    /// negative words keep the current stage: the exe replaces a zero
-    /// stage on room entry, it never stores one). Joining a new room
-    /// clears the chat history and draft: rows come from that room's
-    /// 3012/3013 packets only, never carried across rooms.
+    /// the room's arena word sets the Playing backdrop stage and venue
+    /// theme. A high-bit flag is part of the word, not a rejection:
+    /// the low word carries the stage. Zero keeps the current stage
+    /// (the exe replaces a zero stage on room entry). Joining a new
+    /// room clears the chat history and draft: rows come from that
+    /// room's 3012/3013 packets only, never carried across rooms.
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
         self.waiting_stamp_armed = room.slots.iter().any(|slot| {
             slot.index != room.member_id
@@ -2368,6 +2406,7 @@ impl ScreenGame {
             self.arena_stage = stage;
         }
         self.waiting = Some(room);
+        self.stage_venue_theme();
         self.announced_room_master_id = None;
         self.local_download_badge_armed = false;
         self.chat.clear_waiting();
@@ -5694,6 +5733,48 @@ impl ScreenGame {
         self.scene_art[scene_index(screen)]
             .as_ref()
             .map_or(&[], |art| &art.placements)
+    }
+
+    /// Layer count of one staged figure: the frame the painter consumes
+    /// when staging cuts a multi-frame body to a single frame (#848).
+    #[must_use]
+    pub fn staged_figure_layers(&self, screen: Screen, sprite: &str) -> Option<usize> {
+        self.scene_art(screen)?
+            .figures
+            .get(sprite)
+            .map(AvatarFigure::len)
+    }
+
+    /// Re-hang the staged waiting preview as the Playing venue: the
+    /// arena word picks its frame, and the placement is the Waiting
+    /// block's own staged rect. No geometry or art literal enters the
+    /// painter (#848).
+    pub fn stage_venue_theme(&mut self) -> Option<usize> {
+        let frame = venue_theme_frame(self.waiting.as_ref()?.arena)?;
+        let (placement, figure) = self.staged_venue_theme_parts(frame)?;
+        let playing = self.scene_art[scene_index(Screen::Playing)].as_mut()?;
+        let venue = playing
+            .placements
+            .iter()
+            .position(is_stage_venue_placement)?;
+        playing.placements[venue] = placement;
+        playing
+            .figures
+            .insert(PLAYING_VENUE_THEME_SPRITE.to_owned(), figure);
+        Some(frame)
+    }
+
+    /// The staged waiting placement and the figure cut to one theme
+    /// frame. A body with too few layers is left untouched.
+    fn staged_venue_theme_parts(&self, frame: usize) -> Option<(ScenePlacement, AvatarFigure)> {
+        let art = self.scene_art(Screen::Waiting)?;
+        let placement = art
+            .placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some(PLAYING_VENUE_THEME_SPRITE))?
+            .clone();
+        let figure = art.figures.get(PLAYING_VENUE_THEME_SPRITE)?;
+        (figure.len() > frame).then(|| (placement, figure.layers_through(frame)))
     }
 
     /// Staged art for one screen, if any.
@@ -32046,11 +32127,16 @@ mod game_tests {
     #[test]
     fn arena_high_word_seeds_the_low_stage_word() {
         // Applier seeding (`0x4e78db`): the low word when a high word
-        // is set, the full value otherwise; negative names no stage.
+        // is set, the full value otherwise. The picker flag sets bit
+        // 31, so flagged words are negative but still name a stage;
+        // out-of-range low words and zero name none.
         assert_eq!(arena_stage_word((1 << 16) | 5), Some(5));
         assert_eq!(arena_stage_word(5), Some(5));
+        assert_eq!(arena_stage_word(i32::MIN | 25), Some(25));
+        assert_eq!(arena_stage_word(i32::MIN | 30), Some(30));
         assert_eq!(arena_stage_word(0), None);
         assert_eq!(arena_stage_word(-1), None);
+        assert_eq!(arena_stage_word(i32::MIN | 37), None);
     }
 
     fn loading_status_at_half() -> LoadingStatus {

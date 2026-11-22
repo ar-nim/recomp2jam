@@ -5959,6 +5959,44 @@ mod paint_tests {
     }
 
     #[test]
+    fn playing_backdrop_paints_the_staged_arena_theme_placement() {
+        // The themed placement reaches the same behind-scene painter
+        // as the numbered venue: the staged figure's third frame is
+        // the top layer at the staged venue anchor (#848).
+        use crate::avatar::PLAYING_VENUE_THEME_SPRITE;
+
+        let mut theme = AvatarFigure::default();
+        for color in [0x7C00u16, 0x03E0, 0x001F] {
+            theme.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&color.to_le_bytes(), 1, 1).unwrap(),
+                dx: 204,
+                dy: 100,
+                colorkey: 0xFFFF,
+            });
+        }
+        let mut art = venue_backdrop_art();
+        art.placements[0].sprite = Some(PLAYING_VENUE_THEME_SPRITE.to_owned());
+        art.figures.insert(
+            PLAYING_VENUE_THEME_SPRITE.to_owned(),
+            theme.layers_through(2),
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_playing_backdrop(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        assert_eq!(
+            buf[100 * 800 + 204],
+            pack_xrgb(0, 0, 255),
+            "the staged arena theme frame paints as a behind placement"
+        );
+    }
+
+    #[test]
     fn playing_overlay_layers_gauges_over_behind_scene() {
         // Bound gauges keep their top slot: the shared strip pixel
         // shows the gauge ink while the scene survives beside it.

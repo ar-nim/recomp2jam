@@ -1247,13 +1247,20 @@ fn is_playing_backdrop_panel(sprite: &str) -> bool {
 /// Every name resolves in `Playing1.opi`. Couple-mode variants ride
 /// unreferenced by the block, so only these five stage here — never
 /// invented art.
-pub const PLAYING_BEHIND_SPRITES: [&str; 5] = [
+pub const PLAYING_BEHIND_SPRITES: [&str; 6] = [
     "Playing_BG.ojs",
     "Note_BG.ojs",
     "3Key_Note_BG.ojs",
     "P2P3KeyNote_BG.ojs",
     "P2P7KeyNote_BG.ojs",
+    PLAYING_VENUE_THEME_SPRITE,
 ];
+
+/// Waiting preview body that carries the arena's three venue themes
+/// (`IDC_IMAGE_SWAIT_NORMAL_MAP` `0x16500071`). The Playing stage
+/// re-hangs this staged figure in place of the numbered venue when the
+/// joined room's arena word names a theme frame (#848).
+pub const PLAYING_VENUE_THEME_SPRITE: &str = "Wait_NormaMap.ojs";
 
 /// The BACK1 control code (`IDC_IMAGE_SPLAY_BACK1`, `0x1B500071`):
 /// the Playing setup re-stages this control onto a mode-family

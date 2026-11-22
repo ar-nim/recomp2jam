@@ -994,6 +994,7 @@ impl OnlineSession {
             room.arena = arena;
             self.game.set_joined_room(room.clone());
             restage_live_playing(&mut self.game);
+            self.game.stage_venue_theme();
         }
         self
     }
@@ -1151,6 +1152,10 @@ impl OnlineSession {
                         );
                         return None;
                     }
+                    // The 4003 answer owns the arena global in the
+                    // exe; mirror it before the pick resolves so the
+                    // venue theme follows the echoed word (#848).
+                    self.note_arena_selected(echo.arena);
                     if let Err(source) = self
                         .gateway
                         .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
@@ -12890,6 +12895,11 @@ pub(super) mod session_tests {
     /// `arena_echo` back as 4003, asserts the 4030 list ask, and
     /// answers 4031 with song 757.
     fn answer_select(stream: &mut TcpStream, arena_echo: i32) {
+        answer_select_with_stage(stream, 0, arena_echo);
+    }
+
+    /// Same select script with a caller-chosen 4002 word and 4003 echo.
+    fn answer_select_with_stage(stream: &mut TcpStream, arena_sent: i32, arena_echo: i32) {
         use o2jam_net::play::{MusicListAnswer, MusicListEntry, RoomArenaEcho};
         use o2jam_net::{Request, SetRoomArena, SetRoomMusic};
         let select = read_frame(stream);
@@ -12907,7 +12917,7 @@ pub(super) mod session_tests {
         assert_eq!(stage.id, Request::SetRoomArena.id());
         assert_eq!(
             SetRoomArena::decode_body(&stage.payload).unwrap(),
-            SetRoomArena::new(0)
+            SetRoomArena::new(arena_sent)
         );
         stream
             .write_all(&RoomArenaEcho::new(arena_echo).encode())
@@ -12963,6 +12973,119 @@ pub(super) mod session_tests {
                 difficulty: 2,
                 speed: 1,
             })
+        );
+    }
+
+    /// Wire stage word from the paired boots: high flag plus low stage
+    /// (4003 hex `19000080` = stage 25, `1e000080` = stage 30).
+    fn flagged_arena_word(stage: u16) -> i32 {
+        i32::from(stage) | i32::MIN
+    }
+
+    /// Synthetic three-frame venue art and one venue placement. The
+    /// frame is a layer cut; no archive or literal art is needed.
+    fn stage_synthetic_venue_art(game: &mut ScreenGame) {
+        use o2jam_render::{Rect, Rgb555Image};
+        use o2jam_shell::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        const VENUE: &str = "Wait_NormaMap.ojs";
+        const STAGE: &str = "_Playing_BG.ojs";
+        let placement = |sprite: &str| ScenePlacement {
+            id: sprite.to_owned(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut theme = AvatarFigure::default();
+        for color in [0x7C00u16, 0x03E0, 0x001F] {
+            theme.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&color.to_le_bytes(), 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Waiting,
+            vec![placement(VENUE)],
+            HashMap::from([(VENUE.to_owned(), theme)]),
+        );
+        let mut stage = AvatarFigure::default();
+        stage.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&0x7C00u16.to_le_bytes(), 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        game.load_scene(
+            Screen::Playing,
+            vec![placement(STAGE)],
+            HashMap::from([(STAGE.to_owned(), stage)]),
+        );
+    }
+
+    #[test]
+    fn arena_19000080_echo_stages_venue_frame_zero() {
+        // Live caller chain: main.rs::run_play -> OnlineSession::paint ->
+        // ScreenGame::paint -> paint_playing -> paint_playing_backdrop ->
+        // paint_behind_placements. This guard stops at staging: the
+        // figure layer cut is the frame that painter consumes.
+        let arena = flagged_arena_word(25);
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            answer_select_with_stage(&mut stream, arena, arena);
+            assert_quiet(&mut stream);
+        });
+        stage_synthetic_venue_art(&mut session.game);
+        let mut choice = host_choice();
+        choice.arena_id = arena;
+        session.set_pending_song(choice);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| session.selected_song().is_some());
+        server.join().unwrap();
+        let themed = session
+            .game
+            .scene_placements(Screen::Playing)
+            .iter()
+            .any(|placed| placed.sprite.as_deref() == Some("Wait_NormaMap.ojs"));
+        assert!(themed, "4003 stage 25 did not stage the venue backdrop");
+        assert_eq!(
+            session
+                .game
+                .staged_figure_layers(Screen::Playing, "Wait_NormaMap.ojs"),
+            Some(1),
+            "stage 25 selects the first theme frame"
+        );
+    }
+
+    #[test]
+    fn arena_1e000080_echo_stages_venue_frame_two() {
+        // Same caller chain as the stage-25 guard; the paired boot
+        // with 4003 hex `1e000080` paints the storm theme.
+        let arena = flagged_arena_word(30);
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            answer_select_with_stage(&mut stream, arena, arena);
+            assert_quiet(&mut stream);
+        });
+        stage_synthetic_venue_art(&mut session.game);
+        let mut choice = host_choice();
+        choice.arena_id = arena;
+        session.set_pending_song(choice);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| session.selected_song().is_some());
+        server.join().unwrap();
+        assert_eq!(
+            session
+                .game
+                .staged_figure_layers(Screen::Playing, "Wait_NormaMap.ojs"),
+            Some(3),
+            "stage 30 selects the third theme frame"
         );
     }
 
