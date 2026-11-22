@@ -2870,11 +2870,25 @@ fn paint_dialog_layer_at_anchor(
 /// quit-confirm sheets; one back-to-front pass in file order).
 /// Placements without a loaded figure paint nothing.
 pub fn paint_dialog_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+    paint_dialog_scene_filtered(frame, art, |_| true);
+}
+
+/// Paint a dialog sheet, withholding placements the caller keeps inert.
+/// A withheld body leaves the sheet's own baked art visible: the create-room
+/// key plates use that face while the exe's mode sentinel is unset (#844).
+pub fn paint_dialog_scene_filtered(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    keep: impl Fn(&ScenePlacement) -> bool,
+) {
     if !art.has_figures() {
         return;
     }
     let origin = dialog_origin(&art.placements);
     for placement in &art.placements {
+        if !keep(placement) {
+            continue;
+        }
         let Some(name) = placement.sprite.as_ref() else {
             continue;
         };
