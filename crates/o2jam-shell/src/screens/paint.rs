@@ -14406,6 +14406,81 @@ mod paint_tests {
         assert_eq!(buf[129 * 800 + 192], 0, "peer badge stays dark");
         assert_eq!(buf[165 * 800 + 210], 0, "peer bar stays dark");
     }
+
+    /// Ticket #842: the exe paints this 123x16 plate band at
+    /// x=179..301, y=211..226, while an uncorrected clone paints it at
+    /// y=189..204 (paired frames `p559-badge-ab4` and `av-sweep/waiting`).
+    /// Live chain: `main.rs::run_play` -> `setup_online` ->
+    /// `OnlineSession::ingest_snapshot` -> `ScreenGame::paint_at` ->
+    /// `paint_waiting_scene_with_confirm` -> `paint_waiting_seat_marks`.
+    /// Synthetic art pins the band without reading archives.
+    #[test]
+    fn seat_two_team_plate_paints_at_the_exe_band_anchor() {
+        const PLATE_X: i32 = 179;
+        const PLATE_Y: i32 = 189;
+        const PLATE_W: u32 = 123;
+        const EXE_BAND_TOP: usize = 211;
+        const EXE_BAND_BOTTOM: usize = 226;
+
+        let mut room = waiting_room();
+        let mut peer = room.slots[0].member.clone().expect("host seat");
+        peer.master = false;
+        room.slots[1].member = Some(peer);
+        let seats = staged_seats(&room, None, false);
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Clone,
+                id: WAITING_SEAT_PARENT_IDS[1].to_owned(),
+                code: 0x1650_002C,
+                sprite: Some("Wait_ReadyWindow.ojs".to_owned()),
+                rect: Rect {
+                    x: PLATE_X,
+                    y: PLATE_Y,
+                    w: PLATE_W,
+                    h: 16,
+                },
+            }],
+            figures: HashMap::from([(
+                "Wait_ReadyWindow.ojs".to_owned(),
+                solid_figure(123, 16, [0x00, 0x7C]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_marks(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &seats,
+            &art,
+        );
+
+        let ink = pack_xrgb(0xFF, 0, 0);
+        assert_eq!(
+            buf[EXE_BAND_TOP * 800 + usize::try_from(PLATE_X).expect("plate x")],
+            ink,
+            "exe band top edge must carry the plate"
+        );
+        assert_eq!(
+            buf[EXE_BAND_BOTTOM * 800
+                + usize::try_from(PLATE_X).expect("plate x")
+                + usize::try_from(PLATE_W - 1).expect("plate width")],
+            ink,
+            "exe band right edge must carry the plate"
+        );
+        assert_eq!(
+            buf[(EXE_BAND_TOP - 1) * 800 + usize::try_from(PLATE_X).expect("plate x")],
+            0,
+            "row above the exe band stays dark"
+        );
+        assert_eq!(
+            buf[usize::try_from(PLATE_Y).expect("staged y") * 800
+                + usize::try_from(PLATE_X).expect("plate x")],
+            0,
+            "old 22 px high band stays dark"
+        );
+    }
 }
 
 #[cfg(test)]
