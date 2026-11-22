@@ -157,6 +157,15 @@ keep their catalog sorts beside the selector; the vectors at state
 OPEN: vector contents, wire source, and a header press with the board
 visible (#408 covers chrome only).
 
+### CONFERENCE and MESSENGER notices (#829)
+
+CONFERENCE (`0x1A200087`) posts notice id `0x14` with no decoded copy.
+MESSENGER (`0x1A200088`) calls `FUN_004d6890` and posts either the
+connection-lost string (VA `0x647dc0`) or the loading string (VA
+`0x647e08`). The branch comes from globals at `0x7684d8` and is staged
+at the seam; a tapped press frame and messenger-state fixture stay OPEN.
+Guard: `music_shop_conference_and_messenger_post_their_pinned_notices`.
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).

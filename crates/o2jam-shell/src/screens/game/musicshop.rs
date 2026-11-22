@@ -10,10 +10,11 @@ use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rank_header_key, music_shop_rows,
     shop_page_count, song_installed, sort_lanking_songs, LankingSong, LankingSort, MusicShopAction,
-    MusicShopFace, MusicShopGenreFilter, MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort,
-    MSHOP_BPM_SORT_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_DIFF_SORT_CODE,
-    MSHOP_DOWN_CANCEL_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
-    MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
+    MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState, MusicShopNotice, MusicShopPrice,
+    MusicShopRow, OwnedSort, MSHOP_BPM_SORT_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID,
+    MSHOP_CONFERENCE_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_MESSENGER_CODE,
+    MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE,
+    MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -125,6 +126,10 @@ pub(crate) struct MusicShopState {
     /// Notice id posted by CASHFILLUP when no web path exists. The
     /// exe's text for id `0x12` stays OPEN (#836).
     pub(crate) music_shop_cashfillup_notice_id: Option<u16>,
+    /// Branch behind the two MESSENGER notices. The exe reads globals
+    /// at `0x7684d8`; no wire writer or fixture is pinned, so callers
+    /// stage it (#829).
+    pub(crate) music_shop_messenger_state: MusicShopMessengerState,
     /// Owned face selected by the two tab images (`0x1A600076/77`).
     /// The exe's two flag writes are pinned; the meaning of the flag
     /// beyond the tab names stays OPEN (no visibility frame captured).
@@ -182,6 +187,12 @@ impl MusicShopState {
     /// the client can play does.
     pub(crate) fn set_installed(&mut self, installed: Option<&InstalledMusic>) {
         self.music_shop_installed = installed.cloned();
+    }
+
+    /// Stage the MESSENGER branch whose pinned notice a press posts
+    /// (#829). The default is the connection-lost branch.
+    pub(crate) fn set_messenger_state(&mut self, state: MusicShopMessengerState) {
+        self.music_shop_messenger_state = state;
     }
 
     /// Stage the fetched song flags (`GetMusicList` 4031 answer).
@@ -656,6 +667,18 @@ impl MusicShopState {
                         self.music_shop_owned_marks[slot] = !already_marked;
                     }
                 }
+                MusicShopEffect::None
+            }
+            MusicShopAction::Conference => {
+                self.post_notice(MusicShopNotice::Conference, MSHOP_CONFERENCE_CODE);
+                MusicShopEffect::None
+            }
+            MusicShopAction::Messenger => {
+                let notice = match self.music_shop_messenger_state {
+                    MusicShopMessengerState::Disconnected => MusicShopNotice::MessengerUnavailable,
+                    MusicShopMessengerState::Loading => MusicShopNotice::MessengerLoading,
+                };
+                self.post_notice(notice, MSHOP_MESSENGER_CODE);
                 MusicShopEffect::None
             }
             MusicShopAction::CashFillup => {

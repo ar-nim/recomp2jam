@@ -1787,6 +1787,31 @@ pub const MSHOP_CASH_FILLUP_CODE: u32 = 0x1A20_0009;
 /// fallback caption, never an exe-text claim (#836).
 pub const MSHOP_CASHFILLUP_NOTICE_ID: u16 = 0x12;
 pub const MSHOP_CASHFILLUP_FALLBACK_CAPTION: &str = "WEB UNAVAILABLE (0x12)";
+
+/// Music-shop top-right chrome (#829). CONFERENCE (`0x1A200087`)
+/// posts notice id `0x14` from `FUN_004c7f70`; MESSENGER
+/// (`0x1A200088`) calls `FUN_004d6890` (VA `0x4d6890`,
+/// `ev_f55061f4…`) and posts one of two strings at VA `0x647dc0` /
+/// `0x647e08`. The notice-id copy and the branch writer are OPEN.
+pub const MSHOP_CONFERENCE_CODE: u32 = 0x1A20_0087;
+pub const MSHOP_MESSENGER_CODE: u32 = 0x1A20_0088;
+pub const MSHOP_CONFERENCE_NOTICE_ID: u8 = 0x14;
+pub const MSHOP_MESSENGER_UNAVAILABLE_NOTICE: &str = "메신져 서버와 연결이 되지 않았습니다.";
+pub const MSHOP_MESSENGER_LOADING_NOTICE: &str = "메신져 정보를 로딩중 입니다.";
+
+/// Messenger branch behind the two pinned MESSENGER notices. The exe
+/// reads global `0x7684d8` fields; no wire writer or tapped frame pins
+/// them yet, so callers stage the branch (next step: a messenger-state
+/// fixture and one qualified press frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MusicShopMessengerState {
+    /// Connection-lost notice at VA `0x647dc0` (default branch).
+    #[default]
+    Disconnected,
+    /// Info-loading notice at VA `0x647e08`.
+    Loading,
+}
+
 /// Pinned CP949 copy for the search edit hint and its two notices.
 pub const MSHOP_SEARCH_HINT: &str = "곡제목 입력";
 pub const MSHOP_EMPTY_SEARCH_NOTICE: &str = "검색어를 입력해주세요!!";
@@ -1896,6 +1921,12 @@ pub enum MusicShopNotice {
     EmptySearch,
     /// SEARCH found no catalog title containing the query.
     NoSearchHits,
+    /// CONFERENCE posted notice id `0x14`; its copy is not decoded.
+    Conference,
+    /// MESSENGER reported no server connection (VA `0x647dc0`).
+    MessengerUnavailable,
+    /// MESSENGER reported that info is loading (VA `0x647e08`).
+    MessengerLoading,
 }
 
 impl MusicShopNotice {
@@ -1908,6 +1939,20 @@ impl MusicShopNotice {
             Self::CancelDownload => MSHOP_DOWN_CANCEL_NOTICE,
             Self::EmptySearch => MSHOP_EMPTY_SEARCH_NOTICE,
             Self::NoSearchHits => MSHOP_NO_SEARCH_HITS_NOTICE,
+            Self::Conference => "",
+            Self::MessengerUnavailable => MSHOP_MESSENGER_UNAVAILABLE_NOTICE,
+            Self::MessengerLoading => MSHOP_MESSENGER_LOADING_NOTICE,
+        }
+    }
+
+    /// Exe notice id when the press posts one by id rather than by
+    /// text. Only CONFERENCE's `0x14` is pinned; no id is invented for
+    /// the text-bearing notices (#829).
+    #[must_use]
+    pub const fn notice_type(self) -> Option<u8> {
+        match self {
+            Self::Conference => Some(MSHOP_CONFERENCE_NOTICE_ID),
+            _ => None,
         }
     }
 }
@@ -2079,6 +2124,10 @@ pub enum MusicShopAction {
     Search,
     /// CASHFILLUP pressed; the web helper has no local path.
     CashFillup,
+    /// CONFERENCE pressed (notice id `0x14`, copy OPEN).
+    Conference,
+    /// MESSENGER pressed (one of two pinned notice strings).
+    Messenger,
     /// One music-cart row removed (0-based on the cart page).
     CartRemove(usize),
     /// Cart `BUYITEM` commits the cart.
@@ -2150,6 +2199,8 @@ fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
         MSHOP_TAB_DELETE_CODE => Some(MusicShopAction::Face(MusicShopFace::Cart)),
         MSHOP_SEARCH_CODE => Some(MusicShopAction::Search),
         MSHOP_CASH_FILLUP_CODE => Some(MusicShopAction::CashFillup),
+        MSHOP_CONFERENCE_CODE => Some(MusicShopAction::Conference),
+        MSHOP_MESSENGER_CODE => Some(MusicShopAction::Messenger),
         MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
         MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
         MSHOP_MYALL_LEFT_CODE => Some(MusicShopAction::MyPrev),
