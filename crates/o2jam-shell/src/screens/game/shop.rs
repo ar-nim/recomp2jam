@@ -4,10 +4,13 @@
 use super::super::side::{
     lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
     shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
-    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood, ShopPanel,
-    ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
-    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX,
-    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
+    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood,
+    ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
+    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
+    SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
+    SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
+    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -141,6 +144,26 @@ pub(crate) struct ShopState {
     ext_menu_secondary_word: u8,
     /// Notice posted by ITEMVACATE or CONFERENCE.
     chrome_notice: Option<ShopChromeNotice>,
+    /// Messenger branch selected by the staged read of global `0x7684d8`.
+    messenger_state: ShopMessengerState,
+    /// Notice posted by the last MESSENGER press.
+    messenger_notice: Option<ShopMessengerNotice>,
+    /// Submenu control forced by LUCKYBAG (`0x14208015`).
+    selected_submenu: Option<u32>,
+    /// Object byte `+0x16` written by LUCKYBAG. It is not the
+    /// GIRL/BOY gender byte `+0x18`.
+    lucky_gender_byte: Option<u8>,
+    /// Object flag `+0x8d5` set by SHOPMASTER.
+    shopmaster_flag: bool,
+    /// Level and nickname read from the live character record
+    /// (exe globals `0x77cd20` / `0x77cd05`).
+    player_identity: Option<(i32, String)>,
+    /// Counts inked into the ten SKILLCOUNT cells. The exe's content
+    /// writer is OPEN, so nothing is inferred from an unstaged slot.
+    skill_counts: [Option<u32>; SHOP_SKILLCOUNT_CELLS],
+    /// Caption for the staged `NOTICE_TEXT` cell. No 7.55 writer is
+    /// pinned, so callers stage it explicitly; `None` inks nothing.
+    notice_text: Option<String>,
     /// Staged confirmation-pair result for the vacate ladder.
     vacate_confirmed: bool,
     /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
@@ -170,6 +193,7 @@ impl ShopState {
         self.bag_selection = None;
         self.bag_notice = None;
         self.chrome_notice = None;
+        self.messenger_notice = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -467,6 +491,66 @@ impl ShopState {
         self.chrome_notice
     }
 
+    /// Stage the branch read from messenger global `0x7684d8`.
+    pub(crate) fn stage_messenger_state(&mut self, state: ShopMessengerState) {
+        self.messenger_state = state;
+        self.messenger_notice = None;
+    }
+
+    /// Notice posted by the last MESSENGER press.
+    pub(crate) fn messenger_notice(&self) -> Option<ShopMessengerNotice> {
+        self.messenger_notice
+    }
+
+    /// Submenu control forced by the last LUCKYBAG press.
+    pub(crate) fn selected_submenu(&self) -> Option<u32> {
+        self.selected_submenu
+    }
+
+    /// Object byte `+0x16` written by LUCKYBAG.
+    pub(crate) fn lucky_gender_byte(&self) -> Option<u8> {
+        self.lucky_gender_byte
+    }
+
+    /// Object flag `+0x8d5` staged by SHOPMASTER.
+    pub(crate) fn shopmaster_flag(&self) -> bool {
+        self.shopmaster_flag
+    }
+
+    /// Stage the level and nickname the exe reads from globals.
+    pub(crate) fn stage_player_identity(&mut self, level: i32, nickname: &str) {
+        self.player_identity = Some((level, nickname.to_owned()));
+    }
+
+    /// ` Lv.%d:%s` caption for the staged player identity.
+    pub(crate) fn identity_caption(&self) -> Option<String> {
+        self.player_identity
+            .as_ref()
+            .map(|(level, nickname)| format!("{SHOP_LEVEL_CAPTION_PREFIX}{level}:{nickname}"))
+    }
+
+    /// Stage one SKILLCOUNT cell (content source stays OPEN).
+    pub(crate) fn stage_skill_count(&mut self, slot: usize, count: u32) {
+        if let Some(cell) = self.skill_counts.get_mut(slot) {
+            *cell = Some(count);
+        }
+    }
+
+    /// Counts inked by the staged SKILLCOUNT cells.
+    pub(crate) fn skill_counts(&self) -> &[Option<u32>; SHOP_SKILLCOUNT_CELLS] {
+        &self.skill_counts
+    }
+
+    /// Stage the notice caption for the top-strip TEXT cell.
+    pub(crate) fn stage_notice_text(&mut self, text: &str) {
+        self.notice_text = Some(text.to_owned());
+    }
+
+    /// Staged notice caption (`None` until a caller supplies one).
+    pub(crate) fn notice_text(&self) -> Option<&str> {
+        self.notice_text.as_deref()
+    }
+
     /// Stage the confirmation-pair result for the vacate ladder.
     pub(crate) fn stage_vacate_confirmed(&mut self, confirmed: bool) {
         self.vacate_confirmed = confirmed;
@@ -663,6 +747,42 @@ impl ShopState {
             ShopAction::Conference => {
                 // Static arm `0x142000b6`: type `0x14`, no text.
                 self.chrome_notice = Some(ShopChromeNotice::Conference);
+                false
+            }
+            ShopAction::LuckyBag => {
+                // Static arm `0x14600086` (`ev_f3ad15be…`): hide the
+                // nonempty 12x3 cells, force planet 12, byte `+0x16`,
+                // the SET tab and submenu `0x14208015`, ink the planet
+                // caption when armed, then reseed twice and reset the
+                // three layout words.
+                self.planet_hidden_cells = self.planet_grid_nonzero;
+                self.planet_grid_nonzero = 0;
+                self.planet_index = SHOP_LUCKYBAG_PLANET_INDEX;
+                self.lucky_gender_byte = Some(SHOP_LUCKYBAG_GENDER_BYTE);
+                self.shop_category = SHOP_LUCKYBAG_CATEGORY_CODE
+                    .checked_sub(SHOP_CATEGORY_FIRST_CODE)
+                    .and_then(|slot| usize::try_from(slot).ok());
+                self.selected_submenu = Some(SHOP_LUCKYBAG_SUBMENU_CODE);
+                self.planet_caption_arg = self.planet_caption_armed.then_some(self.planet_index);
+                self.lucky_view = true;
+                self.planet_reseeds = self.planet_reseeds.saturating_add(2);
+                self.planet_layout_flags = SHOP_PLANET_LAYOUT_FLAGS;
+                false
+            }
+            ShopAction::ShopMaster => {
+                // Static arm `0x14600053`: only the `+0x8d5` flag.
+                self.shopmaster_flag = true;
+                false
+            }
+            ShopAction::OpenMessenger => {
+                // Static arm `0x142000b8`: `FUN_004a3060(0)` advances
+                // the two lamp rects (staging only), then the branch
+                // on global `0x7684d8` posts one notice. No opcode.
+                self.messenger_notice = Some(match self.messenger_state {
+                    ShopMessengerState::Disconnected => ShopMessengerNotice::Disconnected,
+                    ShopMessengerState::Loading => ShopMessengerNotice::Loading,
+                    ShopMessengerState::Available => ShopMessengerNotice::Available,
+                });
                 false
             }
             ShopAction::SelectBagItem(slot) => {

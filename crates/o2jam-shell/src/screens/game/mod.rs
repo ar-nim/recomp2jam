@@ -71,16 +71,17 @@ use super::paint::{
     paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
     paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
     paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
-    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
+    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
+    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
+    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -6856,6 +6857,69 @@ impl ScreenGame {
         self.shop.chrome_notice()
     }
 
+    /// Notice posted by the last MESSENGER press.
+    #[must_use]
+    pub fn shop_messenger_notice(&self) -> Option<super::side::ShopMessengerNotice> {
+        self.shop.messenger_notice()
+    }
+
+    /// Stage the branch read from messenger global `0x7684d8`.
+    pub fn stage_shop_messenger_state(&mut self, state: super::side::ShopMessengerState) {
+        self.shop.stage_messenger_state(state);
+    }
+
+    /// Submenu control forced by the last LUCKYBAG press.
+    #[must_use]
+    pub fn shop_selected_submenu(&self) -> Option<u32> {
+        self.shop.selected_submenu()
+    }
+
+    /// Object byte `+0x16` staged by LUCKYBAG.
+    #[must_use]
+    pub fn shop_lucky_gender_byte(&self) -> Option<u8> {
+        self.shop.lucky_gender_byte()
+    }
+
+    /// Object flag `+0x8d5` staged by SHOPMASTER.
+    #[must_use]
+    pub fn shop_master_flag(&self) -> bool {
+        self.shop.shopmaster_flag()
+    }
+
+    /// ` Lv.%d:%s` caption fed by the live character record.
+    #[must_use]
+    pub fn shop_identity_caption(&self) -> Option<String> {
+        self.shop.identity_caption()
+    }
+
+    /// Counts staged for the ten SKILLCOUNT cells.
+    #[must_use]
+    pub fn shop_skill_counts(&self) -> &[Option<u32>; super::side::SHOP_SKILLCOUNT_CELLS] {
+        self.shop.skill_counts()
+    }
+
+    /// Stage one SKILLCOUNT cell (value source stays OPEN).
+    pub fn stage_shop_skill_count(&mut self, slot: usize, count: u32) {
+        self.shop.stage_skill_count(slot, count);
+    }
+
+    /// Staged top-strip notice rect pair (`None` when unstaged).
+    #[must_use]
+    pub fn shop_notice_rects(&self) -> Option<(Rect, Rect)> {
+        super::side::shop_notice_rects(&self.side_placements)
+    }
+
+    /// Stage the caption for the top-strip `NOTICE_TEXT` cell.
+    pub fn stage_shop_notice_text(&mut self, text: &str) {
+        self.shop.stage_notice_text(text);
+    }
+
+    /// Alarm-lamp rects from the staged shop board (no invented art).
+    #[must_use]
+    pub fn shop_messenger_lamp_rects(&self) -> Vec<Rect> {
+        super::side::shop_messenger_lamp_rects(&self.side_placements)
+    }
+
     /// Stage the vacate confirmation pair result.
     pub fn stage_shop_vacate_confirmed(&mut self, confirmed: bool) {
         self.shop.stage_vacate_confirmed(confirmed);
@@ -7283,6 +7347,12 @@ impl ScreenGame {
                     self.shop_purchase_web_open = true;
                 }
                 self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
+            }
+            ShopAction::OpenMessenger => {
+                // `FUN_004a3060(0)` advances the staged lamp rects and
+                // the global branch posts a notice. No local Messenger
+                // backend or wire opcode is pinned (#648 stays OPEN).
+                self.shop.apply_action(action, &owned);
             }
             ShopAction::SortBag => {
                 // Static arm `0x142000b7` (file `0x9bfa8`): the sort
@@ -8019,6 +8089,13 @@ impl ScreenGame {
                 },
             );
             paint_shop_preview(frame, &self.side_placements, self.shop_preview().as_ref());
+            paint_shop_notice_text(frame, &self.side_placements, self.shop.notice_text());
+            paint_shop_identity_captions(
+                frame,
+                &self.side_placements,
+                self.shop.identity_caption().as_deref(),
+                self.shop.skill_counts(),
+            );
             if panel == ShopPanel::MyBag {
                 paint_shop_bag_pager(
                     frame,
@@ -26076,6 +26153,153 @@ mod game_tests {
             game.shop_chrome_notice().map(|n| n.notice_type()),
             Some(0x14)
         );
+    }
+
+    #[test]
+    fn shop_messenger_press_posts_the_global_notice_and_stages_both_alarm_lamps() {
+        use super::super::side::{
+            ShopMessengerNotice, ShopMessengerState, SHOP_MESSENGER_CODE,
+            SHOP_MESSENGER_LAMP_CODES, SHOP_MESSENGER_NOTICE_CONTROL,
+        };
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MESSENGER 0x142000b8) -> ShopState::apply_action ->
+        //   messenger notice record.
+        // Static pin `ev_f3ad15be…`: the arm calls `FUN_004a3060(0)`
+        // (lamp codes `0x145000b9/ba`) then branches on globals
+        // `0x7684d8+8/+4` into notices type `0x15`, type 1, or type 2
+        // with control `0x13200048`. OPEN (next step): one master press
+        // frame and any 5039/5040/5041 wire; the local rig has no
+        // Messenger backend, so absence is not a pass.
+        let mut game = shop_chrome_board();
+        stage_shop_control(&mut game, SHOP_MESSENGER_CODE, 700);
+        for (index, code) in SHOP_MESSENGER_LAMP_CODES.iter().enumerate() {
+            stage_shop_control(&mut game, *code, 740 + index as i32 * 40);
+        }
+        game.stage_shop_messenger_state(ShopMessengerState::Available);
+
+        let lamp_rects: Vec<Rect> = SHOP_MESSENGER_LAMP_CODES
+            .iter()
+            .map(|code| {
+                game.side_placements
+                    .iter()
+                    .find(|placed| placed.code == *code)
+                    .expect("staged lamp")
+                    .rect
+            })
+            .collect();
+        assert_eq!(game.shop_messenger_lamp_rects(), lamp_rects);
+        game.click_shop(710, 40);
+
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Available)
+        );
+        assert_eq!(
+            game.shop_messenger_notice().map(|n| n.notice_type()),
+            Some(0x15)
+        );
+        assert_eq!(game.take_refresh_bag(), None, "no wire from this arm");
+
+        game.stage_shop_messenger_state(ShopMessengerState::Loading);
+        game.click_shop(710, 40);
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Loading)
+        );
+        assert_eq!(
+            game.shop_messenger_notice().map(|n| n.notice_type()),
+            Some(1)
+        );
+
+        game.stage_shop_messenger_state(ShopMessengerState::Disconnected);
+        game.click_shop(710, 40);
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Disconnected)
+        );
+        assert_eq!(
+            game.shop_messenger_notice()
+                .and_then(|n| n.notice_control()),
+            Some(SHOP_MESSENGER_NOTICE_CONTROL)
+        );
+    }
+
+    #[test]
+    fn shop_character_staging_feeds_the_level_and_nickname_caption() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online ->
+        //   stage_online_identity (2001 answer) ->
+        //   ScreenGame::set_myroom_character -> ShopState::stage_player_identity
+        //   -> paint_side -> paint_shop_identity_captions.
+        // Static pin `ev_3e020a4ada701e31…`: `FUN_004a0660` reads
+        // globals `0x77cd20` and `0x77cd05` for ` Lv.%d:%s`. No live
+        // frame separates those sources yet; the paint/source pair is
+        // all this guard claims. Synthetic board, hidden-arm safe.
+        let mut game = open_shop_board(1);
+        let mut character = myroom_test_character(vec![]);
+        character.level = 42;
+        character.nickname = "Alice".to_owned();
+
+        game.set_myroom_character(character);
+        game.stage_shop_skill_count(9, 999);
+
+        assert_eq!(
+            game.shop_identity_caption().as_deref(),
+            Some(" Lv.42:Alice")
+        );
+        assert_eq!(game.shop_skill_counts()[9], Some(999));
+    }
+
+    #[test]
+    fn shop_luckybag_and_shopmaster_stage_their_view_flags_between_bag_faces() {
+        use super::super::side::{
+            SHOP_LUCKYBAG_CODE, SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE,
+            SHOP_PLANET_LAYOUT_FLAGS, SHOP_SHOPMASTER_CODE,
+        };
+        // Live caller chain (once these controls stage):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(LUCKYBAG 0x14600086 / SHOPMASTER 0x14600053 /
+        //   MYCART_POS 0x1460006e / MYBACK_POS 0x1460006d) ->
+        //   ShopState::apply_action.
+        // Static pin `ev_f3ad15be…`: LUCKYBAG sets planet `0xc`, byte
+        // `+0x16` to 0, the SET tab and submenu `0x14208015`, hides the
+        // nonempty 12x3 cells, inks the planet caption, then reseeds
+        // twice and resets the three layout words. SHOPMASTER sets
+        // `+0x8d5`. The bag faces clear/set `+0x8cd`; #722 frame
+        // `c84b952f…` pins the row-pick switch. OPEN: qualified
+        // LUCKYBAG/SHOPMASTER frames and their caption text sources.
+        let mut game = shop_chrome_board();
+        stage_shop_control(&mut game, SHOP_LUCKYBAG_CODE, 700);
+        stage_shop_control(&mut game, SHOP_SHOPMASTER_CODE, 740);
+        game.stage_shop_planet_grid(5);
+        game.stage_shop_planet_caption(true);
+
+        game.click_shop(710, 40);
+
+        assert_eq!(game.shop_planet_index(), SHOP_LUCKYBAG_PLANET_INDEX);
+        assert_eq!(game.shop_category(), Some(0), "SET tab");
+        assert_eq!(
+            game.shop_selected_submenu(),
+            Some(SHOP_LUCKYBAG_SUBMENU_CODE)
+        );
+        assert_eq!(game.shop_lucky_gender_byte(), Some(0));
+        assert_eq!(game.shop_gender(), None, "byte +0x16 is not byte +0x18");
+        assert_eq!(game.shop_planet_hidden_cells(), 5);
+        assert_eq!(
+            game.shop_planet_caption_arg(),
+            Some(SHOP_LUCKYBAG_PLANET_INDEX)
+        );
+        assert_eq!(game.shop_planet_reseeds(), 2);
+        assert_eq!(game.shop_planet_layout_flags(), SHOP_PLANET_LAYOUT_FLAGS);
+
+        game.click_shop(750, 40);
+        assert!(game.shop_master_flag());
+
+        game.click_shop(560, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+        game.click_shop(580, 40);
+        assert_eq!(game.shop_panel(), ShopPanel::MyBag);
     }
 
     #[test]

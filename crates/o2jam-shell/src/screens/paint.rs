@@ -64,7 +64,8 @@ use super::side::{
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
     SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
     SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE,
+    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS,
+    SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1443,6 +1444,52 @@ pub fn paint_shop_bag_pager(
     if let Some((cur, tot)) = shop_bag_page_rects(placements) {
         paint_text_into_rect(frame, cur, &(bag_page + 1).to_string(), CP949_INK);
         paint_text_into_rect(frame, tot, &bag_pages.to_string(), CP949_INK);
+    }
+}
+
+/// NOTICE caption into the staged top-strip TEXT cell (spec #178 D5).
+/// The board art itself stages with the bound layout; its 7.55 writer
+/// string is unread, so only an explicitly staged caption inks here.
+pub fn paint_shop_notice_text(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    notice_text: Option<&str>,
+) {
+    if let (Some(text), Some(rect)) = (
+        notice_text,
+        shop_template_rect(placements, SHOP_NOTICE_TEXT_CODE),
+    ) {
+        paint_text_into_rect(frame, rect, text, CP949_INK);
+    }
+}
+
+/// Player identity and SKILLCOUNT cells staged by `FUN_004a0660`
+/// (`ev_3e020a4ada701e31…`). The level/nickname caption comes from the
+/// live character record; the ten counts are explicitly staged because
+/// the exe's value writer stays OPEN. Unstaged cells paint nothing.
+pub fn paint_shop_identity_captions(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    identity: Option<&str>,
+    skill_counts: &[Option<u32>; SHOP_SKILLCOUNT_CELLS],
+) {
+    if let (Some(identity), Some(rect)) = (
+        identity,
+        shop_template_rect(placements, SHOP_PLAYER_LEVEL_CAPTION_CODE),
+    ) {
+        paint_text_into_rect(frame, rect, identity, CP949_INK);
+    }
+    for (slot, count) in skill_counts.iter().enumerate() {
+        let Some(count) = count else {
+            continue;
+        };
+        let Ok(slot) = u32::try_from(slot) else {
+            continue;
+        };
+        let Some(rect) = shop_template_rect(placements, SHOP_SKILLCOUNT_FIRST_CODE + slot) else {
+            continue;
+        };
+        paint_text_into_rect(frame, rect, &count.to_string(), CP949_INK);
     }
 }
 
@@ -4261,6 +4308,121 @@ mod paint_tests {
             !has_ink_in(&buf, 800, 300, 169, 38, 13),
             "the raw BND row stays dark (the figure paints there)"
         );
+    }
+
+    #[test]
+    fn shop_notice_text_inks_only_the_staged_top_strip_pair() {
+        use super::super::side::{
+            shop_notice_rects, SHOP_NOTICE_BOARD_CODE, SHOP_NOTICE_TEXT_CODE,
+        };
+        // Spec #178 D5 pin: `IMAGE_SSHOP_NOTICE_TEXT 0x142000b3` and
+        // `IMAGE_SSHOP_NOTICEBOARD 0x142000b4` stage in the top strip;
+        // the white tooltip is a separate, hover-gated rect. NOTICE
+        // content has no 7.55 source pin, so the painter inks only an
+        // explicitly staged string. Pure seam, hidden-arm safe.
+        let text_rect = Rect {
+            x: 100,
+            y: 10,
+            w: 200,
+            h: 14,
+        };
+        let board_rect = Rect {
+            x: 90,
+            y: 5,
+            w: 220,
+            h: 30,
+        };
+        let placements = vec![
+            shop_placement(SHOP_NOTICE_TEXT_CODE, 100, 10, 200, 14),
+            shop_placement(SHOP_NOTICE_BOARD_CODE, 90, 5, 220, 30),
+            shop_placement(
+                super::super::side::SHOP_TOOLTIP_CODES[1],
+                455,
+                404,
+                242,
+                119,
+            ),
+        ];
+        assert_eq!(
+            shop_notice_rects(&placements),
+            Some((text_rect, board_rect))
+        );
+
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_notice_text(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some("NOTICE"),
+        );
+        assert!(has_ink_in(&buf, 800, 100, 10, 200, 14), "notice ink");
+        assert!(
+            !has_ink_in(&buf, 800, 455, 404, 242, 119),
+            "the tooltip stays a separate hover-gated rect"
+        );
+
+        let mut empty = vec![0u32; 800 * 600];
+        paint_shop_notice_text(
+            &mut Frame {
+                buf: &mut empty,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+        );
+        assert!(!has_ink_in(&empty, 800, 100, 10, 200, 14));
+    }
+
+    #[test]
+    fn shop_identity_and_ten_skillcount_captions_ink_staged_cells() {
+        use super::super::side::{
+            SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
+        };
+        // Static pin `ev_3e020a4ada701e31…`: `FUN_004a0660` inks
+        // ` Lv.%d:%s` into `0x1440002a` and positions ten SKILLCOUNT
+        // captions at `0x144010a7..b0`. Their value source stays OPEN,
+        // so this guard stages counts instead of inventing one.
+        // Pure painter with synthetic rects; hidden-arm safe.
+        let mut placements = vec![shop_placement(
+            SHOP_PLAYER_LEVEL_CAPTION_CODE,
+            100,
+            10,
+            160,
+            14,
+        )];
+        for slot in 0..SHOP_SKILLCOUNT_CELLS {
+            placements.push(shop_placement(
+                SHOP_SKILLCOUNT_FIRST_CODE + slot as u32,
+                300 + slot as i32 * 30,
+                10,
+                24,
+                14,
+            ));
+        }
+        let mut counts = [None; SHOP_SKILLCOUNT_CELLS];
+        counts[0] = Some(7);
+        counts[9] = Some(999);
+        let mut buf = vec![0u32; 800 * 600];
+
+        paint_shop_identity_captions(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(" Lv.7:Alice"),
+            &counts,
+        );
+
+        assert!(has_ink_in(&buf, 800, 100, 10, 160, 14), "level caption");
+        assert!(has_ink_in(&buf, 800, 300, 10, 24, 14), "first skill slot");
+        assert!(has_ink_in(&buf, 800, 570, 10, 24, 14), "tenth skill slot");
+        assert!(!has_ink_in(&buf, 800, 330, 10, 24, 14), "unstaged slot");
     }
 
     #[test]

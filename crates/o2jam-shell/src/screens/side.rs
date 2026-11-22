@@ -82,6 +82,72 @@ pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
 /// CONFERENCE posts notice type `0x14` with no text.
 pub const SHOP_ITEMVACATE_CODE: u32 = 0x1420_0005;
 pub const SHOP_CONFERENCE_CODE: u32 = 0x1420_00B6;
+/// MESSENGER host arm (`0x142000b8`, `ev_f3ad15be…`): calls
+/// `FUN_004a3060(0)` then branches on the messenger global at
+/// `0x7684d8`. No opcode is sent here; the sheet and any 5039/5041
+/// wire stay OPEN (`docs/messenger-boot-captures.md` #648).
+pub const SHOP_MESSENGER_CODE: u32 = 0x1420_00B8;
+/// Alarm lamps advanced by `FUN_004a3060` (`ev_76d8c0b8…`, file
+/// `0xa3060`). The spec row names `0x142000b9/ba`; the exe helper
+/// resolves the image-class codes `0x145000b9/ba`. The contradiction
+/// is kept here, with the exe as behavior oracle.
+pub const SHOP_MESSENGER_LAMP_CODES: [u32; 2] = [0x1450_00B9, 0x1450_00BA];
+/// Control the exe attaches to the disconnected notice from this arm.
+pub const SHOP_MESSENGER_NOTICE_CONTROL: u32 = 0x1320_0048;
+
+/// Messenger branch selected by the two words of global `0x7684d8`
+/// before the shop host notice (`FUN_00499760`, file `0x99760`).
+/// The writer of those words is OPEN, so callers stage the branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShopMessengerState {
+    /// `+8 == 0`: no messenger session, type-2 notice.
+    #[default]
+    Disconnected,
+    /// `+8 != 0`, `+4 == 0`: loading notice, type 1.
+    Loading,
+    /// Both words set: type `0x15` notice, no text.
+    Available,
+}
+
+/// Notice posted by the MESSENGER host press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopMessengerNotice {
+    Disconnected,
+    Loading,
+    Available,
+}
+
+impl ShopMessengerNotice {
+    /// Exe notice type passed to `FUN_00478c90`.
+    #[must_use]
+    pub const fn notice_type(self) -> u8 {
+        match self {
+            Self::Disconnected => 2,
+            Self::Loading => 1,
+            Self::Available => 0x15,
+        }
+    }
+
+    /// Control the notice ink names (`None` for the two text notices).
+    #[must_use]
+    pub const fn notice_control(self) -> Option<u32> {
+        match self {
+            Self::Disconnected => Some(SHOP_MESSENGER_NOTICE_CONTROL),
+            Self::Loading | Self::Available => None,
+        }
+    }
+}
+
+/// Alarm-lamp rects from the staged shop board (`None` codes are
+/// absent). Geometry always comes from the parsed `.bnd` placements.
+#[must_use]
+pub fn shop_messenger_lamp_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
+    placements
+        .iter()
+        .filter(|placed| SHOP_MESSENGER_LAMP_CODES.contains(&placed.code))
+        .map(|placed| placed.rect)
+        .collect()
+}
 
 /// Notice posted by one of the two shop chrome arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,6 +541,18 @@ pub const SHOP_ITEM_ROWS: usize = 8;
 /// First row-name TEXT template (`IDC_TEXT_SSHOP_ITEMNAME1`); eight
 /// run contiguously through `+7`.
 pub const SHOP_ITEMNAME_FIRST_CODE: u32 = 0x1440_002C;
+/// Player identity TEXT cell (`0x1440002a`). Static pin
+/// `ev_3e020a4ada701e31…`: `FUN_004a0660` uses the exe format string
+/// `" Lv.%d:%s"` (leading space) with globals `0x77cd20` (level) and
+/// `0x77cd05` (nickname). The spec row omits the leading space; the
+/// exe format is the behavior oracle.
+pub const SHOP_PLAYER_LEVEL_CAPTION_CODE: u32 = 0x1440_002A;
+pub const SHOP_LEVEL_CAPTION_PREFIX: &str = " Lv.";
+/// Ten SKILLCOUNT TEXT cells `0x144010a7..b0`, positioned by
+/// `FUN_004a0660` (`ev_3e020a4ada701e31…`). That function stages no
+/// value, so the content source stays OPEN; callers stage counts.
+pub const SHOP_SKILLCOUNT_FIRST_CODE: u32 = 0x1440_10A7;
+pub const SHOP_SKILLCOUNT_CELLS: usize = 10;
 /// First row cash-price TEXT template (`IDC_TEXT_SSHOP_ITEMWON1`);
 /// eight run contiguously through `+7`.
 pub const SHOP_ITEMWON_FIRST_CODE: u32 = 0x1440_0054;
@@ -834,6 +912,18 @@ pub const fn shop_next_planet_index(current: u8, action: ShopAction) -> u8 {
         _ => current,
     }
 }
+/// LUCKYBAG (`0x14600086`): the static arm (`ev_f3ad15be…`,
+/// file `0x99760`) forces planet `0xc`, object byte `+0x16` to 0,
+/// the SET tab and submenu `0x14208015`, hides the nonempty planet
+/// cells and reseeds the layout. Caption text stays OPEN.
+pub const SHOP_LUCKYBAG_CODE: u32 = 0x1460_0086;
+pub const SHOP_LUCKYBAG_PLANET_INDEX: u8 = 0xc;
+pub const SHOP_LUCKYBAG_GENDER_BYTE: u8 = 0;
+pub const SHOP_LUCKYBAG_CATEGORY_CODE: u32 = 0x1420_100A;
+pub const SHOP_LUCKYBAG_SUBMENU_CODE: u32 = 0x1420_8015;
+/// SHOPMASTER (`0x14600053`): the static arm sets object flag
+/// `+0x8d5`; its caption source stays OPEN.
+pub const SHOP_SHOPMASTER_CODE: u32 = 0x1460_0053;
 /// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): the static arm
 /// `0x142000b7` virtually sends `0x13ae` = 5038 RefreshBag
 /// (file `0x9bfa8`, `ev_f3ad15be…`) and `FUN_004a1010`
@@ -896,6 +986,28 @@ pub const SHOP_MYBAGSELECT_CODE: u32 = 0x1450_0052;
 /// rects (`Shop_Tooltip.ojs` at `0xB1`; `0x84` is its art-less twin).
 pub const SHOP_MYCART_BACK_CODE: u32 = 0x1450_006F;
 pub const SHOP_TOOLTIP_CODES: [u32; 2] = [0x1450_0084, 0x1450_00B1];
+/// Top-strip notice pair (`IMAGE_SSHOP_NOTICE_TEXT` /
+/// `IMAGE_SSHOP_NOTICEBOARD`, `0x142000b3/b4`, spec #178 D5). The
+/// board art stages with the bound layout; its writer string is still
+/// unread (`docs/shop.md`), so only an explicitly staged caption inks.
+pub const SHOP_NOTICE_TEXT_CODE: u32 = 0x1420_00B3;
+pub const SHOP_NOTICE_BOARD_CODE: u32 = 0x1420_00B4;
+
+/// Top-strip notice rects from the staged shop board (`None` when
+/// either control is unstaged). Geometry always comes from `.bnd`
+/// placements, never literals.
+#[must_use]
+pub fn shop_notice_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let text = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_NOTICE_TEXT_CODE)?
+        .rect;
+    let board = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_NOTICE_BOARD_CODE)?
+        .rect;
+    Some((text, board))
+}
 /// Music-shop TOP100 board button (`0x1A20007D`, `docs/musicshop.md`):
 /// music-shop chrome only per the #181 verdict — the item shop owns no
 /// TOP100 arm, so this code never dispatches on the item side. The
@@ -1307,6 +1419,13 @@ pub enum ShopAction {
     VacateItem,
     /// CONFERENCE (`0x142000b6`): notice type `0x14`.
     Conference,
+    /// MESSENGER (`0x142000b8`): advance the two alarm lamps and
+    /// post the notice selected by global `0x7684d8`. No wire here.
+    OpenMessenger,
+    /// LUCKYBAG (`0x14600086`): force the lucky planet, tab and submenu.
+    LuckyBag,
+    /// SHOPMASTER (`0x14600053`): set object flag `+0x8d5`.
+    ShopMaster,
     /// Owned bag cell (`0x1460003d..46`): select the paged index
     /// and post the category notice.
     SelectBagItem(usize),
@@ -1416,6 +1535,9 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_EXTMENU_ON_CODE => Some(ShopAction::ToggleExtMenu),
         SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
         SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
+        SHOP_MESSENGER_CODE => Some(ShopAction::OpenMessenger),
+        SHOP_LUCKYBAG_CODE => Some(ShopAction::LuckyBag),
+        SHOP_SHOPMASTER_CODE => Some(ShopAction::ShopMaster),
         SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
         SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
