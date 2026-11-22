@@ -8626,7 +8626,9 @@ impl ScreenGame {
         }
     }
 
-    /// Selected last record and sibling base record for one toggle pair.
+    /// Selected last record for one toggle pair, with its sibling
+    /// restored to the staged base face in the same last-layer pass
+    /// (#841): hover has already cleared by the time this runs.
     fn paint_toggle_pair(
         frame: &mut Frame<'_>,
         art: &SceneArt,
@@ -8637,7 +8639,7 @@ impl ScreenGame {
             return;
         };
         paint_dialog_frame_record(frame, art, selected_code, selected_record);
-        paint_dialog_frame_record(frame, art, sibling_code, 0);
+        Self::repaint_toggle_base(frame, art, sibling_code);
     }
 
     /// Restore one toggle's staged base face, covering the footprint
@@ -23950,6 +23952,22 @@ mod game_tests {
         })
     }
 
+    /// Pixel on the selected record's extra anchor row for LIVE:
+    /// the archive puts that face one pixel above its base record.
+    fn live_toggle_selected_anchor_row(game: &mut ScreenGame) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let (x, y) = (188 + 60 + 20, 71 + 10 - 1);
+        buf[y as usize * 800 + x as usize]
+    }
+
     #[test]
     fn create_room_fresh_open_leaves_both_toggle_pairs_on_base_faces() {
         // Ticket #840. Live caller chain: main.rs::run_play -> winit
@@ -23979,6 +23997,40 @@ mod game_tests {
         assert!(
             near_xrgb(seven_key, base),
             "7KEY must start on its staged base face, got {seven_key:#010x}"
+        );
+    }
+
+    #[test]
+    fn choosing_normal_repaints_live_sibling_base_after_hover_clears() {
+        // Ticket #841. Live caller chain: main.rs::run_play -> winit
+        // LIVE then NORMAL clicks -> ScreenGame::ingest_snapshot ->
+        // click_room_dialog -> CreateRoomForm toggle state ->
+        // paint_at -> paint_room -> paint_create_room_toggle_selection
+        // -> sibling base repaint. The archive's selected frame sits
+        // one pixel above the base frame; cw-03 shows grey LIVE.
+        let mut game = hover_room_lobby();
+        stage_three_record_toggles(&mut game);
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        let click_toggle = |game: &mut ScreenGame, x: i32, y: i32| {
+            game.ingest_snapshot(&InputSnapshot::click_at(188 + x + 20, 71 + y + 15));
+        };
+        click_toggle(&mut game, 60, 10);
+        click_toggle(&mut game, 10, 10);
+        let [normal, live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
+        let base = pack_xrgb(0xFF, 0, 0);
+        let selected = pack_xrgb(0, 0xFF, 0);
+        assert!(near_xrgb(normal, selected), "NORMAL must be selected");
+        assert!(
+            near_xrgb(live, base),
+            "LIVE must return to its staged base face after NORMAL is chosen, got {live:#010x}"
+        );
+        assert!(near_xrgb(three_key, base));
+        assert!(near_xrgb(seven_key, base));
+        let anchor_row = live_toggle_selected_anchor_row(&mut game);
+        assert!(
+            near_xrgb(anchor_row, base),
+            "LIVE's stale selected anchor row must be covered by its staged base face, got {anchor_row:#010x}"
         );
     }
 
