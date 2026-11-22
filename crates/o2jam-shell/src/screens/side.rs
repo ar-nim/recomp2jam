@@ -1649,6 +1649,21 @@ pub const MSHOP_MONEY_WON_CODE: u32 = 0x1A40_001A;
 /// gem buy, won buy.
 pub const MSHOP_GEM_BUY_CODE: u32 = 0x1A20_0041;
 pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
+/// Bag item codes passed to the exe's add helper `FUN_0053ad10(1, id,
+/// code)`: won-priced rows choose `0x43`, gem-priced rows `0x47`
+/// (`ev_26ac6479…` via spec #179 row 21).
+pub const MSHOP_BAG_WON_CODE: u16 = 0x43;
+pub const MSHOP_BAG_GEM_CODE: u16 = 0x47;
+/// BUYITEM control invoked through the state vtable after a successful
+/// row add. The ticket names `0x1A20005F`; `docs/musicshop.md` groups
+/// `0x1A20005D..5F` as BUYITEM plus cart pagers and our hit-tested cart
+/// BUYITEM stays `0x5D`. This marker records the ticket's vtable-invoked
+/// code only; it is never hit-tested (#833).
+pub const MSHOP_BUYITEM_INVOKE_CODE: u32 = 0x1A20_005F;
+/// Pinned notice words for the row-buy ladder (VA `0x64a5f0` with
+/// `%d` = ten bag entries, and VA `0x6486a4`).
+pub const MSHOP_CART_FULL_NOTICE: &str = "장바구니에 담을 수 있는 곡의 개수는 최대 10개 입니다.";
+pub const MSHOP_DUPLICATE_ITEM_NOTICE: &str = "중복된 아이템을 쇼핑백에 담을 수 없습니다.";
 /// Shop-list pager (`IDC_BUTTON_MSHOP_MSALL_LEFT/RIGHT`): left
 /// steps back, right steps forward (ASSUMED pairing — same named
 /// next step as lanking).
@@ -1927,6 +1942,10 @@ pub enum MusicShopNotice {
     MessengerUnavailable,
     /// MESSENGER reported that info is loading (VA `0x647e08`).
     MessengerLoading,
+    /// Row buy at the exe's ten-entry bag cap (VA `0x64a5f0`).
+    CartFull,
+    /// Row buy repeated a song already in the bag (VA `0x6486a4`).
+    DuplicateCartItem,
 }
 
 impl MusicShopNotice {
@@ -1942,6 +1961,8 @@ impl MusicShopNotice {
             Self::Conference => "",
             Self::MessengerUnavailable => MSHOP_MESSENGER_UNAVAILABLE_NOTICE,
             Self::MessengerLoading => MSHOP_MESSENGER_LOADING_NOTICE,
+            Self::CartFull => MSHOP_CART_FULL_NOTICE,
+            Self::DuplicateCartItem => MSHOP_DUPLICATE_ITEM_NOTICE,
         }
     }
 

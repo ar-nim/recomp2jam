@@ -7141,8 +7141,7 @@ impl ScreenGame {
                 .map(|entry| entry.music_id)
                 .collect::<Vec<_>>(),
         );
-        self.music_shop.music_shop_cart.clear();
-        self.music_shop.music_shop_cart_page = 0;
+        self.music_shop.clear_cart();
     }
 
     /// Queued cart buy for the session bridge, if any (5000). The
@@ -7648,6 +7647,29 @@ impl ScreenGame {
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
         self.music_shop.cart()
+    }
+
+    /// Bag item code (`0x43` won / `0x47` gem) chosen by a row buy.
+    #[must_use]
+    pub fn music_shop_bag_item_code(&self, song_id: u32) -> Option<u16> {
+        self.music_shop.bag_item_code(song_id)
+    }
+
+    /// BUYITEM control invoked by the last successful row buy (#833).
+    #[must_use]
+    pub fn music_shop_buyitem_invoked(&self) -> Option<u32> {
+        self.music_shop.buyitem_invoked()
+    }
+
+    /// Entries added through the row-buy arm, not through a row pick.
+    #[must_use]
+    pub fn music_shop_bag_count(&self) -> usize {
+        self.music_shop.bag_count()
+    }
+
+    /// Stage one bag entry at the seam for restores and cap guards.
+    pub fn music_shop_bag_push(&mut self, song_id: u32, gem: bool) {
+        self.music_shop.stage_bag_song(song_id, gem);
     }
 
     /// Pick one catalog song into the cart (id must exist; the
@@ -9348,8 +9370,9 @@ mod game_tests {
         LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
         LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
         LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
-        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE,
-        MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
+        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BAG_GEM_CODE, MSHOP_BAG_WON_CODE,
+        MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_BUYITEM_INVOKE_CODE,
+        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
         MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CASH_FILLUP_CODE, MSHOP_CONFERENCE_CODE,
         MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE,
         MSHOP_DOWN_START_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE,
@@ -27162,6 +27185,65 @@ mod game_tests {
     }
 
     #[test]
+    fn music_shop_row_buy_adds_the_catalog_song_and_invokes_buyitem() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // visit_side(MusicShop) -> GameLoop::mouse_click ->
+        // click_music_shop -> music_shop_action_at -> music_shop_buy_slot
+        // (the two tiled row buy rect arrays) -> MusicShopState::apply_action
+        // (BuyRow) -> click_music_shop's MusicShopEffect::Buy ->
+        // outbox.pending_music_buy (5010). Exe FUN_004c7f70 indexes the
+        // catalog by page*5+row, refuses at ten bag entries with VA
+        // 0x64a5f0, posts VA 0x6486a4 on a duplicate, and invokes the
+        // BUYITEM control on success (ev_26ac6479..., ticket #833).
+        let mut game = open_music_shop_board(11);
+
+        game.click_music_shop(350, 160);
+        assert_eq!(game.music_shop_cart(), vec![757], "row 0 buys song 757");
+        assert_eq!(game.music_shop_bag_item_code(757), Some(MSHOP_BAG_GEM_CODE));
+        assert_eq!(
+            game.music_shop_buyitem_invoked(),
+            Some(MSHOP_BUYITEM_INVOKE_CODE)
+        );
+        assert!(game.take_music_buy().is_some(), "the buy queues 5010");
+
+        game.click_music_shop(350, 160);
+        assert_eq!(
+            game.music_shop_notice(),
+            Some((MusicShopNotice::DuplicateCartItem, MSHOP_GEM_BUY_CODE))
+        );
+        assert_eq!(game.music_shop_cart(), vec![757], "no duplicate add");
+        assert!(game.take_music_buy().is_none(), "a duplicate buys nothing");
+
+        game.click_music_shop(340, 542);
+        assert_eq!(game.music_shop_page(), 1);
+        game.click_music_shop(350, 160);
+        game.click_music_shop(350, 263);
+        assert_eq!(
+            game.music_shop_cart(),
+            vec![757, 762, 763],
+            "page*5+row picks the catalog songs"
+        );
+        assert_eq!(game.music_shop_bag_item_code(763), Some(MSHOP_BAG_WON_CODE));
+        assert_eq!(game.take_music_buy().map(|_| 1), Some(1), "two buys queued");
+        game.take_music_buy();
+
+        for song_id in [758, 759, 760, 761, 764, 765, 766] {
+            game.music_shop_bag_push(song_id, true);
+        }
+        assert_eq!(game.music_shop_bag_count(), 10);
+        game.click_music_shop(340, 542);
+        assert_eq!(game.music_shop_page(), 2);
+        game.click_music_shop(350, 160);
+        assert_eq!(
+            game.music_shop_notice().map(|(notice, _)| notice),
+            Some(MusicShopNotice::CartFull)
+        );
+        assert_eq!(game.music_shop_bag_count(), 10, "the cap holds");
+        assert_eq!(game.music_shop_bag_item_code(767), None);
+        assert!(game.take_music_buy().is_none(), "the cap buys nothing");
+    }
+
+    #[test]
     fn music_shop_conference_and_messenger_post_their_pinned_notices() {
         // Live caller chain: main.rs::run_play -> stage_live_art ->
         // visit_side(MusicShop) -> GameLoop::mouse_click ->
@@ -28565,11 +28647,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(341, 156));
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None, "the seam drains once");
-        game.ingest_snapshot(&InputSnapshot::click_at(350, 179));
+        game.ingest_snapshot(&InputSnapshot::click_at(350, 263));
         assert_eq!(
             game.take_music_buy(),
             Some(SyncMusicPurchase),
-            "tiled WON buy queues 5010"
+            "tiled WON buy on the next row queues 5010"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(440, 535));
         assert_eq!(
