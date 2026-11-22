@@ -31,6 +31,8 @@ pub(super) enum DialogHost {
     RoomFuse,
     /// MyRoom Messenger liveness one-OK sheet.
     MessengerLiveness,
+    /// Item-shop BUYITEM O2CASH shortfall (`Dialog_Question1`, OK/CANCEL).
+    ShopChargeConfirm,
 }
 
 /// One control's frame state. Rest leaves the staged stack alone,

@@ -76,17 +76,17 @@ use super::paint::{
     paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
     paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
     paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -501,6 +501,17 @@ pub enum QuitConfirmOutcome {
     Cancelled,
     /// OK closed the sheet and requested the process exit.
     Confirmed,
+}
+
+/// Local outcome of the item-shop BUYITEM MESSAGE sheet (#867). The
+/// 7.55 OK/CANCEL choice owns only this dialog; no purchase opcode is
+/// claimed from it (the purchase WIRE stays OPEN).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopChargeConfirmOutcome {
+    /// CANCEL dismissed the native sheet without a local commit.
+    Cancelled,
+    /// OK dismissed the sheet and kept the staged checkout decision.
+    Committed,
 }
 
 /// The shell's Space lane (`crate::lane_key(3)`): while the fuse's
@@ -1014,11 +1025,13 @@ pub struct ScreenGame {
     /// Staged Cash Charge view: Item Shop host board plus the
     /// `Dialog_ChargeCash.bnd` frame, client rect, and close control.
     cash_charge_art: Option<CashChargeArt>,
-    /// W-a NULL pin (#397): a staged cart row's BUYITEM opens a local
-    /// web-purchase surface over the shop board. The exe's `5001` is
-    /// a BACK-timed reply and no `C2S 5000` exists, so this surface
-    /// owns the buy leg and the game socket stays quiet.
-    shop_purchase_web_open: bool,
+    /// #867: an O2CASH-shortfall cart BUYITEM posts the exe's type-2
+    /// MESSAGE sheet over the shop board. The Cash Charge web view is
+    /// owned by the separate CASHFILLUP arm. No purchase opcode is
+    /// claimed from the sheet; the WIRE stays OPEN.
+    shop_charge_confirm_open: bool,
+    /// Last OK/CANCEL choice on that native sheet, if dismissed.
+    shop_charge_confirm_outcome: Option<ShopChargeConfirmOutcome>,
     /// Native billing-refusal notice over the active side board
     /// (#405 scripted 5011 failure, #468 rejected gift claim). The
     /// verdict bodies are scripted; the notice copy is ASSUMED from an
@@ -1461,7 +1474,8 @@ impl ScreenGame {
             payment_art: None,
             tutorial_art: None,
             cash_charge_art: None,
-            shop_purchase_web_open: false,
+            shop_charge_confirm_open: false,
+            shop_charge_confirm_outcome: None,
             billing_failure_notice: false,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
@@ -4087,7 +4101,9 @@ impl ScreenGame {
 
     /// One-OK sheets that layer over a side or the Room board.
     fn overlay_dialog_art(&self) -> Option<(DialogHost, &SceneArt)> {
-        if self.myroom_notice.is_some() {
+        if self.shop_charge_confirm_open {
+            Some((DialogHost::ShopChargeConfirm, self.question1_dialog_art()?))
+        } else if self.myroom_notice.is_some() {
             Some((DialogHost::MessengerLiveness, self.relay_down_art.as_ref()?))
         } else if self.room_no_response_dialog_open() {
             Some((DialogHost::RoomFuse, self.relay_down_art.as_ref()?))
@@ -6195,8 +6211,8 @@ impl ScreenGame {
             return true;
         }
         if self.side == Some(SideScreen::Shop) {
-            if self.shop_purchase_web_open {
-                self.click_shop_purchase_web(x, y);
+            if self.shop_charge_confirm_open {
+                self.click_shop_charge_confirm(x, y);
             } else {
                 self.click_shop(x, y);
             }
@@ -6219,16 +6235,16 @@ impl ScreenGame {
         false
     }
 
-    /// The cart BUYITEM web surface is a local overlay: its page owns
-    /// every click (the `(345,385)` OK is a web action), so only the
-    /// staged shop BACK plate ends the leg. That press keeps the
-    /// pinned `5007` exit on the game socket; no buy opcode is added.
-    fn click_shop_purchase_web(&mut self, x: i32, y: i32) {
-        let back_pressed = shop_action_at(&self.side_placements, x, y)
-            .is_some_and(|action| action == ShopAction::BackToLobby);
-        if back_pressed {
-            self.close_shop_purchase_web();
-            self.click_shop(x, y);
+    /// The native MESSAGE sheet owns the pointer until OK or CANCEL.
+    /// Both hits come from the staged `Dialog_Question1` rects (or the
+    /// archive-less fallback); every other click stays consumed. No
+    /// game opcode is emitted for the dismissal.
+    fn click_shop_charge_confirm(&mut self, x: i32, y: i32) {
+        let (ok, cancel) = self.question1_button_hits(x, y);
+        if ok {
+            self.commit_shop_charge_confirm();
+        } else if cancel {
+            self.cancel_shop_charge_confirm();
         }
     }
 
@@ -6562,6 +6578,14 @@ impl ScreenGame {
         self
     }
 
+    /// The staged `Dialog_Question1` sheet, shared by the planet quit
+    /// popup and the item-shop BUYITEM MESSAGE sheet (#867). Staging
+    /// never opens a modal.
+    #[must_use]
+    pub const fn question1_dialog_art(&self) -> Option<&SceneArt> {
+        self.planet_quit_art.as_ref()
+    }
+
     /// Stage the one-OK information sheet (`Dialog_Information.bnd`
     /// placements plus figures) for the relay-down notice. Staging
     /// never opens the modal (#244).
@@ -6588,7 +6612,7 @@ impl ScreenGame {
     fn click_planet_modal(&mut self, x: i32, y: i32) {
         match self.planet_board.planet_modal {
             Some(PlanetModal::QuitConfirm) => {
-                let (ok_hit, cancel_hit) = self.quit_button_hits(x, y);
+                let (ok_hit, cancel_hit) = self.question1_button_hits(x, y);
                 if ok_hit {
                     self.cue_ui_effect(UiEffectId::DialogAccept);
                     self.confirm_quit();
@@ -6632,10 +6656,10 @@ impl ScreenGame {
         }
     }
 
-    /// Quit-popup OK/CANCEL hits: staged dialog rects when art is
-    /// staged ([`dialog_rect_hit`]), the native fallback boxes
-    /// otherwise ([`quit_fallback_rects`]).
-    fn quit_button_hits(&self, x: i32, y: i32) -> (bool, bool) {
+    /// `Dialog_Question1` OK/CANCEL hits for both MESSAGE sheets:
+    /// staged dialog rects when art is staged ([`dialog_rect_hit`]),
+    /// the native fallback boxes otherwise ([`quit_fallback_rects`]).
+    fn question1_button_hits(&self, x: i32, y: i32) -> (bool, bool) {
         let staged = self
             .planet_quit_art
             .as_ref()
@@ -7015,7 +7039,11 @@ impl ScreenGame {
         }
         if side == SideScreen::Shop {
             // The pane shows the equipped avatar on entry (a preview
-            // never survives a leave — see `leave_side`).
+            // never survives a leave — see `leave_side`). The BUYITEM
+            // ladder reads the exe's bag-capacity global (`0x77cce4`);
+            // stage the base 150 from the pinned max-bag notice so the
+            // shortfall sheet can open on the live path (#867).
+            self.stage_checkout_bag_capacity(super::side::SHOP_BASE_BAG_SLOTS);
             self.restage_shop_avatar();
         }
         if side == SideScreen::MusicShop {
@@ -7101,7 +7129,8 @@ impl ScreenGame {
             // to the equipped avatar (ticket #196).
             self.shop.clear_try_on();
             self.restage_shop_avatar();
-            self.shop_purchase_web_open = false;
+            self.shop_charge_confirm_open = false;
+            self.shop_charge_confirm_outcome = None;
         }
         self.side = None;
         self.side_origin = None;
@@ -7658,18 +7687,37 @@ impl ScreenGame {
         self.outbox.pending_shop_buy = Some(SyncItemPurchase);
     }
 
-    /// Whether the staged cart BUYITEM opened the local web-purchase
-    /// surface over the shop board (#397).
+    /// Whether a cart BUYITEM posted the exe's native MESSAGE sheet.
     #[must_use]
-    pub const fn shop_purchase_web_open(&self) -> bool {
-        self.shop_purchase_web_open
+    pub const fn shop_charge_confirm_open(&self) -> bool {
+        self.shop_charge_confirm_open
     }
 
-    /// Close the local web-purchase surface and hand clicks back to
-    /// the shop board. The game socket is untouched by this local
-    /// dismissal; BACK still owns the pinned `5007` exit.
-    pub fn close_shop_purchase_web(&mut self) {
-        self.shop_purchase_web_open = false;
+    /// Last OK/CANCEL choice on the native sheet, if dismissed.
+    #[must_use]
+    pub const fn shop_charge_confirm_outcome(&self) -> Option<ShopChargeConfirmOutcome> {
+        self.shop_charge_confirm_outcome
+    }
+
+    /// OK: close the sheet and keep the staged checkout decision. No
+    /// purchase frame is invented; the WIRE remains OPEN (#867).
+    pub fn commit_shop_charge_confirm(&mut self) {
+        self.shop_charge_confirm_open = false;
+        self.shop_charge_confirm_outcome = Some(ShopChargeConfirmOutcome::Committed);
+    }
+
+    /// CANCEL: close the sheet without committing. The cart and the
+    /// game socket stay as they were (#867).
+    pub fn cancel_shop_charge_confirm(&mut self) {
+        self.shop_charge_confirm_open = false;
+        self.shop_charge_confirm_outcome = Some(ShopChargeConfirmOutcome::Cancelled);
+    }
+
+    /// The staged checkout has no exe buy opcode on the game socket.
+    /// Next evidence step for the purchase WIRE (#867).
+    #[must_use]
+    pub const fn shop_purchase_wire_next_step(&self) -> &'static str {
+        super::side::SHOP_PURCHASE_WIRE_NEXT_STEP
     }
 
     /// Queued shop exit for the session bridge, if any (5007). The
@@ -7758,14 +7806,18 @@ impl ScreenGame {
                 self.restage_shop_avatar();
             }
             ShopAction::CartBuy => {
-                // W-a: the local SHOPPING BAG confirmation face is
-                // already staged by the row pick; BUYITEM opens the
-                // web purchase surface. The static ladder below also
-                // queues 5015 when every staged gate passes.
-                if self.shop.apply_action(action, &owned) {
-                    self.shop_purchase_web_open = true;
-                }
+                // #867: BUYITEM's O2CASH shortfall arm posts the native
+                // type-2 MESSAGE sheet (exe VA `0x499f43`, caption
+                // `0x648b38`). The Cash Charge web view belongs to the
+                // CASHFILLUP arm, so no web surface opens here.
+                self.shop.apply_action(action, &owned);
                 self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
+                if self.shop.checkout_notice()
+                    == Some(super::side::CheckoutNotice::InsufficientCash)
+                {
+                    self.shop_charge_confirm_open = true;
+                    self.shop_charge_confirm_outcome = None;
+                }
             }
             ShopAction::OpenMessenger => {
                 // `FUN_004a3060(0)` advances the staged lamp rects and
@@ -8508,14 +8560,6 @@ impl ScreenGame {
                     && shop_submenu_caption_kept(placed.code, gender)
                     && shop_extmenu_kept(placed, ext_menu_open)
             });
-            // The purchase page is a web surface over the shop board;
-            // its content is not captured, so only the staged client
-            // frame and blank web rect paint (owner billing-web pin).
-            if self.shop_purchase_web_open {
-                if let Some(art) = self.cash_charge_art.as_ref() {
-                    paint_cash_charge_frame(frame, &art.dialog);
-                }
-            }
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -8675,6 +8719,12 @@ impl ScreenGame {
         }
         if let Some(confirm) = self.myroom_confirm.as_ref() {
             paint_myroom_confirm(frame, self.relay_down_art.as_ref(), &confirm.text);
+        }
+        // Last board layer: BUYITEM posts the exe's native MESSAGE
+        // sheet (#867) over every shop overlay, with the staged
+        // `Dialog_Question1` art, O2CASH caption and OK/CANCEL.
+        if self.side == Some(SideScreen::Shop) && self.shop_charge_confirm_open {
+            paint_shop_charge_confirm(frame, self.question1_dialog_art());
         }
         self.paint_dialog_frame_states(frame);
     }
@@ -10036,7 +10086,16 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
             .map_or(u64::MAX, |modal| modal as u64),
     );
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
-    hash_u64(&mut hash, u64::from(game.shop_purchase_web_open));
+    hash_u64(&mut hash, u64::from(game.shop_charge_confirm_open));
+    if let Some(outcome) = game.shop_charge_confirm_outcome {
+        hash_u64(
+            &mut hash,
+            match outcome {
+                ShopChargeConfirmOutcome::Committed => 1,
+                ShopChargeConfirmOutcome::Cancelled => 2,
+            },
+        );
+    }
     if game.outbox.pending_exit_shop.is_some() {
         hash_u64(&mut hash, 5_007);
     }
@@ -26021,11 +26080,11 @@ mod game_tests {
     }
 
     #[test]
-    fn shop_row_toggle_checks_the_cart_and_buy_opens_the_web_surface() {
+    fn shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet() {
         // Ten goods over eight slots: the first ITEMBUY checks row
         // zero into the cart and opens the local SHOPPING BAG face;
-        // BUYITEM opens the web purchase surface and sends no game
-        // opcode (W-a NULL pin, #397).
+        // BUYITEM posts the exe's type-2 MESSAGE sheet (#867) and
+        // sends no game opcode (W-a NULL pin, #397).
         let mut game = open_shop_board(10);
         assert!(game.shop_cart().is_empty());
         game.click_shop(221, 188);
@@ -26036,25 +26095,30 @@ mod game_tests {
         game.click_shop(221, 188);
         game.click_shop(18, 564);
         assert!(
-            game.shop_purchase_web_open(),
-            "the cart BUYITEM opens the web purchase surface"
+            game.shop_charge_confirm_open(),
+            "the cart BUYITEM posts the native MESSAGE sheet"
+        );
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(super::super::side::CheckoutNotice::InsufficientCash),
+            "the sheet carries the O2CASH-shortfall caption"
         );
         assert_eq!(game.take_shop_buy(), None, "no invented 5000 buy send");
     }
 
-    /// W-a NULL pin (#397): the cart-row buy leg is local. The row
-    /// pick opens the SHOPPING BAG confirmation face, BUYITEM opens a
-    /// web surface, its web-owned OK sends nothing, and only the
-    /// staged BACK plate keeps the pinned 5007 exit.
+    /// W-a NULL pin (#397) plus #867: the cart-row buy leg is local.
+    /// The row pick opens the SHOPPING BAG face, BUYITEM posts the
+    /// native MESSAGE sheet, OK dismisses it, and only the staged
+    /// BACK plate keeps the pinned 5007 exit.
     ///
     /// Live caller chain:
     ///   main.rs::run_play -> ScreenGame::ingest_snapshot ->
     ///   click_side_screen -> click_shop -> ShopAction::ToggleRow ->
     ///   ShopPanel::ShoppingBag; then ShopAction::CartBuy ->
-    ///   shop_purchase_web_open -> click_shop_purchase_web ->
-    ///   ShopAction::BackToLobby -> outbox.pending_exit_shop.
+    ///   shop_charge_confirm_open -> commit_shop_charge_confirm ->
+    ///   click_shop(BackToLobby) -> outbox.pending_exit_shop.
     #[test]
-    fn cart_row_buy_opens_local_confirmation_and_web_surface_without_a_buy_send() {
+    fn cart_row_buy_posts_the_native_sheet_without_a_buy_send() {
         use super::super::side::SHOP_BACK_CODE;
         let mut game = open_shop_board(10);
         let mut placements = shop_side_placements();
@@ -26083,20 +26147,24 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(238, 263));
         assert_eq!(game.shop_cart(), vec![1]);
         assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
-        assert!(!game.shop_purchase_web_open());
+        assert!(!game.shop_charge_confirm_open());
 
         game.ingest_snapshot(&InputSnapshot::click_at(41, 574));
-        assert!(game.shop_purchase_web_open());
+        assert!(game.shop_charge_confirm_open());
         assert_eq!(game.take_shop_buy(), None, "buy leg sends no 5000");
 
-        // The exe's `(345,385)` OK lands on the web page, not on a
-        // local game-socket confirm sheet; our web surface consumes it.
-        game.ingest_snapshot(&InputSnapshot::click_at(345, 385));
-        assert!(game.shop_purchase_web_open(), "the web page owns the OK");
+        // OK owns this local sheet; the hit routing itself is pinned
+        // by the staged-dialog test below. No purchase opcode follows.
+        game.commit_shop_charge_confirm();
+        assert!(!game.shop_charge_confirm_open());
+        assert_eq!(
+            game.shop_charge_confirm_outcome(),
+            Some(ShopChargeConfirmOutcome::Committed)
+        );
         assert_eq!(game.take_shop_buy(), None, "the OK sends no opcode");
 
         game.ingest_snapshot(&InputSnapshot::click_at(757, 580));
-        assert!(!game.shop_purchase_web_open());
+        assert!(!game.shop_charge_confirm_open());
         assert_eq!(game.side(), None, "BACK leaves the shop side");
         assert_eq!(game.take_exit_shop(), Some(o2jam_net::shop::ExitShop));
         assert_eq!(
@@ -26992,7 +27060,10 @@ mod game_tests {
             "the passing ladder queues the empty 5015"
         );
         assert_eq!(game.take_start_payment(), None, "one press sends once");
-        assert!(game.shop_purchase_web_open());
+        assert!(
+            !game.shop_charge_confirm_open(),
+            "a passing ladder has no O2CASH shortfall sheet"
+        );
     }
 
     #[test]
@@ -30216,8 +30287,8 @@ mod game_tests {
     fn shops_hand_session_browses_and_buys() {
         // Offline hand-driven shop session (no gateway): the item
         // board opens from Waiting, the pager turns, a row toggle
-        // checks the cart, and the cart BUYITEM opens the local web
-        // surface without a game-socket send; the song board then
+        // checks the cart, and the cart BUYITEM posts the native
+        // MESSAGE sheet without a game-socket send; the song board then
         // sorts, pages, stages the cart, and queues the pinned 5010
         // send — every step through the public seams the windowed
         // binary feeds, each mutation moving the observable hash.
@@ -30234,12 +30305,12 @@ mod game_tests {
         assert_ne!(checked, paged, "row toggle changed nothing");
         game.click_shop(18, 564);
         let bought = game.state_hash();
-        assert!(game.shop_purchase_web_open());
-        assert_eq!(game.take_shop_buy(), None, "the web buy sends no 5000");
-        assert_ne!(
-            bought, checked,
-            "opening the purchase surface changed nothing"
+        assert!(
+            game.shop_charge_confirm_open(),
+            "BUYITEM posts the native sheet"
         );
+        assert_eq!(game.take_shop_buy(), None, "the buy sends no 5000");
+        assert_ne!(bought, checked, "opening the native sheet changed nothing");
         assert!(game.leave_side(), "shop returns to Waiting");
         println!(
             "shop hand session: {entered:016x} -> {paged:016x} -> {checked:016x} -> {bought:016x}"
@@ -30500,8 +30571,8 @@ mod game_tests {
         // Ticket #163 (shop leg, CLICK): press+release through the
         // routed gesture on every staged control — the empty cart
         // commits nothing, all eight ITEMBUY toggles check and uncheck,
-        // the scroll pager turns and holds, BUYITEM opens the local
-        // web surface with no game opcode, the cart pager turns over a
+        // the scroll pager turns and holds, BUYITEM posts the native
+        // MESSAGE sheet with no game opcode, the cart pager turns over a
         // full cart, the #195
         // browse tools answer (ITEMPRE previews, ITEMBACK clears, the
         // bag pager holds with no owned panel staged), and the
@@ -30531,11 +30602,15 @@ mod game_tests {
         assert_eq!(game.shop_page(), 0, "scroll PREV holds at the start");
         game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
         assert!(
-            game.shop_purchase_web_open(),
-            "BUYITEM opens the web purchase surface"
+            game.shop_charge_confirm_open(),
+            "BUYITEM posts the native MESSAGE sheet"
         );
         assert_eq!(game.take_shop_buy(), None, "the buy leg sends no 5000");
-        game.close_shop_purchase_web();
+        game.cancel_shop_charge_confirm();
+        assert_eq!(
+            game.shop_charge_confirm_outcome(),
+            Some(ShopChargeConfirmOutcome::Cancelled)
+        );
         assert_eq!(game.shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
         assert_eq!(game.shop_visible_cart().len(), 3);
@@ -31983,9 +32058,10 @@ mod game_tests {
         // #284 re-pins: the Waiting confirm face word folds after the
         // planet press word on every screen (0 while no ready/start
         // request stands), so the stream shifts once.
-        // #397 re-pins: the local web-purchase surface folds after the
-        // legacy 5000 probe word; BUYITEM now opens the surface instead
-        // of queuing that send, so this leg's word pair flips.
+        // #397 re-pins: the local purchase flag folds after the legacy
+        // 5000 probe word; BUYITEM now posts the native MESSAGE sheet
+        // instead of opening that surface. The OK/CANCEL outcome word
+        // folds only once a choice is made (this walk makes none).
         assert_eq!(
             populated, 0x6996_8636_6FA1_9803,
             "outbox+lanking+shop+musicshop+planet population must not move the observable hash"

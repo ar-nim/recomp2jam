@@ -64,8 +64,8 @@ use super::side::{
     SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
     SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
     SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS,
-    SHOP_SKILLCOUNT_FIRST_CODE,
+    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949,
+    SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -3101,32 +3101,39 @@ pub(crate) fn quit_fallback_rects() -> (Rect, Rect, Rect) {
     (message, ok, cancel)
 }
 
-/// Quit-confirm popup over the bare board: the staged
-/// `Dialog_Question1` sheet (dialog-relative) with the
-/// capture-pinned message in its `TEXT` rect, or the frame-centered
-/// fallback (message + OK/CANCEL words) without staged art.
-/// OK quits, CANCEL closes (the game routes the clicks through
-/// [`dialog_rect_hit`], fallback [`quit_fallback_rects`]).
-pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+/// One `Dialog_Question1` MESSAGE sheet: staged art when installed,
+/// frame-centred OK/CANCEL plate otherwise. The caller owns the caption;
+/// geometry always comes from the parsed `.bnd` rects (ADR-0003).
+fn paint_question1_message(frame: &mut Frame<'_>, art: Option<&SceneArt>, caption: &[u8]) {
     if let Some(art) = art.filter(|art| art.has_figures()) {
-        paint_dialog_scene(frame, art);
-        let origin = dialog_origin(&art.placements);
-        for placement in &art.placements {
-            if placement.code == super::side::QUIT_MESSAGE_CODE {
-                paint_cp949_into_rect(
-                    frame,
-                    Rect {
-                        x: placement.rect.x + origin.0,
-                        y: placement.rect.y + origin.1,
-                        w: placement.rect.w,
-                        h: placement.rect.h,
-                    },
-                    QUIT_MESSAGE_CP949,
-                );
-            }
-        }
-        return;
+        paint_question1_staged(frame, art, caption);
+    } else {
+        paint_question1_fallback(frame, caption);
     }
+}
+
+/// Staged sheet: bodies from the parsed `.bnd`, caption in its TEXT rect.
+fn paint_question1_staged(frame: &mut Frame<'_>, art: &SceneArt, caption: &[u8]) {
+    paint_dialog_scene(frame, art);
+    let origin = dialog_origin(&art.placements);
+    for placement in &art.placements {
+        if placement.code == super::side::QUIT_MESSAGE_CODE {
+            paint_cp949_into_rect(
+                frame,
+                Rect {
+                    x: placement.rect.x + origin.0,
+                    y: placement.rect.y + origin.1,
+                    w: placement.rect.w,
+                    h: placement.rect.h,
+                },
+                caption,
+            );
+        }
+    }
+}
+
+/// Archive-less stand-in: a scrim, the caption, and two button words.
+fn paint_question1_fallback(frame: &mut Frame<'_>, caption: &[u8]) {
     fill_rect(
         frame,
         &Rect {
@@ -3138,12 +3145,24 @@ pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
         scrim_color(),
     );
     let (message, ok, cancel) = quit_fallback_rects();
-    paint_cp949_into_rect(frame, message, QUIT_MESSAGE_CP949);
+    paint_cp949_into_rect(frame, message, caption);
     for (button, word) in [(ok, "OK"), (cancel, "CANCEL")] {
         let scaled = scale_rect_to_frame(&button, frame.w, frame.h);
         fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
         draw_text(frame, scaled.x + 8, scaled.y + 8, word, art_title_ink());
     }
+}
+
+/// Quit-confirm popup over the bare board: OK quits, CANCEL closes
+/// (clicks route through [`dialog_rect_hit`] or [`quit_fallback_rects`]).
+pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    paint_question1_message(frame, art, QUIT_MESSAGE_CP949);
+}
+
+/// Item-shop BUYITEM confirmation (#867): the same native MESSAGE sheet
+/// with the pinned O2CASH-shortfall caption, over the shop board.
+pub fn paint_shop_charge_confirm(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    paint_question1_message(frame, art, SHOP_O2CASH_SHORTFALL_CP949);
 }
 
 /// Relay-unavailable message box over the planet board: the staged

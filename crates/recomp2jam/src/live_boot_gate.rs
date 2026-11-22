@@ -26,15 +26,17 @@ mod live_boot_gate_tests {
     };
     use o2jam_render::{pack_xrgb, Frame as RenderFrame, Rgb555Image};
     use o2jam_shell::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
-    use o2jam_shell::screens::game::PlanetModal;
+    use o2jam_shell::screens::game::{PlanetModal, ShopChargeConfirmOutcome};
     use o2jam_shell::screens::paint::{unbound_scene_placements, CHANNEL_DIALOG_SPRITE};
     use o2jam_shell::screens::side::{
-        MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
-        MYROOM_VACATE_CODE, SHOP_BUYITEM_CODE, SHOP_CHILD_ORIGIN_Y, SHOP_ITEMBUY_FIRST_CODE,
+        CheckoutNotice, MyRoomPanel, PlanetOptionTab, MYROOM_BAG_FIRST_CODE, MYROOM_SELECT_CODE,
+        MYROOM_VACATE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SHOP_BUYITEM_CODE, SHOP_CHILD_ORIGIN_Y,
+        SHOP_ITEMBUY_FIRST_CODE,
     };
     use o2jam_shell::screens::SideScreen;
     use o2jam_shell::staging::{
-        read_install_archives, stage_state, MessengerSheet, StageContext, State, MESSENGER_SHEETS,
+        read_install_archives, stage_dialog, stage_state, Dialog, MessengerSheet, StageContext,
+        State, MESSENGER_SHEETS,
     };
     use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
@@ -52,6 +54,25 @@ mod live_boot_gate_tests {
         let mut bytes = header.to_vec();
         bytes.extend_from_slice(&rest);
         decode_frame(&bytes).unwrap()
+    }
+
+    /// Centre of one staged `Dialog_Question1` button. The origin and
+    /// child rect both come from the installed art; no literal aim.
+    fn question1_button_center(game: &o2jam_shell::ScreenGame, code: u32) -> (i32, i32) {
+        let art = game
+            .question1_dialog_art()
+            .expect("the MESSAGE sheet is staged");
+        let origin = o2jam_shell::screens::paint::dialog_origin(&art.placements);
+        let rect = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .unwrap_or_else(|| panic!("staged MESSAGE sheet has button {code:#x}"))
+            .rect;
+        (
+            origin.0 + rect.x + i32::try_from(rect.w / 2).expect("button width fits"),
+            origin.1 + rect.y + i32::try_from(rect.h / 2).expect("button height fits"),
+        )
     }
 
     /// Drive one native canvas click through the game loop: the same
@@ -940,22 +961,23 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
-    /// W-a re-scope (#397): the exe's final cart recipe (row pick at
-    /// `(238,263)`, BUYITEM `(41,574)`, web OK `(345,385)`) has no
-    /// `C2S 5000`. Our live boot must paint the local SHOPPING BAG
-    /// confirmation face and the staged web client, and leave the buy
-    /// outbox empty. The wire-quiet half is guarded by the scripted
-    /// gateway test `cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family`.
+    /// #867: the exe's final cart recipe (row pick `(238,263)`,
+    /// BUYITEM `(41,574)`) posts the native type-2 MESSAGE sheet with
+    /// the O2CASH-shortfall caption. The live boot must stage the same
+    /// `Dialog_Question1` art, paint the sheet over the shop board, and
+    /// leave the buy outbox empty. The wire-quiet half is guarded by
+    /// `cart_row_buy_leg_is_wire_quiet_except_the_back_5007_family`.
     ///
     /// Live caller chain:
     ///   main.rs::run_play -> setup_online -> assemble_online_session
-    ///   -> stage_live_scenes (stages the charge web frame) ->
+    ///   -> stage_live_scenes (stages `Dialog_Question1`) ->
     ///   OnlineSession::ingest_snapshot -> ScreenGame::ingest_snapshot ->
     ///   click_side_screen -> click_shop(ToggleRow/CartBuy) ->
-    ///   ShopPanel::ShoppingBag -> shop_purchase_web_open ->
-    ///   paint_side -> paint_cash_charge_frame.
+    ///   ShopState::approve_checkout(InsufficientCash) ->
+    ///   shop_charge_confirm_open -> paint_side ->
+    ///   paint_shop_charge_confirm -> click_shop_charge_confirm.
     #[test]
-    fn live_boot_cart_row_buy_paints_the_web_surface_without_a_buy_queue() {
+    fn live_boot_cart_row_buy_paints_the_native_message_sheet() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
             return;
@@ -974,10 +996,16 @@ mod live_boot_gate_tests {
             );
         }
         assert!(
-            session.game_mut().cash_charge_art_staged(),
-            "live boot stages the web frame the purchase surface reuses"
+            session.game_mut().question1_dialog_art().is_some(),
+            "live boot stages the MESSAGE sheet the cart BUYITEM posts"
         );
         assert!(session.game_mut().visit_side(SideScreen::Shop));
+        let mut before = vec![0u32; 800 * 600];
+        session.paint(&mut RenderFrame {
+            buf: &mut before,
+            w: 800,
+            h: 600,
+        });
         session
             .game_mut()
             .set_shop_catalog(&o2jam_file::AvatarItemTable {
@@ -1005,30 +1033,85 @@ mod live_boot_gate_tests {
         );
 
         session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
-        session.ingest_snapshot(&InputSnapshot::click_at(345, 385));
         assert!(
-            session.game_mut().shop_purchase_web_open(),
-            "BUYITEM opened the web purchase surface"
+            session.game_mut().shop_charge_confirm_open(),
+            "BUYITEM posted the native MESSAGE sheet"
+        );
+        assert_eq!(
+            session.game_mut().shop_checkout_notice(),
+            Some(CheckoutNotice::InsufficientCash),
+            "the sheet uses the pinned O2CASH caption"
         );
         assert_eq!(
             session.game_mut().take_shop_buy(),
             None,
             "no invented 5000 on the buy leg"
         );
-        let mut buf = vec![0u32; 800 * 600];
+        let mut after = vec![0u32; 800 * 600];
         session.paint(&mut RenderFrame {
-            buf: &mut buf,
+            buf: &mut after,
             w: 800,
             h: 600,
         });
-        let client = buf[300 * 800 + 400];
-        let channels = [(client >> 16) as u8, (client >> 8) as u8, client as u8];
-        for (painted, captured) in channels.into_iter().zip([25, 24, 25]) {
-            assert!(
-                painted.abs_diff(captured) <= 1,
-                "exe-pinned web client colour after the cart buy: {channels:?}"
+        let changed = (190..410)
+            .flat_map(|y| (240..560).map(move |x| y * 800 + x))
+            .filter(|index| before[*index] != after[*index])
+            .count();
+        assert!(
+            changed > (410 - 190) * (560 - 240) / 2,
+            "the MESSAGE sheet must repaint the exe sheet region, changed={changed}"
+        );
+        // No shop overlay may leak through the sheet: compare the live
+        // pixels with the same staged sheet painted on a blank frame.
+        let mut sheet_only = vec![0u32; 800 * 600];
+        {
+            let mut frame = RenderFrame {
+                buf: &mut sheet_only,
+                w: 800,
+                h: 600,
+            };
+            o2jam_shell::screens::paint::paint_shop_charge_confirm(
+                &mut frame,
+                session.game_mut().question1_dialog_art(),
             );
         }
+        let leaked = (220..390)
+            .flat_map(|y| (260..530).map(move |x| y * 800 + x))
+            .filter(|index| after[*index] != sheet_only[*index])
+            .count();
+        assert_eq!(
+            leaked, 0,
+            "the sheet must cover the shop board it posts over, leaked={leaked}"
+        );
+
+        // Both choices come from the staged sheet's own OK and CANCEL
+        // rects. The test clicks OK and reads the local outcome; the
+        // purchase wire stays OPEN and no opcode is claimed.
+        let ok = question1_button_center(session.game_mut(), QUIT_OK_CODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(ok.0, ok.1));
+        assert!(
+            !session.game_mut().shop_charge_confirm_open(),
+            "OK dismissed the MESSAGE sheet"
+        );
+        assert_eq!(
+            session.game_mut().shop_charge_confirm_outcome(),
+            Some(ShopChargeConfirmOutcome::Committed)
+        );
+        assert_eq!(
+            session.game_mut().take_shop_buy(),
+            None,
+            "the OK sends no buy opcode"
+        );
+        // CANCEL has its own staged rect: reopen the sheet and click it.
+        session.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+        assert!(session.game_mut().shop_charge_confirm_open());
+        let cancel = question1_button_center(session.game_mut(), QUIT_CANCEL_CODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(cancel.0, cancel.1));
+        assert_eq!(
+            session.game_mut().shop_charge_confirm_outcome(),
+            Some(ShopChargeConfirmOutcome::Cancelled)
+        );
+        assert!(!session.game_mut().shop_charge_confirm_open());
         server.join().unwrap();
     }
 
@@ -1341,8 +1424,8 @@ mod live_boot_gate_tests {
     ///   main.rs::stage_online_identity ->
     ///   ScreenGame::stage_exe_item_shop_catalog -> visit_side(Shop)
     ///   -> mount_staged_side_art (STATE_SHOP) ->
-    ///   ScreenGame::click_shop -> ShopState::apply_action(CartBuy)
-    ///   -> shop_purchase_web_open -> paint_side (sheet overlay).
+    ///   ScreenGame::click_shop -> ShopState::approve_checkout(InsufficientCash)
+    ///   -> shop_charge_confirm_open -> paint_shop_charge_confirm.
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_shop_buyitem_mounts_the_confirmation_sheet() {
@@ -1361,10 +1444,15 @@ mod live_boot_gate_tests {
         game.set_decoded_avatar_source(&source);
         game.stage_exe_item_shop_catalog(source.table());
         game.load_side_scene(art.placements, art.figures);
+        let question1 = stage_dialog(&archive, Dialog::PlanetQuit, StageContext::default())
+            .art
+            .expect("Dialog_Question1 stages with installed bytes");
+        game.load_planet_quit_scene(question1.placements, question1.figures);
         for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
             assert!(game.enter_screen(lobby), "staged walk reaches {lobby:?}");
         }
         assert!(game.visit_side(SideScreen::Shop));
+        game.stage_checkout_bag_capacity(150);
         let row = game
             .staged_side_control_rect(SHOP_ITEMBUY_FIRST_CODE)
             .expect("ITEMBUY1 rides the staged STATE_SHOP block");
@@ -1383,8 +1471,17 @@ mod live_boot_gate_tests {
             buy.y + i32::try_from(buy.h / 2).expect("buy height fits a click"),
         );
         assert!(
-            game.shop_purchase_web_open(),
-            "BUYITEM mounts the confirmation sheet instead of staying on the browser"
+            game.shop_charge_confirm_open(),
+            "BUYITEM posts the native MESSAGE sheet"
+        );
+        assert!(
+            game.question1_dialog_art().is_some(),
+            "the staged sheet carries the exe OK/CANCEL art"
+        );
+        assert_eq!(
+            game.shop_checkout_notice(),
+            Some(CheckoutNotice::InsufficientCash),
+            "BUYITEM's O2CASH shortfall posts the pinned caption"
         );
     }
 

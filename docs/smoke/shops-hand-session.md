@@ -9,8 +9,8 @@ Clicks drive the public `click_shop`/`click_music_shop` seams (the
 same seams the windowed binary feeds through
 `GameLoop::mouse_click`); paint runs the side overlays
 (`paint_shop_board` / `paint_music_shop_board` + cart over
-`side_placements`). The item cart BUYITEM opens the local web surface
-with no `C2S 5000` (W-a NULL, #397); scripted `5001` reply probes use
+`side_placements`). The item cart BUYITEM posts the native MESSAGE
+sheet with OK/CANCEL and no `C2S 5000` (#867, W-a NULL #397); scripted `5001` reply probes use
 `queue_shop_buy_for_reply_probe` only. Song buys still drain through
 the take-seam (`take_music_buy` → 5010 — ASSUMED wire-side, never
 exe proof).
