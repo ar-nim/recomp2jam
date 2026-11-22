@@ -7982,6 +7982,10 @@ impl ScreenGame {
             Screen::MusicShop => {}
         }
         self.paint_dialog_frame_states(frame);
+        // The cursor stays on a toggle after the click, so the hover
+        // repaint above would cover its selected face. Selection is the
+        // last layer: it must win over the pointer/press stand-in.
+        self.paint_create_room_toggle_selection(frame);
     }
 
     /// The active side screen: staged art plus its board overlay
@@ -8477,6 +8481,68 @@ impl ScreenGame {
             draw_text(frame, scaled.x, scaled.y, text, 0xFFFF_FFFF);
         }
     }
+
+    /// Selected face for the create-room mode pair the form chose.
+    /// The exe's 0x6000 toggle style selects the toggle's last art frame
+    /// and restores the base face on its sibling (`FUN_004f6a30`,
+    /// file `0x4f6a30`, ev_9911bf18…; `FUN_004f72b0`, file `0x4f72b0`,
+    /// ev_196cde65…; dialog open `FUN_00433b60`, file `0x433b60`).
+    /// Geometry and sprite ids come only from the staged placements.
+    /// Fresh open leaves no face selected (`+0x20d = 3`, `+0x20e = 2`)
+    /// until a click; matching that sentinel and its OK gate is a
+    /// separate commit-behavior change, left OPEN here.
+    fn paint_create_room_toggle_selection(&self, frame: &mut Frame<'_>) {
+        if self.room_dialog != Some(RoomDialog::CreateRoom) {
+            return;
+        }
+        let Some(art) = self.create_room_art.as_ref() else {
+            return;
+        };
+        use super::side::{
+            CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE,
+            CREATE_ROOM_NORMAL_MODE_CODE,
+        };
+        let (game_selected, game_sibling) = if self.create_room_form.live_battle {
+            (CREATE_ROOM_LIVE_MODE_CODE, CREATE_ROOM_NORMAL_MODE_CODE)
+        } else {
+            (CREATE_ROOM_NORMAL_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE)
+        };
+        Self::paint_toggle_pair(frame, art, game_selected, game_sibling);
+        let (key_selected, key_sibling) = if self.create_room_form.seven_key {
+            (CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_3KEY_MODE_CODE)
+        } else {
+            (CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE)
+        };
+        Self::paint_toggle_pair(frame, art, key_selected, key_sibling);
+    }
+
+    /// Selected last record and sibling base record for one toggle pair.
+    fn paint_toggle_pair(
+        frame: &mut Frame<'_>,
+        art: &SceneArt,
+        selected_code: u32,
+        sibling_code: u32,
+    ) {
+        let Some(selected_record) = Self::last_toggle_record(art, selected_code) else {
+            return;
+        };
+        paint_dialog_frame_record(frame, art, selected_code, selected_record);
+        paint_dialog_frame_record(frame, art, sibling_code, 0);
+    }
+
+    /// Last staged record of one create-room toggle body (`None` when
+    /// the control or its figure is absent). The selected face is the
+    /// last frame of the toggle art; `paint_dialog_frame_record` finds
+    /// the placement and paints at its dialog-relative origin.
+    fn last_toggle_record(art: &SceneArt, code: u32) -> Option<usize> {
+        art.placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .and_then(|placed| placed.sprite.as_deref())
+            .and_then(|sprite| art.figures.get(sprite))
+            .and_then(|figure| figure.len().checked_sub(1))
+    }
+
     /// Password text at the parsed password edit rect, dialog-relative
     /// like every other dialog child (pinned #114).
     fn paint_password_text(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
@@ -23424,6 +23490,155 @@ mod game_tests {
         let body = game.take_create_room().expect("committed 2004");
         assert_eq!(body.title, "x");
         assert!(!body.has_password);
+    }
+
+    #[test]
+    fn create_room_toggle_click_paints_the_selected_face_under_the_cursor() {
+        // Live caller chain: main.rs::run_play -> winit click ->
+        // ScreenGame::ingest_snapshot -> apply_pointer_down -> click_dispatch ->
+        // click_room_dialog -> CreateRoomForm state -> paint_at -> paint_room ->
+        // paint_create_room_toggle_selection -> paint_dialog_frame_record.
+        // Synthetic two-record bodies keep the guard independent of
+        // install-root; both records share an anchor, so only the base
+        // record is in the rest stack and the selected repaint is visible.
+        use super::super::side::{
+            CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE,
+            CREATE_ROOM_NORMAL_MODE_CODE,
+        };
+        let mut game = hover_room_lobby();
+        let origin = (188, 71);
+        let base = 0x7C00u16;
+        let selected = 0x03E0u16;
+        let two_face_figure = || {
+            let mut figure = AvatarFigure::default();
+            for word in [base, selected] {
+                figure.push_layer(FigureLayer {
+                    image: o2jam_render::Rgb555Image::decode(
+                        &word.to_le_bytes().repeat(40 * 30),
+                        40,
+                        30,
+                    )
+                    .expect("synthetic toggle face"),
+                    dx: 0,
+                    dy: 0,
+                    colorkey: 0xFFFF,
+                });
+            }
+            figure
+        };
+        let toggle = |id: &str, code: u32, x: i32, y: i32, sprite: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect { x, y, w: 40, h: 30 },
+        };
+        game.load_create_room_scene(
+            vec![
+                coded_dialog_backdrop(0x2410_0001, origin.0, origin.1),
+                toggle(
+                    "normal",
+                    CREATE_ROOM_NORMAL_MODE_CODE,
+                    10,
+                    10,
+                    "CreateRoom_Normal.ojs",
+                ),
+                toggle(
+                    "live",
+                    CREATE_ROOM_LIVE_MODE_CODE,
+                    60,
+                    10,
+                    "CreateRoom_Live.ojs",
+                ),
+                toggle(
+                    "three-key",
+                    CREATE_ROOM_3KEY_MODE_CODE,
+                    10,
+                    50,
+                    "CreateRoom_3Key.ojs",
+                ),
+                toggle(
+                    "seven-key",
+                    CREATE_ROOM_7KEY_MODE_CODE,
+                    60,
+                    50,
+                    "CreateRoom_7Key.ojs",
+                ),
+            ],
+            HashMap::from([
+                ("Dialog_test.ojs".to_owned(), dialog_body_figure(188, 71)),
+                ("CreateRoom_Normal.ojs".to_owned(), two_face_figure()),
+                ("CreateRoom_Live.ojs".to_owned(), two_face_figure()),
+                ("CreateRoom_3Key.ojs".to_owned(), two_face_figure()),
+                ("CreateRoom_7Key.ojs".to_owned(), two_face_figure()),
+            ]),
+        );
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        let at = |x: i32, y: i32| (origin.0 + x + 20, origin.1 + y + 15);
+        let click_toggle = |game: &mut ScreenGame, x: i32, y: i32| {
+            let (click_x, click_y) = at(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(click_x, click_y));
+        };
+        let pixel_at = |game: &mut ScreenGame, (x, y): (i32, i32)| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf[y as usize * 800 + x as usize]
+        };
+        let faces = |game: &mut ScreenGame| {
+            [
+                pixel_at(game, at(10, 10)),
+                pixel_at(game, at(60, 10)),
+                pixel_at(game, at(10, 50)),
+                pixel_at(game, at(60, 50)),
+            ]
+        };
+        let [normal, live, three_key, seven_key] = faces(&mut game);
+        assert!(near_xrgb(normal, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(live, pack_xrgb(0xFF, 0, 0)));
+        assert!(near_xrgb(three_key, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
+
+        click_toggle(&mut game, 60, 10);
+        let [normal, live, three_key, seven_key] = faces(&mut game);
+        assert!(
+            near_xrgb(live, pack_xrgb(0, 0xFF, 0)),
+            "LIVE keeps its selected face while the cursor stays on it"
+        );
+        assert!(
+            near_xrgb(normal, pack_xrgb(0xFF, 0, 0)),
+            "NORMAL returns to the base face when LIVE is picked"
+        );
+        assert!(near_xrgb(three_key, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
+
+        click_toggle(&mut game, 60, 50);
+        let [normal, live, three_key, seven_key] = faces(&mut game);
+        assert!(near_xrgb(live, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(normal, pack_xrgb(0xFF, 0, 0)));
+        assert!(near_xrgb(three_key, pack_xrgb(0xFF, 0, 0)));
+        assert!(
+            near_xrgb(seven_key, pack_xrgb(0, 0xFF, 0)),
+            "7KEY lights while 3KEY stays on the base face"
+        );
+
+        click_toggle(&mut game, 10, 10);
+        click_toggle(&mut game, 10, 50);
+        let [normal, live, three_key, seven_key] = faces(&mut game);
+        assert!(
+            near_xrgb(normal, pack_xrgb(0, 0xFF, 0)),
+            "clicking back to NORMAL lights it"
+        );
+        assert!(near_xrgb(live, pack_xrgb(0xFF, 0, 0)));
+        assert!(near_xrgb(three_key, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
     }
 
     /// Room lobby with the dialog CREATE control staged on the test
