@@ -10,6 +10,7 @@ mod musicshop;
 mod myroom;
 mod options;
 mod options_key_labels;
+mod options_key_mode;
 mod planet;
 mod result_records;
 mod room_fuse;
@@ -21976,6 +21977,8 @@ mod game_tests {
         open_options(&mut game);
         // The gear opens Sound (#359); this guard exercises Key.
         game.switch_option_tab(PlanetOptionTab::Key);
+        // Exe #839: the Key sheet opens in 3K; these are 7K buttons.
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 100, 100);
         assert_eq!(game.option_rebind_armed(), Some(0));
         assert!(game.capture_raw_key(KeyCode::KeyA, true));
@@ -22022,6 +22025,7 @@ mod game_tests {
         stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         for (lane, code) in binds.iter().enumerate() {
             let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
             click_button(&mut game, x, 100);
@@ -22095,6 +22099,7 @@ mod game_tests {
         );
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 140, 100);
         assert_eq!(game.option_rebind_armed(), Some(1));
         assert!(
@@ -22510,6 +22515,7 @@ mod game_tests {
         );
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         click_button(&mut game, 100, 100);
         assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyA, true));
         game.switch_option_tab(PlanetOptionTab::Sound);
@@ -22520,7 +22526,13 @@ mod game_tests {
             "rebound A persists as its DirectInput code: {text}"
         );
         let reloaded = crate::options::OptionsSettings::load_from_dir(&root);
-        assert_eq!(reloaded, *game.options(), "a restart keeps them");
+        // The key-count selection is in-memory only (#839); compare
+        // the profile fields that SAVE actually commits.
+        assert_eq!(
+            reloaded.to_ini_text(),
+            game.options().to_ini_text(),
+            "a restart keeps the persisted fields"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -34117,6 +34129,7 @@ mod game_tests {
         stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
+        game.options_mut().set_three_key(false);
         // Paint parity (guards #132): the KEY3 lane button's art must
         // paint at its staged rect, so visible art and the hit rect
         // coincide. Isolate the dialog paint (no board backdrop) so

@@ -17,12 +17,9 @@
 //! below is a labeled stand-in, not an exe face. Next evidence step:
 //! re-run the arm capture with the cursor parked off the button.
 
+use super::options_key_mode;
 use super::super::paint::{dialog_origin, paint_planet_options, SceneArt};
-use super::super::side::{
-    PlanetOptionTab, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
-    OPTION_KEY_LANE_FIRST,
-};
-use crate::avatar::ScenePlacement;
+use super::super::side::PlanetOptionTab;
 use o2jam_render::{blit_rgb555, fill_rect, pack_xrgb, Frame, Rect};
 
 const KEY_CAPTION_SPRITE: &str = "OptionKey_Keytext.ojs";
@@ -64,7 +61,7 @@ pub(super) fn paint_option_key_tab(
         paint_planet_options(frame, art, PlanetOptionTab::Key, settings);
         return;
     };
-    paint_dialog_without_captions(frame, art, settings);
+    paint_dialog_without_captions(frame, art, captions.three_key, settings);
     paint_bound_captions(frame, art, captions);
     if let Some(lane) = captions.armed_lane {
         paint_armed_stand_in(frame, art, captions.three_key, lane);
@@ -78,20 +75,22 @@ pub(super) fn paint_option_key_tab(
 fn paint_dialog_without_captions(
     frame: &mut Frame<'_>,
     art: &SceneArt,
+    three_key: bool,
     settings: &crate::options::OptionsSettings,
 ) {
-    let without_captions = SceneArt {
+    let visible_sheet = SceneArt {
         placements: art
             .placements
             .iter()
             .filter(|placed| placed.sprite.as_deref() != Some(KEY_CAPTION_SPRITE))
+            .filter(|placed| options_key_mode::is_visible(placed.code, three_key))
             .cloned()
             .collect(),
         figures: art.figures.clone(),
     };
     paint_planet_options(
         frame,
-        Some(&without_captions),
+        Some(&visible_sheet),
         PlanetOptionTab::Key,
         settings,
     );
@@ -104,7 +103,7 @@ fn paint_bound_captions(frame: &mut Frame<'_>, art: &SceneArt, captions: KeyCapt
     };
     let origin = dialog_origin(&art.placements);
     for placed in &art.placements {
-        let Some(lane) = visible_lane(placed, captions.three_key) else {
+        let Some(lane) = options_key_mode::caption_lane(placed.code, captions.three_key) else {
             continue;
         };
         let Some(dik) = captions.lane_dik.get(lane) else {
@@ -125,22 +124,6 @@ fn paint_bound_captions(frame: &mut Frame<'_>, art: &SceneArt, captions: KeyCapt
             Some(layer.colorkey),
         );
     }
-}
-
-/// Lane shown by one caption button in the active key-count family.
-fn visible_lane(placed: &ScenePlacement, three_key: bool) -> Option<usize> {
-    if three_key {
-        visible_lane_in(placed.code, OPTION_KEY_3KEY_FIRST, 4)
-    } else {
-        visible_lane_in(placed.code, OPTION_KEY_LANE_FIRST, 7)
-    }
-}
-
-fn visible_lane_in(code: u32, first: u32, count: u32) -> Option<usize> {
-    let offset = code.checked_sub(first)?;
-    (offset < count)
-        .then(|| usize::try_from(offset).ok())
-        .flatten()
 }
 
 /// Array index for a bound DIK (`0x439230`; `None` is the exe's
@@ -168,7 +151,7 @@ fn glyph_origin(rect: &Rect, glyph: usize, three_key: bool) -> (i32, i32) {
 fn paint_armed_stand_in(frame: &mut Frame<'_>, art: &SceneArt, three_key: bool, lane: usize) {
     let origin = dialog_origin(&art.placements);
     for placed in &art.placements {
-        if visible_lane(placed, three_key) != Some(lane) {
+        if options_key_mode::caption_lane(placed.code, three_key) != Some(lane) {
             continue;
         }
         let thickness = ARMED_OUTLINE_THICKNESS;
@@ -208,6 +191,9 @@ fn paint_armed_stand_in(frame: &mut Frame<'_>, art: &SceneArt, three_key: bool, 
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::side::{
+        OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+    };
     use super::super::{PlanetModal, ScreenGame};
     use super::*;
     use crate::avatar::FigureLayer;

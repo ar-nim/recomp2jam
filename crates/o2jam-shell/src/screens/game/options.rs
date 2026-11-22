@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+use super::options_key_mode;
 use super::super::paint::{dialog_rect_hit, paint_dialog_scene, SceneArt};
 use super::super::side::{
     PlanetOptionTab, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
@@ -177,8 +178,15 @@ impl OptionsDialog {
 
     /// Staged hit for one options-dialog code on the open tab
     /// (`false` while the tab's sheet is unstaged — unstaged
-    /// dialogs answer no button, Escape still closes them).
+    /// dialogs answer no button, Escape still closes them). The Key
+    /// tab hides the inactive lane family through the same filter
+    /// the painter uses, so hidden buttons cannot be armed.
     fn hit(&self, code: u32, x: i32, y: i32) -> bool {
+        if self.tab == PlanetOptionTab::Key
+            && !options_key_mode::is_visible(code, self.settings.three_key())
+        {
+            return false;
+        }
         self.staged_art()
             .filter(|art| art.has_figures())
             .is_some_and(|art| dialog_rect_hit(&art.placements, code, x, y))
