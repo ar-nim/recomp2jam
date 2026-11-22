@@ -376,9 +376,12 @@ impl SideScreen {
     /// The music-shop entry pushes decimal `10` (record 10 names the
     /// shop track); the audit's `0x10` shorthand is corrected the
     /// same way [`Screen::bgm_cue`](super::super::screen::Screen::bgm_cue)
-    /// corrects it. Lanking has no state class and tutorial holds no
-    /// pinned cue (no selector caller names them), so they cue
-    /// silence. The launch client (`recomp2jam/src/main.rs`)
+    /// corrects it. Lanking has no state class, so it cues silence.
+    /// Tutorial has no `BGM.ojm` cue: its state-enter helper loads
+    /// `Tutorial.ojm` and calls its playback helper (exe files
+    /// `0xf0a50`/`0xf0ab0`, #499), so `ScreenGame` cues record 1 of
+    /// that bank at entry instead of this table's `-1`.
+    /// The launch client (`recomp2jam/src/main.rs`)
     /// delegates its side hook here, so the pairs live in one place
     /// and `ScreenGame` re-cues every side entry through this table.
     #[must_use]
