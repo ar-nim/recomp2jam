@@ -93,6 +93,17 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     // over their `.bnd` rects, `docs/planet.md`).
     assert_eq!(game.screen(), Screen::Planet, "boot → bare board");
     shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
+    // The gear plate opens the staged options sheet over the board
+    // (pinned modal seam; the Key tab is the exe-pinned first open).
+    game.click_planet(729, 580);
+    assert_eq!(
+        game.planet_modal(),
+        Some(o2jam_shell::screens::game::PlanetModal::Options),
+        "gear plate -> options sheet"
+    );
+    shots.push(shoot_checked(&mut game, "options", Screen::Planet, 0)?);
+    game.menu_key(MenuKey::Back, true);
+    assert_eq!(game.planet_modal(), None, "Escape closes options");
     // A lit-emblem click (HARD through its pinned `.bnd` rect)
     // opens the channel dialog over the board (family select,
     // live-verified 2026-11-09; the dialog-edge link stays OPEN per
@@ -236,9 +247,6 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(out_dir)?;
     let mut written = Vec::new();
     for shot in shared_shots()? {
-        if shot.name == "avi" {
-            continue;
-        }
         let bytes = encode_png(shot.w as u32, shot.h as u32, &shot.rgb);
         let path = out_dir.join(format!("{}.png", shot.name));
         std::fs::write(&path, &bytes)?;
@@ -2083,6 +2091,7 @@ mod tests {
         let mut expected = vec![
             "avi",
             "planet",
+            "options",
             "channel",
             "channel-digits-native",
             "channel-native",
@@ -4064,10 +4073,10 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Sixteen fixed scenes (channel carries its open-row and
-        // closed-row wire-mirror natives) plus one preview per staged
-        // side and one native per staged #207 side.
-        assert_eq!(shots.len(), 16 + side_count + native_count);
+        // Seventeen fixed scenes (avi, planet, options, channel with
+        // its open-row and closed-row wire-mirror natives) plus one
+        // preview per staged side and one native per staged #207 side.
+        assert_eq!(shots.len(), 17 + side_count + native_count);
         let loading_staged = loading_caption_staged();
         for shot in shots {
             if !loading_staged && shot.name == "loading" {
@@ -4096,11 +4105,11 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Fifteen fixed files (channel plus its open-row and closed-row
-        // wire-mirror natives, minus the never-written avi) plus staged
-        // previews and #207 natives.
-        assert_eq!(written.len(), 15 + side_count + native_count);
-        assert!(!dir.join("avi.png").exists());
+        // Seventeen fixed files (avi, planet, options, channel plus its
+        // open-row and closed-row wire-mirror natives, loading, the
+        // playing/result family) plus staged previews and #207 natives.
+        assert_eq!(written.len(), 17 + side_count + native_count);
+        assert!(dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
         assert!(dir.join("channel-native.png").exists());
         assert!(dir.join("channel-digits-native.png").exists());

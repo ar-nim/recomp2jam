@@ -24,16 +24,18 @@ regression tests), with the 7.55 executable as oracle.
 
 ## Screenshots
 
-Rendered by this client (reference captures; the `-native` variants pair with
-original-client captures in `docs/screenshots/`):
+Rendered by this client from the current build (regenerate with
+`cargo run -p recomp2jam --bin recomp2jam -- shots --out-dir docs/screenshots`,
+after `scripts/worktree-setup.sh`; the `-native` and `reference-*` variants
+pair with original-client captures in the same directory):
 
 | | | |
 |---|---|---|
-| ![planet](docs/screenshots/planet.png) | ![channel](docs/screenshots/channel.png) | ![playing](docs/screenshots/playing.png) |
-| ![myroom](docs/screenshots/myroom.png) | ![musicshop](docs/screenshots/musicshop.png) | ![loading](docs/screenshots/loading.png) |
-
-Regenerate with `cargo run -p recomp2jam -- --out-dir docs/screenshots`
-(after `scripts/worktree-setup.sh`).
+| ![avi](docs/screenshots/avi.png) | ![planet](docs/screenshots/planet.png) | ![channel](docs/screenshots/channel.png) |
+| ![room](docs/screenshots/room.png) | ![waiting](docs/screenshots/waiting.png) | ![options](docs/screenshots/options.png) |
+| ![shop](docs/screenshots/shop.png) | ![myroom](docs/screenshots/myroom.png) | ![musicshop](docs/screenshots/musicshop.png) |
+| ![playing](docs/screenshots/playing.png) | ![loading](docs/screenshots/loading.png) | ![result](docs/screenshots/result.png) |
+| ![lanking](docs/screenshots/lanking.png) | ![musicselect](docs/screenshots/musicselect.png) | ![tutorial](docs/screenshots/tutorial.png) |
 
 ## Feature progress
 
