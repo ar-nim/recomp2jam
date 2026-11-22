@@ -5194,6 +5194,18 @@ impl CreateRoomForm {
     pub fn pop_password(&mut self) {
         self.password.pop();
     }
+    /// Password bytes the 2004 builder sends. The exe writes `0x31`
+    /// into the password string when the lock flag is clear (VA
+    /// `0x43644f`, file `0x3644f`), so an unlocked room still carries
+    /// the one-character text `1`; the form itself stays empty.
+    fn wire_password(&self) -> String {
+        if self.password.is_empty() {
+            "1".to_owned()
+        } else {
+            self.password.clone()
+        }
+    }
+
     /// Commit body for `CreateRoom` 2004. `None` while the title is
     /// empty: the exe OK handler (VA `0x436ac0`) refuses that state
     /// with `방 제목을 입력하세요.` (file `0x244f04`), and no Wine run
@@ -5218,9 +5230,12 @@ impl CreateRoomForm {
                 GameMode::Normal
             },
             has_password: !self.password.is_empty(),
-            password: self.password.clone(),
+            password: self.wire_password(),
+            // The exe copies the form's `+0x212`/`+0x213` bytes
+            // (files `0x36520`/`0x36564`); a fresh dialog leaves both
+            // zero, so the old hardcoded 99 bound was wrong.
             min_level: 0,
-            max_level: 99,
+            max_level: 0,
             premium: false,
         })
     }
@@ -6995,6 +7010,12 @@ mod side_tests {
         let open = form.commit().expect("titled form commits");
         assert_eq!(open.title, "Jam Room");
         assert!(!open.has_password);
+        // seam: pure form-to-wire mapping. The exe's 2004 builder writes
+        // `0x31` into the password buffer when no password was typed
+        // (VA `0x43644f`, file `0x3644f`) and sends the two level bytes
+        // from `+0x212`/`+0x213` (files `0x36520`, `0x36564`), both zero.
+        assert_eq!(open.password, "1");
+        assert_eq!((open.min_level, open.max_level), (0, 0));
         form.push_password_char('x');
         let locked = form.commit().expect("titled form commits");
         assert!(locked.has_password);

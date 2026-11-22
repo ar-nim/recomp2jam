@@ -24619,7 +24619,14 @@ mod game_tests {
         );
         let unlocked = game.take_create_room().expect("committed 2004");
         assert!(!unlocked.has_password);
-        assert_eq!(unlocked.password, "");
+        // #851: the exe 2004 builder substitutes the password string
+        // "1" on the wire when the lock flag is clear (immediate
+        // write at file 0x36455, FUN_00436360, ev_c68b010…); the
+        // FORM password stays empty, the wire text does not.
+        assert_eq!(
+            unlocked.password, "1",
+            "empty lock substitutes the exe's wire password"
+        );
     }
 
     #[test]
