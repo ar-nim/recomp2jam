@@ -12,6 +12,7 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 bash "$SCRIPTS_DIR/lib/rig-run-class.sh" selftest
 bash "$SCRIPTS_DIR/lib/play-local-seams.sh" selftest
+bash "$SCRIPTS_DIR/lib/rig_binary_stale.sh" selftest
 bash "$SCRIPTS_DIR/lib/rig-client-display.sh" selftest
 bash "$SCRIPTS_DIR/lib/rig-client-identity.sh" selftest
 

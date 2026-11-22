@@ -5,9 +5,10 @@
 #   scripts/lib/play-local-seams.sh selftest
 #
 # These seams do not change play-local's argv or preflight order. They give
-# every decision one name: run-class pin/flock policy, binary staleness, and
-# the Memoryer session-token lookup. The live launcher still supplies the
-# real repo root, binary, and database; the tests supply synthetic inputs.
+# every decision one name: run-class pin/flock policy and the Memoryer
+# session-token lookup. Binary staleness lives in rig_binary_stale.sh, which
+# the live launcher sources beside this file. The tests supply synthetic
+# inputs for the decisions here.
 set -euo pipefail
 
 PLAY_LOCAL_SEAMS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,31 +23,6 @@ play_local_needs_display_pin() {
 
 play_local_needs_live_lock() {
   [ "$1" != "$RIG_RUN_CLASS_OWNER" ]
-}
-
-play_local_head_commit_timestamp() {
-  local repo_root="$1" timestamp
-  local -a binary_paths=(crates/ Cargo.toml Cargo.lock ':(exclude,glob)**/tests/**')
-  if ! timestamp="$(git -C "$repo_root" log -1 --format=%ct \
-    "${binary_paths[@]}" 2>/dev/null)"; then
-    printf '0\n'
-    return 0
-  fi
-  printf '%s\n' "${timestamp:-0}"
-}
-
-play_local_binary_timestamp() {
-  local binary="$1" timestamp
-  if ! timestamp="$(stat -c %Y "$binary" 2>/dev/null)"; then
-    printf '0\n'
-    return 0
-  fi
-  printf '%s\n' "${timestamp:-0}"
-}
-
-play_local_binary_is_stale() {
-  local head_timestamp="$1" binary_timestamp="$2"
-  [ "$head_timestamp" -gt 0 ] && [ "$binary_timestamp" -lt "$head_timestamp" ]
 }
 
 play_local_read_session_token() {
@@ -154,18 +130,6 @@ selftest_two_owner_clients_take_no_live_lock() {
     play_local_needs_live_lock "$RIG_RUN_CLASS_X11"
 }
 
-selftest_test_only_commit_keeps_binary_current() {
-  # A test-only commit leaves HEAD_TS at 100; the binary built at 100 is current.
-  assert_false test-only-commit-does-not-mark-binary-stale \
-    play_local_binary_is_stale 100 100
-}
-
-selftest_crate_commit_marks_binary_stale() {
-  # A crate commit moves HEAD_TS to 101; the binary built at 100 is stale.
-  assert_true crate-commit-marks-binary-stale \
-    play_local_binary_is_stale 101 100
-}
-
 selftest_token_lookup_reads_latest_login() {
   local token_database token
   token_database="$(mktemp)"
@@ -211,8 +175,6 @@ main() {
       selftest_owner_zero_display_skips_pin_red_proof
       selftest_rig_run_on_owner_display_is_refused
       selftest_two_owner_clients_take_no_live_lock
-      selftest_test_only_commit_keeps_binary_current
-      selftest_crate_commit_marks_binary_stale
       selftest_token_lookup_reads_latest_login
       selftest_token_lookup_refuses_unknown_uid
       echo "play-local-seams: selftest OK" ;;
