@@ -5115,13 +5115,18 @@ pub struct CreateRoomForm {
     pub title_selected: bool,
     /// Password edit (cap 12).
     pub password: String,
-    /// Battle mode (Live) versus normal.
-    pub live_battle: bool,
-    /// 7-key arena versus 3-key.
-    pub seven_key: bool,
+    /// Battle mode (Live) versus normal. `None` is the exe's fresh
+    /// open sentinel (`+0x20d = 3`, `+0x20e = 2`, `FUN_004351e0`):
+    /// no toggle is lit until one is pressed (cw-02). `Some(false)`
+    /// is NORMAL, `Some(true)` is LIVE.
+    pub live_battle: Option<bool>,
+    /// 7-key arena versus 3-key. `None` is the fresh open sentinel;
+    /// `Some(false)` is 3KEY, `Some(true)` is 7KEY.
+    pub seven_key: Option<bool>,
 }
 impl CreateRoomForm {
-    /// Empty form: normal mode, 7-key (the dialog defaults).
+    /// Empty form: both toggle pairs still on the fresh open
+    /// sentinel (no selected face until a press).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -5191,12 +5196,12 @@ impl CreateRoomForm {
         }
         Some(CreateRoom {
             title: self.title.clone(),
-            key_mode: if self.seven_key {
+            key_mode: if self.seven_key == Some(true) {
                 KeyMode::SevenKeys
             } else {
                 KeyMode::ThreeKeys
             },
-            game_mode: if self.live_battle {
+            game_mode: if self.live_battle == Some(true) {
                 GameMode::Live
             } else {
                 GameMode::Normal

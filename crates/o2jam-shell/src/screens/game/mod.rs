@@ -61,28 +61,29 @@ use super::paint::{
     information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit,
     myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
     myroom_pc_room_mark_kept, paint_avi_scene, paint_billing_failure_notice,
-    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
-    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
-    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
-    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
-    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
-    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
-    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record,
+    paint_dialog_frame_record_at_anchor_of, paint_dialog_scene, paint_information_message,
+    paint_lanking_board, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
+    paint_music_shop_cashfillup_notice, paint_music_shop_face, paint_music_shop_genre_frames,
+    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
+    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
+    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
+    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
+    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
+    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
+    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
+    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -2889,16 +2890,16 @@ impl ScreenGame {
                     .map_or(&[], |art| &art.placements);
                 match create_room_action_at(placements, x, y) {
                     Some(CreateRoomAction::NormalMode) => {
-                        self.create_room_form.live_battle = false;
+                        self.create_room_form.live_battle = Some(false);
                     }
                     Some(CreateRoomAction::LiveMode) => {
-                        self.create_room_form.live_battle = true;
+                        self.create_room_form.live_battle = Some(true);
                     }
                     Some(CreateRoomAction::ThreeKey) => {
-                        self.create_room_form.seven_key = false;
+                        self.create_room_form.seven_key = Some(false);
                     }
                     Some(CreateRoomAction::SevenKey) => {
-                        self.create_room_form.seven_key = true;
+                        self.create_room_form.seven_key = Some(true);
                     }
                     Some(CreateRoomAction::FocusTitle) => {
                         self.create_focus_password = false;
@@ -8573,9 +8574,9 @@ impl ScreenGame {
     /// file `0x4f6a30`, ev_9911bf18…; `FUN_004f72b0`, file `0x4f72b0`,
     /// ev_196cde65…; dialog open `FUN_00433b60`, file `0x433b60`).
     /// Geometry and sprite ids come only from the staged placements.
-    /// Fresh open leaves no face selected (`+0x20d = 3`, `+0x20e = 2`)
-    /// until a click; matching that sentinel and its OK gate is a
-    /// separate commit-behavior change, left OPEN here.
+    /// Fresh open carries the exe sentinel (`+0x20d = 3`, `+0x20e = 2`)
+    /// and paints base faces for both pairs until a toggle press;
+    /// the OK notice for an untouched sentinel stays OPEN.
     fn paint_create_room_toggle_selection(&self, frame: &mut Frame<'_>) {
         if self.room_dialog != Some(RoomDialog::CreateRoom) {
             return;
@@ -8587,21 +8588,47 @@ impl ScreenGame {
             CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE,
             CREATE_ROOM_NORMAL_MODE_CODE,
         };
-        let (game_selected, game_sibling) = if self.create_room_form.live_battle {
-            (CREATE_ROOM_LIVE_MODE_CODE, CREATE_ROOM_NORMAL_MODE_CODE)
-        } else {
-            (CREATE_ROOM_NORMAL_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE)
-        };
-        Self::paint_toggle_pair(frame, art, game_selected, game_sibling);
-        let (key_selected, key_sibling) = if self.create_room_form.seven_key {
-            (CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_3KEY_MODE_CODE)
-        } else {
-            (CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE)
-        };
-        Self::paint_toggle_pair(frame, art, key_selected, key_sibling);
+        match self.create_room_form.live_battle {
+            Some(true) => Self::paint_toggle_pair(
+                frame,
+                art,
+                CREATE_ROOM_LIVE_MODE_CODE,
+                CREATE_ROOM_NORMAL_MODE_CODE,
+            ),
+            Some(false) => Self::paint_toggle_pair(
+                frame,
+                art,
+                CREATE_ROOM_NORMAL_MODE_CODE,
+                CREATE_ROOM_LIVE_MODE_CODE,
+            ),
+            None => {
+                Self::repaint_toggle_base(frame, art, CREATE_ROOM_NORMAL_MODE_CODE);
+                Self::repaint_toggle_base(frame, art, CREATE_ROOM_LIVE_MODE_CODE);
+            }
+        }
+        match self.create_room_form.seven_key {
+            Some(true) => Self::paint_toggle_pair(
+                frame,
+                art,
+                CREATE_ROOM_7KEY_MODE_CODE,
+                CREATE_ROOM_3KEY_MODE_CODE,
+            ),
+            Some(false) => Self::paint_toggle_pair(
+                frame,
+                art,
+                CREATE_ROOM_3KEY_MODE_CODE,
+                CREATE_ROOM_7KEY_MODE_CODE,
+            ),
+            None => {
+                Self::repaint_toggle_base(frame, art, CREATE_ROOM_3KEY_MODE_CODE);
+                Self::repaint_toggle_base(frame, art, CREATE_ROOM_7KEY_MODE_CODE);
+            }
+        }
     }
 
-    /// Selected last record and sibling base record for one toggle pair.
+    /// Selected last record for one toggle pair, with its sibling
+    /// restored to the staged base face in the same last-layer pass
+    /// (#841): hover has already cleared by the time this runs.
     fn paint_toggle_pair(
         frame: &mut Frame<'_>,
         art: &SceneArt,
@@ -8612,7 +8639,20 @@ impl ScreenGame {
             return;
         };
         paint_dialog_frame_record(frame, art, selected_code, selected_record);
-        paint_dialog_frame_record(frame, art, sibling_code, 0);
+        Self::repaint_toggle_base(frame, art, sibling_code);
+    }
+
+    /// Restore one toggle's staged base face, covering the footprint
+    /// of its selected record first. The two records can carry
+    /// different anchors in the archive (mode plates differ by one
+    /// pixel), so the first blit uses the selected record's anchor
+    /// and the second restores the base's authored position.
+    fn repaint_toggle_base(frame: &mut Frame<'_>, art: &SceneArt, code: u32) {
+        let Some(last_record) = Self::last_toggle_record(art, code) else {
+            return;
+        };
+        paint_dialog_frame_record_at_anchor_of(frame, art, code, 0, last_record);
+        paint_dialog_frame_record(frame, art, code, 0);
     }
 
     /// Last staged record of one create-room toggle body (`None` when
@@ -9624,19 +9664,20 @@ mod game_tests {
     use super::super::side::{
         music_shop_top100_rects, MusicShopGenreFilter, MyRoomLowerTab, MyRoomPanel, OwnedSort,
         ShopBagNotice, ShopChromeNotice, ShopGender, ShopRefresh, ShopRefreshContext,
-        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
-        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
-        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
-        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BAG_GEM_CODE, MSHOP_BAG_WON_CODE,
-        MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE, MSHOP_BUYITEM_INVOKE_CODE,
-        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
-        MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CASH_FILLUP_CODE, MSHOP_CONFERENCE_CODE,
-        MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE,
-        MSHOP_DOWN_START_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE,
-        MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE, MSHOP_GENRE_FILTER_FIRST_CODE,
-        MSHOP_ISBUY_CODE, MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MESSENGER_CODE,
-        MSHOP_MESSENGER_LOADING_NOTICE, MSHOP_MESSENGER_UNAVAILABLE_NOTICE, MSHOP_MONEY_GEM_CODE,
-        MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
+        CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, CREATE_ROOM_LIVE_MODE_CODE,
+        CREATE_ROOM_NORMAL_MODE_CODE, LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE,
+        LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE,
+        LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE,
+        MSHOP_BAG_GEM_CODE, MSHOP_BAG_WON_CODE, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE,
+        MSHOP_BPM_SORT_CODE, MSHOP_BUYITEM_INVOKE_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
+        MSHOP_CART_RIGHT_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CASH_FILLUP_CODE,
+        MSHOP_CONFERENCE_CODE, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE,
+        MSHOP_DOWN_CANCEL_CODE, MSHOP_DOWN_START_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_EDITOR_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GEM_PRICE_CODE, MSHOP_GENRE_CODE,
+        MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_ISBUY_CODE, MSHOP_LIGHTBOARD_TOOLTIP_CODE,
+        MSHOP_MESSENGER_CODE, MSHOP_MESSENGER_LOADING_NOTICE, MSHOP_MESSENGER_UNAVAILABLE_NOTICE,
+        MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
         MSHOP_MUSICDELETE_CODE, MSHOP_MYALL_LEFT_CODE, MSHOP_MYALL_RIGHT_CODE,
         MSHOP_OWNED_DOWNSTATUS_SORT_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_PLAYTIME_SORT_CODE,
         MSHOP_OWNED_ROWS, MSHOP_OWNED_TITLE_SORT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
@@ -23833,6 +23874,166 @@ mod game_tests {
         assert!(!body.has_password);
     }
 
+    /// Three staged records per toggle body: base, hover, selected.
+    /// The selected record carries the archive's one-pixel anchor
+    /// offset, so a stale selected face cannot hide behind a base
+    /// repaint. Solid keys need no install-root.
+    fn three_record_toggle_figure(x: i32, y: i32) -> AvatarFigure {
+        let record = |word: u16, dy: i32| FigureLayer {
+            image: Rgb555Image::decode(&word.to_le_bytes().repeat(40 * 30), 40, 30)
+                .expect("synthetic toggle frame"),
+            dx: x,
+            dy: y + dy,
+            colorkey: 0,
+        };
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(record(0x7C00, 0));
+        figure.push_layer(record(0x001F, 0));
+        figure.push_layer(record(0x03E0, -1));
+        figure
+    }
+
+    /// Stage the four create-room toggles at the dialog origin with
+    /// three-record bodies, keeping every guard independent of
+    /// archives.
+    fn stage_three_record_toggles(game: &mut ScreenGame) {
+        let toggle = |id: &str, code: u32, x: i32, y: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: Some(format!("CreateRoom_{id}.ojs")),
+            rect: Rect { x, y, w: 40, h: 30 },
+        };
+        game.load_create_room_scene(
+            vec![
+                coded_dialog_backdrop(0x2410_0001, 188, 71),
+                toggle("Normal", CREATE_ROOM_NORMAL_MODE_CODE, 10, 10),
+                toggle("Live", CREATE_ROOM_LIVE_MODE_CODE, 60, 10),
+                toggle("ThreeKey", CREATE_ROOM_3KEY_MODE_CODE, 10, 50),
+                toggle("SevenKey", CREATE_ROOM_7KEY_MODE_CODE, 60, 50),
+            ],
+            HashMap::from([
+                ("Dialog_test.ojs".to_owned(), dialog_body_figure(188, 71)),
+                (
+                    "CreateRoom_Normal.ojs".to_owned(),
+                    three_record_toggle_figure(10, 10),
+                ),
+                (
+                    "CreateRoom_Live.ojs".to_owned(),
+                    three_record_toggle_figure(60, 10),
+                ),
+                (
+                    "CreateRoom_ThreeKey.ojs".to_owned(),
+                    three_record_toggle_figure(10, 50),
+                ),
+                (
+                    "CreateRoom_SevenKey.ojs".to_owned(),
+                    three_record_toggle_figure(60, 50),
+                ),
+            ]),
+        );
+    }
+
+    /// Centre pixel of each of the four staged toggle faces.
+    fn create_toggle_face_pixels(game: &mut ScreenGame) -> [u32; 4] {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let at = |x: i32, y: i32| (188 + x + 20, 71 + y + 15);
+        [(10, 10), (60, 10), (10, 50), (60, 50)].map(|(x, y)| {
+            let (pixel_x, pixel_y) = at(x, y);
+            buf[pixel_y as usize * 800 + pixel_x as usize]
+        })
+    }
+
+    /// Pixel on the selected record's extra anchor row for LIVE:
+    /// the archive puts that face one pixel above its base record.
+    fn live_toggle_selected_anchor_row(game: &mut ScreenGame) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let (x, y) = (188 + 60 + 20, 71 + 10 - 1);
+        buf[y as usize * 800 + x as usize]
+    }
+
+    #[test]
+    fn create_room_fresh_open_leaves_both_toggle_pairs_on_base_faces() {
+        // Ticket #840. Live caller chain: main.rs::run_play -> winit
+        // CREATE click -> ScreenGame::click_room_control ->
+        // open_create_room_dialog -> paint_at -> paint_room ->
+        // paint_create_room_toggle_selection. Exe fresh open writes
+        // +0x20d=3 / +0x20e=2 (FUN_004351e0) and cw-02 shows no
+        // selected outline on either pair.
+        let mut game = hover_room_lobby();
+        stage_three_record_toggles(&mut game);
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        let [normal, live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
+        let base = pack_xrgb(0xFF, 0, 0);
+        assert!(
+            near_xrgb(normal, base),
+            "NORMAL must start on its staged base face, got {normal:#010x}"
+        );
+        assert!(
+            near_xrgb(live, base),
+            "LIVE must start on its staged base face, got {live:#010x}"
+        );
+        assert!(
+            near_xrgb(three_key, base),
+            "3KEY must start on its staged base face, got {three_key:#010x}"
+        );
+        assert!(
+            near_xrgb(seven_key, base),
+            "7KEY must start on its staged base face, got {seven_key:#010x}"
+        );
+    }
+
+    #[test]
+    fn choosing_normal_repaints_live_sibling_base_after_hover_clears() {
+        // Ticket #841. Live caller chain: main.rs::run_play -> winit
+        // LIVE then NORMAL clicks -> ScreenGame::ingest_snapshot ->
+        // click_room_dialog -> CreateRoomForm toggle state ->
+        // paint_at -> paint_room -> paint_create_room_toggle_selection
+        // -> sibling base repaint. The archive's selected frame sits
+        // one pixel above the base frame; cw-03 shows grey LIVE.
+        let mut game = hover_room_lobby();
+        stage_three_record_toggles(&mut game);
+        game.open_create_room_dialog();
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        let click_toggle = |game: &mut ScreenGame, x: i32, y: i32| {
+            game.ingest_snapshot(&InputSnapshot::click_at(188 + x + 20, 71 + y + 15));
+        };
+        click_toggle(&mut game, 60, 10);
+        click_toggle(&mut game, 10, 10);
+        let [normal, live, three_key, seven_key] = create_toggle_face_pixels(&mut game);
+        let base = pack_xrgb(0xFF, 0, 0);
+        let selected = pack_xrgb(0, 0xFF, 0);
+        assert!(near_xrgb(normal, selected), "NORMAL must be selected");
+        assert!(
+            near_xrgb(live, base),
+            "LIVE must return to its staged base face after NORMAL is chosen, got {live:#010x}"
+        );
+        assert!(near_xrgb(three_key, base));
+        assert!(near_xrgb(seven_key, base));
+        let anchor_row = live_toggle_selected_anchor_row(&mut game);
+        assert!(
+            near_xrgb(anchor_row, base),
+            "LIVE's stale selected anchor row must be covered by its staged base face, got {anchor_row:#010x}"
+        );
+    }
+
     #[test]
     fn create_room_toggle_click_paints_the_selected_face_under_the_cursor() {
         // Live caller chain: main.rs::run_play -> winit click ->
@@ -23942,9 +24143,12 @@ mod game_tests {
             ]
         };
         let [normal, live, three_key, seven_key] = faces(&mut game);
-        assert!(near_xrgb(normal, pack_xrgb(0, 0xFF, 0)));
+        assert!(
+            near_xrgb(normal, pack_xrgb(0xFF, 0, 0)),
+            "fresh open leaves NORMAL on its base face"
+        );
         assert!(near_xrgb(live, pack_xrgb(0xFF, 0, 0)));
-        assert!(near_xrgb(three_key, pack_xrgb(0, 0xFF, 0)));
+        assert!(near_xrgb(three_key, pack_xrgb(0xFF, 0, 0)));
         assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
 
         click_toggle(&mut game, 60, 10);
@@ -23957,7 +24161,10 @@ mod game_tests {
             near_xrgb(normal, pack_xrgb(0xFF, 0, 0)),
             "NORMAL returns to the base face when LIVE is picked"
         );
-        assert!(near_xrgb(three_key, pack_xrgb(0, 0xFF, 0)));
+        assert!(
+            near_xrgb(three_key, pack_xrgb(0xFF, 0, 0)),
+            "the key pair stays on its sentinel until a key toggle is pressed"
+        );
         assert!(near_xrgb(seven_key, pack_xrgb(0xFF, 0, 0)));
 
         click_toggle(&mut game, 60, 50);
