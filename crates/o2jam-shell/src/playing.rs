@@ -9,7 +9,9 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
-use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+use crate::avatar::{
+    paint_scene_figures, strided_sprite55, AvatarFigure, FigureLayer, PlacementRole, ScenePlacement,
+};
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -410,7 +412,7 @@ impl PlayingHudLayout {
                 let rect = match placement.sprite.as_deref() {
                     Some(HUD_LIFE_BAND_SPRITE) => self.life_band.map(life_band_clone_view_rect),
                     Some(HUD_JAM_BAR_SPRITE) => self.jam_bar,
-                    Some(HUD_JAM_LABEL_SPRITE) => self.jam_label,
+                    Some(HUD_JAM_LABEL_SPRITE) => self.jam_label.map(jam_label_clone_view_rect),
                     _ => None,
                 };
                 match rect {
@@ -447,6 +449,36 @@ fn life_band_clone_view_rect(pinned: Rect) -> Rect {
         y: pinned.y.saturating_sub(HUD_LIFE_BAND_NATIVE.y),
         ..pinned
     }
+}
+
+/// View rect that lands the JAM label's absolute record anchor on `pinned`.
+///
+/// The label's record anchor is the word's authored origin, so a clone
+/// must cancel it before the rect can place the ink on the paired row.
+fn jam_label_clone_view_rect(pinned: Rect) -> Rect {
+    Rect {
+        x: pinned.x.saturating_sub(HUD_JAM_LABEL_NATIVE.x),
+        y: pinned.y.saturating_sub(HUD_JAM_LABEL_NATIVE.y),
+        ..pinned
+    }
+}
+
+/// Paint the re-staged JAM label above the procedural gauge fill.
+///
+/// The label belongs to the behind-highway panel set, so the normal
+/// foreground pass skips it; the exe paints this word on the filled
+/// shell. Only already-pinned placements are consumed here.
+pub(crate) fn paint_staged_jam_label(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &std::collections::HashMap<String, AvatarFigure>,
+) {
+    let labels = placements
+        .iter()
+        .filter(|placement| placement.sprite.as_deref() == Some(HUD_JAM_LABEL_SPRITE))
+        .cloned()
+        .collect::<Vec<_>>();
+    paint_scene_figures(frame, &labels, figures);
 }
 
 /// Native tally origins: the capture-pinned set when staged fields
@@ -3904,9 +3936,16 @@ mod live_play_tests {
             life_band_clone_view_rect(layout.life_band.expect("life band pin")),
             "the life band clone cancels its absolute record anchor"
         );
-        for (rewritten, expected) in pinned[1..].iter().zip([layout.jam_bar, layout.jam_label]) {
-            assert_eq!(rewritten.rect, expected.expect("staged pin"));
-        }
+        assert_eq!(
+            pinned[1].rect,
+            layout.jam_bar.expect("JAM bar pin"),
+            "the JAM bar clone uses the pinned rect verbatim"
+        );
+        assert_eq!(
+            pinned[2].rect,
+            jam_label_clone_view_rect(layout.jam_label.expect("JAM label pin")),
+            "the JAM label clone cancels its absolute record anchor"
+        );
     }
 
     #[test]
@@ -3947,6 +3986,93 @@ mod live_play_tests {
         assert!(
             orange > MIN_ORANGE_PIXELS,
             "the orange band must paint inside the pinned x241..245/y267..500 rect, found {orange} pixels"
+        );
+    }
+
+    /// Window around the paired JAM ink box, used by the row guard.
+    const JAM_LABEL_WINDOW: Rect = Rect {
+        x: 114,
+        y: 538,
+        w: 30,
+        h: 16,
+    };
+    const JAM_INK_THRESHOLD: u32 = 150;
+
+    /// Rows holding JAM label ink inside the live gauge window.
+    fn jam_label_ink_rows(buf: &[u32]) -> Vec<i32> {
+        let band = JAM_LABEL_WINDOW;
+        (band.y..band.y + i32::try_from(band.h).unwrap_or(0))
+            .filter(|&y| {
+                (band.x..band.x + i32::try_from(band.w).unwrap_or(0)).any(|x| {
+                    let pixel = buf[(y * 800 + x) as usize];
+                    (pixel & 0xFF) > JAM_INK_THRESHOLD
+                        && ((pixel >> 8) & 0xFF) > JAM_INK_THRESHOLD
+                        && ((pixel >> 16) & 0xFF) > JAM_INK_THRESHOLD
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn jam_label_ink_lands_in_the_paired_rows_when_the_gauge_is_staged() {
+        // Live chain: main.rs::run_play -> ScreenGame::paint ->
+        // ScreenGame::paint_playing -> paint_playing_backdrop ->
+        // LivePlay::paint_over_staged_backdrop -> paint_jam_gauge, then
+        // PlayingHudLayout::from_placements -> pinned_placements ->
+        // paint_foreground_placements -> paint_staged_jam_label. The
+        // guard replays that same pass order against the staged Playing
+        // art; the seam suffices because the bug is entirely in the
+        // staged label's placement relative to the gauge fill.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Playing1.opi");
+        let Ok(archive) = std::fs::read(&path) else {
+            println!("skip: missing install-root Playing1.opi");
+            return;
+        };
+        let report = crate::staging::stage_state(
+            &archive,
+            crate::staging::State::Playing,
+            crate::staging::StageContext {
+                key_mode: 2,
+                ..crate::staging::StageContext::default()
+            },
+        );
+        let staged = report.art.expect("STATE_PLAYING stages");
+        assert!(
+            staged.figures.contains_key(HUD_JAM_LABEL_SPRITE),
+            "the staged label body must decode"
+        );
+        let art = crate::screens::paint::SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        };
+        let hud = PlayingHudLayout::from_placements(&art.placements);
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.set_hud_layout(hud);
+        let geom = HighwayGeometry::centered(800, 600);
+        let mut buf = vec![0u32; 800 * 600];
+        {
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            crate::screens::paint::paint_playing_backdrop(&mut frame, &art);
+            live.paint_over_staged_backdrop(&mut frame, &geom, 0);
+            let pinned = hud.pinned_placements(&art.placements);
+            paint_foreground_placements(&mut frame, &pinned, &art.figures);
+            paint_staged_jam_label(&mut frame, &pinned, &art.figures);
+        }
+        let rows = jam_label_ink_rows(&buf);
+        for row in 541..=546 {
+            assert!(
+                rows.contains(&row),
+                "the JAM word must ink the exe's row {row}; found {rows:?}"
+            );
+        }
+        assert!(
+            !rows.iter().any(|&row| row >= 548),
+            "the label must not fall back to the low band; found {rows:?}"
         );
     }
 
