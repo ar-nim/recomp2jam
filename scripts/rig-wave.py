@@ -4,19 +4,23 @@
 Live mode clicks through `rig-wine.sh send click` (the SendInput helper),
 records frames through `lib/wire_frames.py`, and applies proxy rules from the
 recipe. Replay mode consumes a cited tap log offline and reproduces the same
-evidence strings without a Wine boot, Memoryer, or game data.
+evidence strings without a Wine boot, Memoryer, or game data. A boot-attach
+leg writes its wire log to OUT_DIR/wire/room-stage.log; pass that path as
+--frames so cue and host-marker steps read the same log.
 
 Usage:
   scripts/rig-wave.py --recipe scripts/recipes/row-vanish-582.json \
       --mode replay --frames TAP_LOG --out OUT_DIR
   scripts/rig-wave.py --recipe RECIPE --mode live --out OUT_DIR \
-      --frames TAP_LOG --display :NNN [--proxy-listen PORT --proxy-upstream PORT]
+      --frames OUT_DIR/wire/room-stage.log --display :NNN \
+      [--host-dir HOST_DIR] [--proxy-listen PORT --proxy-upstream PORT]
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import socket
@@ -25,6 +29,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Mapping
 
@@ -34,7 +39,14 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
 from popup_state import NORMAL_MODE_NOTICE, ImageFrameAdapter, query_popup  # noqa: E402
-from wave_recipe import Aim, RecipeError, Step, WaveRecipe, load_recipe  # noqa: E402
+from wave_recipe import (  # noqa: E402
+    INJECTORS,
+    Aim,
+    RecipeError,
+    Step,
+    WaveRecipe,
+    load_recipe,
+)
 from wire_frames import (  # noqa: E402
     Frame,
     FrameStream,
@@ -50,6 +62,9 @@ from wire_frames import (  # noqa: E402
 CUE_TIMEOUT_SECONDS = 20.0
 FRAME_SIZE = "1024x768"
 TAP_LINE_PREFIX_LENGTH = 8
+RIG_POLL_SECONDS = 0.2
+PROCESS_TIMEOUT_SECONDS = 180
+TAP_STOP_TIMEOUT_SECONDS = 10
 
 
 class WaveFailure(RuntimeError):
@@ -63,28 +78,295 @@ class RunOutput:
     captures: Mapping[str, object]
 
 
-class SendInputClicker:
-    """Canvas clicks go through the Wine SendInput helper path, never XTEST."""
+class RigProcesses:
+    """The live process seam; tests replace it with a recording fake."""
+
+    @staticmethod
+    def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            argv, env=os.environ.copy(), capture_output=True, text=True,
+            timeout=PROCESS_TIMEOUT_SECONDS, check=False,
+        )
+
+    @staticmethod
+    def spawn(argv: list[str]) -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            argv, env=os.environ.copy(), stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT, text=True,
+        )
+
+    @staticmethod
+    def wait_for_text(path: Path, text: str, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.is_file() and text in path.read_text(errors="replace"):
+                return
+            time.sleep(RIG_POLL_SECONDS)
+        raise WaveFailure(f"{path} never printed {text!r}")
+
+
+@dataclass(frozen=True)
+class RigCommand:
+    """One step of a boot/attach leg, with its readiness cue."""
+
+    label: str
+    argv: tuple[str, ...]
+    ready_text: str = ""
+    ready_log: Path | None = None
+
+
+def boot_attach_commands(step: Step, out: Path, display: str) -> tuple[RigCommand, ...]:
+    """Translate one boot/attach leg into the pinned rig command chain."""
+    leg = step.leg
+    client = str(leg["client"])
+    wire_log = out / "wire" / "room-stage.log"
+    commands: list[RigCommand] = []
+    if leg["mode"] == "boot":
+        wire_port = str(leg["wire_port"])
+        upstream_port = str(leg["upstream_port"])
+        if client == "exe":
+            commands.append(RigCommand(
+                "mint-login-argv",
+                ("bash", str(SCRIPTS / "rig-mint-launch-argv.sh"),
+                 "--user-index-id", str(leg["user_index_id"]),
+                 "--out", str(out / "argv.txt"),
+                 "--gateway-port", wire_port),
+            ))
+        commands.append(RigCommand(
+            "wire-tap",
+            (sys.executable, str(SCRIPTS / "wine-room-host.py"), "--wire-tap",
+             "--out-dir", str(out / "wire"), "--wire-log", str(wire_log),
+             "--listen-port", wire_port, "--upstream-port", upstream_port),
+            ready_text="wire-tap listening", ready_log=wire_log,
+        ))
+        if client == "exe":
+            launch = ("bash", str(SCRIPTS / "rig-wine.sh"), "launch", str(out / "argv.txt"))
+        else:
+            launch = tuple(str(word) for word in leg["launch"])
+        commands.append(RigCommand(
+            "client-boot",
+            ("bash", str(SCRIPTS / "rig-run.sh"), "run", display, str(out),
+             "--", *launch),
+        ))
+    if client == "exe":
+        login = (sys.executable, str(SCRIPTS / "wine-scene.py"),
+                 "--attach", str(out), "--display", display,
+                 "--target", str(leg["target"]), "--no-host",
+                 "--wire-log", str(wire_log))
+    else:
+        login = tuple(str(word) for word in leg["login"])
+    commands.append(RigCommand("login-flow", login))
+    return tuple(commands)
+
+
+class BootSession:
+    """Owns the processes a boot/attach leg started, so cleanup is exact."""
+
+    def __init__(self, out: Path) -> None:
+        self.out = out
+        self.tap: subprocess.Popen[str] | None = None
+        self.booted = False
+
+    def stop(self, processes: RigProcesses) -> None:
+        if self.booted:
+            processes.run(["bash", str(SCRIPTS / "rig-run.sh"), "stop", str(self.out)])
+            self.booted = False
+        if self.tap is not None and self.tap.poll() is None:
+            self.tap.terminate()
+            self.tap.wait(timeout=TAP_STOP_TIMEOUT_SECONDS)
+            self.tap = None
+
+
+def launch_boot_attach(step: Step, out: Path, display: str,
+                       processes: RigProcesses,
+                       session: BootSession | None = None) -> BootSession:
+    """Run the chain; a refused preflight stops before the login flow."""
+    session = session or BootSession(out)
+    timeout = float(step.leg["login_timeout_seconds"])
+    for command in boot_attach_commands(step, out, display):
+        if command.ready_text:
+            session.tap = processes.spawn(list(command.argv))
+            if session.tap.poll() is not None:
+                raise WaveFailure(f"{command.label} exited before {command.ready_text}")
+            processes.wait_for_text(command.ready_log, command.ready_text, timeout)
+            continue
+        result = processes.run(list(command.argv))
+        if result.returncode != 0:
+            raise WaveFailure(
+                f"{command.label} failed (exit {result.returncode}): "
+                f"{result.stderr.strip() or 'standard preflight refused the run'}")
+        if command.label == "client-boot":
+            session.booted = True
+    return session
+
+
+class SceneSync:
+    """Wait for a painted screen or a state marker; never guess with a sleep."""
+
+    def __init__(self, step: Step, out: Path,
+                 probe: Callable[[], str] | None,
+                 now: Callable[[], float] | None = None,
+                 sleep: Callable[[float], None] | None = None) -> None:
+        self.step = step
+        self.out = out
+        self.probe = probe
+        self.now = now or time.monotonic
+        self.sleep = sleep or time.sleep
+
+    def wait(self) -> str:
+        timeout = float(self.step.leg["timeout_seconds"])
+        deadline = self.now() + timeout
+        while True:
+            if self._reached():
+                return self._line()
+            if self.now() >= deadline:
+                wanted = self.step.leg.get("scene") or self.step.leg.get("state_text")
+                raise WaveFailure(f"scene-sync {self.step.id} timed out waiting for {wanted}")
+            self.sleep(RIG_POLL_SECONDS)
+
+    def _reached(self) -> bool:
+        if self.step.leg["mode"] == "screen":
+            return self.probe() == self.step.leg["scene"]
+        path = Path(str(self.step.leg["state_file"]))
+        if not path.is_absolute():
+            path = self.out / path
+        if not path.is_file():
+            return False
+        return str(self.step.leg["state_text"]) in path.read_text(errors="replace")
+
+    def _line(self) -> str:
+        if self.step.leg["mode"] == "screen":
+            return (f"scene-sync {self.step.id} screen={self.step.leg['scene']} "
+                    f"label={self.step.leg['scene']}")
+        return (f"scene-sync {self.step.id} "
+                f"state={_state_name(str(self.step.leg['state_text']))}")
+
+
+class HostMarker:
+    """Queue a host command only after the guest opcode reaches the tap."""
+
+    def __init__(self, step: Step, host_dir: Path, out: Path,
+                 lines_provider: Callable[[], list[WireLine]],
+                 now: Callable[[], float] | None = None,
+                 sleep: Callable[[float], None] | None = None) -> None:
+        self.step = step
+        self.host_dir = host_dir
+        self.out = out
+        self.lines_provider = lines_provider
+        self.now = now or time.monotonic
+        self.sleep = sleep or time.sleep
+
+    def run(self) -> str:
+        self._await_guest()
+        self._queue_command()
+        return (f"host-marker {self.step.id} gate={self.step.leg['gate_opcode']} "
+                f"command={self.step.leg['command']}")
+
+    def _await_guest(self) -> None:
+        gate = _cue_step(self.step.id, int(self.step.leg["gate_opcode"]))
+        deadline = self.now() + float(self.step.leg["timeout_seconds"])
+        while True:
+            if find_cue(self.lines_provider(), gate) is not None:
+                return
+            if self.now() >= deadline:
+                raise WaveFailure(
+                    f"host-marker {self.step.id}: guest {gate.opcode} never reached the tap")
+            self.sleep(RIG_POLL_SECONDS)
+
+    def _queue_command(self) -> None:
+        self.host_dir.mkdir(parents=True, exist_ok=True)
+        with (self.host_dir / "host.cmd").open("a", encoding="utf-8") as handle:
+            handle.write(str(self.step.leg["command"]) + "\n")
+        ack = str(self.step.leg["ack_text"])
+        log = self.host_dir / "host.log"
+        deadline = self.now() + float(self.step.leg["timeout_seconds"])
+        while True:
+            if log.is_file() and ack in log.read_text(errors="replace"):
+                break
+            if self.now() >= deadline:
+                raise WaveFailure(f"host-marker {self.step.id}: host did not ack {ack!r}")
+            self.sleep(RIG_POLL_SECONDS)
+        marker = self.out / f"{self.step.leg['marker']}.ready"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("ok\n", encoding="utf-8")
+
+
+class SendInputCommand:
+    """Build Wine SendInput clicks through the siclick helper path."""
 
     @staticmethod
     def command(aim: Aim) -> list[str]:
         x, y = aim.point()
         return [str(SCRIPTS / "rig-wine.sh"), "send", "click", str(x), str(y)]
 
-    def click(self, aim: Aim) -> None:
-        result = subprocess.run(
-            self.command(aim), env=os.environ.copy(), capture_output=True,
-            text=True, timeout=120, check=False,
-        )
+
+class ClickDispatcher:
+    """One injector seam with two adapters: Wine SendInput and native XTEST."""
+
+    def __init__(self, display: str, processes: RigProcesses | None = None) -> None:
+        self.display = display
+        self.processes = processes or RigProcesses()
+        self.name = "sendinput"
+
+    def select(self, name: str) -> None:
+        if name not in INJECTORS:
+            raise WaveFailure(f"injector {name!r} is not published: {sorted(INJECTORS)}")
+        self.name = name
+
+    def command(self, aim: Aim) -> list[str]:
+        if self.name == "sendinput":
+            return SendInputCommand.command(aim)
+        x, y = aim.point()
+        return [str(SCRIPTS / "rig-xtest.py"), "--display", self.display,
+                "click", "1", str(x), str(y)]
+
+    def click(self, aim: Aim) -> str:
+        command = self.command(aim)
+        result = self.processes.run(command)
         if result.returncode != 0:
-            raise WaveFailure(f"SendInput click {aim.key} failed: {result.stderr.strip()}")
+            raise WaveFailure(
+                f"{self.name} click {aim.key} failed: {result.stderr.strip()}")
+        x, y = aim.point()
+        return f"{self.name} click {aim.key} at ({x},{y})"
 
 
 class ReplayRig:
     """Replay a recipe against recorded frames without touching a rig."""
 
-    def __init__(self, lines: list[WireLine]) -> None:
+    def __init__(self, lines: list[WireLine], out: Path | None = None) -> None:
         self._lines = lines
+        self._out = out
+
+    def boot_attach(self, step: Step) -> str:
+        return (f"boot-attach {step.leg['client']} -> {step.leg['target']} "
+                f"evidence={step.evidence}")
+
+    def scene_sync(self, step: Step) -> str:
+        if step.leg["mode"] == "screen":
+            observed = step.evidence.get("observed_scene")
+            if observed != step.leg["scene"]:
+                raise WaveFailure(
+                    f"scene-sync {step.id} replay saw {observed!r}, "
+                    f"expected {step.leg['scene']!r}")
+            return f"scene-sync {step.id} screen={observed}"
+        path = Path(str(step.leg["state_file"]))
+        if not path.is_absolute() and self._out is not None:
+            path = self._out / path
+        if not path.is_file() or str(step.leg["state_text"]) not in path.read_text(
+                errors="replace"):
+            raise WaveFailure(f"scene-sync {step.id} replay has no {step.leg['state_text']!r}")
+        return f"scene-sync {step.id} state={_state_name(str(step.leg['state_text']))}"
+
+    def host_marker(self, step: Step) -> str:
+        gate = _cue_step(step.id, int(step.leg["gate_opcode"]))
+        if find_cue(self._lines, gate) is None:
+            raise WaveFailure(
+                f"host-marker {step.id}: guest {gate.opcode} never reached the tap")
+        return (f"host-marker {step.id} gate={gate.opcode} "
+                f"command={step.leg['command']} (replay)")
+
+    def set_injector(self, step: Step) -> str:
+        return f"injector {step.leg['name']} (replay)"
 
     def probe(self, step: Step) -> str:
         return (
@@ -119,11 +401,49 @@ class ReplayRig:
 class LiveRig:
     """Drive the recipe against a real Wine display and a pass-through tap."""
 
-    def __init__(self, out: Path, display: str, frames: Path) -> None:
+    def __init__(self, out: Path, display: str, frames: Path,
+                 processes: RigProcesses | None = None, scene_probe=None,
+                 host_dir: Path | None = None) -> None:
         self._out = out
         self._display = display
         self._frames = frames
-        self._clicker = SendInputClicker()
+        self._processes = processes or RigProcesses()
+        self._clicks = ClickDispatcher(display, self._processes)
+        self._scene_probe = scene_probe
+        self._host_dir = host_dir
+        self._session: BootSession | None = None
+
+    def boot_attach(self, step: Step) -> str:
+        self._session = BootSession(self._out)
+        launch_boot_attach(step, self._out, self._display,
+                           self._processes, self._session)
+        return (f"boot-attach {step.leg['client']} -> {step.leg['target']} "
+                f"via rig-run.sh (standard preflight)")
+
+    def scene_sync(self, step: Step) -> str:
+        probe = self._scene_probe or _wine_scene_label(self._display, self._out)
+        return SceneSync(step, self._out, probe).wait()
+
+    def host_marker(self, step: Step) -> str:
+        if self._host_dir is None:
+            raise WaveFailure(f"host-marker {step.id} needs --host-dir")
+        return HostMarker(
+            step, self._host_dir, self._out, self._tap_lines).run()
+
+    def set_injector(self, step: Step) -> str:
+        self._clicks.select(str(step.leg["name"]))
+        return f"injector {self._clicks.name}"
+
+    def stop(self) -> None:
+        if self._session is not None:
+            self._session.stop(self._processes)
+            self._session = None
+
+    def _tap_lines(self) -> list[WireLine]:
+        try:
+            return parse_tap_lines(self._frames.read_text(errors="replace"))
+        except OSError:
+            return []
 
     def probe(self, step: Step) -> str:
         score = self._popup_score()
@@ -133,13 +453,13 @@ class LiveRig:
         for _ in range(step.max_tries):
             if self._popup_score() <= NORMAL_MODE_NOTICE.floor:
                 return ""
-            self._clicker.click(self._required_aim(step))
+            self._clicks.click(self._required_aim(step))
         raise WaveFailure(f"popup still up at aim {step.aim.key}; BACK aborted")
 
     def click(self, step: Step) -> str:
         aim = self._required_aim(step)
-        self._clicker.click(aim)
-        return f"{_now()} {step.text} evidence={aim.evidence}"
+        click_line = self._clicks.click(aim)
+        return f"{_now()} {step.text} evidence={aim.evidence} via={click_line}"
 
     def cue(self, step: Step) -> str:
         deadline = time.monotonic() + CUE_TIMEOUT_SECONDS
@@ -268,6 +588,27 @@ def _now() -> str:
     return time.strftime("%H:%M:%S")
 
 
+def _cue_step(step_id: str, opcode: int) -> Step:
+    return Step(id=step_id, action="wire-cue", direction="C2S", opcode=opcode)
+
+
+def _state_name(state_text: str) -> str:
+    if "name=" not in state_text:
+        return "marker"
+    return state_text.split("name=", 1)[1].split()[0]
+
+
+def _wine_scene_label(display: str, out: Path):
+    """Borrow the pinned scene classifier; do not duplicate its pixel rules."""
+    path = SCRIPTS / "wine-scene.py"
+    spec = importlib.util.spec_from_file_location("rig_wave_wine_scene", path)
+    if spec is None or spec.loader is None:
+        raise WaveFailure(f"cannot load scene classifier {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Frames(display, out / "scene-probe").scene_label
+
+
 def _missing_cue(step: Step) -> str:
     return f"missing wire cue {step.id} ({step.direction} {step.opcode})"
 
@@ -337,6 +678,14 @@ def execute(recipe: WaveRecipe, rig: ReplayRig | LiveRig) -> RunOutput:
             driver_lines.append(rig.note(step))
         elif step.action == "wait":
             rig.wait(step)
+        elif step.action == "boot-attach":
+            driver_lines.append(rig.boot_attach(step))
+        elif step.action == "scene-sync":
+            driver_lines.append(rig.scene_sync(step))
+        elif step.action == "host-marker":
+            driver_lines.append(rig.host_marker(step))
+        elif step.action == "set-injector":
+            driver_lines.append(rig.set_injector(step))
     return RunOutput(tuple(driver_lines), tuple(evidence_lines), captures)
 
 
@@ -358,6 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frames", type=Path, help="tap log (input for replay, output for live)")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--display", default=os.environ.get("DISPLAY", ":61"))
+    parser.add_argument("--host-dir", type=Path, help="external host-bot command/log dir")
     parser.add_argument("--proxy-listen", type=int)
     parser.add_argument("--proxy-upstream", type=int)
     return parser
@@ -376,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
         recipe = load_recipe(args.recipe)
         if args.mode == "replay":
             lines = parse_tap_lines(args.frames.read_text(errors="replace"))
-            result = execute(recipe, ReplayRig(lines))
+            result = execute(recipe, ReplayRig(lines, args.out))
         else:
             result = run_live(recipe, args)
         write_output(args.out, result)
@@ -395,10 +745,11 @@ def run_live(recipe: WaveRecipe, args: argparse.Namespace) -> RunOutput:
         tap = RewritingTap(args.proxy_listen, args.proxy_upstream,
                            list(recipe.proxy_rules), args.frames)
         tap.start()
+    rig = LiveRig(args.out, args.display, args.frames, host_dir=args.host_dir)
     try:
-        rig = LiveRig(args.out, args.display, args.frames)
         return execute(recipe, rig)
     finally:
+        rig.stop()
         if tap is not None:
             tap.stop()
 
