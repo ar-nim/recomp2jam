@@ -84,8 +84,9 @@ pub const MYROOM_MOVE_CODE: u32 = 0x1550_0053;
 /// queues the exe's empty 5007 ExitShop send (#802).
 pub const MYROOM_BACK_CODE: u32 = 0x1520_0002;
 /// GOSHOP button (`Myroom_GoShop.ojs`): opens the item shop.
-/// Records only — nested sides stay rejected, so the hop is OPEN
-/// with a leave-then-visit hand step.
+/// The exe picks the same runtime state as Room ITEMSHOP without a
+/// send (file `0xa3ee0` case `0x15200003`); the shell leaves MyRoom
+/// before mounting it.
 pub const MYROOM_GOSHOP_CODE: u32 = 0x1520_0003;
 /// Vacate button (`MyRoom_Btn_Vacate.ojs`): clears the selected worn
 /// slot locally and restages the figure; queues nothing — the vacate
@@ -363,7 +364,7 @@ pub enum MyRoomAction {
     VacateSlot,
     /// BACK pressed: return to the opening lobby.
     BackToLobby,
-    /// GOSHOP pressed: records only (nested sides rejected).
+    /// GOSHOP pressed: switches to the Item Shop state, no wire.
     OpenShop,
     /// Gift MOVE pressed: claim the selected gift cell.
     ClaimGift,

@@ -277,7 +277,11 @@ case `0x15200002` changes state and calls the send builder with opcode
 `0x138f`/5007 (EV `ev_d3647af672ca1747c74f03fd9ce38e9d79e589b278186fd70c5606f7a3b42b94`);
 case `0x15200003` (GOSHOP) only changes state. Our BACK now queues the
 same empty `ExitShop` as the item-shop BACK; `OnlineSession::flush_exit_shop`
-sends 5007 and the 5028 wallet-refresh follow-up. GOSHOP stays local.
+sends 5007 and the 5028 wallet-refresh follow-up. GOSHOP changes only
+the scene: case `0x15200003` calls `ChangeState(3)`, the same runtime
+state pick Room ITEMSHOP makes before its 5006 (ticket #856, statics
+`ev_138a6bae…` and `ev_8ba1098e…`). The shell leaves MyRoom before
+mounting the staged `STATE_SHOP` block and queues no extra wire.
 The live BACK press/tap remains ticket #426.
 Guard: `myroom_back_sends_one_empty_5007_and_goshop_sends_nothing`
 (scripted gateway), plus the shell guard
