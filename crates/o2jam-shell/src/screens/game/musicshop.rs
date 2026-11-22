@@ -382,6 +382,16 @@ impl MusicShopState {
         self.music_shop_top100_pressed
     }
 
+    /// Stage the TOP100 entry state recorded by `FUN_004c6d70`: it
+    /// looks up `0x1A20007D` and writes 0 into the control property at
+    /// `+0x20` (setter `FUN_00409bd0`). A fresh entry therefore carries
+    /// no press and no ranking board. The property's name and any
+    /// nonzero writer stay OPEN; the qualified press frame pins no board
+    /// content, so none is staged (#827).
+    pub(crate) fn enter_music_shop(&mut self) {
+        self.music_shop_top100_pressed = None;
+    }
+
     /// Active color filter.
     pub(crate) fn genre_filter(&self) -> MusicShopGenreFilter {
         self.music_shop_genre_filter

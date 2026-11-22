@@ -135,6 +135,17 @@ Guards: `music_shop_top100_arm_stages_eight_rects_and_answer_each_press`
 `music_shop_top100_press_reaches_staged_chrome_without_a_wire`,
 `music_shop_top100_press_inks_only_the_pressed_staged_rect`.
 
+### TOP100 entry state (#827)
+
+Entry `FUN_004c6d70` looks up `0x1A20007D` and writes 0 into the
+control property at `+0x20` (setter `FUN_00409bd0`). `visit_side`
+records that entry through `MusicShopState::enter_music_shop`, so a
+fresh shop carries no press and no ranking-board ink. The guard
+`music_shop_entry_clears_the_top100_press_and_stages_no_ranking_board`
+compares the eight staged header rects before and after a leave/re-entry
+and asserts no 5010. OPEN: the `+0x20` property name, any nonzero
+writer, and a 5011 rank-wire source.
+
 ## OPEN
 
 TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179). The arm's staged chrome and press marker landed under #408; ranking contents remain OPEN (no source in the qualified press frame).

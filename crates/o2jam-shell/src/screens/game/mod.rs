@@ -6588,6 +6588,11 @@ impl ScreenGame {
             // never survives a leave — see `leave_side`).
             self.restage_shop_avatar();
         }
+        if side == SideScreen::MusicShop {
+            // Entry FUN_004c6d70 writes 0 into the TOP100 control
+            // property at +0x20: no press and no ranking board (#827).
+            self.music_shop.enter_music_shop();
+        }
         true
     }
 
@@ -9322,13 +9327,13 @@ mod game_tests {
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
-        MusicShopGenreFilter, MyRoomLowerTab, MyRoomPanel, OwnedSort, ShopBagNotice,
-        ShopChromeNotice, ShopGender, ShopRefresh, ShopRefreshContext, LANKING_LPAGE_NEXT_CODE,
-        LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_LVIEW_TOGGLE_FIRST_CODE,
-        LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE, LANKING_RPAGE_PREV_CODE,
-        LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE,
-        MSHOP_ARTIST_CODE, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE, MSHOP_BPM_SORT_CODE,
-        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
+        music_shop_top100_rects, MusicShopGenreFilter, MyRoomLowerTab, MyRoomPanel, OwnedSort,
+        ShopBagNotice, ShopChromeNotice, ShopGender, ShopRefresh, ShopRefreshContext,
+        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
+        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
+        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
+        LANKING_SORT_TITLE_CODE, MSHOP_ARTIST_CODE, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_BPM_CODE,
+        MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE,
         MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE,
         MSHOP_DIFF_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_DOWN_START_CODE,
         MSHOP_DOWN_TEXT_CODE, MSHOP_EDITOR_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
@@ -27136,6 +27141,86 @@ mod game_tests {
             .map(|row| row.song.song_id)
             .collect();
         assert_eq!(owned, vec![757]);
+    }
+
+    #[test]
+    fn music_shop_entry_clears_the_top100_press_and_stages_no_ranking_board() {
+        // Live caller chain: main.rs::run_play -> stage_live_art ->
+        // ScreenGame::visit_side(MusicShop) -> (entry FUN_004c6d70 writes
+        // 0 into the TOP100 control property at +0x20) ->
+        // paint_at -> paint_music_shop_top100_chrome. The qualified press
+        // frame 5ddfd9d3 shows a pointer and web-banner caption only, so
+        // no ranking content is asserted on entry (#827).
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut placements: Vec<ScenePlacement> = (0..8u32)
+            .map(|slot| ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MSHOP_TOP100_CODE + slot,
+                sprite: None,
+                rect: Rect {
+                    x: 200 + slot as i32 * 60,
+                    y: 0,
+                    w: 50,
+                    h: 20,
+                },
+            })
+            .collect();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: MSHOP_MSALL_LEFT_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 198,
+                y: 532,
+                w: 45,
+                h: 21,
+            },
+        });
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+
+        let mut fresh = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut fresh,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.click_music_shop(225, 10);
+        assert_eq!(game.music_shop_top100_pressed(), Some(MSHOP_TOP100_CODE));
+        assert!(game.leave_side());
+        assert!(game.visit_side(SideScreen::MusicShop));
+        assert_eq!(
+            game.music_shop_top100_pressed(),
+            None,
+            "entry writes 0 into the TOP100 control property"
+        );
+        assert!(game.take_music_buy().is_none(), "no rank wire is queued");
+
+        let mut reentered = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut reentered,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        for rect in music_shop_top100_rects(&game.side_placements) {
+            for x in rect.x..rect.x + i32::try_from(rect.w).unwrap_or(0) {
+                let y = rect.y + i32::try_from(rect.h).unwrap_or(0) - 1;
+                let index = usize::try_from(y * 800 + x).unwrap_or(0);
+                assert_eq!(
+                    fresh[index], reentered[index],
+                    "entry stages no ranking board ink"
+                );
+            }
+        }
     }
 
     #[test]
