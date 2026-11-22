@@ -236,10 +236,10 @@ pub struct WaitingCaptions<'a> {
     /// Local nickname from 2001, used on the self cover when the 3003
     /// slot list does not carry the guest's own member.
     pub local_name: Option<&'a str>,
-    /// Per-seat `4039` progress arms. A `Some` percentage is the second
-    /// half of the download-badge arm (#559 refutation): `4037 0004`
-    /// alone leaves the exe seat badge-free.
-    pub member_download_progress: [Option<u8>; WAITING_SEATS],
+    /// Whether S2C `4035` named the local member with a non-Ready
+    /// download state (#838). This is the only paint arm for the two
+    /// seat-template download bodies; `4037`/`4039` stay wire-only.
+    pub local_download_badge_armed: bool,
 }
 
 /// Difficulty, speed and EX chart level behind the `LEVEL` badge:
@@ -534,7 +534,7 @@ pub fn paint_waiting_scene_with_confirm(
     let seats = staged_seats(
         room,
         captions.local_name,
-        &captions.member_download_progress,
+        captions.local_download_badge_armed,
     );
     let is_room_master = room.member_id == confirm.master_seat_id;
     paint_waiting_backdrop(frame, art, member_role);
@@ -815,7 +815,7 @@ pub fn paint_waiting_seat_avatars(
     figures: &[Option<AvatarFigure>],
     now_ms: u64,
 ) {
-    let seats = staged_seats(room, None, &NO_DOWNLOAD_PROGRESS);
+    let seats = staged_seats(room, None, false);
     for (index, staged_figure) in figures.iter().enumerate() {
         if seats.get(index).is_none_or(|seat| !seat.present) {
             continue;
@@ -912,8 +912,8 @@ pub(crate) struct StagedSeat {
     pub(crate) playing: bool,
     /// The room names a song (`JoinedRoom.music_id` nonzero).
     pub(crate) has_song: bool,
-    /// Both halves of the exe's download-badge arm: `4037` music-state 4
-    /// and a `4039` progress report. State alone is not enough (#559).
+    /// S2C `4035` named this seat's member as downloading (#838). The
+    /// boot-wave3 exe frames leave it dark on `4037`/`4039` progress.
     pub(crate) download_badge_armed: bool,
     /// Music-state 2 (`NoAccess`) arms the seat's NoGem plate
     /// (exe seat `+0x217c`, refresh slot 7).
@@ -1101,17 +1101,6 @@ pub(crate) fn paint_waiting_seat_marks(
     }
 }
 
-/// No `4039` report stands: every seat's badge stays dark.
-const NO_DOWNLOAD_PROGRESS: [Option<u8>; WAITING_SEATS] = [None; WAITING_SEATS];
-
-/// Whether both wire arms light the seat's downloading badge and bar.
-/// The p559-badge-ab4 refutation pins that `4037 0004` alone does not:
-/// the exe seat stays clean until a `4039` percentage arrives (see
-/// `docs/music-availability.md` §2).
-fn arms_download_badge(member: &o2jam_net::RoomMember, progress: Option<u8>) -> bool {
-    progress.is_some() && member.music_state == o2jam_net::MusicState::Downloading.code()
-}
-
 /// Wire `music-state=2` is the exe's NoGem marker (`FUN_004b2e30`
 /// refresh slot 7, seat `+0x217c`).
 fn is_no_gem(member: &o2jam_net::RoomMember) -> bool {
@@ -1122,13 +1111,15 @@ fn is_no_gem(member: &o2jam_net::RoomMember) -> bool {
 /// own seat owns cover `member_id` when the 3003 snapshot does not
 /// list it. The p343 matched capture pins both: the slot-0 master
 /// (star, PC, READY) on the left cover, the guest on the next one.
-/// `member_download_progress` supplies the `4039` half of the badge arm;
-/// pass [`NO_DOWNLOAD_PROGRESS`] for painters that do not read badges.
+/// `local_download_badge_armed` is the S2C `4035` paint arm (#838):
+/// only the local seat may show the two download bodies. Pass `false`
+/// for painters that do not read that arm.
 pub(crate) fn staged_seats(
     room: &JoinedRoom,
     local_name: Option<&str>,
-    member_download_progress: &[Option<u8>; WAITING_SEATS],
+    local_download_badge_armed: bool,
 ) -> Vec<StagedSeat> {
+    let own = usize::from(room.member_id);
     let mut seats: Vec<StagedSeat> = (0..WAITING_SEATS).map(|_| empty_staged_seat()).collect();
     for slot in room.slots.iter() {
         let index = usize::from(slot.index);
@@ -1138,10 +1129,8 @@ pub(crate) fn staged_seats(
         *seat = staged_slot_seat(
             slot,
             room.champion == Some(u8::try_from(index).unwrap_or(u8::MAX)),
-            member_download_progress.get(index).copied().flatten(),
         );
     }
-    let own = usize::from(room.member_id);
     if seats.get(own).is_some_and(|seat| !seat.present) {
         let own_slot = room
             .slots
@@ -1159,18 +1148,21 @@ pub(crate) fn staged_seats(
             master: own_slot.is_some_and(|member| member.master),
             playing: own_slot.is_some_and(|member| member.playing_state != 0),
             has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
-            download_badge_armed: own_slot.is_some_and(|member| {
-                arms_download_badge(member, member_download_progress.get(own).copied().flatten())
-            }),
+            download_badge_armed: false,
             no_gem: own_slot.is_some_and(is_no_gem),
             pc_room: own_slot.is_some_and(|member| member.free_pass != 0),
         };
+    }
+    if local_download_badge_armed {
+        if let Some(local_seat) = seats.get_mut(own) {
+            local_seat.download_badge_armed = true;
+        }
     }
     seats
 }
 
 /// Staged view of one wire slot, including its own master flag.
-fn staged_slot_seat(slot: &RoomSlot, champion: bool, download_progress: Option<u8>) -> StagedSeat {
+fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
     match &slot.member {
         Some(member) => StagedSeat {
             name: member.nickname.clone(),
@@ -1183,7 +1175,7 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool, download_progress: Option<u
             master: member.master,
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
-            download_badge_armed: arms_download_badge(member, download_progress),
+            download_badge_armed: false,
             no_gem: is_no_gem(member),
             pc_room: member.free_pass != 0,
         },
@@ -1568,10 +1560,9 @@ pub(crate) fn paint_waiting_covers(
     local_name: Option<&str>,
 ) {
     let has_champion = room.champion.is_some();
-    for (cover_id, seat) in
-        WAITING_COVER_IDS
-            .iter()
-            .zip(staged_seats(room, local_name, &NO_DOWNLOAD_PROGRESS))
+    for (cover_id, seat) in WAITING_COVER_IDS
+        .iter()
+        .zip(staged_seats(room, local_name, false))
     {
         if !cover_stages_body(placements, cover_id) {
             continue;

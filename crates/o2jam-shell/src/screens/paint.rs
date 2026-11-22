@@ -5398,7 +5398,7 @@ mod paint_tests {
             state_code: 1,
             member: Some(guest),
         };
-        let seats = staged_seats(&room, None, &[None; 8]);
+        let seats = staged_seats(&room, None, false);
         assert_eq!(seats[0].name, "host", "slot 0 stays on the left");
         assert!(seats[0].master, "the slot-0 master keeps its star");
         assert!(seats[0].ready, "the slot-0 READY plate stays left");
@@ -5416,7 +5416,7 @@ mod paint_tests {
         // the guest's own cover is slot 1, not cover 0.
         let mut room = waiting_room();
         room.member_id = 1;
-        let seats = staged_seats(&room, Some("tester"), &[None; 8]);
+        let seats = staged_seats(&room, Some("tester"), false);
         assert_eq!(seats[0].name, "host", "master keeps cover 0");
         assert_eq!(seats[1].name, "tester", "self uses cover member_id");
         assert!(seats[1].present, "the self cover is occupied");
@@ -14132,7 +14132,7 @@ mod paint_tests {
             fold_pin_word(&mut hash, u64::try_from(x).unwrap_or(u64::MAX));
             fold_pin_word(&mut hash, u64::try_from(y).unwrap_or(u64::MAX));
         }
-        let staged_seats = staged_seats(&champion, None, &[None; 8]);
+        let staged_seats = staged_seats(&champion, None, false);
         for seat in &staged_seats {
             let role = staged_role(champion.champion.is_some(), seat);
             fold_pin_text(&mut hash, &staged_seat_text(seat, role));
@@ -14298,21 +14298,20 @@ mod paint_tests {
         );
     }
 
-    /// Ticket #559, 16c2b9a guard updated after the p559-badge-ab4
-    /// refutation: the exe seat stays badge-free on `4037 0004` alone;
-    /// the `4039` progress arm lights the DOWNLOADING badge and bar.
-    /// The full A/B pixel pair runs through `paint_at` in
-    /// `game_tests::download_badge_stays_dark_on_4037_state_without_4039_progress`
-    /// and `game_tests::download_badge_lights_when_4039_progress_follows_4037_state`.
-    /// Live chain: `OnlineSession::apply_member_music_state` /
-    /// `apply_download_progress` -> `ScreenGame` seat mirror -> `paint_at`
-    /// -> `paint_waiting_scene` -> `staged_seats` ->
+    /// Ticket #838: after the boot-wave3 refutation, only S2C `4035`
+    /// arms the local seat's DOWNLOADING badge and bar. The full A/B
+    /// pixel pair runs through `paint_at` in
+    /// `game_tests::acquire_music_4035_paints_the_local_seat_badge_and_bar`
+    /// and `game_tests::music_state_4037_and_progress_4039_leave_the_seat_chrome_dark`.
+    /// Live chain: session frame ingest -> `OnlineSession::apply_acquire_music`
+    /// -> `answer_acquire_music` -> `ScreenGame::arm_local_download_badge`
+    /// -> `paint_at` -> `paint_waiting_scene` -> `staged_seats` ->
     /// `paint_waiting_seat_marks`. Rect origins are the parsed Waiting
     /// seat-template `.bnd` records (EXTEND1 `(48,127)` / EXTEND2
     /// `(190,127)`, bar y163), not painter literals; the figures are
     /// synthetic so CI runs without art.
     #[test]
-    fn downloading_member_paints_only_its_own_bnd_badge_and_bar() {
+    fn acquire_music_4035_paints_only_its_own_bnd_badge_and_bar() {
         let mut room = waiting_room();
         let mut peer = RoomMember {
             nickname: "peer".to_owned(),
@@ -14325,17 +14324,15 @@ mod paint_tests {
             state_code: 1,
             member: Some(peer),
         });
-        let mut progress = [None; 8];
-        progress[1] = Some(42);
-        let seats = staged_seats(&room, None, &progress);
+        let seats = staged_seats(&room, None, true);
         assert!(
-            seats[1].download_badge_armed,
-            "4037 state plus 4039 progress stages the seat badge"
+            seats[0].download_badge_armed,
+            "4035 arms the local seat badge"
         );
-        let unarmed = staged_seats(&room, None, &[None; 8]);
+        let unarmed = staged_seats(&room, None, false);
         assert!(
-            !unarmed[1].download_badge_armed,
-            "4037 state alone leaves the seat badge dark"
+            !unarmed[0].download_badge_armed,
+            "no 4035 arm leaves the seat badge dark"
         );
 
         let placements = [
@@ -14404,10 +14401,10 @@ mod paint_tests {
             &seats,
             &art,
         );
-        assert_eq!(buf[129 * 800 + 192], pack_xrgb(0xFF, 0, 0), "peer badge");
-        assert_eq!(buf[165 * 800 + 210], pack_xrgb(0, 0xFF, 0), "peer bar");
-        assert_eq!(buf[129 * 800 + 50], 0, "ready seat has no badge");
-        assert_eq!(buf[165 * 800 + 68], 0, "ready seat has no bar");
+        assert_eq!(buf[129 * 800 + 50], pack_xrgb(0xFF, 0, 0), "local badge");
+        assert_eq!(buf[165 * 800 + 68], pack_xrgb(0, 0xFF, 0), "local bar");
+        assert_eq!(buf[129 * 800 + 192], 0, "peer badge stays dark");
+        assert_eq!(buf[165 * 800 + 210], 0, "peer bar stays dark");
     }
 }
 

@@ -3542,7 +3542,8 @@ impl OnlineSession {
     /// - a non-zero state means a transfer stands (`scene+0x504 = 1`)
     ///   and no `4010` goes out; when that state belongs to the local
     ///   member, the client **enqueues the room song instead of
-    ///   starting** (`StartMusicDownload`, VA `0x4bb1e0`);
+    ///   starting** (`StartMusicDownload`, VA `0x4bb1e0`) and arms the
+    ///   local seat's badge and bar (#838, REA `ev_18a485d7…`);
     /// - an all-`Ready` list is the exe's retry arm: a master whose
     ///   start request stands re-sends `4010`.
     fn answer_acquire_music(&mut self, event: &AcquireMusic) {
@@ -3554,12 +3555,18 @@ impl OnlineSession {
                 .find(|member| member.member_id == id)
                 .map(|member| member.state)
         });
+        let local_is_downloading = self_state.is_some_and(|state| state != MusicState::Ready);
+        if local_is_downloading {
+            self.game.arm_local_download_badge();
+        } else {
+            self.game.clear_local_download_badge();
+        }
         if event
             .members
             .iter()
             .any(|member| member.state != MusicState::Ready)
         {
-            if self_state.is_some_and(|state| state != MusicState::Ready) {
+            if local_is_downloading {
                 self.kick_room_song_download();
             }
             return;
@@ -12034,20 +12041,17 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Room);
     }
 
-    /// Ticket #559: the member-downloading leg, updated after the
-    /// p559-badge-ab4 refutation. Live chain: `OnlineSession::paint` ->
+    /// Ticket #838: the boot-wave3 qualified exe frames stay badge-free
+    /// at 42 % and 100 %. Live chain: session frame ingest ->
     /// `poll_waiting_chat` -> `drain_waiting_chat` ->
     /// `apply_member_music_state` (4037) / `apply_download_progress`
-    /// (4039) -> `ScreenGame` seat mirror -> `start_gate_verdict` (-4,
-    /// no START frame) and the Waiting painter. 4037 supplies the state
-    /// half and 4039 arms the badge; the refuted 4037-only arm paints
-    /// nothing. The percentage's bar fill stays OPEN; the pinned wire
-    /// byte must not be dropped.
+    /// (4039) -> `ScreenGame` seat mirror and the Waiting painter.
+    /// 4037/4039 remain wire state only: neither arms the seat badge
+    /// or bar. The peer-seat START verdict is pinned separately by
+    /// `start_stays_closed_while_a_peer_reports_downloading`.
     #[test]
-    fn downloading_state_and_progress_from_the_gateway_stage_the_seat() {
+    fn music_state_4037_and_progress_4039_leave_the_local_badge_unarmed_from_the_gateway() {
         use o2jam_net::SyncMemberMusicStateEvent;
-        let mut room = joined_snapshot();
-        room.slots[1].member = Some(member_on_team("peer", true, 1));
         let state = SyncMemberMusicStateEvent {
             member_id: 1,
             state: MusicState::Downloading,
@@ -12056,7 +12060,7 @@ pub(super) mod session_tests {
             percentage: 42,
             member_id: 1,
         };
-        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
             stream.write_all(&state.encode()).unwrap();
             stream.write_all(&progress.encode()).unwrap();
             assert_quiet(&mut stream);
@@ -12073,20 +12077,89 @@ pub(super) mod session_tests {
         assert_eq!(
             session.game.member_download_progress(1),
             Some(42),
-            "4039 stages the percentage and arms the badge instead of dropping it"
+            "4039 stages the percentage without dropping the pinned wire byte"
         );
-        assert_eq!(
-            session.game.start_gate_verdict(),
-            StartGateVerdict::MusicDownloading,
-            "the exe's -4 verdict keeps START closed"
+        assert!(
+            !session.game.local_download_badge_armed(),
+            "4037/4039 must not arm the badge"
         );
     }
 
-    /// #559 guardable remainder: the 4037 Ready arm must clear the
-    /// seat's 4039 percentage as it clears the DOWNLOADING badge, so
-    /// the readouts and the START verdict agree. The equal-07E8-slice
-    /// exe/Rust A/B is still a separate capture task (docs/parity/
-    /// waiting.md).
+    /// Ticket #838: S2C `4035 0200000104` paints the local seat in the
+    /// qualified #773 exe frame. Live chain: session frame ingest ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` ->
+    /// `apply_acquire_music` -> `answer_acquire_music` ->
+    /// `ScreenGame::arm_local_download_badge` -> `paint_at` ->
+    /// `paint_waiting_scene_with_confirm` -> `staged_seats` ->
+    /// `paint_waiting_seat_marks`.
+    #[test]
+    fn acquire_music_4035_arms_only_the_local_badge_from_the_gateway() {
+        let acquire = AcquireMusic {
+            members: vec![
+                MemberMusicState {
+                    member_id: 0,
+                    state: MusicState::Ready,
+                },
+                MemberMusicState {
+                    member_id: 1,
+                    state: MusicState::Downloading,
+                },
+            ],
+        };
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
+            stream.write_all(&acquire.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.member_music_state(1) == Some(MusicState::Downloading.code())
+        });
+        server.join().unwrap();
+        assert!(
+            session.game.local_download_badge_armed(),
+            "4035 arms the local seat's badge and bar"
+        );
+    }
+
+    /// The second 4035 arm names the local member Ready. Statics give
+    /// the zero arm the master/gate retry path (REA `ev_18a485d7…`);
+    /// the pixel-clear leg after a completed transfer stays OPEN on
+    /// #559. Live chain: session frame ingest -> `poll_waiting_chat` ->
+    /// `drain_waiting_chat` -> `apply_acquire_music` ->
+    /// `answer_acquire_music` -> `ScreenGame::clear_local_download_badge`.
+    #[test]
+    fn ready_4035_clears_the_local_badge_from_the_gateway() {
+        let downloading = AcquireMusic {
+            members: vec![MemberMusicState {
+                member_id: 1,
+                state: MusicState::Downloading,
+            }],
+        };
+        let ready = AcquireMusic {
+            members: vec![MemberMusicState {
+                member_id: 1,
+                state: MusicState::Ready,
+            }],
+        };
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
+            stream.write_all(&downloading.encode()).unwrap();
+            stream.write_all(&ready.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |session| {
+            session.game.member_music_state(1) == Some(MusicState::Ready.code())
+        });
+        server.join().unwrap();
+        assert!(
+            !session.game.local_download_badge_armed(),
+            "a Ready 4035 clears the local badge"
+        );
+    }
+
+    /// #773 guardable remainder: the 4037 Ready arm must clear the
+    /// seat's 4039 percentage so the readout and the START verdict
+    /// agree. After #838 this is wire state only — 4037/4039 no longer
+    /// touch the 4035 paint arm. The equal-07E8-slice exe/Rust A/B is
+    /// still a separate capture task (docs/parity/waiting.md).
     ///
     /// Live chain: `OnlineSession::paint` -> `poll_waiting_chat` ->
     /// `drain_waiting_chat` -> `apply_download_progress` (4039) /

@@ -105,7 +105,7 @@ Consequence: a song in `OJNList.dat` with no `o2ma<id>.ojn` on disk is
   `(0x12, 0xfc3, member, state)`); `4039 DownloadProgressChanged`
   handler VA `0x559a10` (two 1-byte reads, forward `(0x12, 0xfc7, pct,
   member)`). Seat reset parks `0` at `+0x217c` (VA `0x53fcc1`).
-- **#559 refutation — badge arm needs both wire halves (capture-pinned).**
+- **#559/#838 refutation — 4035 is the paint arm (capture-pinned).**
   The matched `p559-badge-ab4` pair (exe OTwo.exe sha256 `83a04541…72c823b`,
   Wine 11.22; manifests `~/scratch/p559-badge-ab4/{exe,rust3}/manifest.json`)
   sends `4026 000004` + `4037 0004` and **no 4039**. The exe screenshot
@@ -114,12 +114,21 @@ Consequence: a song in `OJNList.dat` with no `o2ma<id>.ojn` on disk is
   screenshot `rust3/states/member-downloading.png` (sha256
   `77d74909…e463a9449`) paints both. Wire logs: `exe/wire/room-stage.log`
   sha256 `f853a28b…3f1f7b7a`, `rust3/wire/room-stage.log` sha256
-  `ed682ad2…8ab8a6bbf616a0b`. The earlier matched-ab-339 read (state alone
-  ⇒ badge) is contradicted; the exe wins. Our painter now arms
-  `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` only when a 4037 state
-  **and** a 4039 percentage stand. Next evidence step stays on #559: add
-  host 4038 progress, wait for 4039, recapture both; if the exe seat is
-  still badge-free, make 4037/4039 wire-only and remove our paint.
+  `ed682ad2…8ab8a6bbf616a0b`. The first refutation (state alone ⇒ badge)
+  was followed by a `4037 0004` + `4039` 42 %/100 % qualification in
+  `~/scratch/boot-wave3/{p559-progress-exe3,p559-progress-rust2}`: exe
+  `member-progress-42.png` (`d4edc94d…`) and `member-progress-100.png`
+  (`459ad408…`) stay badge-free, while Rust `states/member-progress-42.png`
+  (`d2c98e5d…`) painted both. The qualified #773 frame
+  `~/scratch/p773-proxy-exe3/after-start-immediate.png` (`3a053d00…`) with
+  S2C `4035 0200000104` paints the local seat's green
+  `Wait_Downloding.ojs` and black `Wait_Downloding_Bar.ojs`. Statics agree:
+  the 4035 case in each Waiting dispatcher (normal `0x4b1d42`, live
+  `0x4aba51`; REA `ev_18a485d7…` / `ev_0593bf27…`) calls the seat refresh
+  and, for the local member, `StartMusicDownload` (`0x4bb1e0`); the 4037
+  case only refreshes/retries. Our painter therefore arms those two bodies
+  **only on 4035 with a non-Ready local member**. 4037/4039 stay wire-only
+  after #838; the #559 equal-07E8 A/B recapture stays OPEN.
 
 ## 3. Notice pin — the select dialog says "not downloaded" (PINNED)
 
@@ -364,11 +373,13 @@ source the engine stays idle.
   WaitingSkillChanged, 4058 WaitingSkillExChanged), runs the START
   gate's arms (`4034` on a missing song, `4010` when startable,
   the pinned notice arms otherwise), kicks the room song's download when
-  the 4035 answer marks our own state non-Ready, retries `4010` from the
-  4035/4037 ready arms, and keeps Waiting when a 4011 arrives with a
-  non-zero result. 4039 stages its percentage in the seat's progress
-  mirror and the 4037 Ready arm clears it with the badge; the bar's
-  frame/fill mapping stays OPEN, so no synthetic fill is painted.
+  the 4035 answer marks our own state non-Ready, arms the local seat's
+  DOWNLOADING badge and bar through `ScreenGame::arm_local_download_badge`,
+  retries `4010` from the 4035/4037 ready arms, and keeps Waiting when a
+  4011 arrives with a non-zero result. 4039 stages its percentage in the
+  seat's progress mirror and 4037 Ready clears that readout; neither
+  event changes the paint arm (#838). The bar's frame/fill mapping stays
+  OPEN, so no synthetic fill is painted.
   `configure_music_source` points the engine at the optional
   `O2JAM_MUSIC_SOURCE` local mirror (our adapter, not an exe setting;
   the WinInet FTP client stays OPEN). Each Waiting paint runs
