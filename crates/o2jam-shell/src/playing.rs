@@ -9,7 +9,7 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
-use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer, ScenePlacement};
+use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -20,7 +20,7 @@ use o2jam_net::GameSpeed;
 use o2jam_render::{
     blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, intersect_rect,
     number_width, pack_xrgb, panel_content_rect, scale_rect_to_frame, text_width, visible_spans,
-    Frame, LaneCurtain, Rect, Rgb555Image, GLYPH_H, NATIVE_HEIGHT,
+    Frame, LaneCurtain, Rect, Rgb555Image, GLYPH_H, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Lanes across the highway.
@@ -286,6 +286,166 @@ pub const COMBO_DIGIT_LAYOUT_BOX: Rect = Rect {
 /// nothing for a cleared slot — the same pixels — and keeps the
 /// hidden position pinned for the guard.
 pub const COMBO_DIGIT_HIDE_OFFSET: (i32, i32) = (-0x5A, -0x3C);
+
+/// #843 capture pins (boot-843 pair A/B, HEAD `39e7549`, trace
+/// `S843-HEAD-PAIR-01`). The pair pins exe-vs-Rust ink boxes at
+/// native 800x600; the offsets below translate a staged anchor (or
+/// the parsed `State_Playing.bnd` rect) into the exe box. They are
+/// capture-pinned staging data, never paint-side literals: the
+/// painter only consumes [`PlayingHudLayout`] and the placements it
+/// rewrites. Positive combo/hold digits, own-vs-peer fill mapping,
+/// and VOL/ghost-label scenario variants stay OPEN.
+const HUD_LIFE_BAND_SPRITE: &str = "Life_gauge_left_bar.ojs";
+/// `Life_gauge_left_bar.ojs` frame-0 record anchor and extent
+/// (`Playing1.opi` slot 236). The exe's orange band starts 7 px
+/// lower than the shell's staged anchor in the paired frame.
+const HUD_LIFE_BAND_NATIVE: Rect = Rect {
+    x: 238,
+    y: 264,
+    w: 12,
+    h: 247,
+};
+const HUD_LIFE_BAND_OFFSET: (i32, i32) = (0, 7);
+const HUD_JAM_BAR_SPRITE: &str = "Jamgauge_left_bar.ojs";
+/// The exe's JAM bar starts 7 px further left and runs 14 px wider
+/// than the staged `Jamgauge_left_bar.ojs` anchor (x23..229).
+const HUD_JAM_BAR_OFFSET: (i32, i32) = (-7, 0);
+const HUD_JAM_BAR_WIDTH_DELTA: i32 = 14;
+const HUD_JAM_LABEL_SPRITE: &str = "Jam_gauge_text.ojs";
+/// The bar art already bakes `JAM` at its centre; the separate
+/// `Jam_gauge_text.ojs` record must land on that ink, not beside it.
+const HUD_JAM_LABEL_NATIVE: Rect = Rect {
+    x: 85,
+    y: 539,
+    w: 29,
+    h: 7,
+};
+const HUD_JAM_LABEL_OFFSET: (i32, i32) = (29, 2);
+/// `P2P_MaxCombo_Text.ojs` (36x24) supplies the two-line
+/// `MAX COMBO` caption; the shell previously left the venue's
+/// `SC...` art in its place.
+pub const COMBO_WORD_SPRITE: &str = "P2P_MaxCombo_Text.ojs";
+/// Own-combo digit font: `ComboScroe.ojs`, ten 7x10 frames.
+const OWN_COMBO_FONT_SPRITE: &str = "ComboScroe.ojs";
+const HUD_COMBO_WORD_NATIVE: Rect = Rect {
+    x: 32,
+    y: 572,
+    w: 36,
+    h: 24,
+};
+const HUD_OWN_COMBO_NATIVE: (i32, i32) = (105, 570);
+/// Ink box centre of the exe's `MISS` judgement word (x97..155,
+/// y360..375). The shell's line-relative anchor lands 84 px lower.
+const HUD_JUDGEMENT_CENTER_NATIVE: (i32, i32) = (126, 368);
+/// Bottom tally label ink origins, from the paired frame. The old
+/// photo grid sat 10–15 px left and 2 px low.
+const HUD_TALLY_COUNTS_NATIVE: [(i32, i32); 4] = [(320, 558), (420, 558), (320, 578), (420, 578)];
+/// `State_Playing.bnd` rect 2 is (489,556,254,10); the exe paints
+/// its TIME shell 4 px lower in the paired frame.
+const HUD_TIME_BAR_OFFSET: (i32, i32) = (0, 4);
+
+/// Capture-pinned HUD geometry, built from staged Playing placements
+/// and consumed by the painters. Every field stays `None` without
+/// the matching staged art, so the archive-less fallback keeps its
+/// verified geometry (ADR-0003).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlayingHudLayout {
+    /// Re-staged life-band sprite rect (native).
+    pub life_band: Option<Rect>,
+    /// Re-staged JAM bar sprite rect (native).
+    pub jam_bar: Option<Rect>,
+    /// Re-staged JAM label sprite rect (native).
+    pub jam_label: Option<Rect>,
+    /// `MAX COMBO` caption rect (native).
+    pub combo_word: Option<Rect>,
+    /// Own-combo digit ink origin (native).
+    pub own_combo: Option<(i32, i32)>,
+    /// Judgement word ink centre (native).
+    pub judgement_center: Option<(i32, i32)>,
+}
+
+impl PlayingHudLayout {
+    /// Build the pin set from the same staging stream the painter
+    /// consumes. A missing sprite leaves its art override unset;
+    /// text/caption pins always stage because they need no archive
+    /// body (the painter draws them procedurally when the font is
+    /// absent).
+    #[must_use]
+    pub fn from_placements(placements: &[ScenePlacement]) -> Self {
+        let staged = |name: &str| {
+            placements
+                .iter()
+                .any(|placement| placement.sprite.as_deref() == Some(name))
+        };
+        Self {
+            life_band: staged(HUD_LIFE_BAND_SPRITE)
+                .then(|| translate_rect(HUD_LIFE_BAND_NATIVE, HUD_LIFE_BAND_OFFSET)),
+            jam_bar: staged(HUD_JAM_BAR_SPRITE).then(|| {
+                let mut rect = translate_rect(NATIVE_JAM_BARS[0], HUD_JAM_BAR_OFFSET);
+                rect.w = i32::try_from(rect.w)
+                    .unwrap_or(i32::MAX)
+                    .saturating_add(HUD_JAM_BAR_WIDTH_DELTA)
+                    .try_into()
+                    .unwrap_or(u32::MAX);
+                rect
+            }),
+            jam_label: staged(HUD_JAM_LABEL_SPRITE)
+                .then(|| translate_rect(HUD_JAM_LABEL_NATIVE, HUD_JAM_LABEL_OFFSET)),
+            combo_word: (!placements.is_empty()).then_some(HUD_COMBO_WORD_NATIVE),
+            own_combo: (!placements.is_empty()).then_some(HUD_OWN_COMBO_NATIVE),
+            judgement_center: (!placements.is_empty()).then_some(HUD_JUDGEMENT_CENTER_NATIVE),
+        }
+    }
+
+    /// Rewrite the staged art placements so their rect (not their
+    /// record anchor) positions the body at the pinned box. Single
+    /// anchored figures ignore their rect; the clone role is the
+    /// painter's existing rect-positioned path (`avatar.rs`,
+    /// `placement_view_origin`). Everything else stays verbatim.
+    #[must_use]
+    pub fn pinned_placements(&self, placements: &[ScenePlacement]) -> Vec<ScenePlacement> {
+        placements
+            .iter()
+            .map(|placement| {
+                let rect = match placement.sprite.as_deref() {
+                    Some(HUD_LIFE_BAND_SPRITE) => self.life_band,
+                    Some(HUD_JAM_BAR_SPRITE) => self.jam_bar,
+                    Some(HUD_JAM_LABEL_SPRITE) => self.jam_label,
+                    _ => None,
+                };
+                match rect {
+                    Some(rect) => ScenePlacement {
+                        role: PlacementRole::Clone,
+                        rect,
+                        ..placement.clone()
+                    },
+                    None => placement.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
+fn translate_rect(rect: Rect, (dx, dy): (i32, i32)) -> Rect {
+    Rect {
+        x: rect.x.saturating_add(dx),
+        y: rect.y.saturating_add(dy),
+        ..rect
+    }
+}
+
+/// Native tally origins: the capture-pinned set when staged fields
+/// are present, the photo grid otherwise. Used by
+/// [`AvatarLayout::for_frame_placed`].
+#[must_use]
+fn tally_origins_native(placements: Option<&[ScenePlacement]>) -> [(i32, i32); 4] {
+    if placements.is_some() {
+        HUD_TALLY_COUNTS_NATIVE
+    } else {
+        TALLY_COUNT_GRID
+    }
+}
+
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
 /// frames in digit order 0..=9 (archive slot 96). Never painted: the
 /// exe's only `PlayTimeNum` painter (`FUN_0050d800`, file `0x10D800`
@@ -635,6 +795,8 @@ pub struct PlaySkin {
     jam_flash: Vec<SkinSprite>,
     score_font: Option<DigitFont>,
     combo_font: Option<DigitFont>,
+    own_combo_font: Option<DigitFont>,
+    combo_word: Option<SkinSprite>,
     play_time_font: Option<DigitFont>,
     long_combo_font: Option<DigitFont>,
     long_combo_plate: Option<SkinSprite>,
@@ -651,6 +813,8 @@ impl PlaySkin {
             && self.hit_bursts.is_empty()
             && self.score_font.is_none()
             && self.combo_font.is_none()
+            && self.own_combo_font.is_none()
+            && self.combo_word.is_none()
             && self.play_time_font.is_none()
             && self.long_combo_font.is_none()
             && self.long_combo_plate.is_none()
@@ -778,6 +942,18 @@ impl PlaySkin {
     #[must_use]
     pub fn combo_font(&self) -> Option<&DigitFont> {
         self.combo_font.as_ref()
+    }
+
+    /// Staged own-combo digit font ([`OWN_COMBO_FONT_SPRITE`]).
+    #[must_use]
+    pub fn own_combo_font(&self) -> Option<&DigitFont> {
+        self.own_combo_font.as_ref()
+    }
+
+    /// Staged `MAX COMBO` caption ([`COMBO_WORD_SPRITE`]).
+    #[must_use]
+    pub fn combo_word(&self) -> Option<&SkinSprite> {
+        self.combo_word.as_ref()
     }
 
     /// Staged play-time-digit font ([`PLAY_TIME_FONT_SPRITE`]).
@@ -1010,6 +1186,9 @@ impl PlaySkin {
             .unwrap_or_default();
         skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
         skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
+        skin.own_combo_font = digit_font(archive, OWN_COMBO_FONT_SPRITE);
+        skin.combo_word =
+            archive_body(archive, COMBO_WORD_SPRITE).and_then(|body| lane_sprite(body, 0));
         skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
         skin.long_combo_font = digit_font(archive, LONG_COMBO_NUM_FONT_SPRITE);
         skin.long_combo_plate = archive_body(archive, LONG_COMBO_PLATE_SPRITE)
@@ -1701,6 +1880,9 @@ pub struct LivePlay {
     windows: TimingWindows,
     reshuffle: MeasureReshuffle,
     curtain: LaneCurtain,
+    /// #843 capture-pinned HUD geometry, re-staged every frame from
+    /// the Playing scene's placements by the game loop.
+    hud: PlayingHudLayout,
     now_ms: u64,
     last_word: Option<(Judgement, u64)>,
     sounds: Vec<u32>,
@@ -1738,6 +1920,7 @@ impl Default for LivePlay {
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
             curtain: LaneCurtain::Full,
+            hud: PlayingHudLayout::default(),
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
@@ -1776,6 +1959,7 @@ impl LivePlay {
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
             curtain: LaneCurtain::Full,
+            hud: PlayingHudLayout::default(),
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
@@ -1829,6 +2013,7 @@ impl LivePlay {
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
             curtain: LaneCurtain::Full,
+            hud: PlayingHudLayout::default(),
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
@@ -1843,6 +2028,14 @@ impl LivePlay {
     /// Skill-ring curtain worn for this run (default: none).
     pub fn set_curtain(&mut self, curtain: LaneCurtain) {
         self.curtain = curtain;
+    }
+
+    /// Re-stage the #843 capture pins from the live Playing placements
+    /// before this frame's paint. The game loop always calls this with
+    /// the staged set (or the default layout in the no-archive arm),
+    /// so a stale frame cannot keep an earlier scene's geometry.
+    pub fn set_hud_layout(&mut self, hud: PlayingHudLayout) {
+        self.hud = hud;
     }
 
     /// Select the life-bar delta set from the playing chart's difficulty
@@ -2547,13 +2740,24 @@ impl LivePlay {
         if now_ms.saturating_sub(at) >= 600 {
             return;
         }
-        let center_x = Self::highway_center_x(geom);
+        // #843: the paired MISS frame pins the word centre at
+        // (126,368), not on the highway centre above the line. The
+        // no-archive fallback keeps the old line-relative anchor.
+        let (center_x, center_y) = self.hud.judgement_center.map_or(
+            (Self::highway_center_x(geom), geom.line_y - 40),
+            |(x, y)| {
+                (
+                    scale_scene_axis(x, frame.w, NATIVE_WIDTH),
+                    scale_scene_axis(y, frame.h, NATIVE_HEIGHT),
+                )
+            },
+        );
         let word = word_of(judgement);
         let text_w = i32::try_from(text_width(word)).unwrap_or(0);
         draw_text(
             frame,
             center_x - text_w / 2,
-            geom.line_y - 40,
+            center_y,
             word,
             pack_xrgb(0xFF, 0xFF, 0xFF),
         );
@@ -2697,8 +2901,12 @@ impl LivePlay {
     /// staged figures bind (its `(0,0)` anchor is unbound).
     fn paint_jam_gauge(&self, frame: &mut Frame<'_>) {
         let progress = self.score.jam.level_progress();
-        for bar in jam_bar_rects(frame.w, frame.h) {
-            Self::paint_jam_bar(frame, &bar, progress);
+        let mut bars = jam_bar_rects(frame.w, frame.h);
+        if let Some(pinned) = self.hud.jam_bar {
+            bars[0] = scale_rect_to_frame(&pinned, frame.w, frame.h);
+        }
+        for bar in &bars {
+            Self::paint_jam_bar(frame, bar, progress);
         }
         self.paint_jam_level(frame);
     }
@@ -2772,7 +2980,18 @@ impl LivePlay {
                 );
             }
         }
-        if self.score.combo > 0 {
+        // #843: the exe's own-combo zero sits below the strip row.
+        // It stays visible at combo 0; the caption lives in
+        // [`Self::paint_combo_word`] above it.
+        if let Some((x, y)) = self.hud.own_combo {
+            let (x, y) = scale_scene_origin((x, y), frame.w, frame.h);
+            match self.view.skin.own_combo_font() {
+                Some(font) => font.paint(frame, x, y, self.score.combo),
+                None => {
+                    draw_number(frame, x, y, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
+                }
+            }
+        } else if self.score.combo > 0 {
             draw_number(
                 frame,
                 combo_x,
@@ -2780,6 +2999,25 @@ impl LivePlay {
                 self.score.combo,
                 pack_xrgb(0xFF, 0xFF, 0x40),
             );
+        }
+    }
+
+    /// Two-line `MAX COMBO` caption through the staged
+    /// `P2P_MaxCombo_Text.ojs` body (procedural caption otherwise),
+    /// at the #843 capture-pinned origin. The venue's baked `SC...`
+    /// ink stays underneath as stage art; this caption is the live
+    /// label the exe paints over it.
+    fn paint_combo_word(&self, frame: &mut Frame<'_>) {
+        let Some(rect) = self.hud.combo_word else {
+            return;
+        };
+        let at = scale_scene_origin((rect.x, rect.y), frame.w, frame.h);
+        match self.view.skin.combo_word() {
+            Some(sprite) => sprite.paint_at(frame, at.0, at.1),
+            None => {
+                draw_text(frame, at.0, at.1, "MAX", pack_xrgb(0xFF, 0xFF, 0xFF));
+                draw_text(frame, at.0, at.1 + 8, "COMBO", pack_xrgb(0xFF, 0xFF, 0xFF));
+            }
         }
     }
 
@@ -2818,6 +3056,7 @@ impl LivePlay {
         self.paint_jam_flash(frame, geom, now_ms);
         self.paint_jam_gauge(frame);
         self.paint_panel_strip(frame);
+        self.paint_combo_word(frame);
         self.paint_judgement_word(frame, geom, now_ms);
     }
 }
@@ -3077,7 +3316,23 @@ impl PlayingBoundFields {
         Self {
             exit: placed_rect(placements, FIELD_EXIT_ID, fallback.exit),
             chat_window: placed_rect(placements, FIELD_CHAT_WINDOW_ID, fallback.chat_window),
-            time_bar: placed_rect(placements, FIELD_TIMEBAR_ID, fallback.time_bar),
+            time_bar: {
+                let staged = placed_rect(
+                    placements,
+                    FIELD_TIMEBAR_ID,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        w: 0,
+                        h: 0,
+                    },
+                );
+                if staged.w > 0 && staged.h > 0 {
+                    translate_rect(staged, HUD_TIME_BAR_OFFSET)
+                } else {
+                    fallback.time_bar
+                }
+            },
             buffer1: placed_rect(placements, FIELD_BUFFER1_ID, fallback.buffer1),
             buffer2: placed_rect(placements, FIELD_BUFFER2_ID, fallback.buffer2),
             chat_edit: placed_rect(placements, FIELD_CHAT_EDIT_ID, fallback.chat_edit),
@@ -3228,8 +3483,9 @@ impl AvatarLayout {
     /// read from staged placements ([`PlayingBoundFields`]): every
     /// TIMEBAR/TITLE/SPEED/VOLUME/EXIT origin comes from its parsed
     /// `.bnd` rect when staged (owner rule `f38f3`), else its
-    /// fallback. Avatar origins and the photo-measured counts grid
-    /// are shared verbatim.
+    /// fallback. The TIME row and count origins take the #843
+    /// capture offset / pin when the staged set is present; avatar
+    /// origins stay shared verbatim.
     #[must_use]
     pub(crate) fn for_frame_placed(
         frame_w: usize,
@@ -3257,7 +3513,7 @@ impl AvatarLayout {
                 h: scale_extent(AVATAR_LIFE_SIZE.1, frame_h, SCENE_NATIVE_H),
             },
             seat,
-            counts_origins: TALLY_COUNT_GRID
+            counts_origins: tally_origins_native(placements)
                 .map(|origin| scale_scene_origin(origin, frame_w, frame_h)),
             time_bar: scale_scene_rect(&fields.time_bar, frame_w, frame_h),
             speed_origin: scale_scene_origin((fields.speed.x, fields.speed.y), frame_w, frame_h),
@@ -3531,6 +3787,105 @@ mod live_play_tests {
     use crate::avatar::PlacementRole;
     use o2jam_game::{HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
     use o2jam_render::{has_ink_near, near_xrgb};
+
+    fn hud_placement(name: &str) -> ScenePlacement {
+        ScenePlacement {
+            id: name.to_owned(),
+            code: 0,
+            sprite: Some(name.to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+            role: PlacementRole::Single,
+        }
+    }
+
+    #[test]
+    fn capture_pins_rewrite_staged_hud_anchors_when_the_playing_sprites_are_staged() {
+        // Live chain: main.rs::run_play -> ScreenGame::paint ->
+        // ScreenGame::paint_playing -> PlayingHudLayout::from_placements
+        // -> pinned_placements -> paint_foreground_placements.
+        // The layout is a pure placement-to-rect translation, so the
+        // seam test pins the whole geometry contract.
+        let staged = [
+            hud_placement(HUD_LIFE_BAND_SPRITE),
+            hud_placement(HUD_JAM_BAR_SPRITE),
+            hud_placement(HUD_JAM_LABEL_SPRITE),
+        ];
+        let layout = PlayingHudLayout::from_placements(&staged);
+        assert_eq!(
+            layout.life_band,
+            Some(Rect {
+                x: 238,
+                y: 271,
+                w: 12,
+                h: 247
+            }),
+            "life band: staged anchor plus the capture's 7 px row pin"
+        );
+        assert_eq!(
+            layout.jam_bar,
+            Some(Rect {
+                x: 16,
+                y: 536,
+                w: 220,
+                h: 16
+            }),
+            "JAM bar: the paired frame insets left and widens the anchor"
+        );
+        assert_eq!(
+            layout.jam_label,
+            Some(Rect {
+                x: 114,
+                y: 541,
+                w: 29,
+                h: 7
+            }),
+            "JAM label: the duplicate text lands on the bar's baked word"
+        );
+        assert_eq!(layout.combo_word, Some(HUD_COMBO_WORD_NATIVE));
+        assert_eq!(layout.own_combo, Some(HUD_OWN_COMBO_NATIVE));
+        assert_eq!(layout.judgement_center, Some(HUD_JUDGEMENT_CENTER_NATIVE));
+        let pinned = layout.pinned_placements(&staged);
+        assert_eq!(pinned.len(), staged.len());
+        for (original, rewritten) in staged.iter().zip(&pinned) {
+            assert_eq!(rewritten.sprite, original.sprite);
+            assert_eq!(rewritten.role, PlacementRole::Clone);
+        }
+        for (rewritten, expected) in
+            pinned
+                .iter()
+                .zip([layout.life_band, layout.jam_bar, layout.jam_label])
+        {
+            assert_eq!(rewritten.rect, expected.expect("staged pin"));
+        }
+    }
+
+    #[test]
+    fn capture_pins_move_the_count_grid_and_time_bar_when_fields_are_staged() {
+        // Live chain: main.rs::run_play -> ScreenGame::paint_playing ->
+        // LivePlay::paint_avatar_scene_with_placements ->
+        // AvatarScene::paint_with_placements ->
+        // AvatarLayout::for_frame_placed -> tally_origins_native /
+        // PlayingBoundFields::from_placements. Pure layout seam.
+        let mut time_bar = hud_placement(FIELD_TIMEBAR_ID);
+        time_bar.rect = PlayingBoundFields::fallback().time_bar;
+        let staged = [time_bar];
+        let layout = AvatarLayout::for_frame_placed(800, 600, Some(&staged));
+        assert_eq!(layout.counts_origins, HUD_TALLY_COUNTS_NATIVE);
+        assert_eq!(
+            layout.time_bar.y, 560,
+            "the bnd row takes the capture offset"
+        );
+        assert_eq!(
+            AvatarLayout::for_frame(800, 600).counts_origins,
+            TALLY_COUNT_GRID,
+            "the archive-less fallback keeps the photo grid"
+        );
+    }
 
     fn geom() -> HighwayGeometry {
         HighwayGeometry::centered(70, 60)
@@ -6609,9 +6964,12 @@ mod avatar_scene_tests {
     }
 
     #[test]
-    fn staged_layout_matches_the_parsed_bind_origins() {
-        // A fully staged run (parsed rects verbatim) lays out the
-        // native fallback origins: placement and fallback agree.
+    fn staged_layout_matches_the_parsed_bind_origins_except_capture_pins() {
+        // #843: a fully staged run agrees with the native fallback
+        // for every field except the two capture contradictions:
+        // the exe paints its TIME shell 4 px below `State_Playing.bnd`
+        // rect 2, and the paired frame's tally ink sits on the
+        // pinned grid. The bnd values stay the archive-less fallback.
         let fallback = PlayingBoundFields::fallback();
         let staged = vec![
             field_placement(FIELD_EXIT_ID, fallback.exit),
@@ -6622,7 +6980,19 @@ mod avatar_scene_tests {
         ];
         let staged_layout = AvatarLayout::for_frame_placed(800, 600, Some(&staged));
         let plain_layout = AvatarLayout::for_frame(800, 600);
-        assert_eq!(staged_layout, plain_layout);
+        assert_eq!(staged_layout.counts_origins, HUD_TALLY_COUNTS_NATIVE);
+        assert_eq!(
+            staged_layout.time_bar,
+            translate_rect(fallback.time_bar, HUD_TIME_BAR_OFFSET)
+        );
+        assert_eq!(
+            AvatarLayout {
+                counts_origins: plain_layout.counts_origins,
+                time_bar: plain_layout.time_bar,
+                ..staged_layout
+            },
+            plain_layout
+        );
     }
 
     #[test]

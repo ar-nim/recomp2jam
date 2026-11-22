@@ -48,12 +48,13 @@ pub use self::waiting::MyRoomWireSend;
 use self::waiting::PendingOutbox;
 pub use self::waiting::WaitingAmbientRequest;
 use super::super::avatar::{
-    avatar_item_by_id, load_worn_figure, ojn_cover_figure, paint_scene_figures_selected,
-    AvatarFigure, ScenePlacement, AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_worn_figure, ojn_cover_figure, paint_foreground_placements,
+    paint_scene_figures_selected, AvatarFigure, ScenePlacement, AVATAR_BREATHING_TICK_MS,
+    LOADING_COVER_SPRITE,
 };
 use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
-use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
+use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingHudLayout};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
@@ -70,20 +71,19 @@ use super::paint::{
     paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
     paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
     paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_playing_backdrop, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -9009,6 +9009,14 @@ impl ScreenGame {
         // the foreground placements. The unstaged arm keeps the flat
         // placeholder fill (ADR-0003's no-archive fallback).
         let playing_art = self.scene_art[scene_index(Screen::Playing)].as_ref();
+        // #843: the paired capture pins ride the staged placements.
+        // Live chain: main.rs::run_play -> ScreenGame::paint ->
+        // ScreenGame::paint_playing -> PlayingHudLayout::from_placements
+        // -> pinned_placements -> paint_foreground_placements.
+        let hud = playing_art.map_or_else(PlayingHudLayout::default, |art| {
+            PlayingHudLayout::from_placements(&art.placements)
+        });
+        self.playing.set_hud_layout(hud);
         let staged_backdrop = playing_art.is_some_and(playing_backdrop_staged);
         if staged_backdrop {
             if let Some(art) = playing_art {
@@ -9020,7 +9028,11 @@ impl ScreenGame {
             self.playing.paint(frame, &geom, now_ms);
         }
         if let Some(art) = playing_art {
-            paint_playing_foreground(frame, art);
+            paint_foreground_placements(
+                frame,
+                &hud.pinned_placements(&art.placements),
+                &art.figures,
+            );
             self.playing.paint_avatar_scene_with_placements(
                 frame,
                 self.avatar.as_ref(),
