@@ -70,15 +70,16 @@ use super::paint::{
     paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
     paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
     paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
-    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
-    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
+    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
+    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -6868,6 +6869,17 @@ impl ScreenGame {
         self.shop.stage_skill_count(slot, count);
     }
 
+    /// Staged top-strip notice rect pair (`None` when unstaged).
+    #[must_use]
+    pub fn shop_notice_rects(&self) -> Option<(Rect, Rect)> {
+        super::side::shop_notice_rects(&self.side_placements)
+    }
+
+    /// Stage the caption for the top-strip `NOTICE_TEXT` cell.
+    pub fn stage_shop_notice_text(&mut self, text: &str) {
+        self.shop.stage_notice_text(text);
+    }
+
     /// Alarm-lamp rects from the staged shop board (no invented art).
     #[must_use]
     pub fn shop_messenger_lamp_rects(&self) -> Vec<Rect> {
@@ -8005,6 +8017,7 @@ impl ScreenGame {
                 },
             );
             paint_shop_preview(frame, &self.side_placements, self.shop_preview().as_ref());
+            paint_shop_notice_text(frame, &self.side_placements, self.shop.notice_text());
             paint_shop_identity_captions(
                 frame,
                 &self.side_placements,

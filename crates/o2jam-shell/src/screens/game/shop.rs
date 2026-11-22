@@ -161,6 +161,9 @@ pub(crate) struct ShopState {
     /// Counts inked into the ten SKILLCOUNT cells. The exe's content
     /// writer is OPEN, so nothing is inferred from an unstaged slot.
     skill_counts: [Option<u32>; SHOP_SKILLCOUNT_CELLS],
+    /// Caption for the staged `NOTICE_TEXT` cell. No 7.55 writer is
+    /// pinned, so callers stage it explicitly; `None` inks nothing.
+    notice_text: Option<String>,
     /// Staged confirmation-pair result for the vacate ladder.
     vacate_confirmed: bool,
     /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
@@ -536,6 +539,16 @@ impl ShopState {
     /// Counts inked by the staged SKILLCOUNT cells.
     pub(crate) fn skill_counts(&self) -> &[Option<u32>; SHOP_SKILLCOUNT_CELLS] {
         &self.skill_counts
+    }
+
+    /// Stage the notice caption for the top-strip TEXT cell.
+    pub(crate) fn stage_notice_text(&mut self, text: &str) {
+        self.notice_text = Some(text.to_owned());
+    }
+
+    /// Staged notice caption (`None` until a caller supplies one).
+    pub(crate) fn notice_text(&self) -> Option<&str> {
+        self.notice_text.as_deref()
     }
 
     /// Stage the confirmation-pair result for the vacate ladder.

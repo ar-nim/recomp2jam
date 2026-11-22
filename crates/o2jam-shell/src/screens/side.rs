@@ -986,6 +986,28 @@ pub const SHOP_MYBAGSELECT_CODE: u32 = 0x1450_0052;
 /// rects (`Shop_Tooltip.ojs` at `0xB1`; `0x84` is its art-less twin).
 pub const SHOP_MYCART_BACK_CODE: u32 = 0x1450_006F;
 pub const SHOP_TOOLTIP_CODES: [u32; 2] = [0x1450_0084, 0x1450_00B1];
+/// Top-strip notice pair (`IMAGE_SSHOP_NOTICE_TEXT` /
+/// `IMAGE_SSHOP_NOTICEBOARD`, `0x142000b3/b4`, spec #178 D5). The
+/// board art stages with the bound layout; its writer string is still
+/// unread (`docs/shop.md`), so only an explicitly staged caption inks.
+pub const SHOP_NOTICE_TEXT_CODE: u32 = 0x1420_00B3;
+pub const SHOP_NOTICE_BOARD_CODE: u32 = 0x1420_00B4;
+
+/// Top-strip notice rects from the staged shop board (`None` when
+/// either control is unstaged). Geometry always comes from `.bnd`
+/// placements, never literals.
+#[must_use]
+pub fn shop_notice_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let text = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_NOTICE_TEXT_CODE)?
+        .rect;
+    let board = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_NOTICE_BOARD_CODE)?
+        .rect;
+    Some((text, board))
+}
 /// Music-shop TOP100 board button (`0x1A20007D`, `docs/musicshop.md`):
 /// music-shop chrome only per the #181 verdict — the item shop owns no
 /// TOP100 arm, so this code never dispatches on the item side. The
