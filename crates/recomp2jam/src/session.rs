@@ -5720,6 +5720,92 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    fn a_music_shop_cart_buy_sends_one_empty_5015_after_the_checkout_ladder() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_session_catalog
+        //   -> OnlineSession::ingest_snapshot -> GameLoop::mouse_click
+        //   -> ScreenGame::click_music_shop(BuyRow, CartBuy)
+        //   -> MusicShopState::approve_checkout -> PendingOutbox
+        //   -> OnlineSession::poll_wire -> flush_start_payment -> 5015.
+        // Tier 2 scripted gateway with a synthetic OJN catalog: CI-safe.
+        // STATIC pin only (ev_26ac6479…); the qualified live tap is
+        // still OPEN.
+        use o2jam_net::CharacterInfo;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{
+            SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (wire_tx, wire_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            let mut opcodes = Vec::new();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                opcodes.push(frame.id);
+            }
+            wire_tx.send(opcodes).expect("the test reads its wire tap");
+        });
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.set_song_catalog(&o2jam_file::parse_ojn_list(&select_catalog_blob()).unwrap());
+        game.stage_music_shop_prices(&[o2jam_file::OjnMidParamEntry {
+            song_id: 757,
+            param_a: 0,
+            param_b: 40,
+            anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+        }]);
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+                area(MSHOP_GEM_BUY_CODE, 322, 51, 25, 16),
+                area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.set_myroom_character(CharacterInfo {
+            gem: 500,
+            o2_cash: 500,
+            music_cash: 500,
+            item_cash: 500,
+            ..CharacterInfo::default()
+        });
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.ingest_snapshot(&InputSnapshot::click_at(350, 160));
+        session.ingest_snapshot(&InputSnapshot::click_at(424, 529));
+        paint_frame(&mut session);
+        paint_frame(&mut session);
+        assert!(session.game.take_start_payment().is_none());
+        drop(session);
+        server.join().unwrap();
+        let opcodes = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            opcodes.iter().filter(|id| **id == 5015).count(),
+            1,
+            "one approved cart buy sends one empty 5015: {opcodes:?}"
+        );
+        assert_eq!(
+            opcodes.iter().filter(|id| **id == 5010).count(),
+            1,
+            "the row buy keeps its existing 5010 leg: {opcodes:?}"
+        );
+    }
+
+    #[test]
     fn sell_refund_updates_the_gem_wallet_from_a_live_5003_body() {
         // Live caller chain:
         //   OnlineSession::paint -> poll_wire -> poll_sell_response ->
