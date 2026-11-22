@@ -4,10 +4,11 @@
 use super::super::side::{
     lanking_page_window, shop_checkout_decision, shop_goods, shop_next_planet_index,
     shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate, CheckoutMode,
-    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood, ShopPanel,
-    ShopRefresh, ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState,
-    SHOP_BAG_CELLS, SHOP_CART_ROWS, SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX,
-    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
+    CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood,
+    ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
+    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
+    SHOP_ITEM_ROWS, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
+    SHOP_PLANET_LAYOUT_FLAGS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -141,6 +142,10 @@ pub(crate) struct ShopState {
     ext_menu_secondary_word: u8,
     /// Notice posted by ITEMVACATE or CONFERENCE.
     chrome_notice: Option<ShopChromeNotice>,
+    /// Messenger branch selected by the staged read of global `0x7684d8`.
+    messenger_state: ShopMessengerState,
+    /// Notice posted by the last MESSENGER press.
+    messenger_notice: Option<ShopMessengerNotice>,
     /// Staged confirmation-pair result for the vacate ladder.
     vacate_confirmed: bool,
     /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
@@ -170,6 +175,7 @@ impl ShopState {
         self.bag_selection = None;
         self.bag_notice = None;
         self.chrome_notice = None;
+        self.messenger_notice = None;
     }
 
     /// Item-list page (eight rows per page).
@@ -467,6 +473,17 @@ impl ShopState {
         self.chrome_notice
     }
 
+    /// Stage the branch read from messenger global `0x7684d8`.
+    pub(crate) fn stage_messenger_state(&mut self, state: ShopMessengerState) {
+        self.messenger_state = state;
+        self.messenger_notice = None;
+    }
+
+    /// Notice posted by the last MESSENGER press.
+    pub(crate) fn messenger_notice(&self) -> Option<ShopMessengerNotice> {
+        self.messenger_notice
+    }
+
     /// Stage the confirmation-pair result for the vacate ladder.
     pub(crate) fn stage_vacate_confirmed(&mut self, confirmed: bool) {
         self.vacate_confirmed = confirmed;
@@ -663,6 +680,17 @@ impl ShopState {
             ShopAction::Conference => {
                 // Static arm `0x142000b6`: type `0x14`, no text.
                 self.chrome_notice = Some(ShopChromeNotice::Conference);
+                false
+            }
+            ShopAction::OpenMessenger => {
+                // Static arm `0x142000b8`: `FUN_004a3060(0)` advances
+                // the two lamp rects (staging only), then the branch
+                // on global `0x7684d8` posts one notice. No opcode.
+                self.messenger_notice = Some(match self.messenger_state {
+                    ShopMessengerState::Disconnected => ShopMessengerNotice::Disconnected,
+                    ShopMessengerState::Loading => ShopMessengerNotice::Loading,
+                    ShopMessengerState::Available => ShopMessengerNotice::Available,
+                });
                 false
             }
             ShopAction::SelectBagItem(slot) => {

@@ -6822,6 +6822,23 @@ impl ScreenGame {
         self.shop.chrome_notice()
     }
 
+    /// Notice posted by the last MESSENGER press.
+    #[must_use]
+    pub fn shop_messenger_notice(&self) -> Option<super::side::ShopMessengerNotice> {
+        self.shop.messenger_notice()
+    }
+
+    /// Stage the branch read from messenger global `0x7684d8`.
+    pub fn stage_shop_messenger_state(&mut self, state: super::side::ShopMessengerState) {
+        self.shop.stage_messenger_state(state);
+    }
+
+    /// Alarm-lamp rects from the staged shop board (no invented art).
+    #[must_use]
+    pub fn shop_messenger_lamp_rects(&self) -> Vec<Rect> {
+        super::side::shop_messenger_lamp_rects(&self.side_placements)
+    }
+
     /// Stage the vacate confirmation pair result.
     pub fn stage_shop_vacate_confirmed(&mut self, confirmed: bool) {
         self.shop.stage_vacate_confirmed(confirmed);
@@ -7250,6 +7267,12 @@ impl ScreenGame {
                     self.shop_purchase_web_open = true;
                 }
                 self.run_checkout(super::side::CheckoutMode::Buy, owned_len);
+            }
+            ShopAction::OpenMessenger => {
+                // `FUN_004a3060(0)` advances the staged lamp rects and
+                // the global branch posts a notice. No local Messenger
+                // backend or wire opcode is pinned (#648 stays OPEN).
+                self.shop.apply_action(action, &owned);
             }
             ShopAction::SortBag => {
                 // Static arm `0x142000b7` (file `0x9bfa8`): the sort
@@ -25686,6 +25709,76 @@ mod game_tests {
         assert_eq!(
             game.shop_chrome_notice().map(|n| n.notice_type()),
             Some(0x14)
+        );
+    }
+
+    #[test]
+    fn shop_messenger_press_posts_the_global_notice_and_stages_both_alarm_lamps() {
+        use super::super::side::{
+            ShopMessengerNotice, ShopMessengerState, SHOP_MESSENGER_CODE,
+            SHOP_MESSENGER_LAMP_CODES, SHOP_MESSENGER_NOTICE_CONTROL,
+        };
+        // Live caller chain (once the control stages):
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(MESSENGER 0x142000b8) -> ShopState::apply_action ->
+        //   messenger notice record.
+        // Static pin `ev_f3ad15be…`: the arm calls `FUN_004a3060(0)`
+        // (lamp codes `0x145000b9/ba`) then branches on globals
+        // `0x7684d8+8/+4` into notices type `0x15`, type 1, or type 2
+        // with control `0x13200048`. OPEN (next step): one master press
+        // frame and any 5039/5040/5041 wire; the local rig has no
+        // Messenger backend, so absence is not a pass.
+        let mut game = shop_chrome_board();
+        stage_shop_control(&mut game, SHOP_MESSENGER_CODE, 700);
+        for (index, code) in SHOP_MESSENGER_LAMP_CODES.iter().enumerate() {
+            stage_shop_control(&mut game, *code, 740 + index as i32 * 40);
+        }
+        game.stage_shop_messenger_state(ShopMessengerState::Available);
+
+        let lamp_rects: Vec<Rect> = SHOP_MESSENGER_LAMP_CODES
+            .iter()
+            .map(|code| {
+                game.side_placements
+                    .iter()
+                    .find(|placed| placed.code == *code)
+                    .expect("staged lamp")
+                    .rect
+            })
+            .collect();
+        assert_eq!(game.shop_messenger_lamp_rects(), lamp_rects);
+        game.click_shop(710, 40);
+
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Available)
+        );
+        assert_eq!(
+            game.shop_messenger_notice().map(|n| n.notice_type()),
+            Some(0x15)
+        );
+        assert_eq!(game.take_refresh_bag(), None, "no wire from this arm");
+
+        game.stage_shop_messenger_state(ShopMessengerState::Loading);
+        game.click_shop(710, 40);
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Loading)
+        );
+        assert_eq!(
+            game.shop_messenger_notice().map(|n| n.notice_type()),
+            Some(1)
+        );
+
+        game.stage_shop_messenger_state(ShopMessengerState::Disconnected);
+        game.click_shop(710, 40);
+        assert_eq!(
+            game.shop_messenger_notice(),
+            Some(ShopMessengerNotice::Disconnected)
+        );
+        assert_eq!(
+            game.shop_messenger_notice()
+                .and_then(|n| n.notice_control()),
+            Some(SHOP_MESSENGER_NOTICE_CONTROL)
         );
     }
 

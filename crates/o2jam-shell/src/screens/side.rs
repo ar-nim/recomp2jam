@@ -82,6 +82,72 @@ pub const SHOP_CHARGE_MONEY_CODE: u32 = 0x1420_0004;
 /// CONFERENCE posts notice type `0x14` with no text.
 pub const SHOP_ITEMVACATE_CODE: u32 = 0x1420_0005;
 pub const SHOP_CONFERENCE_CODE: u32 = 0x1420_00B6;
+/// MESSENGER host arm (`0x142000b8`, `ev_f3ad15be…`): calls
+/// `FUN_004a3060(0)` then branches on the messenger global at
+/// `0x7684d8`. No opcode is sent here; the sheet and any 5039/5041
+/// wire stay OPEN (`docs/messenger-boot-captures.md` #648).
+pub const SHOP_MESSENGER_CODE: u32 = 0x1420_00B8;
+/// Alarm lamps advanced by `FUN_004a3060` (`ev_76d8c0b8…`, file
+/// `0xa3060`). The spec row names `0x142000b9/ba`; the exe helper
+/// resolves the image-class codes `0x145000b9/ba`. The contradiction
+/// is kept here, with the exe as behavior oracle.
+pub const SHOP_MESSENGER_LAMP_CODES: [u32; 2] = [0x1450_00B9, 0x1450_00BA];
+/// Control the exe attaches to the disconnected notice from this arm.
+pub const SHOP_MESSENGER_NOTICE_CONTROL: u32 = 0x1320_0048;
+
+/// Messenger branch selected by the two words of global `0x7684d8`
+/// before the shop host notice (`FUN_00499760`, file `0x99760`).
+/// The writer of those words is OPEN, so callers stage the branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShopMessengerState {
+    /// `+8 == 0`: no messenger session, type-2 notice.
+    #[default]
+    Disconnected,
+    /// `+8 != 0`, `+4 == 0`: loading notice, type 1.
+    Loading,
+    /// Both words set: type `0x15` notice, no text.
+    Available,
+}
+
+/// Notice posted by the MESSENGER host press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopMessengerNotice {
+    Disconnected,
+    Loading,
+    Available,
+}
+
+impl ShopMessengerNotice {
+    /// Exe notice type passed to `FUN_00478c90`.
+    #[must_use]
+    pub const fn notice_type(self) -> u8 {
+        match self {
+            Self::Disconnected => 2,
+            Self::Loading => 1,
+            Self::Available => 0x15,
+        }
+    }
+
+    /// Control the notice ink names (`None` for the two text notices).
+    #[must_use]
+    pub const fn notice_control(self) -> Option<u32> {
+        match self {
+            Self::Disconnected => Some(SHOP_MESSENGER_NOTICE_CONTROL),
+            Self::Loading | Self::Available => None,
+        }
+    }
+}
+
+/// Alarm-lamp rects from the staged shop board (`None` codes are
+/// absent). Geometry always comes from the parsed `.bnd` placements.
+#[must_use]
+pub fn shop_messenger_lamp_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
+    placements
+        .iter()
+        .filter(|placed| SHOP_MESSENGER_LAMP_CODES.contains(&placed.code))
+        .map(|placed| placed.rect)
+        .collect()
+}
 
 /// Notice posted by one of the two shop chrome arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1307,6 +1373,9 @@ pub enum ShopAction {
     VacateItem,
     /// CONFERENCE (`0x142000b6`): notice type `0x14`.
     Conference,
+    /// MESSENGER (`0x142000b8`): advance the two alarm lamps and
+    /// post the notice selected by global `0x7684d8`. No wire here.
+    OpenMessenger,
     /// Owned bag cell (`0x1460003d..46`): select the paged index
     /// and post the category notice.
     SelectBagItem(usize),
@@ -1416,6 +1485,7 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_EXTMENU_ON_CODE => Some(ShopAction::ToggleExtMenu),
         SHOP_ITEMVACATE_CODE => Some(ShopAction::VacateItem),
         SHOP_CONFERENCE_CODE => Some(ShopAction::Conference),
+        SHOP_MESSENGER_CODE => Some(ShopAction::OpenMessenger),
         SHOP_PLANET_UP_CODE => Some(ShopAction::PlanetUp),
         SHOP_PLANET_DOWN_CODE => Some(ShopAction::PlanetDown),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
