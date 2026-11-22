@@ -21,6 +21,8 @@ mod window;
 pub use avatar::{
     load_archive_sprite, load_worn_figure, pick_wear_sprites, AvatarFigure, FigureLayer,
 };
+#[cfg(feature = "test-support")]
+pub use avatar_source::clear_decoded_avatar_cache;
 pub use avatar_source::{decode_item_table, read_installed_avatar, AvatarSource};
 pub use music_download::{MusicDownload, MusicDownloadRequest};
 pub use playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingView};

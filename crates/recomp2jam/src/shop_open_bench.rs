@@ -1,16 +1,18 @@
-//! Release-only timing harness for the Item Shop open path (#755).
+//! Item Shop open guards (#755, #862).
 //!
-//! The ignored profile test records stage durations with real 7.55 data;
-//! the budget guard runs in the normal suite and skips without game data.
-//! Run the profile with:
+//! The normal-suite guard pins decoded-source identity through a forced
+//! cache eviction; it never asserts wall-clock time. The 75 ms budget
+//! lives in the ignored release profile, run alone so full-suite
+//! parallelism and concurrent lane builds cannot flake it:
 //! `cargo test --release --bin recomp2jam shop_open_profile -- --ignored --nocapture`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use o2jam_net::CharacterInfo;
 use o2jam_shell::screens::SideScreen;
-use o2jam_shell::{GameLoop, MenuKey, ScreenGame};
+use o2jam_shell::{AvatarSource, GameLoop, MenuKey, ScreenGame};
 
 const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 
@@ -67,8 +69,9 @@ fn time<F: FnOnce()>(label: &str, operation: F) -> Duration {
     elapsed
 }
 
-/// Measure the stages behind one open, then repeated open/leave cycles.
-/// Each cycle needs a fresh open: `leave_side` is part of the gesture.
+/// The profile carries the wall-clock budget. It is `#[ignore]`d in the
+/// normal suite: an explicit release run is a single measurement window,
+/// not one test among parallel tests and concurrent lane builds.
 #[test]
 #[ignore = "measurement harness; run in release with --ignored --nocapture"]
 fn shop_open_profile_records_stage_durations() {
@@ -114,11 +117,68 @@ fn shop_open_profile_records_stage_durations() {
     }
 }
 
+/// Stage identity from a caller-held decode and open the shop. This is
+/// the #862 seam: only the archive lookup/decode is replaced; the
+/// character, catalog, source staging, and shop click stay on the live
+/// `stage_online_identity` path.
+fn staged_identity_and_shop(hero: &CharacterInfo, source: &Arc<AvatarSource>) -> ScreenGame {
+    let mut game = ScreenGame::new();
+    crate::stage_online_identity_with_decoded_avatar(&mut game, Some(hero), source);
+    walk_to_channel(&mut game);
+    assert!(game.visit_side(SideScreen::Shop));
+    game
+}
+
+fn assert_staged_source(game: &ScreenGame, expected: &Arc<AvatarSource>, attempt: u32) {
+    let staged = game
+        .staged_avatar_source()
+        .unwrap_or_else(|| panic!("attempt {attempt} staged no avatar source"));
+    assert!(
+        Arc::ptr_eq(staged, expected),
+        "attempt {attempt} must reuse the injected decoded avatar source"
+    );
+}
+
 /// The shop board's cost is paid before the click: boot stages the
 /// avatar source, then each channel login stages it again before the
 /// player can open the shop. Both landings must reuse one decoded
 /// source; the open itself must not restart archive work.
+///
+/// Live caller chain:
+///   main.rs::run_play -> stage_online_identity (boot)
+///   -> session.rs::resolve_channel_login -> stage_online_identity
+///   -> ScreenGame::set_decoded_avatar_source -> visit_side(Shop).
+/// The seam above injects only the decoded source; clearing the shared
+/// cache between attempts proves reuse does not depend on that cache.
 #[test]
+fn repeated_identity_staging_survives_forced_avatar_cache_eviction() {
+    if !avatar_path().is_file() {
+        println!("skip: missing install-root avatar.opa");
+        return;
+    }
+    let hero = bench_character();
+    let source =
+        o2jam_shell::read_installed_avatar(&install_root()).expect("installed avatar decodes");
+
+    let first = staged_identity_and_shop(&hero, &source);
+    o2jam_shell::clear_decoded_avatar_cache();
+    let second = staged_identity_and_shop(&hero, &source);
+
+    let reloaded = o2jam_shell::read_installed_avatar(&install_root())
+        .expect("installed avatar decodes after eviction");
+    assert!(
+        !Arc::ptr_eq(&source, &reloaded),
+        "forced eviction must produce a fresh cached decode"
+    );
+    assert_staged_source(&first, &source, 1);
+    assert_staged_source(&second, &source, 2);
+}
+
+/// Wall-clock leg: kept out of the parallel suite, run only in the
+/// ignored release profile above. The 75 ms number still measures the
+/// live second landing plus shop open with real 7.55 data.
+#[test]
+#[ignore = "timing budget; run alone in the release shop_open_profile profile"]
 fn second_identity_landing_and_shop_open_stay_under_budget() {
     // Live caller chain:
     //   main.rs::run_play -> stage_online_identity (boot)

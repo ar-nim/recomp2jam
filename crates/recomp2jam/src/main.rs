@@ -1517,6 +1517,30 @@ fn stage_online_identity(
     game: &mut o2jam_shell::ScreenGame,
     character: Option<&o2jam_net::CharacterInfo>,
 ) {
+    stage_identity_records(game, character);
+    let source = o2jam_shell::read_installed_avatar(&install_root());
+    stage_identity_avatar(game, character, source.as_ref());
+}
+
+/// Stage identity from a caller-held decode. The live path above
+/// supplies the process cache; guards inject the same `Arc` on both
+/// landings to pin reuse independently of shared-cache state (#862).
+#[cfg(test)]
+fn stage_online_identity_with_decoded_avatar(
+    game: &mut o2jam_shell::ScreenGame,
+    character: Option<&o2jam_net::CharacterInfo>,
+    source: &std::sync::Arc<o2jam_shell::AvatarSource>,
+) {
+    stage_identity_records(game, character);
+    stage_identity_avatar(game, character, Some(source));
+}
+
+/// Character record and song catalog ride every landing, even without
+/// an avatar archive (tickets #191, #192).
+fn stage_identity_records(
+    game: &mut o2jam_shell::ScreenGame,
+    character: Option<&o2jam_net::CharacterInfo>,
+) {
     if let Some(hero) = character {
         game.set_myroom_character(hero.clone());
     }
@@ -1535,8 +1559,16 @@ fn stage_online_identity(
             tracing::info!("music-shop board staged from identity");
         }
     }
+}
 
-    let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) else {
+/// The avatar half of identity: worn figure, then the shared decode
+/// that feeds the waiting seats and the shop board.
+fn stage_identity_avatar(
+    game: &mut o2jam_shell::ScreenGame,
+    character: Option<&o2jam_net::CharacterInfo>,
+    source: Option<&std::sync::Arc<o2jam_shell::AvatarSource>>,
+) {
+    let Some(source) = source else {
         tracing::debug!(
             "avatar.opa missing or unparsable; identity readouts stage, figures stay empty"
         );
@@ -1544,7 +1576,7 @@ fn stage_online_identity(
     };
     if let Some(hero) = character {
         let figure = connect::stack_from_decoded_source(
-            &source,
+            source,
             &hero.equipment,
             hero.gender == o2jam_net::Gender::Male,
         );
@@ -1561,7 +1593,7 @@ fn stage_online_identity(
     // avatar source (server-authoritative catalog join): stage it here
     // so the live board is never empty after the avatar archive lands,
     // even on the default boot that fetches no character (no channel).
-    game.set_decoded_avatar_source(&source);
+    game.set_decoded_avatar_source(source);
 }
 
 /// Fold the channel-entry 5029 answer into the boot wallet. The exe
