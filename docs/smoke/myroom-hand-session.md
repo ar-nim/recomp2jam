@@ -27,11 +27,12 @@ non-attributive). BACK click (551,11) returns to Waiting.
 
 ## Wire queued (take-seam, scripted stub — ASSUMED, never exe proof)
 
-`GetGiftMessageList` 5017 on entry, `EquipItem` 5004
+`EquipItem` 5004
 (slot-then-item, exe-pinned shape + derivation), `ClaimGift` 5023
 (exe-pinned shape; gift-type follows the picked run,
-`is_attributive` false). No live gateway answered them; the
-session proves queueing, not the round trip.
+`is_attributive` false). No 5017 entry fetch exists (#857). No
+live gateway answered these; the session proves queueing, not the
+round trip.
 
 ## Paint seen
 
@@ -47,9 +48,10 @@ selected slot/cells — highlight rendering stays OPEN (see below).
    commits the equip, MOVE claims the gift; the exe send sites
    (`docs/equip.md`, `docs/gifts.md`) name no control. Next step:
    rig walk of the myroom apply/claim gestures.
-2. **Entry gift-list fetch timing is ours-by-design.** The 5017
-   shape is exe-pinned; queueing it on entry is not. Next step:
-   rig or gateway replay naming the entry fetch.
+2. **Entry gift-list fetch is removed (#857).** The 5017 shape is
+   exe-pinned, but no exe call site or paired side-entry tap sends
+   it. Re-add only with a pinned cue. Next step: one paired tap
+   with a seeded gift box that observes the exe send.
 3. **Slot-selection semantics stay OPEN.** Selection records and
    paints; what the exe filters or targets with it is unpinned.
    Next step: rig comparison of bag contents per slot button.

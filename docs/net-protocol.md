@@ -158,7 +158,12 @@ Events: 2005 RoomCreated, 2007 RoomRemoved, 2008 RoomParamsChanged, 2009 RoomUse
   (`~/scratch/p380-wire-probe.log`, #380). On the client, a 07DA/07DB
   fuse node can read 2007 before the matching room-list drain; frames
   read by that fuse are deferred and replayed through the same handler
-  instead of being dropped as foreign (#380).
+  instead of being dropped as foreign (#380). Backoff (#858): the wave-2
+  paired side-entry taps show no repeated 2010 after the boot-time one,
+  so our fuse sends at most one 07DA per Room visit. A processed 07DB
+  or a starved overdue sheet leaves the latch set; leaving Room clears
+  it. No refresh trigger is invented. Guard:
+  `side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway`.
 
 ### 4c. Key payload shapes (Memoryer message fields, order = wire order)
 
