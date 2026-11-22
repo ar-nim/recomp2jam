@@ -54,7 +54,9 @@ use super::super::avatar::{
 };
 use super::super::avatar_source::AvatarSource;
 use super::super::options::{InSongMix, OptionsSettings};
-use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingHudLayout};
+use super::super::playing::{
+    paint_staged_jam_label, HighwayGeometry, LivePlay, PlaySkin, PlayingHudLayout,
+};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
@@ -9059,11 +9061,9 @@ impl ScreenGame {
             self.playing.paint(frame, &geom, now_ms);
         }
         if let Some(art) = playing_art {
-            paint_foreground_placements(
-                frame,
-                &hud.pinned_placements(&art.placements),
-                &art.figures,
-            );
+            let pinned = hud.pinned_placements(&art.placements);
+            paint_foreground_placements(frame, &pinned, &art.figures);
+            paint_staged_jam_label(frame, &pinned, &art.figures);
             self.playing.paint_avatar_scene_with_placements(
                 frame,
                 self.avatar.as_ref(),

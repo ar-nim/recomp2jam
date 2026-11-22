@@ -17,7 +17,7 @@ coordinate literals were added.
 |---|---|---|---|
 | Right life band | y267-500, x241-245 | y260-500 | staged `Life_gauge_left_bar.ojs` anchor `(238,264,12,247)` + `(0,7)`; rewritten placement uses the rect-positioned clone role |
 | JAM bar | x16-235 @y536 | x23-228 | staged `Jamgauge_left_bar.ojs` anchor + `(-7,0)`, width +14; procedural fill takes the same pinned rect |
-| JAM label | `JAM` x114-137 y541 | doubled `JAMJAM` x85-141 y539 | `Jam_gauge_text.ojs` re-staged at anchor + `(29,2)` so its ink lands on the word baked into the bar art |
+| JAM label | `JAM` x114-137 y541-546 | low-band ink near y552 (the #843 offset was staged but not painted) | `Jam_gauge_text.ojs` re-staged at anchor + `(29,2)`, its absolute record anchor cancelled in the clone rect, and painted after the procedural jam fill so rows 541-546 carry the word |
 | Combo word | `MAX COMBO` x32-63 y572-591 | venue `SC...` x13-38 y560 | staged `P2P_MaxCombo_Text.ojs` painted at `(32,572)` through `PlaySkin::combo_word` |
 | Own combo zero | x105-113 y570-588 | x86-93 y556-565 | staged `ComboScroe.ojs` digit painted at `(105,570)`; visible at combo 0 |
 | Judgement `MISS` | x97-155 y360-375 | x88-118 y447-457 | word centre pinned to `(126,368)`, centre-anchored as the staged word art |
@@ -33,6 +33,16 @@ coordinate literals were added.
   Data-gated (skips without `install-root`). RED on HEAD:
   `assertion left == right failed`, left `Rect { x: 489, y: 556, w: 254, h: 10 }`,
   right `Rect { x: 489, y: 560, w: 254, h: 10 }`. GREEN after the fix.
+- `playing::live_play_tests::jam_label_ink_lands_in_the_paired_rows_when_the_gauge_is_staged`
+  — live chain: `main.rs::run_play` → `ScreenGame::paint` →
+  `ScreenGame::paint_playing` → `paint_playing_backdrop` →
+  `LivePlay::paint_over_staged_backdrop` → `paint_jam_gauge`, then
+  `PlayingHudLayout::from_placements` → `pinned_placements` →
+  `paint_foreground_placements` → `paint_staged_jam_label`. Data-gated
+  (skips without `install-root`); the seam replays the pass order because
+  the bug is the staged label's placement relative to the gauge fill.
+  RED without the anchor cancellation: `the JAM word must ink the exe's
+  row 541; found []`.
 - `playing::live_play_tests::capture_pins_rewrite_staged_hud_anchors_when_the_playing_sprites_are_staged`
   — live chain: `main.rs::run_play` → `ScreenGame::paint` →
   `ScreenGame::paint_playing` → `PlayingHudLayout::from_placements` →
