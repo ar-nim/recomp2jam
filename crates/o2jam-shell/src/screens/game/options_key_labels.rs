@@ -398,6 +398,9 @@ mod tests {
             art.figures.clone(),
         );
         game.switch_option_tab(PlanetOptionTab::Key);
+        // The exe opens in 3K; this guard pins the seven-key caption
+        // path, so select that family before rebinding KEY1.
+        game.options_mut().set_three_key(false);
         game.options_mut()
             .rebind_lane(0, winit::keyboard::KeyCode::KeyA);
         let mut buf = vec![0u32; 800 * 600];
@@ -478,7 +481,9 @@ mod tests {
     fn changed_outside_captions(before: &[u32], after: &[u32]) -> usize {
         (0..600)
             .flat_map(|y| (0..800).map(move |x| (x, y)))
-            .filter(|(x, y)| !(310..490).contains(x) || !(340..373).contains(y))
+            // Both caption rows and their glyph spill live inside
+            // this band; only panels/selectors may change outside it.
+            .filter(|(x, y)| !(295..510).contains(x) || !(330..390).contains(y))
             .filter(|(x, y)| {
                 before[*y as usize * 800 + *x as usize]
                     != after[*y as usize * 800 + *x as usize]

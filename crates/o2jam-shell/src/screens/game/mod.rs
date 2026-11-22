@@ -8367,7 +8367,9 @@ impl ScreenGame {
                             frame,
                             dialog.staged_art(),
                             options_key_labels::KeyCaptions {
-                                lane_dik: dialog.settings().lane_dik(),
+                                lane_dik: dialog
+                                    .settings()
+                                    .lane_dik_for_mode(dialog.settings().three_key()),
                                 three_key: dialog.settings().three_key(),
                                 armed_lane: dialog.rebind_armed(),
                             },
@@ -21957,7 +21959,7 @@ mod game_tests {
         // rewrites), the Sound slider step moving 8 -> the exe's 4,
         // and #590's first-knob GameBGVolume/BGVolume coupling.
         assert_eq!(
-            hash, 0x529D_C34E_9757_FA02,
+            hash, 0xB509_D740_6096_FAE6,
             "options outputs drifted: {observed}"
         );
     }
