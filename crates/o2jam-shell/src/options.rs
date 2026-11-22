@@ -91,9 +91,7 @@ pub const DEFAULT_LANE_DIK: [u8; OPTION_LANES] = [0x1F, 0x20, 0x21, 0x39, 0x24, 
 /// a per-button capture pins it. Index 1 is the skipped duplicate
 /// caption rect (`0x439780`). This table is in-memory only: the ini
 /// `Key` section holds the seven-key table.
-pub const DEFAULT_THREE_KEY_DIK: [u8; OPTION_LANES] = [
-    0x2A, 0x00, 0x36, 0x1C, 0x00, 0x00, 0x00,
-];
+pub const DEFAULT_THREE_KEY_DIK: [u8; OPTION_LANES] = [0x2A, 0x00, 0x36, 0x1C, 0x00, 0x00, 0x00];
 
 /// Default lane keys resolving [`DEFAULT_LANE_DIK`].
 pub const DEFAULT_LANE_KEYS: [KeyCode; OPTION_LANES] = [
@@ -679,6 +677,23 @@ impl OptionsSettings {
         } else {
             self.lane_dik
         }
+    }
+
+    /// In-memory three-key DIK table (the exe's mode-specific key
+    /// array read by repaint `0x439780`).
+    #[must_use]
+    pub const fn three_key_dik(&self) -> [u8; OPTION_LANES] {
+        self.three_key_dik
+    }
+
+    /// Write one DIK into the in-memory three-key table. The caller
+    /// owns the exe's arm-advance rule and lane-armability filter.
+    pub fn set_three_key_dik(&mut self, lane: usize, dik: u8) -> bool {
+        let Some(slot) = self.three_key_dik.get_mut(lane) else {
+            return false;
+        };
+        *slot = dik;
+        true
     }
 
     /// Rebind one lane: only keys with a DirectInput code stick, so

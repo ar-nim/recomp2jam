@@ -21982,7 +21982,8 @@ mod game_tests {
         click_button(&mut game, 100, 100);
         assert_eq!(game.option_rebind_armed(), Some(0));
         assert!(game.capture_raw_key(KeyCode::KeyA, true));
-        assert_eq!(game.option_rebind_armed(), None);
+        // Exe 0x438e80 advances the arm instead of clearing it (#839).
+        assert_eq!(game.option_rebind_armed(), Some(1));
         assert_eq!(game.options().lane_keys()[0], KeyCode::KeyA);
         assert_eq!(
             game.lane_bindings().map(|binds| binds[0]),
@@ -22046,22 +22047,23 @@ mod game_tests {
     }
 
     #[test]
-    fn three_key_lane_buttons_arm_lanes_zero_through_three() {
+    fn three_key_lane_buttons_arm_the_kept_family_lanes() {
         // Live chain: main.rs::run_online -> run_windowed_session ->
         // window::InputHandler::route_key -> GameLoop::capture_raw_key
         // -> ScreenGame::options_dialog.rebind_armed_lane ->
-        // OptionsSettings::rebind_lane. `3KEY_1..4` sits at the four
-        // staged rects next to `KEY1..7` on the exe Key sheet; each
-        // click arms the lane with the same rebind capture. Which four
-        // playable lanes the 3-key mode uses stays OPEN (no exe pin).
+        // OptionsSettings::set_three_key_dik. Exe 0x4395e0 skips
+        // 3K index 1 (the duplicate staged rect) and advances the arm.
         use super::super::side::OPTION_KEY_3KEY_FIRST;
         use winit::keyboard::KeyCode;
-        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC, KeyCode::KeyV];
-        let buttons: Vec<(u32, i32, i32)> = (0..4u32)
+        let lanes = [0u32, 2, 3];
+        let binds = [KeyCode::KeyZ, KeyCode::KeyX, KeyCode::KeyC];
+        let expected_dik = [0x2Cu8, 0x2D, 0x2E];
+        let buttons: Vec<(u32, i32, i32)> = lanes
+            .iter()
             .map(|lane| {
                 (
                     OPTION_KEY_3KEY_FIRST + lane,
-                    100 + 40 * i32::try_from(lane).unwrap_or(0),
+                    100 + 40 * i32::try_from(*lane).unwrap_or(0),
                     100,
                 )
             })
@@ -22070,21 +22072,29 @@ mod game_tests {
         stage_option_buttons(&mut game, PlanetOptionTab::Key, &buttons);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
-        for (lane, code) in binds.iter().enumerate() {
+        for (slot, (&lane, code)) in lanes.iter().zip(binds.iter()).enumerate() {
             let x = 100 + 40 * i32::try_from(lane).unwrap_or(0);
             click_button(&mut game, x, 100);
             assert_eq!(
                 game.option_rebind_armed(),
-                Some(lane),
-                "3KEY{} arms lane {lane}",
-                lane + 1
+                usize::try_from(lane).ok(),
+                "3K lane {lane} arms from its staged button"
             );
             assert!(game.capture_raw_key(*code, true));
+            let next = [2usize, 3, 0][slot];
+            assert_eq!(game.option_rebind_armed(), Some(next), "arm advances");
+        }
+        let three_key_dik = game.options().three_key_dik();
+        for (lane, dik) in lanes.iter().zip(expected_dik) {
+            assert_eq!(
+                three_key_dik[*lane as usize], dik,
+                "the 3K table holds the rebound DIK for lane {lane}"
+            );
         }
         assert_eq!(
-            game.options().lane_keys()[..4],
-            binds,
-            "the first four lanes answer the 3KEY binds"
+            game.options().lane_dik()[0],
+            0x1F,
+            "3K rebinds never overwrite the seven-key table"
         );
     }
 

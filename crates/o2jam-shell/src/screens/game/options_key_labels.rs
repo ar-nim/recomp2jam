@@ -17,9 +17,9 @@
 //! below is a labeled stand-in, not an exe face. Next evidence step:
 //! re-run the arm capture with the cursor parked off the button.
 
-use super::options_key_mode;
 use super::super::paint::{dialog_origin, paint_planet_options, SceneArt};
 use super::super::side::PlanetOptionTab;
+use super::options_key_mode;
 use o2jam_render::{blit_rgb555, fill_rect, pack_xrgb, Frame, Rect};
 
 const KEY_CAPTION_SPRITE: &str = "OptionKey_Keytext.ojs";
@@ -88,12 +88,7 @@ fn paint_dialog_without_captions(
             .collect(),
         figures: art.figures.clone(),
     };
-    paint_planet_options(
-        frame,
-        Some(&visible_sheet),
-        PlanetOptionTab::Key,
-        settings,
-    );
+    paint_planet_options(frame, Some(&visible_sheet), PlanetOptionTab::Key, settings);
 }
 
 /// Paint the active family's captions at their exe offset class.
@@ -471,8 +466,7 @@ mod tests {
             // this band; only panels/selectors may change outside it.
             .filter(|(x, y)| !(295..510).contains(x) || !(330..390).contains(y))
             .filter(|(x, y)| {
-                before[*y as usize * 800 + *x as usize]
-                    != after[*y as usize * 800 + *x as usize]
+                before[*y as usize * 800 + *x as usize] != after[*y as usize * 800 + *x as usize]
             })
             .count()
     }
@@ -483,8 +477,7 @@ mod tests {
         (rect.y..rect.y + height)
             .flat_map(move |y| (rect.x..rect.x + width).map(move |x| (x, y)))
             .filter(|(x, y)| {
-                before[*y as usize * 800 + *x as usize]
-                    != after[*y as usize * 800 + *x as usize]
+                before[*y as usize * 800 + *x as usize] != after[*y as usize * 800 + *x as usize]
             })
             .count()
     }
@@ -542,7 +535,10 @@ mod tests {
             None,
             "a 3K lane click is ignored in 7K mode"
         );
-        click_staged(&mut game, staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false));
+        click_staged(
+            &mut game,
+            staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false),
+        );
         assert_eq!(
             game.option_rebind_armed(),
             Some(6),
@@ -553,7 +549,10 @@ mod tests {
         game.switch_option_tab(PlanetOptionTab::Key);
         click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_MODE, false));
         assert!(game.options().three_key(), "3KEY switches back");
-        click_staged(&mut game, staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false));
+        click_staged(
+            &mut game,
+            staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false),
+        );
         assert_eq!(
             game.option_rebind_armed(),
             None,
@@ -635,7 +634,7 @@ mod tests {
         let a_glyph = figure.layer(12).expect("A glyph decodes");
         let three_key_buffer = paint_live_key_tab(&game);
         assert_eq!(
-            glyph_mismatches(&three_key_buffer, a_glyph, (318, 336)),
+            glyph_mismatches(&three_key_buffer, a_glyph, (322, 340)),
             0,
             "the 3K bind table must hold the new A glyph"
         );
@@ -645,7 +644,7 @@ mod tests {
         let seven_key_buffer = paint_live_key_tab(&game);
         let default_s = figure.layer(13).expect("S glyph decodes");
         assert_eq!(
-            glyph_mismatches(&seven_key_buffer, default_s, (306, 346)),
+            glyph_mismatches(&seven_key_buffer, default_s, (310, 350)),
             0,
             "a 3K rebind must not overwrite the 7K bind table"
         );
@@ -661,7 +660,7 @@ mod tests {
         let q_glyph = figure.layer(0).expect("Q glyph decodes");
         let seven_key_rebound = paint_live_key_tab(&game);
         assert_eq!(
-            glyph_mismatches(&seven_key_rebound, q_glyph, (306, 346)),
+            glyph_mismatches(&seven_key_rebound, q_glyph, (310, 350)),
             0,
             "the 7K bind table must hold the new Q glyph"
         );
@@ -670,7 +669,7 @@ mod tests {
         click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_MODE, false));
         let three_key_restored = paint_live_key_tab(&game);
         assert_eq!(
-            glyph_mismatches(&three_key_restored, a_glyph, (318, 336)),
+            glyph_mismatches(&three_key_restored, a_glyph, (322, 340)),
             0,
             "the 3K table keeps its A glyph after a 7K rebind"
         );

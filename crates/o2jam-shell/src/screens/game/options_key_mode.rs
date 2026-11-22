@@ -43,15 +43,40 @@ pub(super) fn is_visible(code: u32, three_key: bool) -> bool {
 #[must_use]
 pub(super) fn caption_lane(code: u32, three_key: bool) -> Option<usize> {
     let offset = if three_key {
-        THREE_KEY_CAPTIONS.contains(&code).then(|| code - OPTION_KEY_3KEY_FIRST)?
+        THREE_KEY_CAPTIONS
+            .contains(&code)
+            .then(|| code - OPTION_KEY_3KEY_FIRST)?
     } else {
-        SEVEN_KEY_CAPTIONS.contains(&code).then(|| code - OPTION_KEY_LANE_FIRST)?
+        SEVEN_KEY_CAPTIONS
+            .contains(&code)
+            .then(|| code - OPTION_KEY_LANE_FIRST)?
     };
     let lane = usize::try_from(offset).ok()?;
-    if three_key && lane == SKIPPED_THREE_KEY_LANE {
-        None
+    is_armable_lane(lane, three_key).then_some(lane)
+}
+
+/// Can a lane be armed and written in this mode? The 3K family
+/// skips index 1 (its duplicate staged rect).
+#[must_use]
+pub(super) fn is_armable_lane(lane: usize, three_key: bool) -> bool {
+    if three_key {
+        lane < 4 && lane != SKIPPED_THREE_KEY_LANE
     } else {
-        Some(lane)
+        lane < 7
+    }
+}
+
+/// Next armed lane after a successful write. 7K wraps over seven
+/// lanes; 3K wraps over its kept indexes 0, 2, 3 (`0x4395e0`).
+#[must_use]
+pub(super) fn next_armed_lane(lane: usize, three_key: bool) -> usize {
+    if !three_key {
+        return (lane + 1) % 7;
+    }
+    match lane {
+        0 => 2,
+        2 => 3,
+        _ => 0,
     }
 }
 

@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use super::options_key_mode;
 use super::super::paint::{dialog_rect_hit, paint_dialog_scene, SceneArt};
 use super::super::side::{
     PlanetOptionTab, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
@@ -24,9 +23,10 @@ use super::super::side::{
     OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, OPTION_SOUND_KEYSET,
     PLANET_OPTION_FIRST_TAB,
 };
+use super::options_key_mode;
 use super::ui_effect::UiEffectId;
 use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
-use crate::options::OptionsSettings;
+use crate::options::{dik_of_keycode, OptionsSettings};
 use o2jam_render::{Frame, Rgb555Image};
 
 /// What one options click asks the game to do: close the modal and/or
@@ -139,18 +139,31 @@ impl OptionsDialog {
         self.rebind = None;
     }
 
-    /// Bind a mapped key to the armed lane and disarm it.
+    /// Write a mapped key into the active mode's bind table, then
+    /// advance the arm like the exe rebind handlers `0x438e80` /
+    /// `0x4395e0`: the DIK lands at `+0x18a + armed`, and an unmapped
+    /// key or invalid arm leaves both the table and the arm alone.
     pub(super) fn rebind_armed_lane(
         &mut self,
         lane: usize,
         code: winit::keyboard::KeyCode,
     ) -> bool {
-        if self.settings.rebind_lane(lane, code) {
-            self.rebind = None;
-            true
-        } else {
-            false
+        let is_three_key = self.settings.three_key();
+        if self.rebind != Some(lane) || !options_key_mode::is_armable_lane(lane, is_three_key) {
+            return false;
         }
+        let Some(dik) = dik_of_keycode(code) else {
+            return false;
+        };
+        let written = if is_three_key {
+            self.settings.set_three_key_dik(lane, dik)
+        } else {
+            self.settings.rebind_lane(lane, code)
+        };
+        if written {
+            self.rebind = Some(options_key_mode::next_armed_lane(lane, is_three_key));
+        }
+        written
     }
 
     /// Load `option.ini` beside `install_root` at boot and remember
@@ -253,9 +266,9 @@ impl OptionsDialog {
 
     /// Key-tab value buttons: `KEY1..KEY7` arm their lane for
     /// rebind (the next mapped key press sticks), `3KEY_1..4` arm
-    /// lanes 0..3 the same way (the 3-key lane mapping stays
-    /// OPEN), `3KEY`/`7KEY` record the key-count selection, and
-    /// `KEYTEST` flips its checkbox (both selection-only, OPEN).
+    /// the kept 3K lanes (index 1 is skipped at its duplicate rect),
+    /// `3KEY`/`7KEY` select the key-count family, and `KEYTEST`
+    /// flips its checkbox (selection-only, OPEN).
     fn click_key_tab(&mut self, x: i32, y: i32) {
         for lane in 0..7u32 {
             if self.hit(OPTION_KEY_LANE_FIRST + lane, x, y) {
@@ -264,7 +277,9 @@ impl OptionsDialog {
             }
         }
         for lane in 0..4u32 {
-            if self.hit(OPTION_KEY_3KEY_FIRST + lane, x, y) {
+            let armable = usize::try_from(lane)
+                .is_ok_and(|index| options_key_mode::is_armable_lane(index, true));
+            if armable && self.hit(OPTION_KEY_3KEY_FIRST + lane, x, y) {
                 self.rebind = usize::try_from(lane).ok();
                 return;
             }
