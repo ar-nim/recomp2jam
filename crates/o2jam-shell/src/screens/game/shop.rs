@@ -7,10 +7,10 @@ use super::super::side::{
     CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender, ShopGood,
     ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
     TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LUCKYBAG_CATEGORY_CODE,
-    SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE,
-    SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
-    SHOP_PLANET_LAYOUT_FLAGS,
+    SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
+    SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
+    SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
+    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -155,6 +155,12 @@ pub(crate) struct ShopState {
     lucky_gender_byte: Option<u8>,
     /// Object flag `+0x8d5` set by SHOPMASTER.
     shopmaster_flag: bool,
+    /// Level and nickname read from the live character record
+    /// (exe globals `0x77cd20` / `0x77cd05`).
+    player_identity: Option<(i32, String)>,
+    /// Counts inked into the ten SKILLCOUNT cells. The exe's content
+    /// writer is OPEN, so nothing is inferred from an unstaged slot.
+    skill_counts: [Option<u32>; SHOP_SKILLCOUNT_CELLS],
     /// Staged confirmation-pair result for the vacate ladder.
     vacate_confirmed: bool,
     /// Staged item code for the vacate ladder (`0x23`/`0x24` branch).
@@ -506,6 +512,30 @@ impl ShopState {
     /// Object flag `+0x8d5` staged by SHOPMASTER.
     pub(crate) fn shopmaster_flag(&self) -> bool {
         self.shopmaster_flag
+    }
+
+    /// Stage the level and nickname the exe reads from globals.
+    pub(crate) fn stage_player_identity(&mut self, level: i32, nickname: &str) {
+        self.player_identity = Some((level, nickname.to_owned()));
+    }
+
+    /// ` Lv.%d:%s` caption for the staged player identity.
+    pub(crate) fn identity_caption(&self) -> Option<String> {
+        self.player_identity
+            .as_ref()
+            .map(|(level, nickname)| format!("{SHOP_LEVEL_CAPTION_PREFIX}{level}:{nickname}"))
+    }
+
+    /// Stage one SKILLCOUNT cell (content source stays OPEN).
+    pub(crate) fn stage_skill_count(&mut self, slot: usize, count: u32) {
+        if let Some(cell) = self.skill_counts.get_mut(slot) {
+            *cell = Some(count);
+        }
+    }
+
+    /// Counts inked by the staged SKILLCOUNT cells.
+    pub(crate) fn skill_counts(&self) -> &[Option<u32>; SHOP_SKILLCOUNT_CELLS] {
+        &self.skill_counts
     }
 
     /// Stage the confirmation-pair result for the vacate ladder.

@@ -541,6 +541,18 @@ pub const SHOP_ITEM_ROWS: usize = 8;
 /// First row-name TEXT template (`IDC_TEXT_SSHOP_ITEMNAME1`); eight
 /// run contiguously through `+7`.
 pub const SHOP_ITEMNAME_FIRST_CODE: u32 = 0x1440_002C;
+/// Player identity TEXT cell (`0x1440002a`). Static pin
+/// `ev_3e020a4ada701e31…`: `FUN_004a0660` uses the exe format string
+/// `" Lv.%d:%s"` (leading space) with globals `0x77cd20` (level) and
+/// `0x77cd05` (nickname). The spec row omits the leading space; the
+/// exe format is the behavior oracle.
+pub const SHOP_PLAYER_LEVEL_CAPTION_CODE: u32 = 0x1440_002A;
+pub const SHOP_LEVEL_CAPTION_PREFIX: &str = " Lv.";
+/// Ten SKILLCOUNT TEXT cells `0x144010a7..b0`, positioned by
+/// `FUN_004a0660` (`ev_3e020a4ada701e31…`). That function stages no
+/// value, so the content source stays OPEN; callers stage counts.
+pub const SHOP_SKILLCOUNT_FIRST_CODE: u32 = 0x1440_10A7;
+pub const SHOP_SKILLCOUNT_CELLS: usize = 10;
 /// First row cash-price TEXT template (`IDC_TEXT_SSHOP_ITEMWON1`);
 /// eight run contiguously through `+7`.
 pub const SHOP_ITEMWON_FIRST_CODE: u32 = 0x1440_0054;

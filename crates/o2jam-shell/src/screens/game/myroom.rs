@@ -138,6 +138,8 @@ impl ScreenGame {
         // cash lands here, and every money caption paints from the
         // wallet afterwards — never from this record again.
         self.wallet.apply_character_cash(&character);
+        self.shop
+            .stage_player_identity(character.level, &character.nickname);
         self.equipped_block = Some(EquippedAvatarBlock::from_character(&character));
         self.myroom_character = Some(character);
         self.restage_shop_avatar();

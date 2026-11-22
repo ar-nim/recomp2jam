@@ -69,13 +69,13 @@ use super::paint::{
     paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
     paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
     paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons, paint_shop_preview,
-    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
     WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
     WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
@@ -6851,6 +6851,23 @@ impl ScreenGame {
         self.shop.shopmaster_flag()
     }
 
+    /// ` Lv.%d:%s` caption fed by the live character record.
+    #[must_use]
+    pub fn shop_identity_caption(&self) -> Option<String> {
+        self.shop.identity_caption()
+    }
+
+    /// Counts staged for the ten SKILLCOUNT cells.
+    #[must_use]
+    pub fn shop_skill_counts(&self) -> &[Option<u32>; super::side::SHOP_SKILLCOUNT_CELLS] {
+        self.shop.skill_counts()
+    }
+
+    /// Stage one SKILLCOUNT cell (value source stays OPEN).
+    pub fn stage_shop_skill_count(&mut self, slot: usize, count: u32) {
+        self.shop.stage_skill_count(slot, count);
+    }
+
     /// Alarm-lamp rects from the staged shop board (no invented art).
     #[must_use]
     pub fn shop_messenger_lamp_rects(&self) -> Vec<Rect> {
@@ -7988,6 +8005,12 @@ impl ScreenGame {
                 },
             );
             paint_shop_preview(frame, &self.side_placements, self.shop_preview().as_ref());
+            paint_shop_identity_captions(
+                frame,
+                &self.side_placements,
+                self.shop.identity_caption().as_deref(),
+                self.shop.skill_counts(),
+            );
             if panel == ShopPanel::MyBag {
                 paint_shop_bag_pager(
                     frame,
@@ -25798,6 +25821,32 @@ mod game_tests {
                 .and_then(|n| n.notice_control()),
             Some(SHOP_MESSENGER_NOTICE_CONTROL)
         );
+    }
+
+    #[test]
+    fn shop_character_staging_feeds_the_level_and_nickname_caption() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online ->
+        //   stage_online_identity (2001 answer) ->
+        //   ScreenGame::set_myroom_character -> ShopState::stage_player_identity
+        //   -> paint_side -> paint_shop_identity_captions.
+        // Static pin `ev_3e020a4ada701e31…`: `FUN_004a0660` reads
+        // globals `0x77cd20` and `0x77cd05` for ` Lv.%d:%s`. No live
+        // frame separates those sources yet; the paint/source pair is
+        // all this guard claims. Synthetic board, hidden-arm safe.
+        let mut game = open_shop_board(1);
+        let mut character = myroom_test_character(vec![]);
+        character.level = 42;
+        character.nickname = "Alice".to_owned();
+
+        game.set_myroom_character(character);
+        game.stage_shop_skill_count(9, 999);
+
+        assert_eq!(
+            game.shop_identity_caption().as_deref(),
+            Some(" Lv.42:Alice")
+        );
+        assert_eq!(game.shop_skill_counts()[9], Some(999));
     }
 
     #[test]
