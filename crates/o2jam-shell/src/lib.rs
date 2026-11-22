@@ -325,6 +325,15 @@ impl InputSnapshot {
         snapshot
     }
 
+    /// One lane-key edge, for replaying a key press/release through the
+    /// same snapshot sweep the window freezes (no pointer or button).
+    #[must_use]
+    pub fn lane_key(lane: usize, down: bool) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.push_edge(InputEdge::Lane { lane, down });
+        snapshot
+    }
+
     /// Pointer motion with no edges (the hover source).
     #[must_use]
     pub fn motion_to(x: i32, y: i32) -> Self {
