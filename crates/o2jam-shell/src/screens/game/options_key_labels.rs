@@ -18,7 +18,10 @@
 //! re-run the arm capture with the cursor parked off the button.
 
 use super::super::paint::{dialog_origin, paint_planet_options, SceneArt};
-use super::super::side::{PlanetOptionTab, OPTION_KEY_3KEY_FIRST, OPTION_KEY_LANE_FIRST};
+use super::super::side::{
+    PlanetOptionTab, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST,
+};
 use crate::avatar::ScenePlacement;
 use o2jam_render::{blit_rgb555, fill_rect, pack_xrgb, Frame, Rect};
 
@@ -411,6 +414,274 @@ mod tests {
             glyph_mismatches(&buf, figure.layer(12).expect("A glyph decodes"), (310, 350)),
             0,
             "the live modal must paint the rebound A glyph"
+        );
+    }
+
+    fn open_key_sheet(art: &SceneArt) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        game.load_planet_option_tab(
+            PlanetOptionTab::Key,
+            art.placements.clone(),
+            art.figures.clone(),
+        );
+        game.switch_option_tab(PlanetOptionTab::Key);
+        game
+    }
+
+    /// Screen point on one staged control. `top_edge` picks a point
+    /// that no overlapping lane rect also contains (3K rects sit
+    /// partly on top of the 7K rects in `Interface1.opi`).
+    fn staged_point(art: &SceneArt, code: u32, top_edge: bool) -> (i32, i32) {
+        let placed = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .expect("control is staged");
+        let origin = dialog_origin(&art.placements);
+        (
+            origin.0 + placed.rect.x + half_width(&placed.rect),
+            origin.1
+                + placed.rect.y
+                + if top_edge {
+                    0
+                } else {
+                    half_height(&placed.rect)
+                },
+        )
+    }
+
+    fn half_width(rect: &Rect) -> i32 {
+        i32::try_from(rect.w / 2).expect("staged rect fits a screen")
+    }
+
+    fn half_height(rect: &Rect) -> i32 {
+        i32::try_from(rect.h / 2).expect("staged rect fits a screen")
+    }
+
+    fn click_staged(game: &mut ScreenGame, at: (i32, i32)) {
+        game.ingest_snapshot(&crate::InputSnapshot::click_at(at.0, at.1));
+    }
+
+    fn paint_live_key_tab(game: &ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_planet_modal(&mut Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        });
+        buf
+    }
+
+    fn changed_outside_captions(before: &[u32], after: &[u32]) -> usize {
+        (0..600)
+            .flat_map(|y| (0..800).map(move |x| (x, y)))
+            .filter(|(x, y)| !(310..490).contains(x) || !(340..373).contains(y))
+            .filter(|(x, y)| {
+                before[*y as usize * 800 + *x as usize]
+                    != after[*y as usize * 800 + *x as usize]
+            })
+            .count()
+    }
+
+    fn changed_in_rect(before: &[u32], after: &[u32], rect: &Rect) -> usize {
+        let width = i32::try_from(rect.w).expect("staged rect fits a screen");
+        let height = i32::try_from(rect.h).expect("staged rect fits a screen");
+        (rect.y..rect.y + height)
+            .flat_map(move |y| (rect.x..rect.x + width).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                before[*y as usize * 800 + *x as usize]
+                    != after[*y as usize * 800 + *x as usize]
+            })
+            .count()
+    }
+
+    #[test]
+    fn gear_opened_key_tab_seeds_the_exe_three_key_caption() {
+        // Live caller chain: gear click -> PlanetModal::Options ->
+        // ScreenGame::paint_planet_modal -> options_key_labels::paint_option_key_tab.
+        // Exe constructor 0x438080 selects 3K; capture play-02 pins
+        // 3KEY_1 = L Shift (rec34). Archives absent -> skip.
+        let Some(art) = key_art() else {
+            return;
+        };
+        let game = open_key_sheet(&art);
+        assert!(
+            game.options().three_key(),
+            "the exe opens the Key sheet in 3K mode"
+        );
+        let painted = paint_live_key_tab(&game);
+        let figure = art
+            .figures
+            .get(KEY_CAPTION_SPRITE)
+            .expect("key glyph atlas stages");
+        let l_shift = figure.layer(34).expect("L Shift glyph decodes");
+        assert_eq!(
+            glyph_mismatches(&painted, l_shift, (318, 336)),
+            0,
+            "3KEY_1 must show the pinned L Shift glyph on first open"
+        );
+    }
+
+    #[test]
+    fn key_mode_toggle_switches_the_painted_family_and_ignores_inactive_lanes() {
+        // Live caller chain: pointer -> ScreenGame::ingest_snapshot ->
+        // OptionsDialog::click -> click_key_tab -> set_three_key ->
+        // paint_planet_modal -> paint_option_key_tab -> paint_dialog_scene.
+        // Exe toggle handler 0x4383d0 swaps control groups. Archives absent -> skip.
+        let Some(art) = key_art() else {
+            return;
+        };
+        let mut game = open_key_sheet(&art);
+        let three_key_buffer = paint_live_key_tab(&game);
+
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_7KEY_MODE, false));
+        assert!(!game.options().three_key(), "7KEY switches the mode");
+        let seven_key_buffer = paint_live_key_tab(&game);
+        assert!(
+            changed_outside_captions(&three_key_buffer, &seven_key_buffer) > 0,
+            "the toggle must repaint panels/selectors, not only captions"
+        );
+
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_FIRST, true));
+        assert_eq!(
+            game.option_rebind_armed(),
+            None,
+            "a 3K lane click is ignored in 7K mode"
+        );
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false));
+        assert_eq!(
+            game.option_rebind_armed(),
+            Some(6),
+            "a 7K lane click still arms its lane"
+        );
+
+        game.capture_raw_key(winit::keyboard::KeyCode::KeyQ, true);
+        game.switch_option_tab(PlanetOptionTab::Key);
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_MODE, false));
+        assert!(game.options().three_key(), "3KEY switches back");
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_LANE_FIRST + 6, false));
+        assert_eq!(
+            game.option_rebind_armed(),
+            None,
+            "a 7K lane click is ignored in 3K mode"
+        );
+    }
+
+    #[test]
+    fn three_key_duplicate_rect_paints_only_the_kept_family_index() {
+        // Exe repaint 0x439780 skips 3K family index 1; 0x25209009
+        // and 0x2520900A share one staged rect. Archives absent -> skip.
+        let Some(art) = key_art() else {
+            return;
+        };
+        let origin = dialog_origin(&art.placements);
+        let rect = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == OPTION_KEY_3KEY_FIRST + 2)
+            .expect("the kept 3K caption is staged")
+            .rect;
+        let mut kept_dik = [0u8; crate::options::OPTION_LANES];
+        kept_dik[2] = 0x1F;
+        let mut both_dik = kept_dik;
+        both_dik[1] = 0x1E;
+        let kept = paint_key_tab(
+            &art,
+            KeyCaptions {
+                lane_dik: kept_dik,
+                three_key: true,
+                armed_lane: None,
+            },
+        );
+        let both = paint_key_tab(
+            &art,
+            KeyCaptions {
+                lane_dik: both_dik,
+                three_key: true,
+                armed_lane: None,
+            },
+        );
+        let at = Rect {
+            x: origin.0 + rect.x,
+            y: origin.1 + rect.y,
+            w: rect.w,
+            h: rect.h,
+        };
+        assert_eq!(
+            changed_in_rect(&kept, &both, &at),
+            0,
+            "the skipped 3K index must not ink the shared rect twice"
+        );
+    }
+
+    #[test]
+    fn rebind_advances_the_arm_and_keeps_seven_key_binds_separate() {
+        // Live caller chain: pointer -> OptionsDialog::click ->
+        // click_key_tab -> window::route_key -> GameLoop::capture_raw_key
+        // -> OptionsDialog::rebind_armed_lane -> paint_planet_modal.
+        // Exe 0x4395e0/0x438e80 write +0x18a + armed, advance the arm,
+        // and read mode-specific key arrays. Archives absent -> skip.
+        let Some(art) = key_art() else {
+            return;
+        };
+        let mut game = open_key_sheet(&art);
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_FIRST, true));
+        assert_eq!(game.option_rebind_armed(), Some(0));
+        assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyA, true));
+        assert_eq!(
+            game.option_rebind_armed(),
+            Some(2),
+            "3K arm advances past skipped index 1"
+        );
+
+        let figure = art
+            .figures
+            .get(KEY_CAPTION_SPRITE)
+            .expect("key glyph atlas stages");
+        let a_glyph = figure.layer(12).expect("A glyph decodes");
+        let three_key_buffer = paint_live_key_tab(&game);
+        assert_eq!(
+            glyph_mismatches(&three_key_buffer, a_glyph, (318, 336)),
+            0,
+            "the 3K bind table must hold the new A glyph"
+        );
+
+        game.switch_option_tab(PlanetOptionTab::Key);
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_7KEY_MODE, false));
+        let seven_key_buffer = paint_live_key_tab(&game);
+        let default_s = figure.layer(13).expect("S glyph decodes");
+        assert_eq!(
+            glyph_mismatches(&seven_key_buffer, default_s, (306, 346)),
+            0,
+            "a 3K rebind must not overwrite the 7K bind table"
+        );
+
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_LANE_FIRST, false));
+        assert_eq!(game.option_rebind_armed(), Some(0));
+        assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyQ, true));
+        assert_eq!(
+            game.option_rebind_armed(),
+            Some(1),
+            "7K arm advances to the next lane"
+        );
+        let q_glyph = figure.layer(0).expect("Q glyph decodes");
+        let seven_key_rebound = paint_live_key_tab(&game);
+        assert_eq!(
+            glyph_mismatches(&seven_key_rebound, q_glyph, (306, 346)),
+            0,
+            "the 7K bind table must hold the new Q glyph"
+        );
+
+        game.switch_option_tab(PlanetOptionTab::Key);
+        click_staged(&mut game, staged_point(&art, OPTION_KEY_3KEY_MODE, false));
+        let three_key_restored = paint_live_key_tab(&game);
+        assert_eq!(
+            glyph_mismatches(&three_key_restored, a_glyph, (318, 336)),
+            0,
+            "the 3K table keeps its A glyph after a 7K rebind"
         );
     }
 
