@@ -80,12 +80,24 @@ import numpy as np
 from PIL import Image
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+
+from popup_state import (  # noqa: E402  (path set above for the in-repo query)
+    NORMAL_MODE_NOTICE,
+    ArrayFrameAdapter,
+    aim as popup_aim,
+    query_popup,
+)
+
 REPO_ROOT = SCRIPT_DIR.parent
 CANVAS = (800, 600)
 
 # Aim points, each with the evidence that placed it. Coordinates are native
 # 800x600 canvas pixels (the Wine desktop is that size at the X screen's
-# origin, so XTEST coordinates and canvas coordinates agree).
+# origin, so XTEST coordinates and canvas coordinates agree). Popup aims
+# come from the definitions in lib/popup_state.py (#747); this drive owns
+# no second copy of a popup face.
+NORMAL_MODE_OK = popup_aim("normal-mode-ok")
 AIMS = {
     "easy-emblem": (
         136,
@@ -94,10 +106,9 @@ AIMS = {
         "the H/EASY plate opens the Channel dialog",
     ),
     "fallback-ok": (
-        400,
-        365,
-        "planet-verify findings.md: the NORMAL-mode message box OK sits at "
-        "(400,365) and blocks canvas clicks until dismissed",
+        NORMAL_MODE_OK.x,
+        NORMAL_MODE_OK.y,
+        NORMAL_MODE_OK.evidence,
     ),
     "channel-enter": (
         526,
@@ -243,7 +254,7 @@ C2S_READY_OPCODE = 4008          # 0FA8, the guest's READY press
 MENU_BAND = (555, 595)          # dark navy MENU bar under the planet board
 TAB_BAND = (50, 140)            # emblem/tab strip along the board's head
 PLATE_BOX = (300, 160, 500, 185)  # channel dialog's grey title plate
-POPUP_BOX = (300, 240, 500, 340)  # blue message-box body
+# The blue message-box body and its floor live in lib/popup_state.py (#747).
 ROW_BANNER_BOX = (40, 120, 330, 148)  # hosted row's green music banner
 ROW_TITLE_BOX = (40, 85, 330, 120)    # title strip; hover highlight lands here
 
@@ -548,16 +559,13 @@ class Frames:
     def popup_fraction(self) -> float:
         """Share of the message-box box that is the blue body (0..1)."""
         frame = self.last if self.last is not None else self.grab()
-        left, top, right, bottom = POPUP_BOX
-        box = frame[top:bottom, left:right]
-        red, _, blue = box[:, :, 0], box[:, :, 1], box[:, :, 2]
-        blue_body = (blue > 120) & (blue - red > 60)
-        return float(blue_body.mean())
+        return query_popup(
+            NORMAL_MODE_NOTICE, ArrayFrameAdapter(frame)
+        ).score
 
     def popup_is_up(self) -> bool:
-        # 0.9, not 0.5: the promo carousel's blue page fills this box on the
-        # bare board (measured 0.83) while a real message box measures 0.99.
-        return self.popup_fraction() > 0.9
+        frame = self.last if self.last is not None else self.grab()
+        return query_popup(NORMAL_MODE_NOTICE, ArrayFrameAdapter(frame)).is_up
 
     def playing_metrics(self) -> tuple[float, float]:
         """Dark-lane and blue-HUD shares for this frame."""

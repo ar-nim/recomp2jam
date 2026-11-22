@@ -29,6 +29,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 POPUP_HELPER="$SCRIPT_DIR/lib/planet_popup.py"
+read -r POPUP_OK_X POPUP_OK_Y <<<"$(python3 "$POPUP_HELPER" aim normal-mode-ok)"
 # shellcheck source=lib/rig-session.sh
 . "$SCRIPT_DIR/lib/rig-session.sh"
 
@@ -181,17 +182,17 @@ popup_is_up() {
   [ "$(python3 "$POPUP_HELPER" check "$frame" 2>/dev/null)" = "up" ]
 }
 
-# The NORMAL-mode box blocks the Planet emblem. Its OK face is pinned at
-# (400,365) in docs/captures/t240/findings.md; the frame test only decides
-# whether that face needs pressing.
+# The NORMAL-mode box blocks the Planet emblem. The aim comes from the popup
+# definition in lib/popup_state.py (#747); the frame test alone decides
+# whether that face needs pressing (W6: never blind-Escape).
 dismiss_startup_popup() {
   local frame deadline
   frame="$(latest_frame)"
   if ! popup_is_up "$frame"; then
     return 0
   fi
-  echo "planet-to-waiting: dismiss NORMAL-mode box at (400,365) (docs/captures/t240/findings.md)"
-  click_at 400 365
+  echo "planet-to-waiting: dismiss NORMAL-mode box at ($POPUP_OK_X,$POPUP_OK_Y) (docs/captures/t240/findings.md)"
+  click_at "$POPUP_OK_X" "$POPUP_OK_Y"
   deadline=$((SECONDS + 10))
   while [ "$SECONDS" -lt "$deadline" ]; do
     frame="$(latest_frame)"
