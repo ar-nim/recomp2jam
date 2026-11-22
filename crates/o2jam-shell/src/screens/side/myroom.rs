@@ -175,7 +175,8 @@ pub const MYROOM_ITEMCASH_CODE: u32 = 0x1540_005B;
 pub const MYROOM_NOTICE_TEXT_CODE: u32 = 0x1550_0068;
 /// Notice-board image (`IDC_IMAGE_SMYROOM_NOTICEBOARD`).
 pub const MYROOM_NOTICEBOARD_CODE: u32 = 0x1550_0069;
-/// PC-room mark (`IDC_IMAGE_SMYROOM_PCROOMMARK`): P0, visibly inert.
+/// PC-room mark (`IDC_IMAGE_SMYROOM_PCROOMMARK`): frame 1 is staged
+/// only for the exe's pass words 1 and `0x800` (#811); no wire is sent.
 pub const MYROOM_PCROOMMARK_CODE: u32 = 0x1550_006A;
 /// Web-avatar button (`IDC_BUTTON_SMYROOM_WEBABATAR`): P0, queues nothing.
 pub const MYROOM_WEBAVATAR_CODE: u32 = 0x1520_0058;
@@ -902,9 +903,6 @@ pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
     match code {
         MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
             Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")
-        }
-        MYROOM_PCROOMMARK_CODE => {
-            Some("PCROOMMARK P0: image only, no wire read - paints nothing new")
         }
         MYROOM_NOTICE_TEXT_CODE | MYROOM_NOTICEBOARD_CODE => {
             Some("NOTICE P0: content OPEN like waiting NOTICE - paints nothing")

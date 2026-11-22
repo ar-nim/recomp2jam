@@ -58,30 +58,30 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, dialog_control_code, dialog_origin, dialog_rect_hit, has_room_panels,
     information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit,
-    myroom_notice_board_frame, myroom_page_number_frame, paint_avi_scene,
-    paint_billing_failure_notice, paint_cash_charge_frame, paint_channel_chat,
-    paint_dialog_frame_record, paint_dialog_scene, paint_information_message, paint_lanking_board,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
-    paint_music_shop_cashfillup_notice, paint_music_shop_face, paint_music_shop_genre_frames,
-    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_identity_captions, paint_shop_item_icons,
-    paint_shop_notice_text, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
+    myroom_pc_room_mark_kept, paint_avi_scene, paint_billing_failure_notice,
+    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record, paint_dialog_scene,
+    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
+    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
+    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
+    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_no_response_dialog, paint_room_scene_with_hover, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -8032,14 +8032,22 @@ impl ScreenGame {
         if self.side == Some(SideScreen::MyRoom) {
             let panel = self.myroom.panel();
             let tab = self.myroom.lower_tab();
+            let pass_word = self.myroom_pass.word;
             paint_scene_figures_selected(
                 frame,
                 &self.side_placements,
                 &self.side_figures,
-                |placed| myroom_panel_kept(placed, panel) && myroom_tab_kept(placed, tab),
+                |placed| {
+                    myroom_panel_kept(placed, panel)
+                        && myroom_tab_kept(placed, tab)
+                        && myroom_pc_room_mark_kept(placed, pass_word)
+                },
                 |placed| {
                     myroom_notice_board_frame(placed, &self.side_figures)
                         .or_else(|| myroom_page_number_frame(placed, tab, &self.side_figures))
+                        .or_else(|| {
+                            myroom_pc_room_mark_frame(placed, pass_word, &self.side_figures)
+                        })
                 },
             );
         } else if self.side == Some(SideScreen::MusicShop) {
@@ -17871,9 +17879,10 @@ mod game_tests {
         paint_myroom_panel(&mut game)
     }
 
-    #[cfg(any())]
-    /// Two-frame PCROOMMARK body: frame 0 red, frame 1 green. The
-    /// staged placement code and rect are synthetic; no archive data.
+    /// Two-frame PCROOMMARK body: frame 0 red at the staged origin,
+    /// frame 1 green one 20-pixel canvas to the right. Offsetting them
+    /// distinguishes a single staged frame from the all-layer stack.
+    /// The placement code and rect are synthetic; no archive data.
     fn myroom_pc_room_overlay() -> (ScreenGame, Rect) {
         use super::super::side::{MyRoomPassInfo, MYROOM_PCROOMMARK_CODE};
         use crate::avatar::FigureLayer;
@@ -17886,18 +17895,20 @@ mod game_tests {
             w: 20,
             h: 20,
         };
-        let mut figure = solid_figure(20, 20, 0xF800);
-        figure.push_layer(FigureLayer {
+        let layer = |word: u16, dx: i32| FigureLayer {
             image: o2jam_render::Rgb555Image::decode(
-                &vec![0x07E0u16.to_le_bytes(); 20 * 20].concat(),
+                &vec![word.to_le_bytes(); 20 * 20].concat(),
                 20,
                 20,
             )
-            .expect("green frame"),
-            dx: 0,
-            dy: 0,
+            .expect("solid frame"),
+            dx,
+            dy: rect.y,
             colorkey: 0xFFFF,
-        });
+        };
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(layer(0xF800, rect.x));
+        figure.push_layer(layer(0x07E0, rect.x + 20));
         game.load_side_scene(
             vec![ScenePlacement {
                 role: PlacementRole::Single,
@@ -17912,7 +17923,19 @@ mod game_tests {
         (game, rect)
     }
 
-    #[cfg(any())]
+    /// Pixel pairs at the frame-0 and frame-1 canvas centres.
+    fn myroom_pc_room_pixels(word: Option<u32>) -> (u32, u32) {
+        use super::super::side::MyRoomPassInfo;
+        let (mut game, rect) = myroom_pc_room_overlay();
+        game.set_myroom_pass(MyRoomPassInfo {
+            word,
+            ..MyRoomPassInfo::default()
+        });
+        let buf = paint_myroom_panel(&mut game);
+        let at = |x: i32| buf[((rect.y + 10) as usize) * 800 + x as usize];
+        (at(rect.x + 10), at(rect.x + 30))
+    }
+
     #[test]
     fn myroom_pc_room_mark_stages_frame_one_only_for_the_exe_pass_words() {
         // Live caller chain: GameLoop::paint -> ScreenGame::paint_side
@@ -17923,25 +17946,19 @@ mod game_tests {
         // `ev_1b8cb135…`) looks up `0x1550006a` and stages frame 1 for
         // `0x768b34 == 1 || == 0x800` only; every other word paints
         // no mark. Pure synthetic paint, so no install-root skip.
-        use super::super::side::MyRoomPassInfo;
-        let paint_center = |word: Option<u32>| {
-            let (mut game, rect) = myroom_pc_room_overlay();
-            game.set_myroom_pass(MyRoomPassInfo {
-                word,
-                ..MyRoomPassInfo::default()
-            });
-            let buf = paint_myroom_panel(&mut game);
-            buf[((rect.y + 10) as usize) * 800 + (rect.x + 10) as usize]
-        };
-        let green = pack_xrgb(0, 255, 0);
-        assert_eq!(paint_center(Some(1)), green, "pass 1 stages frame 1");
-        assert_eq!(
-            paint_center(Some(0x800)),
-            green,
-            "pass 0x800 stages frame 1"
-        );
+        // The green RGB555 layer expands to (8,255,0) in XRGB8888.
+        let green = pack_xrgb(8, 255, 0);
+        for word in [Some(1), Some(0x800)] {
+            let (frame_zero, frame_one) = myroom_pc_room_pixels(word);
+            assert_eq!(frame_one, green, "word {word:?} stages frame 1");
+            assert_eq!(frame_zero, 0, "frame 0 must not stack beneath frame 1");
+        }
         for word in [None, Some(0), Some(2), Some(0x7FF)] {
-            assert_ne!(paint_center(word), green, "word {word:?} stages no mark");
+            assert_eq!(
+                myroom_pc_room_pixels(word),
+                (0, 0),
+                "word {word:?} stages no mark"
+            );
         }
     }
 
@@ -18514,10 +18531,14 @@ mod game_tests {
         );
         assert_eq!(myroom_p0_verdict(MYROOM_WEBAVATAR_CODE), None);
 
+        // #811 retires the PCROOMMARK verdict: the staged pass word
+        // now controls frame 1 of the pinned image control.
+        assert_eq!(myroom_action_for_code(MYROOM_PCROOMMARK_CODE), None);
+        assert_eq!(myroom_p0_verdict(MYROOM_PCROOMMARK_CODE), None);
+
         for code in [
             MYROOM_ALARM_CODE,
             MYROOM_ALARM_POPUP_CODE,
-            MYROOM_PCROOMMARK_CODE,
             MYROOM_NOTICE_TEXT_CODE,
             MYROOM_NOTICEBOARD_CODE,
         ] {

@@ -12,8 +12,9 @@ use super::ScreenGame;
 use crate::avatar::{avatar_item_by_id, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::paint::{
-    myroom_notice_board_frame, myroom_page_number_frame, paint_myroom_data, paint_myroom_figure,
-    paint_myroom_slot_icons, paint_screen,
+    myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
+    myroom_pc_room_mark_kept, paint_myroom_data, paint_myroom_figure, paint_myroom_slot_icons,
+    paint_screen,
 };
 use crate::screens::side::{
     myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
@@ -535,13 +536,19 @@ impl ScreenGame {
             Some(art) => {
                 let panel = self.myroom.panel();
                 let tab = self.myroom.lower_tab();
+                let pass_word = self.myroom_pass.word;
                 art.paint_backdrop_live_selected(
                     frame,
                     Screen::Myroom,
-                    |placed| myroom_panel_kept(placed, panel) && myroom_tab_kept(placed, tab),
+                    |placed| {
+                        myroom_panel_kept(placed, panel)
+                            && myroom_tab_kept(placed, tab)
+                            && myroom_pc_room_mark_kept(placed, pass_word)
+                    },
                     |placed| {
                         myroom_notice_board_frame(placed, &art.figures)
                             .or_else(|| myroom_page_number_frame(placed, tab, &art.figures))
+                            .or_else(|| myroom_pc_room_mark_frame(placed, pass_word, &art.figures))
                     },
                 );
                 paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);

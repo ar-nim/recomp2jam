@@ -315,6 +315,27 @@ OPEN, so no unverified pass is claimed. Presentation guard:
 `screens/side/myroom_freeinfo.rs`. A known-pass exe capture is the next
 evidence step.
 
+## PC-room mark (ticket #811, 2026-11-23)
+
+`FUN_004a3730` (VA `0x4a3730`, file `0xa3730`, fresh REA 6.9.0 /
+Ghidra 12.2 dossier
+`ev_1b8cb1354f11145172bc8bdb441a1e311a2176cd19b4f64a09b67ab1df39c30f`,
+exe sha256 `83a04541…72c823b`) stages the avatar at `0x15700012`, then
+tests pass word `0x768b34` for exactly `1` or `0x800`. Only those two
+words look up PCROOMMARK `0x1550006a` and set its view/frame words to
+frame 1; all other words have no else arm, so no mark is staged.
+
+Our painters (`ScreenGame::paint_side` and `paint_myroom`) read the
+already-staged `MyRoomPassInfo.word` (#800): the mark is kept only for
+`1`/`0x800` and its second frame is selected there; every other word hides
+the placement. The staged body carries no invented geometry, and the old
+P0 image-only verdict is retired. Guard:
+`myroom_pc_room_mark_stages_frame_one_only_for_the_exe_pass_words`
+(synthetic two-frame body, no install-root skip).
+OPEN: one live PC-room and one non-PC-room frame with the paired pass
+word; the wire writer of `0x768b34` remains untraced, so no pass is
+inferred from a 2001 field.
+
 ## Special-item replies (ticket #799 body, 2026-11-22)
 
 `FUN_004a54e0` (VA `0x4a54e0`, file `0xa54e0`,
