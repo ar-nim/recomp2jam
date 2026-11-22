@@ -256,6 +256,11 @@ const CHAT_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// drain): the same never-stall shape as the stats section — a missed
 /// notice window retries on the next paint.
 const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
+/// Short socket window for the Shop sell-reply drain (5003). It runs
+/// on every paint while the Shop side is mounted, so the resting 10 s
+/// gateway timeout would otherwise hold the whole frame loop whenever
+/// Memoryer sends no reply (ticket #866 live pack).
+const SELL_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// Socket window for the per-frame tally section (the 4017/4018/4040
 /// answer drain): wider than the 1 ms chat/stats polls because the
 /// server computes rewards between our submit and its broadcast, but
@@ -4142,7 +4147,9 @@ impl OnlineSession {
         self.flush_refresh_bag();
         self.flush_start_payment();
         self.poll_attempts();
-        self.poll_sell_response();
+        self.with_drain_timeout(SELL_IO_TIMEOUT, "shop sell", |session| {
+            session.poll_sell_response();
+        });
         self.poll_wallet_answer();
         if self.game.screen() == Screen::Room {
             self.poll_room_user_list_fuse();
@@ -13200,6 +13207,56 @@ pub(super) mod session_tests {
         );
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Loading);
+        server.join().unwrap();
+    }
+
+    /// Live caller chain: `main.rs::run_online` -> `run_windowed_session`
+    /// -> `GameLoop::paint` -> `OnlineSession::paint` -> `poll_wire`
+    /// -> `poll_sell_response` -> `GatewayConnection::next_frame`. The
+    /// Room ITEMSHOP click mounts the Shop side; the very next paint
+    /// must still return while the gateway is quiet. The live pack
+    /// (`~/scratch/boot-verify-2/buyitem`, BV2-BUYITEM-03) showed every
+    /// mounted-side paint blocking one full resting socket timeout,
+    /// so the window kept painting the Room board.
+    #[test]
+    fn mounted_shop_side_paints_without_waiting_for_a_quiet_gateway() {
+        use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
+        use o2jam_shell::screens::side::SideScreen;
+
+        // The resting window is shortened so a stall fails fast; the
+        // sell drain must override it with its own short window.
+        const QUIET_GATEWAY_TIMEOUT: Duration = Duration::from_millis(300);
+        const MAX_PAINT_DURATION: Duration = Duration::from_millis(150);
+
+        let (release_tx, release_rx) = mpsc::channel();
+        let (mut session, server) = room_session(move |stream| {
+            // Keep the socket open with no reply: the sell drain sees
+            // a quiet gateway, exactly like Memoryer after 5006.
+            let _held = stream;
+            let _ = release_rx.recv();
+        });
+        assert!(session.game_mut().visit_side(SideScreen::Shop));
+        session
+            .gateway
+            .set_timeouts(Some(QUIET_GATEWAY_TIMEOUT))
+            .unwrap();
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a buffer index");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits a buffer index");
+        let mut buf = vec![0u32; width * height];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: width,
+            h: height,
+        };
+        let started = Instant::now();
+        session.paint(&mut frame);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < MAX_PAINT_DURATION,
+            "mounted side must not wait on the socket ({elapsed:?})"
+        );
+        assert_eq!(session.game_mut().side(), Some(SideScreen::Shop));
+        let _ = release_tx.send(());
         server.join().unwrap();
     }
 
