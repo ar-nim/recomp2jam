@@ -1338,7 +1338,10 @@ impl OnlineSession {
         // own bank rides along for the FIRSTSTEP entry cue.
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
         self.game
-            .stage_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
+            .set_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
+        // A bank attach mid-visit replaces the bank its entry cue
+        // resolves against, so re-apply that cue explicitly here.
+        self.game.recue_tutorial_ojm_if_open();
         tracing::info!(entries, "key sounds attached");
     }
 
@@ -1370,7 +1373,10 @@ impl OnlineSession {
             .with_audio(backend, std::collections::HashMap::new());
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
         self.game
-            .stage_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
+            .set_tutorial_ojm_bank(crate::load_tutorial_ojm_bank());
+        // An attach during an open Tutorial visit re-cues its entry
+        // record over the fresh bank; a closed visit stays silent.
+        self.game.recue_tutorial_ojm_if_open();
         self.game.stage_ui_effect_bank(crate::load_ui_effect_bank());
     }
 
