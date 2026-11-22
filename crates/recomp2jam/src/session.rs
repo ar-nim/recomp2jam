@@ -4038,15 +4038,16 @@ impl OnlineSession {
 
     /// #367: on a relay-down Room visit, send our own 07DA poll and
     /// keep a tracked 2011 node until its answer is processed. The
-    /// shell owns the 20 s wall-clock gate; this seam only moves the
-    /// frames and calls the pump. No sleep, no synthetic timer.
+    /// shell owns the 20 s wall-clock gate and the one-request-per-
+    /// visit latch (#858); this seam only moves the frames and calls
+    /// the pump. No sleep, no synthetic timer.
     fn poll_room_user_list_fuse(&mut self) {
         if !self.game.room_no_response_fuse_enabled() || self.game.room_no_response_dialog_open() {
             return;
         }
         if self.game.room_user_list_poll_tracked() {
             self.drain_room_user_list_reply();
-        } else {
+        } else if !self.game.room_user_list_poll_sent() {
             self.send_room_user_list_poll();
         }
         self.game.pump_room_user_list_fuse();
@@ -14382,6 +14383,97 @@ pub(super) mod session_tests {
     /// -> `ScreenGame::track_room_user_list_send_at` /
     /// `track_room_user_list_reply`. This tier-2 scripted-gateway
     /// round trip uses the real boot staging seam and a real socket.
+    /// Fake gateway that answers every 2010 and reports its pair
+    /// counts after the client closes the socket.
+    fn answering_user_list_gateway() -> (u16, mpsc::Receiver<(usize, usize)>, thread::JoinHandle<()>)
+    {
+        use o2jam_net::frame::encode_frame;
+
+        let (counts_tx, counts_rx) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(5)))
+                .unwrap();
+            let mut requests = 0;
+            let mut answers = 0;
+            loop {
+                let mut header = [0u8; HEADER_LEN];
+                match stream.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue
+                    }
+                    Err(_) => break,
+                }
+                let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+                let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+                if stream.read_exact(&mut body).is_err() {
+                    break;
+                }
+                let mut bytes = header.to_vec();
+                bytes.extend_from_slice(&body);
+                let Ok(frame) = decode_frame(&bytes) else {
+                    continue;
+                };
+                if frame.id == Request::GetUserList.id() {
+                    requests += 1;
+                    stream
+                        .write_all(&encode_frame(Response::GetUserList as u16, &[]))
+                        .unwrap();
+                    answers += 1;
+                }
+            }
+            counts_tx.send((requests, answers)).unwrap();
+        });
+        (port, counts_rx, server)
+    }
+
+    #[test]
+    fn side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway() {
+        // Ticket #858. Live caller chain: `main.rs::run_online` ->
+        // `OnlineSession::paint` -> `poll_wire` ->
+        // `poll_room_user_list_fuse` -> `send_room_user_list_poll`
+        // (C2S 2010) -> `drain_room_user_list_reply` (S2C 2011).
+        // The wave-2 paired side-entry taps show one boot-time exe
+        // 2010 and no repeats; our fuse used to send one pair per
+        // processed answer. Tier 2 scripted gateway, no archives.
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, counts_rx, server) = answering_user_list_gateway();
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows: Vec::new() });
+        game.set_myroom_character(o2jam_net::CharacterInfo::default());
+        game.load_side_scene(Vec::new(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        for _ in 0..12 {
+            paint_frame(&mut session);
+            thread::sleep(Duration::from_millis(2));
+        }
+        drop(session);
+        server.join().unwrap();
+        let (requests, answers) = counts_rx.recv().unwrap();
+        assert_eq!(
+            (requests, answers),
+            (1, 1),
+            "one side-entry tap carries one 2010/2011 pair (#858)"
+        );
+    }
+
     #[test]
     fn relay_down_room_poll_sends_07da_and_clears_on_07db() {
         let (port, server) = fake_gateway(|mut stream| {

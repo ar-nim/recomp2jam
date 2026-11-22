@@ -1942,6 +1942,13 @@ impl ScreenGame {
         self.room_no_response.poll_tracked()
     }
 
+    /// `true` once this Room visit has sent its one 07DA. No exe
+    /// refresh trigger is pinned; the latch clears on leaving Room.
+    #[must_use]
+    pub const fn room_user_list_poll_sent(&self) -> bool {
+        self.room_no_response.user_list_requested()
+    }
+
     /// Test affordance: install the fuse's clock. Production keeps
     /// [`FuseClock::Wall`]; guards advance a virtual instant so a wire
     /// write cannot race the 20 s deadline (#743).

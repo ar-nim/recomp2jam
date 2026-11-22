@@ -5,8 +5,10 @@
 //! overdue (`docs/captures/static-367/pin.md`, shell observations
 //! `S367-1`/`S367-3`; live node pin in issue #367 comment 5). Our
 //! client has no 36 s relay connect block, so the arm is our own
-//! 07DA/07DB poll pair on a boot that observed the relay down. This
-//! module owns that wall-clock node and the sheet's type-100
+//! 07DA/07DB poll pair on a boot that observed the relay down. The
+//! pair is latched once per Room visit: no exe refresh trigger is
+//! pinned (#858), so an answer or an overdue sheet never re-arms it.
+//! This module owns that wall-clock node and the sheet's type-100
 //! dismissal queue; the session owns the socket and the game owns
 //! the paint/hit tests. Each queued dismissal pops exactly one
 //! layer from the open dialog stack (#689), so a fuse over another
@@ -93,11 +95,15 @@ struct TrackedUserListPoll {
 
 /// Fuse state carried by `ScreenGame`. The relay observation comes
 /// from boot; the tracked node comes from the session's Room poll.
+/// `user_list_requested` latches the one 07DA allowed per Room visit:
+/// the 7.55 taps pin no refresh trigger, so a processed 07DB or an
+/// overdue sheet must never re-arm the request (#858).
 #[derive(Debug, Default)]
 pub(super) struct RoomNoResponseFuse {
     clock: FuseClock,
     relay_down_observed: bool,
     poll: Option<TrackedUserListPoll>,
+    user_list_requested: bool,
     sheet_open: bool,
     dismissal_queue: VecDeque<u16>,
     dialog_stack: Vec<DialogLayer>,
@@ -129,13 +135,18 @@ impl RoomNoResponseFuse {
 
     /// Stamp a node at an explicit instant (the wall-clock gate leg).
     fn track_send_at(&mut self, in_room: bool, now: Instant) -> bool {
-        if !self.enabled(in_room) || self.poll.is_some() || self.sheet_open {
+        if !self.enabled(in_room)
+            || self.user_list_requested
+            || self.poll.is_some()
+            || self.sheet_open
+        {
             return false;
         }
         self.poll = Some(TrackedUserListPoll {
             expected_reply: EXPECTED_USER_LIST_REPLY,
             sent_at: now,
         });
+        self.user_list_requested = true;
         true
     }
 
@@ -147,6 +158,12 @@ impl RoomNoResponseFuse {
     #[must_use]
     pub(super) const fn poll_tracked(&self) -> bool {
         self.poll.is_some()
+    }
+
+    /// Whether this Room visit already put its one 07DA on the wire.
+    #[must_use]
+    pub(super) const fn user_list_requested(&self) -> bool {
+        self.user_list_requested
     }
 
     /// Walk the node queue. On the first overdue pass, erase the
@@ -211,6 +228,7 @@ impl RoomNoResponseFuse {
     /// boot relay observation for the next Room visit.
     pub(super) fn clear(&mut self) {
         self.poll = None;
+        self.user_list_requested = false;
         self.sheet_open = false;
         self.dismissal_queue.clear();
         self.dialog_stack.clear();
@@ -271,6 +289,27 @@ mod room_fuse_tests {
         ));
         assert!(fuse.pump(true, &[]));
         assert!(fuse.sheet_open());
+    }
+
+    /// seam: the latch is the whole behavior here; the live scripted
+    /// gateway leg in `recomp2jam::session_tests` counts the pair.
+    #[test]
+    fn one_room_visit_requests_the_user_list_once_until_it_leaves_room() {
+        let sent_at = Instant::now();
+        let mut fuse = fuse_stamped_at(sent_at);
+        assert!(fuse.user_list_requested());
+        assert!(fuse.track_reply(), "the 07DB closes the pair");
+        assert!(fuse.user_list_requested(), "the visit keeps its sent latch");
+        assert!(!fuse.track_send(true), "an answered pair never re-arms");
+
+        fuse.clear();
+        assert!(fuse.track_send(true), "a fresh Room visit starts over");
+        assert!(!fuse.track_send(true), "one node at a time");
+
+        let mut overdue = fuse_stamped_at(sent_at);
+        overdue.set_clock(FuseClock::virtual_at(sent_at + Duration::from_secs(21)));
+        assert!(overdue.pump(true, &[]), "the starved node opens the sheet");
+        assert!(!overdue.track_send(true), "the sheet never re-arms");
     }
 
     /// Relay-down alone never stages; without the Room state the
