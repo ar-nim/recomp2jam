@@ -278,6 +278,7 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
         return;
     };
     game.load_scene(Screen::Playing, art.placements, art.figures);
+    game.stage_venue_theme();
     if let Some(skin) = PlaySkin::from_archive_for_stage(archive, Some(game.arena_stage())) {
         game.set_play_skin(skin);
     }
