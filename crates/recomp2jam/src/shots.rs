@@ -93,6 +93,15 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     // over their `.bnd` rects, `docs/planet.md`).
     assert_eq!(game.screen(), Screen::Planet, "boot → bare board");
     shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
+    // Native companion for the emblem-caption anchor gate: the v3
+    // oracle pair is 800x600, so the ink bands must be compared at
+    // full resolution (the downscaled preview halves a 2 px bearing).
+    shots.push(shoot_checked_native(
+        &mut game,
+        "planet-native",
+        Screen::Planet,
+        0,
+    )?);
     // The gear plate opens the staged options sheet over the board
     // (pinned modal seam; the Key tab is the exe-pinned first open).
     game.click_planet(729, 580);
@@ -2134,6 +2143,7 @@ mod tests {
         let mut expected = vec![
             "avi",
             "planet",
+            "planet-native",
             "options",
             "channel",
             "channel-digits-native",
@@ -4182,11 +4192,11 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Eighteen fixed scenes (the native music-select companion
-        // joins the downscaled preview) plus the mid-lesson tutorial
-        // frame, one preview per staged side and one native per staged
-        // #207 side.
-        let fixed = 18 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        // Nineteen fixed scenes (the native planet and music-select
+        // companions join their downscaled previews) plus the
+        // mid-lesson tutorial frame, one preview per staged side and
+        // one native per staged #207 side.
+        let fixed = 19 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
         assert_eq!(shots.len(), fixed + side_count + native_count);
         let loading_staged = loading_caption_staged();
         for shot in shots {
@@ -4216,15 +4226,16 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Nineteen fixed files (avi, planet, options, channel plus its
-        // open-row and closed-row wire-mirror natives, the two
-        // music-select previews, loading, the playing/result family,
-        // the mid-lesson tutorial frame) plus staged previews and #207
-        // natives.
-        let fixed = 18 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        // Twenty fixed files (avi, the planet and music-select
+        // preview/native pairs, options, channel plus its open-row and
+        // closed-row wire-mirror natives, loading, the playing/result
+        // family, the mid-lesson tutorial frame) plus staged previews
+        // and #207 natives.
+        let fixed = 19 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
         assert_eq!(written.len(), fixed + side_count + native_count);
         assert!(dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
+        assert!(dir.join("planet-native.png").exists());
         assert!(dir.join("channel-native.png").exists());
         assert!(dir.join("channel-digits-native.png").exists());
         assert!(dir.join("waiting-guest.png").exists());

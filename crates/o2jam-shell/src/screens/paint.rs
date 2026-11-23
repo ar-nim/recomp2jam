@@ -2493,6 +2493,44 @@ fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: 
     paint_text_into_rect(frame, native_rect, &text, CP949_INK);
 }
 
+/// Rasterizer origin inside an emblem caption's TEXT cell, in native
+/// pixels. The 7.55 oracle pair inks at y=127 in a cell whose top is
+/// y=125 (`~/scratch/fix880b-findings.md`); our glyph cap rounds one
+/// pixel above the requested origin, so this origin lands the ink at
+/// the exe's +2 px GDI bearing. Geometry stays in the staged rect.
+const PLANET_CAPTION_INK_ORIGIN_Y: i32 = 3;
+
+/// Paint one emblem caption the way the exe's `TEXT` control does:
+/// horizontally centered in its staged cell (`docs/gdi-text.md`,
+/// `DT_CENTER` mode) with the pinned GDI ink bearing below the cell
+/// top. Shared text callers keep their own left/top anchoring.
+fn paint_planet_caption_in_cell(frame: &mut Frame<'_>, native_rect: Rect, text: &str) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let text_width = cp949_width_at_scale(text, scale);
+    let left = ((rect.w as f32 - text_width).max(0.0) * 0.5).round() as i32;
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    o2jam_text::draw_text(
+        &mut image,
+        o2jam_text::system_font(),
+        left,
+        PLANET_CAPTION_INK_ORIGIN_Y,
+        text,
+        CP949_INK,
+        scale,
+    );
+    composite_text_image(frame, &rect, &image);
+}
+
 /// Emblem captions over the staged board: each `TEXT` placement
 /// paints its runtime string into its own `.bnd` rect (ordinals
 /// 6..10, `docs/planet.md`). No placement, no caption — geometry
@@ -2500,7 +2538,8 @@ fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: 
 fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
     for placement in placements {
         if let Some(caption) = planet_caption_for_code(placement.code) {
-            paint_cp949_into_rect(frame, placement.rect, caption.cp949);
+            let text = o2jam_text::decode_cp949_lossy(caption.cp949);
+            paint_planet_caption_in_cell(frame, placement.rect, &text);
         }
     }
 }
@@ -8918,6 +8957,78 @@ mod paint_tests {
             PlanetPromoPaint::spinning(1),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn planet_caption_ink_lands_on_the_exe_cell_anchor() {
+        // Oracle: `~/scratch/paired-shots-v3/states/planet/exe.png`.
+        // Each 7.55 caption inks from y 127 in its 94x13 TEXT cell
+        // (cell top y 125) and centers on that cell. Our rasterizer's
+        // cap-top anchor starts at the cell's left/top, so the fix
+        // must move both axes.
+        use super::super::side::PLANET_CAPTIONS;
+        if o2jam_text::system_font().is_none() {
+            return;
+        }
+        // Parsed `State_Planet.bnd` rects 7..11, code order.
+        let cells = [
+            (338, 125, 94_u32, 13_u32),
+            (209, 125, 94, 13),
+            (91, 125, 94, 13),
+            (619, 125, 94, 13),
+            (512, 125, 94, 13),
+        ];
+        for (caption, (x, y, w, h)) in PLANET_CAPTIONS.iter().zip(cells) {
+            let art = SceneArt {
+                placements: vec![ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: caption.code,
+                    sprite: None,
+                    rect: Rect { x, y, w, h },
+                }],
+                figures: HashMap::new(),
+            };
+            let mut buf = vec![0_u32; 800 * 600];
+            paint_planet_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &art,
+                None,
+                None,
+                None,
+                PlanetPromoPaint::spinning(1),
+            );
+            let (mut left, mut top, mut right, mut bottom) = (i32::MAX, i32::MAX, 0, 0);
+            for (at, pixel) in buf.iter().enumerate() {
+                if *pixel == 0 {
+                    continue;
+                }
+                let (ink_x, ink_y) = ((at % 800) as i32, (at / 800) as i32);
+                left = left.min(ink_x);
+                top = top.min(ink_y);
+                right = right.max(ink_x);
+                bottom = bottom.max(ink_y);
+            }
+            assert!(left <= right, "caption {} inks nothing", caption.code);
+            assert_eq!(top, y + 2, "caption {} ink bearing", caption.code);
+            let cell_bottom = y + i32::try_from(h).unwrap_or(0);
+            assert!(
+                bottom < cell_bottom,
+                "caption {} ink leaves its cell",
+                caption.code
+            );
+            let cell_center = x + i32::try_from(w).unwrap_or(0) / 2;
+            let ink_center = (left + right) / 2;
+            assert!(
+                (ink_center - cell_center).abs() <= 1,
+                "caption {} centered at {ink_center}, exe cell center {cell_center}",
+                caption.code
+            );
+        }
     }
 
     #[test]
