@@ -223,3 +223,23 @@ full evidence IDs. VAs map to file offsets by subtracting `0x400000`.
   `0x2f209002..004` = in-memory note shape only. Load/save `0x43a630` /
   `0x43ab00` match the table above. (ev `ev_1f10e5d7…`,
   `ev_784693a1…`)
+
+## v3 quiesced Key-tab re-pair (2026-11-23, #845/#876)
+
+The quiesced options-key exe frame (`~/scratch/paired-shots-v3/states/options-key/exe.png`)
+contradicts the earlier A/V "unlit pads" reading: with the key-test box
+unchecked, the 3K pad/bar bodies from `OptionKey_3Keydown.ojs` stay lit
+(red L/R rings, gold Enter ring, staggered note bars). The exe is the
+oracle; `paint_dialog_without_captions` now keeps that panel at rest and
+still withholds the checkbox body. The older guard was renamed and
+corrected. The 3K selector/footer bodies use the sheet's baked plates
+(`docs/dialog-frame-states.md`). The promo carousel also keeps paging
+behind the modal (`tick_planet_promo_at` → `planet_board_mounted`),
+which fixes the large flank delta: re-pair region SSIM 0.9999/0.9999.
+Full quiesced re-pair: raw 0.9845, structural (sigma=2) 0.9893,
+sigma=4 0.9916 — 0.0007 short of the 0.99 gate. Remaining delta is the
+3K panel gradient and glyph raster, not promo or button chrome. The
+exact panel-gradient source stays OPEN; next step is one qualified
+rest/press A/B pack that names the panel's alpha or frame-selection
+rule. Panel animation frames and 3K R Shift/Enter slot order remain
+OPEN as above.

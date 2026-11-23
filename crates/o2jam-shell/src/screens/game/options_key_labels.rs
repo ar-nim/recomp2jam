@@ -79,9 +79,9 @@ pub(super) fn paint_option_key_tab(
 /// the exe image control paints exactly the selected frame (VAs
 /// `0x439000` / `0x439780`).
 ///
-/// An unchecked key test also holds back the lit panel and check
-/// body: the paired Key-rest frame shows the pad faces and empty box
-/// baked into the sheet backdrop, not the brighter test bodies.
+/// An unchecked key test holds back the check body only: the v3
+/// Key-rest oracle keeps the 3K pad/bar body lit and the empty box
+/// baked into the sheet backdrop.
 fn paint_dialog_without_captions(
     frame: &mut Frame<'_>,
     art: &SceneArt,
@@ -95,7 +95,11 @@ fn paint_dialog_without_captions(
             .iter()
             .filter(|placed| placed.sprite.as_deref() != Some(KEY_CAPTION_SPRITE))
             .filter(|placed| options_key_mode::is_visible(placed.code, three_key))
-            .filter(|placed| key_test || !is_key_test_body(placed.sprite.as_deref()))
+            .filter(|placed| {
+                key_test
+                    || (three_key && is_three_key_panel(placed.sprite.as_deref()))
+                    || !is_key_test_body(placed.sprite.as_deref())
+            })
             .cloned()
             .collect(),
         figures: art.figures.clone(),
@@ -107,6 +111,13 @@ fn paint_dialog_without_captions(
 /// staged controls, so the rest face still comes from the sheet.
 fn is_key_test_body(sprite: Option<&str>) -> bool {
     matches!(sprite, Some(KEY_TEST_PANEL_SPRITE | KEY_TEST_CHECK_SPRITE))
+}
+
+/// The 3K pad/bar body stays lit at rest in the v3 oracle even while
+/// the key-test box is unchecked. The checkbox body still uses the
+/// sheet's baked empty box.
+fn is_three_key_panel(sprite: Option<&str>) -> bool {
+    sprite == Some(KEY_TEST_PANEL_SPRITE)
 }
 
 /// Paint the active family's captions at their exe offset class.
@@ -529,6 +540,25 @@ mod tests {
     }
 
     #[test]
+    fn key_tab_unchecked_rest_paints_the_three_key_pad_bodies() {
+        // #845 v3 oracle: the Key-tab rest frame keeps the 3K pad
+        // bodies (red L/R rings, gold Enter ring, staggered bars)
+        // even while the key-test box stays unchecked. Native
+        // (314,243) is black inside the L pad bar, not the white
+        // baked plate of `OptionKey_Back.ojs`.
+        let Some(art) = key_art() else {
+            return;
+        };
+        let game = open_key_sheet(&art);
+        let painted = paint_live_key_tab(&game);
+        assert_eq!(
+            painted[243 * 800 + 314],
+            o2jam_render::pack_xrgb(16, 0, 0),
+            "the staged L pad body owns the bar ink at rest"
+        );
+    }
+
+    #[test]
     fn key_mode_toggle_switches_the_painted_family_and_ignores_inactive_lanes() {
         // Live caller chain: pointer -> ScreenGame::ingest_snapshot ->
         // OptionsDialog::click -> click_key_tab -> set_three_key ->
@@ -725,7 +755,7 @@ mod tests {
     /// Live chain: planet gear -> PlanetModal::Options ->
     /// ScreenGame::paint_planet_modal -> this painter.
     #[test]
-    fn unchecked_key_test_keeps_the_exe_pad_faces_unlit() {
+    fn unchecked_key_test_keeps_the_three_key_pad_bodies_lit() {
         let Some(art) = key_art() else {
             return;
         };
@@ -752,7 +782,11 @@ mod tests {
                 .collect(),
             figures: art.figures.clone(),
         };
-        let expected = paint_key_tab(&unlit_art, captions);
+        // #845 v3 correction: the earlier pack read this pad as
+        // unlit; the quiesced v3 exe frame keeps the staged 3K panel
+        // lit while the checkbox stays empty. The exe wins.
+        let unlit = paint_key_tab(&unlit_art, captions);
+        let lit = paint_key_tab(&art, captions);
         let panel = art
             .figures
             .get(KEY_TEST_PANEL_SPRITE)
@@ -767,8 +801,12 @@ mod tests {
         );
         let at = pad.1 as usize * 800 + pad.0 as usize;
         assert_eq!(
-            painted[at], expected[at],
-            "unchecked key test must leave the third pad on the backdrop face"
+            painted[at], lit[at],
+            "the third pad follows the staged 3K panel at rest"
+        );
+        assert_ne!(
+            painted[at], unlit[at],
+            "the v3 oracle differs from the older unlit-pack reading"
         );
     }
 

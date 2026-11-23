@@ -4017,6 +4017,17 @@ impl ScreenGame {
         self.channel_scene.hovered(self.pointer)
     }
 
+    /// Row the Channel select bar paints: the row under the pointer,
+    /// else the last row the pointer visited, else the keyboard
+    /// highlight (the #876 v3 oracle keeps the bar after parking).
+    #[must_use]
+    pub fn channel_select_bar_row(&self) -> Option<usize> {
+        if self.flow.current() != Screen::Channel || self.side.is_some() {
+            return None;
+        }
+        self.channel_scene.select_bar_row(self.pointer)
+    }
+
     /// Highlighted channel row (the keyboard Confirm target;
     /// `None` off the Channel screen or with no listed rows). The
     /// session bridge logs into it before advancing (ticket #30).
@@ -6290,6 +6301,16 @@ impl ScreenGame {
             && self.flow.current() == Screen::Planet
     }
 
+    /// Planet board still mounted under one of its own dialogs. The
+    /// 7.55 carousel tick lives in `CStatePlanet`'s per-frame update
+    /// (VA `0x48e3b0`); the Channel dialog and the gear/notice sheets
+    /// are hosted by that state, so the banner keeps paging behind
+    /// them (`docs/wine-boot.md`, modal auto-paging pin; #876/#845).
+    /// Side lobbies are different states and never reach this timer.
+    fn planet_board_mounted(&self) -> bool {
+        self.side.is_none() && matches!(self.flow.current(), Screen::Planet | Screen::Channel)
+    }
+
     /// The room lobby with no side sheet, no room dialog, and no
     /// options modal owns it — the only room state where the worn
     /// figure slot is fully visible (the planet bare-board mirror).
@@ -6323,6 +6344,9 @@ impl ScreenGame {
     /// and press agree even when no motion preceded the press.
     fn apply_pointer_down(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        if self.flow.current() == Screen::Channel {
+            self.channel_scene.remember_hover(self.pointer);
+        }
         // Dialog buttons keep the held face while the modal stays open;
         // sheets that close on the click simply vanish with the press.
         self.dialog_frames.release();
@@ -6372,6 +6396,9 @@ impl ScreenGame {
     /// fires, pinned #111 arm 3).
     fn apply_pointer_up(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
+        if self.flow.current() == Screen::Channel {
+            self.channel_scene.remember_hover(self.pointer);
+        }
         let held = self.dialog_frames.held();
         self.dialog_frames.release();
         if self.planet_modal() == Some(PlanetModal::Options) {
@@ -6775,16 +6802,17 @@ impl ScreenGame {
         self.planet_board.tick_promo(frames);
     }
 
-    /// Clocked rotation advance: on the bare board while spinning,
-    /// anchor the accumulator on the first paint, then step one
-    /// banner frame per `PLANET_PROMO_TICK_MS` of frame time (the
+    /// Clocked rotation advance: on a mounted planet board while
+    /// spinning, anchor the accumulator on the first paint, then step
+    /// one banner frame per `PLANET_PROMO_TICK_MS` of frame time (the
     /// exe's per-frame update, VA `0x48e3b0`, fires the body on the
-    /// same cadence). Covered boards, a cleared flag, and frameless
-    /// boards never touch the accumulator, so the banner holds.
+    /// same cadence). Dialogs hosted by that state stay mounted
+    /// ([`Self::planet_board_mounted`]); side lobbies, a cleared flag,
+    /// and frameless boards never touch the accumulator.
     /// Frame time is the paint seam's explicit instant (sample clock
     /// windowed, fixed clock on replays): no wall clock here.
     fn tick_planet_promo_at(&mut self, now_ms: u64) {
-        if !self.bare_planet_board()
+        if !self.planet_board_mounted()
             || !self.planet_board.planet_promo_carousel.spinning()
             || self.promo_frame_count() == 0
         {
@@ -8929,7 +8957,7 @@ impl ScreenGame {
                 frame,
                 Some(art),
                 board,
-                self.hovered_channel_row(),
+                self.channel_select_bar_row(),
             ),
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
             (None, false) => self.channel_scene.paint_rows(rows, frame, None, None, None),
@@ -9893,6 +9921,7 @@ impl GameLoop for ScreenGame {
             self.pointer = Some((x, y));
             if self.flow.current() == Screen::Channel {
                 self.channel_scene.drag_to(y);
+                self.channel_scene.remember_hover(self.pointer);
             }
         }
         for edge in snapshot.edges() {
@@ -20087,6 +20116,34 @@ mod game_tests {
     }
 
     #[test]
+    fn channel_select_bar_holds_the_last_hovered_row_after_the_pointer_leaves() {
+        // #876 v3 oracle: the exe frame parks its pointer off-canvas
+        // yet the select bar stays on the Ch.03 row the driver last
+        // visited. A parked pointer must not snap the bar back to the
+        // keyboard highlight. The hover resolver itself still reports
+        // `None`; only the bar's view state persists.
+        let mut game = ScreenGame::new();
+        game.set_channels(three_channels());
+        let figures = HashMap::from([(
+            "Dialog_ChannelSelectBar.ojs".to_owned(),
+            solid_figure(348, 44, 0x7C00),
+        )]);
+        game.load_scene(Screen::Planet, Vec::new(), figures.clone());
+        game.load_scene(Screen::Channel, Vec::new(), figures);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 340));
+        assert_eq!(game.hovered_channel_row(), Some(2));
+        game.ingest_snapshot(&InputSnapshot::motion_to(0, 0));
+        assert_eq!(game.hovered_channel_row(), None);
+        assert_eq!(
+            game.channel_select_bar_row(),
+            Some(2),
+            "the select bar holds the last hovered row"
+        );
+    }
+
+    #[test]
     fn hover_moves_the_channel_select_bar_off_the_highlight() {
         // The exe arms the select bar on mouse motion alone
         // (`Dialog_ChannelSelectBar.ojs` follows the row under the
@@ -20120,7 +20177,9 @@ mod game_tests {
         let bar = pack_xrgb(0xFF, 0x00, 0x00);
         assert_eq!(buf[340 * 800 + 300], bar, "bar follows the pointer row");
         assert_ne!(buf[250 * 800 + 300], bar, "row 0 lost the bar");
-        // Off the rows the bar returns to the keyboard highlight.
+        // #876 correction: the earlier stand-in snapped the bar back
+        // to the keyboard highlight off the rows. The v3 exe frame
+        // keeps it on the last visited row; that observation wins.
         game.ingest_snapshot(&InputSnapshot::motion_to(20, 20));
         assert_eq!(game.hovered_channel_row(), None);
         let mut buf = vec![0u32; 800 * 600];
@@ -20132,7 +20191,12 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[250 * 800 + 300], bar, "highlight row keeps the bar");
+        assert_eq!(
+            buf[340 * 800 + 300],
+            bar,
+            "the last visited row keeps the bar after pointer leaves"
+        );
+        assert_ne!(buf[250 * 800 + 300], bar, "row 0 stays unlit");
     }
 
     #[test]
@@ -21120,6 +21184,44 @@ mod game_tests {
             paint_planet_frame_at(&mut game, now_ms);
         }
         assert_eq!(game.planet_promo_index(), 2);
+    }
+
+    #[test]
+    fn promo_clock_keeps_rotating_behind_the_channel_dialog() {
+        // #876: the 7.55 carousel belongs to the hosting CStatePlanet
+        // update, so it keeps paging while its Channel dialog is up
+        // (`docs/wine-boot.md`, modal auto-paging pin). The clock must
+        // not freeze when the dialog covers the board.
+        let mut game = promo_carousel_game();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
+            paint_planet_frame_at(&mut game, now_ms);
+        }
+        assert_eq!(
+            game.planet_promo_index(),
+            2,
+            "the banner must advance under the Channel dialog"
+        );
+    }
+
+    #[test]
+    fn promo_clock_keeps_rotating_behind_an_options_modal() {
+        // #845: the same CStatePlanet update drives the gear sheet,
+        // so the board behind the Key tab must page as well.
+        let mut game = promo_carousel_game();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
+            paint_planet_frame_at(&mut game, now_ms);
+        }
+        assert_eq!(
+            game.planet_promo_index(),
+            2,
+            "the banner must advance under the Options modal"
+        );
     }
 
     #[test]
