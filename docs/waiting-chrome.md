@@ -153,3 +153,36 @@ commits only staged `0x16201020/21` rects from the live click chain;
 `paint_waiting_effect_toggle` paints record 1 on the selected control
 and record 0 on the other. No decorative layer is invented, and the
 Playing consumer stays OPEN as above.
+
+## Quiesced menu chrome (#883, #884) — 7.55 pair pins
+
+Exe oracle: `~/scratch/paired-shots-v3/states/{waiting-master,music-select}/exe.png`
+(sha `83a04541…72c823b`). Paired build at the time was `fa15011`; the
+fix below is verified against a fresh quiesced re-pair from `cb2/fix883`.
+
+- **Seat member line**: the occupied seat's line is the seat template's
+  `IDC_TEXT_SWAIT_AVATARINFO 0x1640002D` TEXT child, rect `(1,157,121,15)`
+  in template space, added to the seat parent `EXTENDn` origin. It prints
+  `Lv.<level>:<nickname>` (`Lv.1:t207probe`, `Lv.1:tester`) with no team
+  letter, role word or ready flag. The `.bnd` cover rect `(28,53,141,175)`
+  belongs to `Wait_Cover_Avatar.ojs`, not to this caption. The measured
+  cell bearing on the oracle is `(+1,+4)`; geometry stays in the parsed
+  template and parent rects. Guards:
+  `waiting_cover_names_ink_the_template_text_cell`,
+  `waiting_seat_caption_prints_level_and_name_only`.
+- **NoMusic body**: the oracle shows a clean blue card for a member with
+  `music_state=0` (`Ready`) and an empty per-member music list. The shell
+  used to arm `Wait_NoMusicImage.ojs` from `music_ids.is_empty()` alone.
+  The wire field's exact exe writer stays OPEN (next step: tap one
+  `NoMusic=1` member on a matched pair); the `Ready` negative is pinned
+  by this oracle.
+- **Speed chip and Random cards**: `Wait_Btn_Speed_Num.ojs` and
+  `Wait_Map_Random.ojs` are image controls: the exe shows one selected
+  record (speed code 1 → `X1`, random rest → `?`). Stacking their records
+  ended on a green `?` and a song cover. Both ids now join the one-record
+  exclusion list, with the speed code selecting its record and the card
+  keeping record 0. Guard:
+  `waiting_speed_and_random_cards_paint_one_record_each`.
+- **Skill counts**: the three `SKILLCOUNT` plates show no digits at a
+  zero count; the old default `[0;3]` inked three `0` glyphs over the
+  baked X art. Guard: `waiting_zero_skill_counts_leave_the_x_boxes_bare`.

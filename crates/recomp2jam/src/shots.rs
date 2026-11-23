@@ -3884,14 +3884,26 @@ mod tests {
         let scrim = o2jam_render::pack_xrgb(0x08, 0x08, 0x10);
         let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
         for ((x, y), text) in &captions {
-            assert_eq!(
-                actual[(y - 2) as usize * 800 + (x - 4) as usize],
-                scrim,
-                "caption `{text}` scrims its rect corner"
-            );
+            let bpm_bare = text == &waiting_bpm_caption(song_bpm);
+            if bpm_bare {
+                // #883: the oracle inks BPM on the blue well with the
+                // pinned GDI bearing and no black scrim.
+                assert_ne!(
+                    actual[(y - 2) as usize * 800 + (x - 4) as usize],
+                    scrim,
+                    "BPM must not invent a scrim"
+                );
+            } else {
+                assert_eq!(
+                    actual[(y - 2) as usize * 800 + (x - 4) as usize],
+                    scrim,
+                    "caption `{text}` scrims its rect corner"
+                );
+            }
+            let (ink_x, ink_y) = if bpm_bare { (x + 6, y + 7) } else { (*x, *y) };
             let mut expected = native_probe();
             paint_probe(&mut expected, |frame| {
-                o2jam_render::draw_text(frame, *x, *y, text, ink);
+                o2jam_render::draw_text(frame, ink_x, ink_y, text, ink);
             });
             assert_pixels_came_from_font(&actual, &expected, text);
         }

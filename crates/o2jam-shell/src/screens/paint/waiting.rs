@@ -572,6 +572,9 @@ pub fn paint_waiting_scene_with_confirm(
 /// `Wait_RoomNumber`'s ten glyphs would show `99`/`999`.
 fn waiting_paints_one_record(id: &str) -> bool {
     id == WAITING_LEVEL_ID
+        || id == WAITING_SPEED_NUM_ID
+        || id == WAITING_RANDMAP_ID
+        || WAITING_SPEED_ARROW_IDS.contains(&id)
         || id == waiting_confirm_control_id(true)
         || id == waiting_confirm_control_id(false)
         || WAITING_CHANNEL_NUMBER_IDS.contains(&id)
@@ -833,6 +836,12 @@ pub fn paint_waiting_seat_avatars(
 /// Seat-cover control ids in seat order (`COVERAVATAR1..8`, codes
 /// `0x1650003D..44` → `.bnd` rects 60..67): each cover rect positions
 /// its own seat, anchor-free bodies included (the placement lesson).
+/// Seat-template TEXT child holding the member line (`0x1640002D`,
+/// rect `(1,157,121,15)` in template space). The 7.55 pair inks it in
+/// the team plate near the bottom of each seat; the cover-art rect is
+/// the avatar body, not this caption's origin (#883).
+pub(crate) const WAITING_AVATARINFO_ID: &str = "IDC_TEXT_SWAIT_AVATARINFO";
+
 const WAITING_COVER_IDS: [&str; 8] = [
     "IDC_IMAGE_SWAIT_COVERAVATAR1",
     "IDC_IMAGE_SWAIT_COVERAVATAR2",
@@ -875,6 +884,17 @@ pub(crate) const WAITING_LEVEL_ID: &str = "IDC_IMAGE_SWAIT_LEVEL";
 pub(crate) const WAITING_WINNERSCORE_ID: &str = "IDC_TEXT_SWAIT_WINNERSCROE";
 /// Scroll-speed value art (`SPEED_NUM`, code `0x16500066` → rect 101).
 pub(crate) const WAITING_SPEED_NUM_ID: &str = "IDC_IMAGE_SWAIT_SPEED_NUM";
+/// Big Random card (`RANDMAP`, code `0x1650004F` → rect 78). The exe's
+/// rest frame is the `?` card; stacking every record shows a song cover
+/// in its place (#884).
+const WAITING_RANDMAP_ID: &str = "IDC_IMAGE_SWAIT_RANDMAP";
+/// Scroll-speed arrow bodies (codes `0x16200064/65`): each holds a
+/// bright rest record and a dark pressed record. The 7.55 oracle keeps
+/// the bright one while idle (#883).
+const WAITING_SPEED_ARROW_IDS: [&str; 2] = [
+    "IDC_BUTTON_SWAIT_SPEED_LEFT",
+    "IDC_BUTTON_SWAIT_SPEED_RIGHT",
+];
 /// Skill-slot art ids top to bottom (`1/2/3SKILL`, codes
 /// `0x16500058..5A` → rects 87..89, the X boxes of the SKILL panel).
 pub(crate) const WAITING_SKILL_IDS: [&str; 3] = [
@@ -895,9 +915,9 @@ pub(crate) const WAITING_SKILLCOUNT_IDS: [&str; 3] = [
     "IDC_TEXT_SWAIT_3SKILLCOUNT",
 ];
 
-/// One staged seat view: the wire member plus the champion mark; the
-/// self seat carries no level (the wire sends no self nickname or
-/// level — `self_seat` documents the local-only name).
+/// One staged seat view: the wire member plus the live flags that arm
+/// its template bodies; the self seat carries no level (the wire sends
+/// no self nickname or level — `self_seat` documents the local-only name).
 pub(crate) struct StagedSeat {
     pub(crate) name: String,
     pub(crate) level: Option<i32>,
@@ -905,12 +925,14 @@ pub(crate) struct StagedSeat {
     pub(crate) ready: bool,
     pub(crate) present: bool,
     pub(crate) locked: bool,
-    pub(crate) champion: bool,
     /// `RoomMember.master`: the room creator's seat.
     pub(crate) master: bool,
     /// `RoomMember.playing_state` nonzero (the member is playing).
     pub(crate) playing: bool,
     /// The room names a song (`JoinedRoom.music_id` nonzero).
+    /// The member reports `MusicState::Ready` (or the room names a song
+    /// for a locally staged seat). An empty per-member music list alone
+    /// must not paint the NoMusic body (#883).
     pub(crate) has_song: bool,
     /// S2C `4035` named this seat's member as downloading (#838). The
     /// boot-wave3 exe frames leave it dark on `4037`/`4039` progress.
@@ -1132,6 +1154,15 @@ pub(crate) fn paint_waiting_seat_marks(
     }
 }
 
+/// A seated member counts as having the room song when their music
+/// state reports `Ready`. The 7.55 pair shows a clean blue card for a
+/// member with `music_state=0` and an empty per-member music list; the
+/// old `music_ids` test painted the NoMusic overlay over the figure.
+/// The exact NoMusic writer stays OPEN (`docs/waiting-chrome.md`).
+fn member_has_room_song(member: &o2jam_net::RoomMember) -> bool {
+    member.music_state == o2jam_net::MusicState::Ready.code()
+}
+
 /// Wire `music-state=2` is the exe's NoGem marker (`FUN_004b2e30`
 /// refresh slot 7, seat `+0x217c`).
 fn is_no_gem(member: &o2jam_net::RoomMember) -> bool {
@@ -1157,10 +1188,7 @@ pub(crate) fn staged_seats(
         let Some(seat) = seats.get_mut(index) else {
             continue;
         };
-        *seat = staged_slot_seat(
-            slot,
-            room.champion == Some(u8::try_from(index).unwrap_or(u8::MAX)),
-        );
+        *seat = staged_slot_seat(slot);
     }
     if seats.get(own).is_some_and(|seat| !seat.present) {
         let own_slot = room
@@ -1175,10 +1203,10 @@ pub(crate) fn staged_seats(
             ready: own_slot.is_some_and(|member| member.ready),
             present: true,
             locked: false,
-            champion: room.champion == Some(room.member_id),
             master: own_slot.is_some_and(|member| member.master),
             playing: own_slot.is_some_and(|member| member.playing_state != 0),
-            has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
+            has_song: own_slot.is_some_and(member_has_room_song)
+                || (own_slot.is_none() && room.music_id != 0),
             download_badge_armed: false,
             no_gem: own_slot.is_some_and(is_no_gem),
             pc_room: own_slot.is_some_and(|member| member.free_pass != 0),
@@ -1193,7 +1221,7 @@ pub(crate) fn staged_seats(
 }
 
 /// Staged view of one wire slot, including its own master flag.
-fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
+fn staged_slot_seat(slot: &RoomSlot) -> StagedSeat {
     match &slot.member {
         Some(member) => StagedSeat {
             name: member.nickname.clone(),
@@ -1202,10 +1230,9 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             ready: member.ready,
             present: true,
             locked: false,
-            champion,
             master: member.master,
             playing: member.playing_state != 0,
-            has_song: !member.music_ids.is_empty(),
+            has_song: member_has_room_song(member),
             download_badge_armed: false,
             no_gem: is_no_gem(member),
             pc_room: member.free_pass != 0,
@@ -1217,7 +1244,6 @@ fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             ready: false,
             present: false,
             locked: true,
-            champion: false,
             master: false,
             playing: false,
             has_song: false,
@@ -1238,7 +1264,6 @@ fn empty_staged_seat() -> StagedSeat {
         ready: false,
         present: false,
         locked: false,
-        champion: false,
         master: false,
         playing: false,
         has_song: false,
@@ -1248,31 +1273,46 @@ fn empty_staged_seat() -> StagedSeat {
     }
 }
 
-/// Role prefix of one seat: the champion seat names `CHAMPION`, every
-/// other occupied seat `CHALLENGER` (the reference 1v1 pair); rooms
-/// without a champion mark name no roles (normal rooms carry none).
-pub(crate) fn staged_role(has_champion: bool, seat: &StagedSeat) -> Option<&'static str> {
-    if !has_champion || !seat.present {
-        return None;
-    }
-    Some(if seat.champion {
-        "CHAMPION"
-    } else {
-        "CHALLENGER"
-    })
+/// Member line the exe prints in one occupied seat's team plate. The
+/// quiesced 7.55 capture inks `Lv.1:t207probe` and `Lv.1:tester`; no
+/// team letter, role word or ready flag reaches this TEXT child (#883).
+#[must_use]
+pub(crate) fn waiting_seat_caption(seat: &StagedSeat) -> String {
+    let level = seat
+        .level
+        .map_or_else(|| "-".to_owned(), |level| level.to_string());
+    format!("Lv.{level}:{}", seat.name)
 }
 
-/// One staged seat line: role plus team plus `Lv` (unknown levels
-/// show `-`: the self seat carries no wire level) plus name plus the
-/// ready flag — the legacy row shape, role-prefixed.
-pub(crate) fn staged_seat_text(seat: &StagedSeat, role: Option<&str>) -> String {
-    let flag = if seat.ready { 'R' } else { '-' };
-    let level = seat.level.map_or("-".to_owned(), |level| level.to_string());
-    let team = team_letter(seat.team);
-    match role {
-        Some(role) => format!("{role} {team} Lv:{level} {} {flag}", seat.name),
-        None => format!("{team} Lv:{level} {} {flag}", seat.name),
-    }
+/// Ink origin of one seat's `AVATARINFO` TEXT child: the template rect
+/// plus its seat parent's origin. The measured GDI bearing of this cell
+/// is `(+1,+4)` in the 7.55 pair (oracle crop: ink starts at `(39,216)`
+/// for template `(1,157)` on parent `(37,55)`).
+fn waiting_seat_text_origin(
+    placements: &[ScenePlacement],
+    seat: usize,
+    frame: &Frame<'_>,
+) -> Option<(i32, i32)> {
+    let text = placements
+        .iter()
+        .find(|placed| placed.id == WAITING_AVATARINFO_ID)?;
+    let parent_id = WAITING_SEAT_PARENT_IDS.get(seat)?;
+    let parent = placements.iter().find(|placed| placed.id == *parent_id)?;
+    let scaled = scale_rect_to_frame(
+        &Rect {
+            x: parent.rect.x.saturating_add(text.rect.x),
+            y: parent.rect.y.saturating_add(text.rect.y),
+            w: text.rect.w,
+            h: text.rect.h,
+        },
+        frame.w,
+        frame.h,
+    );
+    let bearing = anchor_in_frame(1, 4, frame.w, frame.h);
+    Some((
+        scaled.x.saturating_add(bearing.0),
+        scaled.y.saturating_add(bearing.1),
+    ))
 }
 
 /// Scaled frame origin of one waiting control (`None` while the staged
@@ -1393,7 +1433,9 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
-    paint_waiting_speed(frame, speed, placements);
+    paint_waiting_speed_art(frame, speed, art);
+    paint_waiting_random_card(frame, art);
+    paint_waiting_speed_arrows(frame, art);
     paint_waiting_skills(frame, room, captions.skill_slots, placements);
     paint_waiting_skillcounts(
         frame,
@@ -1590,10 +1632,10 @@ pub(crate) fn paint_waiting_covers(
     placements: &[ScenePlacement],
     local_name: Option<&str>,
 ) {
-    let has_champion = room.champion.is_some();
-    for (cover_id, seat) in WAITING_COVER_IDS
+    for (index, (cover_id, seat)) in WAITING_COVER_IDS
         .iter()
         .zip(staged_seats(room, local_name, false))
+        .enumerate()
     {
         if !cover_stages_body(placements, cover_id) {
             continue;
@@ -1601,11 +1643,19 @@ pub(crate) fn paint_waiting_covers(
         let Some((x, y)) = waiting_bnd_origin(placements, cover_id, frame) else {
             continue;
         };
+        let Some((text_x, text_y)) = waiting_seat_text_origin(placements, index, frame) else {
+            continue;
+        };
         if seat.locked {
-            paint_room_detail_line(frame, x, y, "LOCK", art_title_ink());
+            paint_room_detail_line(frame, text_x, text_y, "LOCK", art_title_ink());
         } else if seat.present {
-            let role = staged_role(has_champion, &seat);
-            paint_room_detail_line(frame, x, y, &staged_seat_text(&seat, role), art_title_ink());
+            paint_room_detail_line(
+                frame,
+                text_x,
+                text_y,
+                &waiting_seat_caption(&seat),
+                art_title_ink(),
+            );
             paint_cover_ready_dot(frame, x, y, seat.ready);
         }
     }
@@ -1765,6 +1815,64 @@ pub(crate) fn paint_waiting_speed(frame: &mut Frame<'_>, speed: u8, placements: 
         WAITING_SPEED_NUM_ID,
         &room_speed_label(speed),
     );
+}
+
+/// Paint the speed chip the way the exe's image control does: one
+/// staged record, not the whole `Wait_Btn_Speed_Num.ojs` stack. The
+/// quiesced 7.55 pair shows a single large `X1` (code 1); our stack
+/// used to end on a green `?` over a small caption (#883). Without an
+/// installed figure the bare GDI caption remains the fallback.
+fn paint_waiting_speed_art(frame: &mut Frame<'_>, speed: u8, art: &SceneArt) {
+    let Some(placed) = art
+        .placements
+        .iter()
+        .find(|placed| placed.id == WAITING_SPEED_NUM_ID)
+    else {
+        return;
+    };
+    let record = usize::from(speed);
+    let staged = placed
+        .sprite
+        .as_deref()
+        .and_then(|sprite| art.figures.get(sprite))
+        .is_some_and(|figure| figure.layer(record).is_some());
+    if staged {
+        let shares_body = shared_sprite_names(&art.placements)
+            .contains(&placed.sprite.as_deref().unwrap_or_default());
+        paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
+    } else {
+        paint_waiting_speed(frame, speed, &art.placements);
+    }
+}
+
+/// Paint the Random card's rest record instead of stacking all of its
+/// records. The 7.55 oracle inks `?` on both cards; the old stack ended
+/// on a song cover (#884).
+fn paint_waiting_random_card(frame: &mut Frame<'_>, art: &SceneArt) {
+    let Some(placed) = art
+        .placements
+        .iter()
+        .find(|placed| placed.id == WAITING_RANDMAP_ID)
+    else {
+        return;
+    };
+    let shares_body = shared_sprite_names(&art.placements)
+        .contains(&placed.sprite.as_deref().unwrap_or_default());
+    paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
+}
+
+/// Paint the two arrow bodies at their rest record. The generic stack
+/// used to end on the dark pressed frame, dimming the whole SPEED
+/// plate against the 7.55 pair (#883).
+fn paint_waiting_speed_arrows(frame: &mut Frame<'_>, art: &SceneArt) {
+    for id in WAITING_SPEED_ARROW_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let shares_body = shared_sprite_names(&art.placements)
+            .contains(&placed.sprite.as_deref().unwrap_or_default());
+        paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
+    }
 }
 
 /// One owned skill in a Waiting selector: id at owned-vector `+4`,
@@ -1973,6 +2081,13 @@ pub(crate) fn paint_waiting_mapname(
     room: &JoinedRoom,
     placements: &[ScenePlacement],
 ) {
+    // The quiet 7.55 pair leaves the sheet's baked `Random` label in
+    // this cell for an arena-0 room. The static map-cycle table still
+    // names stage entries for other arena words; this negative is the
+    // oracle for the paired room word (next step: tap a non-zero arena).
+    if room.arena == 0 {
+        return;
+    }
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MAPNAME_ID, frame) {
         paint_room_detail_line(frame, x, y, waiting_map_name(room.arena), art_title_ink());
     }
@@ -2001,9 +2116,14 @@ pub(crate) fn paint_waiting_bpm(
     song_bpm: Option<f32>,
     placements: &[ScenePlacement],
 ) {
-    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_BPM_ID, frame) {
-        paint_room_detail_line(frame, x, y, &waiting_bpm_caption(song_bpm), art_title_ink());
-    }
+    // The oracle inks `124` directly on the staged blue well; the old
+    // shared detail line drew an invented black scrim over it (#883).
+    paint_waiting_bare_caption(
+        frame,
+        placements,
+        WAITING_BPM_ID,
+        &waiting_bpm_caption(song_bpm),
+    );
 }
 
 /// `SKILLCOUNT` caption for one inventory slot: the count word at
@@ -2033,6 +2153,11 @@ pub(crate) fn paint_waiting_skillcounts(
         let count = slots
             .and_then(|slots| slots.selected(slot))
             .map_or(*count, |item| item.count);
+        // The 7.55 X plates show no digits at a zero count; our default
+        // `[0;3]` used to print three black-on-scrim zeros over them.
+        if count == 0 {
+            continue;
+        }
         if let Some((x, y)) = waiting_bnd_origin(placements, id, frame) {
             paint_room_detail_line(
                 frame,
