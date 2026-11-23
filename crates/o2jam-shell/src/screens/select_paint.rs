@@ -42,6 +42,14 @@ const ROW_LEVEL_TEXT_ID: &str = "IDC_TEXT_DSMUSIC_TXT_DIFF";
 /// sprite — only geometry.
 pub(crate) const ROW_BAND_ID_PREFIX: &str = "IDC_BUTTON_DSMUSIC_EXTEND";
 
+/// GDI cell bearing for select-dialog text ink, in native pixels.
+/// `Dialog_SelectMusic.bnd` band 150 plus `SET` template y 6 puts the
+/// first row's cell top at y 156; the 7.55 reference frame
+/// (`~/scratch/av-reports/frames/ref_musicselect.png`, #349) inks row 1
+/// from y 161. The rasterizer anchors cap tops at the cell top, so
+/// this bearing moves only the ink, never the staged geometry.
+const SELECT_TEXT_INK_BEARING_Y: i32 = 5;
+
 /// Caption ink (white, the exe's dialog text tone).
 pub(crate) fn select_ink() -> u32 {
     pack_xrgb(0xFF, 0xFF, 0xFF)
@@ -241,7 +249,8 @@ fn paint_slot(frame: &mut Frame<'_>, slot: Option<Rect>, text: &str, ink: u32) {
         return;
     };
     let spot = scale_rect_to_frame(&rect, frame.w, frame.h);
-    draw_text(frame, spot.x, spot.y, text, ink);
+    let ink_y = spot.y.saturating_add(SELECT_TEXT_INK_BEARING_Y);
+    draw_text(frame, spot.x, ink_y, text, ink);
 }
 
 #[cfg(test)]
@@ -368,6 +377,41 @@ mod tests {
         (rect.y..rect.y + rect.h as i32)
             .flat_map(|y| (rect.x..rect.x + rect.w as i32).map(move |x| (x, y)))
             .any(|(x, y)| buf[y as usize * width + x as usize] == ink)
+    }
+
+    /// First row with exact caption ink inside a rect.
+    fn first_ink_row(buf: &[u32], rect: Rect, ink: u32) -> Option<i32> {
+        (rect.y..rect.y + rect.h as i32).find(|&y| {
+            (rect.x..rect.x + rect.w as i32).any(|x| buf[y as usize * 800 + x as usize] == ink)
+        })
+    }
+
+    #[test]
+    fn select_row_ink_starts_at_the_gdi_cell_bearing_not_the_template_top() {
+        // The 7.55 frame inks row 1 at y 161 while its staged cell top
+        // is y 156; the five-pixel GDI bearing is part of the anchor.
+        let mut buf = vec![pack_xrgb(0x40, 0x40, 0x40); 800 * 600];
+        let slots = SelectTextSlots::from_placements(&dialog_placements());
+        let songs = songs();
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
+        paint_select_text(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &slots,
+            &rows,
+            None,
+            SelectTextLive::default(),
+        );
+        let title = Rect {
+            x: 410,
+            y: 156,
+            w: 149,
+            h: 12,
+        };
+        assert_eq!(first_ink_row(&buf, title, select_ink()), Some(161));
     }
 
     #[test]
