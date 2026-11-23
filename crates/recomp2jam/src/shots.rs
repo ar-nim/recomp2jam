@@ -200,6 +200,12 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     }
     stage_select_music_scene(&mut game);
     shots.push(shoot_checked(&mut game, "musicselect", Screen::Waiting, 0)?);
+    shots.push(shoot_checked_native(
+        &mut game,
+        "musicselect-native",
+        Screen::Waiting,
+        0,
+    )?);
     game.menu_key(MenuKey::Confirm, true);
     stage_loading_status(&mut game);
     shots.push(shoot_checked(&mut game, "loading", Screen::Loading, 0)?);
@@ -2142,6 +2148,7 @@ mod tests {
         }
         expected.extend_from_slice(&[
             "musicselect",
+            "musicselect-native",
             "loading",
             "playing",
             "playing-native",
@@ -4175,11 +4182,11 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Seventeen fixed scenes plus the mid-lesson tutorial frame
-        // (avi, planet, options, channel with its open-row and
-        // closed-row wire-mirror natives) plus one preview per staged
-        // side and one native per staged #207 side.
-        let fixed = 17 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        // Eighteen fixed scenes (the native music-select companion
+        // joins the downscaled preview) plus the mid-lesson tutorial
+        // frame, one preview per staged side and one native per staged
+        // #207 side.
+        let fixed = 18 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
         assert_eq!(shots.len(), fixed + side_count + native_count);
         let loading_staged = loading_caption_staged();
         for shot in shots {
@@ -4209,11 +4216,12 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Eighteen fixed files (avi, planet, options, channel plus its
-        // open-row and closed-row wire-mirror natives, loading, the
-        // playing/result family, the mid-lesson tutorial frame) plus
-        // staged previews and #207 natives.
-        let fixed = 17 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        // Nineteen fixed files (avi, planet, options, channel plus its
+        // open-row and closed-row wire-mirror natives, the two
+        // music-select previews, loading, the playing/result family,
+        // the mid-lesson tutorial frame) plus staged previews and #207
+        // natives.
+        let fixed = 18 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
         assert_eq!(written.len(), fixed + side_count + native_count);
         assert!(dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
