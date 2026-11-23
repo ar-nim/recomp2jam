@@ -4311,8 +4311,8 @@ pub(crate) use self::waiting::{
     paint_waiting_bpm, paint_waiting_covers, paint_waiting_mapname, paint_waiting_music,
     paint_waiting_seat_marks, paint_waiting_skillcounts, paint_waiting_skills, paint_waiting_speed,
     paint_waiting_staged, paint_waiting_team_highlight, paint_waiting_title, paint_waiting_wins,
-    ready_dot_color, seat_origin, staged_role, staged_seat_text, staged_seats,
-    waiting_control_armed_for_role, waiting_level_layer, waiting_music_caption, waiting_row_text,
+    ready_dot_color, seat_origin, staged_seats, waiting_control_armed_for_role,
+    waiting_level_layer, waiting_music_caption, waiting_row_text, waiting_seat_caption,
     waiting_seats, SeatKind, StagedSeat, WAITING_AVATAR_SLOT_ID, WAITING_BPM_ID, WAITING_LEVEL_ID,
     WAITING_MAPNAME_ID, WAITING_MUSICNAME_ID, WAITING_ROOMNAME_ID, WAITING_SEATS,
     WAITING_SEAT_PARENT_IDS, WAITING_SKILLCOUNT_IDS, WAITING_SKILL_IDS, WAITING_SPEED_NUM_ID,
@@ -10454,7 +10454,7 @@ mod paint_tests {
         // bodies. Occupied covers then take the live seat line (the
         // scrim covers the art pixel); empty covers stay untouched
         // so the staged empty panels show.
-        let placements = (0..8)
+        let mut placements: Vec<ScenePlacement> = (0..8)
             .map(|seat| ScenePlacement {
                 role: PlacementRole::Single,
                 id: format!("IDC_IMAGE_SWAIT_COVERAVATAR{}", seat + 1),
@@ -10468,6 +10468,29 @@ mod paint_tests {
                 },
             })
             .collect();
+        // The member line belongs to the seat template's AVATARINFO
+        // child, not the cover body. These synthetic parents put its
+        // ink at each cover origin so the old per-cover assertions stay
+        // a pin on the cover/line pairing (#883).
+        for (seat, parent_id) in WAITING_SEAT_PARENT_IDS.iter().enumerate() {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*parent_id).to_owned(),
+                code: 0x1601_5022 + seat as u32,
+                sprite: None,
+                rect: Rect {
+                    x: 8 + (seat as i32) * 60,
+                    y: 39 + (seat as i32) * 45,
+                    w: 123,
+                    h: 150,
+                },
+            });
+        }
+        placements.push(waiting_probe(
+            "IDC_TEXT_SWAIT_AVATARINFO",
+            None,
+            (1, 157, 122, 172),
+        ));
         let art = SceneArt {
             placements,
             figures: HashMap::from([("Wait_Cover_Avatar.ojs".to_owned(), red_figure())]),
@@ -10711,13 +10734,17 @@ mod paint_tests {
     }
 
     #[test]
-    fn staged_covers_name_champion_and_challenger() {
-        // Cover rects 60/61 `(28,53,169,228)`/`(170,53,311,228)`:
-        // wire slot 0 names CHALLENGER, slot 1 (the champion here)
-        // names CHAMPION. Both take their wire level.
+    fn waiting_cover_names_ink_the_template_text_cell() {
+        // Quiesced 7.55 pair `~/scratch/paired-shots-v3/states/waiting-master/exe.png`:
+        // `Lv.1:t207probe` inks inside the red team plate at y 217, not
+        // on the cover art at y 53. The seat template's `AVATARINFO`
+        // TEXT rect `(1,157)` plus seat-parent `(37,55)` is the pin.
         let placements = vec![
             waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
             waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR2", None, (170, 53, 311, 228)),
+            waiting_probe(WAITING_SEAT_PARENT_IDS[0], None, (37, 55, 160, 205)),
+            waiting_probe(WAITING_SEAT_PARENT_IDS[1], None, (179, 55, 302, 205)),
+            waiting_probe("IDC_TEXT_SWAIT_AVATARINFO", None, (1, 157, 122, 172)),
         ];
         let mut buf = vec![background_of(Screen::Waiting); 800 * 600];
         paint_waiting_covers(
@@ -10730,18 +10757,77 @@ mod paint_tests {
             &placements,
             None,
         );
-        assert_eq!(buf[51 * 800 + 166], scrim_color(), "challenger scrim");
+        let mut expected = vec![background_of(Screen::Waiting); 800 * 600];
+        for cover_x in [28, 170] {
+            fill_rect(
+                &mut Frame {
+                    buf: &mut expected,
+                    w: 800,
+                    h: 600,
+                },
+                &Rect {
+                    x: cover_x - 6,
+                    y: 53,
+                    w: 3,
+                    h: 5,
+                },
+                pack_xrgb(0x30, 0xE0, 0x30),
+            );
+        }
+        for parent_x in [37, 179] {
+            paint_room_detail_line(
+                &mut Frame {
+                    buf: &mut expected,
+                    w: 800,
+                    h: 600,
+                },
+                parent_x + 1 + 1,
+                55 + 157 + 4,
+                "Lv.9:host",
+                art_title_ink(),
+            );
+        }
+        let mismatch = buf
+            .iter()
+            .zip(expected.iter())
+            .position(|(actual, want)| actual != want);
         assert!(
-            buf[51 * 800 + 170..51 * 800 + 311].contains(&scrim_color()),
-            "champion line paints on cover 1"
+            mismatch.is_none(),
+            "first mismatch at {:?}; names must ink the template cell in Lv.<n>:<name> form",
+            mismatch
         );
-        assert!(has_ink_near(&buf, art_title_ink()));
-        // Ready dots ride the cover lines: each wire slot carries its
-        // own ready flag, never a synthetic self-first duplicate.
-        assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
         assert!(
-            buf[55 * 800 + 160..55 * 800 + 311].contains(&pack_xrgb(0x30, 0xE0, 0x30)),
-            "cover 1 ready dot"
+            !buf[40 * 800..100 * 800].contains(&scrim_color()),
+            "no cover-art caption remains above the team plate"
+        );
+        // Ready dots keep their own cover-line origin.
+        assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
+    }
+
+    #[test]
+    fn waiting_zero_skill_counts_leave_the_x_boxes_bare() {
+        // Exe oracle: the three SKILL X plates are ink-free when no
+        // owned-item count is staged. Rust printed `0` in all three.
+        let placements = vec![
+            waiting_probe("IDC_TEXT_SWAIT_1SKILLCOUNT", None, (712, 208, 731, 223)),
+            waiting_probe("IDC_TEXT_SWAIT_2SKILLCOUNT", None, (712, 246, 731, 261)),
+            waiting_probe("IDC_TEXT_SWAIT_3SKILLCOUNT", None, (712, 284, 731, 299)),
+        ];
+        let mut buf = vec![background_of(Screen::Waiting); 800 * 600];
+        paint_waiting_skillcounts(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[0, 0, 0],
+            None,
+            &placements,
+        );
+        assert_eq!(
+            buf,
+            vec![background_of(Screen::Waiting); 800 * 600],
+            "a zero count must not ink the baked X plate"
         );
     }
 
@@ -11705,6 +11791,150 @@ mod paint_tests {
     }
 
     #[test]
+    fn waiting_speed_and_random_cards_paint_one_record_each() {
+        // Exe oracle: SPEED_NUM shows one `X1` record for code 1, and
+        // RANDMAP keeps its `?` rest card. Stacking every record used
+        // to end on a green `?` and a song cover (#883/#884).
+        let mut speed = solid_figure(54, 35, [0x00, 0x7C]);
+        speed.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x00].repeat(54 * 35), 54, 35).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let mut random = solid_figure(89, 65, [0x00, 0x7C]);
+        random.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x00].repeat(89 * 65), 89, 65).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let art = SceneArt {
+            placements: vec![
+                waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
+                waiting_probe(
+                    WAITING_SPEED_NUM_ID,
+                    Some("SpeedProbe.ojs"),
+                    (681, 378, 735, 413),
+                ),
+                waiting_probe(
+                    "IDC_IMAGE_SWAIT_RANDMAP",
+                    Some("RandomProbe.ojs"),
+                    (619, 468, 708, 533),
+                ),
+            ],
+            figures: HashMap::from([
+                ("SpeedProbe.ojs".to_owned(), speed),
+                ("RandomProbe.ojs".to_owned(), random),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        assert_eq!(
+            buf[390 * 800 + 700],
+            pack_xrgb(0, 0, 255),
+            "speed code 1 paints its own record"
+        );
+        assert_eq!(
+            buf[480 * 800 + 650],
+            pack_xrgb(255, 0, 0),
+            "random card keeps the rest record"
+        );
+    }
+
+    #[test]
+    fn waiting_speed_arrows_keep_the_bright_rest_record() {
+        // Quiesced pair `(720,400)`: exe shows bright blue arrows,
+        // rust stacked the two-record sprites and ended on the dark
+        // face (#883). Both arrow ids must use record 0.
+        let mut arrow = solid_figure(33, 36, [0x1F, 0x00]);
+        arrow.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x10, 0x42].repeat(33 * 36), 33, 36).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let art = SceneArt {
+            placements: vec![
+                waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
+                waiting_probe(
+                    "IDC_BUTTON_SWAIT_SPEED_LEFT",
+                    Some("ArrowProbe.ojs"),
+                    (647, 378, 680, 414),
+                ),
+                waiting_probe(
+                    "IDC_BUTTON_SWAIT_SPEED_RIGHT",
+                    Some("ArrowProbe.ojs"),
+                    (736, 378, 769, 414),
+                ),
+            ],
+            figures: HashMap::from([("ArrowProbe.ojs".to_owned(), arrow)]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        assert_eq!(
+            buf[390 * 800 + 655],
+            pack_xrgb(0, 0, 255),
+            "left arrow keeps its bright rest record"
+        );
+        assert_eq!(
+            buf[390 * 800 + 745],
+            pack_xrgb(0, 0, 255),
+            "right arrow keeps its bright rest record"
+        );
+    }
+
+    #[test]
+    fn waiting_map_cell_keeps_the_baked_random_label() {
+        // Exe region `(640,480)`: an arena-0 room leaves `Random` from
+        // the sheet visible. Our map-cycle caption printed a Korean
+        // stage name plus a black scrim on top of it (#884).
+        let placements = vec![waiting_probe(
+            WAITING_MAPNAME_ID,
+            None,
+            (620, 448, 707, 462),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_mapname(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &placements,
+        );
+        assert!(
+            buf.iter().all(|pixel| *pixel == 0),
+            "no map caption for the arena-0 room in the oracle pair"
+        );
+    }
+
+    #[test]
     fn skill_slots_show_staged_ring_ids_only() {
         // `1SKILL` rect 87 `(701,208,731,238)`: the staged ring id;
         // `2SKILL` (no second ring) stays untouched X art.
@@ -11838,17 +12068,16 @@ mod paint_tests {
     }
 
     #[test]
-    fn staged_seat_text_shows_level_and_name() {
-        // Room-fill `Lv.%d:%s` flow: role prefix, team letter, wire
-        // level, nickname, ready flag.
-        let champion = StagedSeat {
+    fn waiting_seat_caption_prints_level_and_name_only() {
+        // Quiesced 7.55 pair: `Lv.1:t207probe`, not the legacy row text
+        // with team letter, champion role or ready flag (#883).
+        let host = StagedSeat {
             name: "host".to_owned(),
             level: Some(9),
             team: 0,
             ready: true,
             present: true,
             locked: false,
-            champion: true,
             master: true,
             playing: false,
             has_song: true,
@@ -11856,19 +12085,14 @@ mod paint_tests {
             no_gem: false,
             pc_room: false,
         };
-        assert_eq!(
-            staged_seat_text(&champion, Some("CHAMPION")),
-            "CHAMPION A Lv:9 host R"
-        );
-        assert_eq!(staged_seat_text(&champion, None), "A Lv:9 host R");
-        let challenger = StagedSeat {
+        assert_eq!(waiting_seat_caption(&host), "Lv.9:host");
+        let local = StagedSeat {
             name: "YOU".to_owned(),
             level: None,
             team: 1,
             ready: false,
             present: true,
             locked: false,
-            champion: false,
             master: false,
             playing: false,
             has_song: false,
@@ -11876,10 +12100,7 @@ mod paint_tests {
             no_gem: false,
             pc_room: false,
         };
-        assert_eq!(
-            staged_seat_text(&challenger, Some("CHALLENGER")),
-            "CHALLENGER B Lv:- YOU -"
-        );
+        assert_eq!(waiting_seat_caption(&local), "Lv.-:YOU");
     }
 
     #[test]
@@ -12414,14 +12635,15 @@ mod paint_tests {
 
     #[test]
     fn staged_scene_prefers_bnd_anchors_over_the_legacy_grid() {
-        // Covers staged: the seat line anchors to the cover rect
-        // and the legacy grid slot `(100,150)` stays untouched — an
-        // empty stage paints no fill (`docs/channel-fill.md`).
-        let placements = vec![waiting_probe(
-            "IDC_IMAGE_SWAIT_COVERAVATAR1",
-            None,
-            (28, 53, 169, 228),
-        )];
+        // Covers staged: the seat line anchors to the template
+        // `AVATARINFO` cell at `(39,216)` and the legacy grid slot
+        // `(100,150)` stays untouched — an empty stage paints no fill
+        // (`docs/channel-fill.md`, #883).
+        let placements = vec![
+            waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
+            waiting_probe(WAITING_SEAT_PARENT_IDS[0], None, (37, 55, 160, 205)),
+            waiting_probe("IDC_TEXT_SWAIT_AVATARINFO", None, (1, 157, 122, 172)),
+        ];
         let art = SceneArt {
             placements,
             figures: HashMap::new(),
@@ -12440,7 +12662,7 @@ mod paint_tests {
             false,
             MemberRole::Spectator,
         );
-        assert_eq!(buf[51 * 800 + 24], scrim_color());
+        assert_eq!(buf[214 * 800 + 35], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
     }
 
@@ -13988,7 +14210,7 @@ mod paint_tests {
             Some(124.0),
             &placements,
         );
-        assert_eq!(buf[58 * 800 + 616], scrim_color());
+        assert_eq!(buf[58 * 800 + 616], 0, "the blue well has no shell scrim");
         assert!(has_ink_near(&buf, art_title_ink()));
     }
 
@@ -14011,7 +14233,7 @@ mod paint_tests {
             None,
             &placements,
         );
-        assert_eq!(buf[58 * 800 + 616], scrim_color());
+        assert_eq!(buf[58 * 800 + 616], 0, "the blue well has no shell scrim");
         assert!(has_ink_near(&buf, art_title_ink()));
     }
 
@@ -14719,8 +14941,7 @@ mod paint_tests {
         }
         let staged_seats = staged_seats(&champion, None, false);
         for seat in &staged_seats {
-            let role = staged_role(champion.champion.is_some(), seat);
-            fold_pin_text(&mut hash, &staged_seat_text(seat, role));
+            fold_pin_text(&mut hash, &waiting_seat_caption(seat));
         }
         for arena in [0, 1, 2, 3, 4, 9] {
             fold_pin_text(&mut hash, waiting_map_name(arena));
@@ -14875,10 +15096,14 @@ mod paint_tests {
         // sits at `member_id`; header class chips stay unpainted.
         // #535 re-cut: `SPEED_NUM` now inks caption level's pick-or-room
         // speed instead of the room's own speed, so the four folded
-        // frames differ at that rect alone. Named guards + the p343
-        // matched rerun carry the exe evidence.
+        // frames differ at that rect alone. #883 re-pins the seat line
+        // to the exe's `Lv.<n>:<name>` form (captain/ready words removed)
+        // and #884 drops zero skill counts from the baked X plates.
+        // #883 second pass also leaves the arena-0 MAPNAME cell at the
+        // sheet's baked `Random`, inks BPM bare, and keeps the bright
+        // speed-arrow record. Named guards + quiesced pairs carry it.
         assert_eq!(
-            hash, 0x2EF3_90AE_C80F_1B86,
+            hash, 0x283B_C1B8_F2A8_B058,
             "waiting paint generation changed; re-check the exe pins before updating"
         );
     }

@@ -16234,7 +16234,7 @@ mod game_tests {
         let buf = paint_waiting_frame(&mut game, 800, 600);
         let scrim = pack_xrgb(0x08, 0x08, 0x10);
         assert_eq!(buf[13 * 800 + 476], scrim, "mapname scrim");
-        assert_eq!(buf[58 * 800 + 616], scrim, "bpm scrim");
+        assert_eq!(buf[58 * 800 + 616], 0, "the BPM well has no shell scrim");
         assert_eq!(buf[206 * 800 + 736], scrim, "skillcount scrim");
         assert!(
             has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)),
@@ -33933,12 +33933,12 @@ mod game_tests {
         // No dialog art at the origin, no structure scrims, and the
         // #274 readout band below the seats stays clear (staged art
         // without figures leaves the frame untouched, so absence reads
-        // 0) — but the BPM scrim inks its rect.
+        // 0); the BPM ink is bare on the staged blue well (#883).
         assert_eq!(buf[0], 0);
         assert_eq!(buf[95 * 800 + 30], 0);
         assert_eq!(buf[450 * 800 + 100], 0);
         assert_eq!(buf[458 * 800 + 100], 0);
-        assert_eq!(buf[58 * 800 + 616], pack_xrgb(0x08, 0x08, 0x10));
+        assert_eq!(buf[58 * 800 + 616], 0);
     }
 
     #[test]
