@@ -3308,14 +3308,14 @@ impl OnlineSession {
     /// lines under the short chat timeout so a quiet gateway never
     /// stalls the frame loop — the same timeout-restore shape as
     /// [`Self::poll_channel_chat`].
-    fn poll_waiting_chat(&mut self) {
+    fn poll_waiting_chat(&mut self, now: Instant) {
         if self.game.screen() != Screen::Waiting {
             return;
         }
         self.with_drain_timeout(CHAT_IO_TIMEOUT, "waiting chat", |session| {
             session.drain_waiting_chat();
         });
-        self.poll_start();
+        self.poll_start_at(now);
     }
 
     /// Start-broadcast section in `Waiting`: the 4011 drain sets
@@ -3327,7 +3327,7 @@ impl OnlineSession {
     /// through `ScreenGame::force_advance_to_loading`, since the
     /// START gate passes masters only and a guest Confirm could never
     /// satisfy it. Leaving Waiting clears the announcement either way.
-    fn poll_start(&mut self) {
+    fn poll_start_at(&mut self, now: Instant) {
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
             return;
@@ -3347,7 +3347,7 @@ impl OnlineSession {
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
             if self.joined_waiting && self.game.screen() == Screen::Loading {
-                self.arm_loading_gate_at(Instant::now());
+                self.arm_loading_gate_at(now);
             }
         }
     }
@@ -4136,7 +4136,10 @@ impl OnlineSession {
     /// sequence must never put a fresh 1004 on the wire ahead of the
     /// 2021 leave (Memoryer answers it with a 1001 `-1` auth error
     /// until the leave resets the session, ticket #175 probe).
-    fn poll_wire(&mut self) {
+    /// One wire poll driven by an explicit loading-gate clock. Live
+    /// paints pass the wall clock; virtual guards pass synthetic
+    /// instants so the pinned spans need no sleeps (#874).
+    fn poll_wire_at(&mut self, now: Instant) {
         self.replay_deferred_frames();
         self.flush_waiting_exit();
         self.flush_arena_send();
@@ -4160,15 +4163,26 @@ impl OnlineSession {
         // foreign frame and the fuse would starve on a live reply.
         let room_poll_pending = self.game.room_user_list_poll_tracked();
         if self.wire_attempt_pending() || room_poll_pending {
-            self.poll_start();
+            self.poll_start_at(now);
         } else {
             self.poll_lobby_chat();
-            self.poll_waiting_chat();
+            self.poll_waiting_chat(now);
             self.poll_music_downloads();
         }
         self.poll_tally();
         self.flush_result_wire();
-        self.advance_loading_gate_at(Instant::now());
+        self.advance_loading_gate_at(now);
+    }
+
+    /// One window paint with an explicit loading-gate clock. The live
+    /// [`GameLoop::paint`] passes the wall clock; virtual guards step
+    /// the same caller chain without waiting on real time (#874).
+    fn paint_at_instant(&mut self, frame: &mut o2jam_render::Frame<'_>, now: Instant) {
+        self.poll_wire_at(now);
+        self.game.paint(frame);
+        if self.game.screen() != Screen::Loading {
+            self.loaded_sent = false;
+        }
     }
 }
 
@@ -4320,11 +4334,7 @@ impl GameLoop for OnlineSession {
     }
 
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
-        self.poll_wire();
-        self.game.paint(frame);
-        if self.game.screen() != Screen::Loading {
-            self.loaded_sent = false;
-        }
+        self.paint_at_instant(frame, Instant::now());
     }
 }
 
@@ -4418,6 +4428,11 @@ fn level_for_difficulty(difficulty: u8) -> usize {
 
 #[cfg(test)]
 pub(super) mod session_tests {
+    //! Session guards (#874): clock-driven guards stay in the normal suite.
+    //! Wall-clock guards carry `#[ignore]` with their own release command;
+    //! `wall_clock_session_guards_are_isolated_from_the_normal_suite` pins
+    //! that list so lane contention cannot silently move them back.
+
     #[cfg(test)]
     use o2jam_shell::screens::side::MyRoomNotice;
     use std::io::{Read, Write};
@@ -4804,6 +4819,17 @@ pub(super) mod session_tests {
         session.paint(&mut frame);
     }
 
+    /// One native-canvas paint with the loading gate driven by `now`.
+    fn paint_frame_at(session: &mut OnlineSession, now: Instant) {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        session.paint_at_instant(&mut frame, now);
+    }
+
     /// The game's native-canvas paint only (no session poll), for
     /// frame comparisons after a wire event has been drained.
     pub(super) fn painted_game_frame(session: &mut OnlineSession) -> Vec<u32> {
@@ -4814,19 +4840,6 @@ pub(super) mod session_tests {
             h: 600,
         });
         buf
-    }
-
-    /// Paint only when the real window would request a redraw. `None`
-    /// parks the loop until input, matching `WindowHandler::about_to_wait`;
-    /// a parked guest is the #727 stall.
-    fn paint_on_heartbeat(session: &mut OnlineSession, due: &mut Option<Instant>, now: Instant) {
-        match *due {
-            None => return,
-            Some(deadline) if now < deadline => return,
-            Some(_) => {}
-        }
-        paint_frame(session);
-        *due = session.idle_repaint_interval().map(|gap| now + gap);
     }
 
     /// Paint budget for a drained-state assertion. Counting paints,
@@ -6216,6 +6229,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock gateway pacing; run alone in release (#874): cargo test --release --bin recomp2jam myroom_equip_sends_5004_through_scripted_gateway -- --ignored --nocapture"]
     fn myroom_equip_sends_5004_through_scripted_gateway() {
         // Live caller chain (#419, EQUIP-APPLY x peer):
         //   window::WindowHandler -> OnlineSession::ingest_snapshot
@@ -6491,6 +6505,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock gateway pacing; run alone in release (#874): cargo test --release --bin recomp2jam myroom_bagsort_sends_5038_and_5039_reply_through_scripted_gateway -- --ignored --nocapture"]
     fn myroom_bagsort_sends_5038_and_5039_reply_through_scripted_gateway() {
         // Live caller chain: WindowHandler::ingest_snapshot ->
         // ScreenGame::click_myroom_side -> BagSort -> outbox 5038 ->
@@ -7086,6 +7101,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock paint measurement; run alone in release (#874): cargo test --release --bin recomp2jam channel_login_no_reply_never_blocks_paint -- --ignored --nocapture"]
     fn channel_login_no_reply_never_blocks_paint() {
         // Ticket #172, the freeze itself: a server that takes the
         // 1004 and never answers must not stall the frame loop — the
@@ -7112,6 +7128,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock paint measurement; run alone in release (#874): cargo test --release --bin recomp2jam channel_reentry_after_quick_back_paints_through -- --ignored --nocapture"]
     fn channel_reentry_after_quick_back_paints_through() {
         // Ticket #172 repro: enter, quick back (the pinned 2021 leave
         // goes out, ticket #175), re-enter. The stonewalled second
@@ -8353,6 +8370,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock socket poll; run alone in release (#874): cargo test --release --bin recomp2jam disband_broadcast_read_by_the_07da_fuse_still_removes_the_row -- --ignored --nocapture"]
     fn disband_broadcast_read_by_the_07da_fuse_still_removes_the_row() {
         // Live-path guard for the drain gap seen in the 13:14 live leg:
         // the #367 07DA/07DB fuse owns the socket while its node is
@@ -9495,6 +9513,9 @@ pub(super) mod session_tests {
     #[test]
     fn guest_loading_gate_keeps_the_window_repainting_after_start_broadcast() {
         use super::SESSION_POLL_HEARTBEAT;
+        use crate::loading::{
+            LoadingGateArm, LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM,
+        };
 
         let (loaded_send, loaded_recv) = mpsc::channel();
         let (mut session, server) = joined_waiting_session(guest_snapshot(), move |mut stream| {
@@ -9509,9 +9530,20 @@ pub(super) mod session_tests {
             Some(SESSION_POLL_HEARTBEAT),
             "the armed joined gate must keep the window repainting"
         );
-        paint_until(&mut session, |session| {
-            session.game.screen() == Screen::Playing
-        });
+        let LoadingGateArm::ChartArmed { entered_at, .. } = session.loading_pacing.arm_state()
+        else {
+            panic!("the guest must arm its chart on the start broadcast");
+        };
+        paint_frame_at(&mut session, entered_at + LOADING_CONFIRM_AFTER_START);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Loading,
+            "4012 alone must not enter Playing"
+        );
+        paint_frame_at(
+            &mut session,
+            entered_at + LOADING_CONFIRM_AFTER_START + LOADING_PLAYING_AFTER_CONFIRM,
+        );
         assert_eq!(session.game.screen(), Screen::Playing);
         assert_eq!(
             loaded_recv.recv_timeout(Duration::from_secs(4)).unwrap(),
@@ -9521,12 +9553,18 @@ pub(super) mod session_tests {
     }
 
     /// #725 headless two-client walk: one master and one joined peer, each
-    /// on its own scripted gateway, painted only when its own idle
-    /// heartbeat says the window would repaint. The master driver presses
-    /// Confirm on its Loading cover; the peer gets no input after START,
-    /// so both seats must reach Playing from the live gate alone.
+    /// on its own scripted gateway. Both report the heartbeat that keeps
+    /// the window repainting; the gate's clock is then stepped explicitly
+    /// (#874). The master driver presses Confirm on its Loading cover; the
+    /// peer gets no input after START, so it reaches Playing from the live
+    /// gate alone.
     #[test]
     fn two_client_gateway_walk_reaches_playing_on_master_and_peer_without_peer_input() {
+        use super::SESSION_POLL_HEARTBEAT;
+        use crate::loading::{
+            LoadingGateArm, LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM,
+        };
+
         let (started_send, started_recv) = mpsc::channel();
         let (master_loaded_send, master_loaded_recv) = mpsc::channel();
         let (peer_loaded_send, peer_loaded_recv) = mpsc::channel();
@@ -9546,24 +9584,37 @@ pub(super) mod session_tests {
 
         master.menu_key(MenuKey::Confirm, true);
         let first_paint = Instant::now();
-        let mut master_due = Some(first_paint);
-        let mut peer_due = Some(first_paint);
+        paint_frame_at(&mut master, first_paint);
+        paint_frame_at(&mut peer, first_paint);
+        assert_eq!(master.game.screen(), Screen::Loading);
+        assert_eq!(peer.game.screen(), Screen::Loading);
+        assert_eq!(
+            master.idle_repaint_interval(),
+            Some(SESSION_POLL_HEARTBEAT),
+            "the master's gate must keep its window repainting"
+        );
+        assert_eq!(
+            peer.idle_repaint_interval(),
+            Some(SESSION_POLL_HEARTBEAT),
+            "the input-free peer must keep its window repainting"
+        );
 
-        let deadline = Instant::now() + Duration::from_secs(6);
-        while (master.game.screen() != Screen::Playing || peer.game.screen() != Screen::Playing)
-            && Instant::now() < deadline
-        {
-            let now = Instant::now();
-            paint_on_heartbeat(&mut master, &mut master_due, now);
-            if master.game.screen() == Screen::Loading {
-                master.menu_key(MenuKey::Confirm, true);
-                master_due = Some(now);
-            }
-            paint_on_heartbeat(&mut peer, &mut peer_due, now);
-            thread::sleep(Duration::from_millis(10));
-        }
-
+        master.menu_key(MenuKey::Confirm, true);
         assert_eq!(master.game.screen(), Screen::Playing, "master never played");
+
+        let LoadingGateArm::ChartArmed { entered_at, .. } = peer.loading_pacing.arm_state() else {
+            panic!("the peer must arm its chart on the start broadcast");
+        };
+        paint_frame_at(&mut peer, entered_at + LOADING_CONFIRM_AFTER_START);
+        assert_eq!(
+            peer.game.screen(),
+            Screen::Loading,
+            "4012 alone must not play"
+        );
+        paint_frame_at(
+            &mut peer,
+            entered_at + LOADING_CONFIRM_AFTER_START + LOADING_PLAYING_AFTER_CONFIRM,
+        );
         assert_eq!(
             peer.game.screen(),
             Screen::Playing,
@@ -9597,6 +9648,7 @@ pub(super) mod session_tests {
     /// game data).
     #[test]
     fn live_paced_guest_reaches_playing_without_scripted_loading_gate_arming() {
+        use crate::loading::{LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM};
         use o2jam_net::Request;
 
         let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -9635,14 +9687,30 @@ pub(super) mod session_tests {
         session.game.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
 
-        let mut due = Some(Instant::now());
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while session.game.screen() != Screen::Playing && Instant::now() < deadline {
-            let now = Instant::now();
-            paint_on_heartbeat(&mut session, &mut due, now);
-            thread::sleep(Duration::from_millis(10));
+        // The chart is still staged on the live paint path; only the
+        // gate's clock is explicit, so lane contention cannot eat the
+        // 60 s receive window while the debug Vorbis decode runs (#874).
+        let gate_start = Instant::now();
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame_at(&mut session, gate_start);
         }
+        assert_eq!(
+            session.game.screen(),
+            Screen::Loading,
+            "the guest never reached Loading"
+        );
 
+        let confirmed_at = gate_start + LOADING_CONFIRM_AFTER_START;
+        paint_frame_at(&mut session, confirmed_at);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Loading,
+            "4012 alone must not enter Playing"
+        );
+        paint_frame_at(&mut session, confirmed_at + LOADING_PLAYING_AFTER_CONFIRM);
         assert_eq!(
             session.game.screen(),
             Screen::Playing,
@@ -11198,6 +11266,7 @@ pub(super) mod session_tests {
     /// `confirm_master_start` -> `StartGame` 4010. The channel-readable
     /// 2009/2003 half stays OPEN per #291.
     #[test]
+    #[ignore = "wall-clock two-gateway race; run alone in release (#874): cargo test --release --bin recomp2jam peer_ready_click_echo_opens_the_master_gate_and_mirror -- --ignored --nocapture"]
     fn peer_ready_click_echo_opens_the_master_gate_and_mirror() {
         let (ready_sent, ready_received) = mpsc::channel();
         let mut master_room = room_with_peer("tester2");
@@ -11813,6 +11882,7 @@ pub(super) mod session_tests {
     ///   (3002/3003) -> master BACK -> 3005 -> peer poll_waiting_chat
     ///   -> apply_user_left -> promote_waiting_master.
     #[test]
+    #[ignore = "wall-clock two-gateway race; run alone in release (#874): cargo test --release --bin recomp2jam rejoined_peer_survives_the_masters_leave_without_a_disband_broadcast -- --ignored --nocapture"]
     fn rejoined_peer_survives_the_masters_leave_without_a_disband_broadcast() {
         let (master_left_tx, master_left_rx) = mpsc::channel();
         let (mut peer, peer_server) =
@@ -13222,6 +13292,7 @@ pub(super) mod session_tests {
     /// mounted-side paint blocking one full resting socket timeout,
     /// so the window kept painting the Room board.
     #[test]
+    #[ignore = "wall-clock paint budget; run alone in release (#874): cargo test --release --bin recomp2jam mounted_shop_side_paints_without_waiting_for_a_quiet_gateway -- --ignored --nocapture"]
     fn mounted_shop_side_paints_without_waiting_for_a_quiet_gateway() {
         use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
         use o2jam_shell::screens::side::SideScreen;
@@ -14513,6 +14584,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock gateway handoff; run alone in release (#874): cargo test --release --bin recomp2jam side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway -- --ignored --nocapture"]
     fn side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway() {
         // Ticket #858. Live caller chain: `main.rs::run_online` ->
         // `OnlineSession::paint` -> `poll_wire` ->
@@ -14554,6 +14626,7 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    #[ignore = "wall-clock gateway handoff; run alone in release (#874): cargo test --release --bin recomp2jam relay_down_room_poll_sends_07da_and_clears_on_07db -- --ignored --nocapture"]
     fn relay_down_room_poll_sends_07da_and_clears_on_07db() {
         let (port, server) = fake_gateway(|mut stream| {
             let request = read_frame(&mut stream);
@@ -15494,5 +15567,44 @@ pub(super) mod session_tests {
         drop(observer);
         actor_server.join().unwrap();
         observer_server.join().unwrap();
+    }
+
+    /// Wall-clock session guards run alone in the release timing profile
+    /// (#874, #862 precedent). This guard pins that isolation: an
+    /// unmarked guard would return to the parallel normal suite and
+    /// flake again under lane contention.
+    #[test]
+    fn wall_clock_session_guards_are_isolated_from_the_normal_suite() {
+        const ISOLATED: &[&str] = &[
+            "channel_login_no_reply_never_blocks_paint",
+            "channel_reentry_after_quick_back_paints_through",
+            "disband_broadcast_read_by_the_07da_fuse_still_removes_the_row",
+            "peer_ready_click_echo_opens_the_master_gate_and_mirror",
+            "rejoined_peer_survives_the_masters_leave_without_a_disband_broadcast",
+            "mounted_shop_side_paints_without_waiting_for_a_quiet_gateway",
+            "side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway",
+            "relay_down_room_poll_sends_07da_and_clears_on_07db",
+            "myroom_equip_sends_5004_through_scripted_gateway",
+            "myroom_bagsort_sends_5038_and_5039_reply_through_scripted_gateway",
+        ];
+
+        let harness = std::env::current_exe().expect("test harness path");
+        let output = std::process::Command::new(harness)
+            .args(["--list", "--ignored"])
+            .output()
+            .expect("ignored test list");
+        assert!(
+            output.status.success(),
+            "ignored test list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ignored = String::from_utf8(output.stdout).expect("utf-8 test list");
+        for name in ISOLATED {
+            let full_name = format!("session::session_tests::{name}: test");
+            assert!(
+                ignored.lines().any(|line| line == full_name),
+                "{name} must stay out of the parallel suite (run it alone in release)"
+            );
+        }
     }
 }
