@@ -5,14 +5,15 @@
 
 use std::collections::HashMap;
 
-use super::{paint_text_into_rect, SceneArt, CP949_INK};
+use super::{paint_caption_in_cell, paint_text_into_rect, CaptionAlignment, SceneArt, CP949_INK};
 use crate::avatar::{paint_placement_layer, AvatarFigure, ScenePlacement};
 use crate::screen::Screen;
 use crate::screens::side::{
     myroom_action_for_code, MyRoomAction, MyRoomLowerTab, MyRoomState, MYROOM_AVATAR_CODE,
     MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_PAGE_DIGITS,
-    MYROOM_GIFT_PAGE_FIRST_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_PCROOMMARK_CODE,
-    MYROOM_SELECT_CODE, MYROOM_SLOT_IMAGE_FIRST_CODE,
+    MYROOM_GIFT_PAGE_FIRST_CODE, MYROOM_ITEMCASH_CODE, MYROOM_MGAME_MONEY_CODE,
+    MYROOM_MUSICCASH_CODE, MYROOM_NOTICEBOARD_CODE, MYROOM_O2CASH_CODE, MYROOM_O2JAM_MONEY_CODE,
+    MYROOM_PCROOMMARK_CODE, MYROOM_SELECT_CODE, MYROOM_SLOT_IMAGE_FIRST_CODE,
 };
 use o2jam_render::{scale_rect_to_frame, Frame, Rect};
 
@@ -152,8 +153,24 @@ pub fn paint_myroom_data(
         if text.is_empty() {
             continue;
         }
+        // The three cash cells are blank in the v3 exe frame while
+        // the shared wallet holds zero. Keep the caption source but
+        // do not ink an invented zero over the staged plate.
+        let cash_cell = matches!(
+            *code,
+            MYROOM_O2CASH_CODE | MYROOM_MUSICCASH_CODE | MYROOM_ITEMCASH_CODE
+        );
+        if cash_cell && text == "0" {
+            continue;
+        }
         if let Some(placed) = placements.iter().find(|placed| placed.code == *code) {
-            paint_text_into_rect(frame, placed.rect, text, CP949_INK);
+            if matches!(*code, MYROOM_MGAME_MONEY_CODE | MYROOM_O2JAM_MONEY_CODE) {
+                // The G/W values sit at the right edge of their
+                // staged cells in the 7.55 pair (v3 myroom frame).
+                paint_caption_in_cell(frame, placed.rect, text, CP949_INK, CaptionAlignment::Right);
+            } else {
+                paint_text_into_rect(frame, placed.rect, text, CP949_INK);
+            }
         }
     }
     match state.lower_tab() {
@@ -309,4 +326,63 @@ pub fn paint_myroom_figure(
     };
     let slot = scale_rect_to_frame(&slot.rect, frame.w, frame.h);
     figure.paint_visible_centered(frame, &slot, frame.w, frame.h, now_ms);
+}
+
+#[cfg(test)]
+mod myroom_paint_tests {
+    use super::*;
+
+    #[test]
+    fn wallet_values_right_align_and_zero_cash_cells_stay_blank() {
+        // Live caller chain: `paint_side` -> `paint_myroom_overlay`
+        // -> `paint_myroom_data`. Oracle: the v3 exe pair inks 15533
+        // at the right edge of the G cell (685,421,95,13) and leaves
+        // the three cash cells (705,478/500/522,74,12) blank.
+        let placements = [
+            ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_MGAME_MONEY_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 685,
+                    y: 421,
+                    w: 95,
+                    h: 13,
+                },
+            },
+            ScenePlacement {
+                role: crate::avatar::PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_O2CASH_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 705,
+                    y: 478,
+                    w: 74,
+                    h: 12,
+                },
+            },
+        ];
+        let captions = [
+            (MYROOM_MGAME_MONEY_CODE, "15533".to_owned()),
+            (MYROOM_O2CASH_CODE, "0".to_owned()),
+        ];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_myroom_data(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &HashMap::new(),
+            MyRoomState::new(),
+            &[],
+            &[],
+            &captions,
+        );
+        assert!((750..775).any(|col| buf[430 * 800 + col] != 0));
+        assert!((700..710).all(|col| buf[484 * 800 + col] == 0));
+    }
 }

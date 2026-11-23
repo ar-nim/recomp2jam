@@ -56,16 +56,18 @@ use super::side::{
     MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE,
     MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_FALLBACK_CAPTION,
     MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE,
-    MSHOP_GEM_PRICE_CODE, MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE,
-    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE,
-    MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE,
-    MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949,
-    SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
+    MSHOP_ENTRY_FREE_SONG_IDS, MSHOP_GEM_PRICE_CODE, MSHOP_LIGHTBOARD_FALLBACK,
+    MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE,
+    MSHOP_OWNED_FREE_OWNER, MSHOP_OWNED_SERVICE_ENDED_OWNER, MSHOP_OWNED_TIME_TEXT_CODE,
+    MSHOP_OWNED_TITLE_TEXT_CODE, MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT,
+    MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949, SHOP_PLAYER_LEVEL_CAPTION_CODE,
+    SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use o2jam_file::ControlList;
@@ -1614,6 +1616,11 @@ const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
 /// the staged `MS_EX` rect (#815).
 const MUSIC_SHOP_SEARCH_HIT_TONE: u32 = pack_xrgb(0xC0, 0xD0, 0x40);
 
+/// Gray hint ink sampled from the v3 exe frame at (60,542):
+/// `rgb(99,113,107)`. The white edit plate makes white CP949 ink
+/// invisible; the typed draft keeps the normal white ink.
+const MUSIC_SHOP_SEARCH_HINT_INK: [u8; 4] = [0x63, 0x71, 0x6B, 0xFF];
+
 /// Ink the search edit's Korean hint or typed draft, and mark the
 /// matching song rows. Unstaged edit/rows paint nothing.
 pub fn paint_music_shop_search(
@@ -1627,12 +1634,12 @@ pub fn paint_music_shop_search(
         .iter()
         .find(|placed| placed.code == MSHOP_SEARCH_EDIT_CODE)
     {
-        let text = if draft.is_empty() {
-            MSHOP_SEARCH_HINT
+        let (text, ink) = if draft.is_empty() {
+            (MSHOP_SEARCH_HINT, MUSIC_SHOP_SEARCH_HINT_INK)
         } else {
-            draft
+            (draft, CP949_INK)
         };
-        paint_text_into_rect(frame, edit.rect, text, CP949_INK);
+        paint_text_into_rect(frame, edit.rect, text, ink);
     }
     for (row, slot) in visible_rows.iter().zip(music_shop_slots(placements)) {
         if !hits.contains(&row.song.song_id) {
@@ -1705,6 +1712,10 @@ pub fn paint_music_shop_genre_frames(
 /// split here is own-by-design presentation over staged rects.
 const MUSIC_SHOP_PROGRESS_BASE_TONE: u32 = pack_xrgb(0x20, 0x60, 0x90);
 const MUSIC_SHOP_PROGRESS_FILL_TONE: u32 = pack_xrgb(0x40, 0xB0, 0xE0);
+/// Idle bar ink sampled from the v3 exe entry frame at (450,455)
+/// and (600,498): `rgb(33,49,74)`. The staged progress sprite inks
+/// a bright fill, so an idle panel covers it inside the staged rect.
+const MUSIC_SHOP_PROGRESS_IDLE_TONE: u32 = pack_xrgb(0x21, 0x31, 0x4A);
 
 /// Paint the download bars and row readout while a shop transfer
 /// owns the panel. The completed/total pair comes from the staged
@@ -1715,6 +1726,15 @@ pub fn paint_music_shop_progress(
     readout: Option<(usize, usize)>,
 ) {
     let Some((completed, total)) = readout else {
+        for code in [MSHOP_CURRENT_PROGRESS_CODE, MSHOP_TOTAL_PROGRESS_CODE] {
+            if let Some(staged) = placements.iter().find(|placed| placed.code == code) {
+                fill_rect(
+                    frame,
+                    &scale_rect_to_frame(&staged.rect, frame.w, frame.h),
+                    MUSIC_SHOP_PROGRESS_IDLE_TONE,
+                );
+            }
+        }
         return;
     };
     // The exe styles both bars with mode 2; only the current bar
@@ -1858,9 +1878,37 @@ pub fn paint_music_shop_owned_rows(
     placements: &[ScenePlacement],
     rows: &[OwnedRow],
 ) {
+    let title_cell = shop_template_rect(placements, MSHOP_OWNED_TITLE_TEXT_CODE);
+    let time_cell = shop_template_rect(placements, MSHOP_OWNED_TIME_TEXT_CODE);
     for (row, slot) in rows.iter().zip(music_shop_owned_slots(placements)) {
+        // The exe inks the two MY templates (left title, centered
+        // creator/status) inside each staged MY_EX slot. A board
+        // that stages only the hit area keeps the old full-slot
+        // fallback; geometry still rides staged rects.
+        match title_cell {
+            Some(cell) => paint_caption_in_cell(
+                frame,
+                music_shop_tiled_rect(cell, &slot),
+                &row.title,
+                CP949_INK,
+                CaptionAlignment::Left,
+            ),
+            None => paint_text_into_rect(frame, slot, &row.title, CP949_INK),
+        }
+        if let Some(cell) = time_cell {
+            paint_caption_in_cell(
+                frame,
+                music_shop_tiled_rect(cell, &slot),
+                if MSHOP_ENTRY_FREE_SONG_IDS.contains(&u32::from(row.song_id)) {
+                    MSHOP_OWNED_FREE_OWNER
+                } else {
+                    MSHOP_OWNED_SERVICE_ENDED_OWNER
+                },
+                CP949_INK,
+                CaptionAlignment::Center,
+            );
+        }
         let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
-        paint_text_into_rect(frame, slot, &row.title, CP949_INK);
         if row.marked {
             let mark = Rect {
                 x: slot.x + i32::try_from(slot.w).unwrap_or(0) - 2,
@@ -2209,11 +2257,15 @@ pub fn paint_music_shop_wallet(
         (MSHOP_MONEY_GEM_CODE, wallet.gem),
         (MSHOP_MONEY_WON_CODE, wallet.cash_point),
     ];
-    let labels = ["G", "W"];
-    for ((code, amount), label) in cells.into_iter().zip(labels) {
+    for (code, amount) in cells {
         if let Some(rect) = music_shop_caption_rect(placements, code) {
-            let text = format!("{} {}", label, wallet_amount_caption(amount));
-            paint_text_into_rect(frame, rect, &text, CP949_INK);
+            // The G/W labels are baked into the staged backdrop; the
+            // TEXT cells hold only the amount (v3 exe pair).
+            let text = wallet_amount_caption(amount);
+            // The v3 exe pair inks the amount at the cell's right
+            // edge (x 135 in rect 41..136); left anchoring missed it
+            // by half the cell (senior note, commit 3701ddb).
+            paint_caption_in_cell(frame, rect, &text, CP949_INK, CaptionAlignment::Right);
         }
     }
 }
@@ -2471,6 +2523,68 @@ fn paint_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, in
         o2jam_text::system_font(),
         0,
         top_inset,
+        text,
+        ink,
+        scale,
+    );
+    composite_text_image(frame, &rect, &image);
+}
+
+/// Horizontal ink placement inside an exe TEXT cell. `DrawTextA`
+/// flags are pinned in `docs/gdi-text.md`; each family carries its
+/// own pin, so this enum never guesses a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptionAlignment {
+    /// Left edge of the cell (plain `TextOutA` families).
+    Left,
+    /// Center of the cell (`DT_CENTER`).
+    Center,
+    /// Right edge of the cell (`DT_RIGHT`).
+    Right,
+}
+
+/// Rasterizer origin inside a TEXT cell, in pixels. The 7.55 pair
+/// inks two pixels below the cell top (`docs/gdi-text.md` GDI
+/// bearing); our glyph cap rounds one pixel above the requested
+/// origin (same pin as commit `3701ddb` on `cb2/fix880b`).
+const CAPTION_INK_ORIGIN_Y: i32 = 3;
+
+/// Paint one caption in its staged TEXT cell with the exe's ink
+/// bearing and the family's own horizontal alignment. Geometry
+/// always comes from the staged `.bnd` rect; only presentation
+/// (glyph outlines) comes from the modern rasterizer (owner `e8d01`).
+pub(super) fn paint_caption_in_cell(
+    frame: &mut Frame<'_>,
+    native_rect: Rect,
+    text: &str,
+    ink: [u8; 4],
+    alignment: CaptionAlignment,
+) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let text_width = cp949_width_at_scale(text, scale);
+    let leftover = (rect.w as f32 - text_width).max(0.0);
+    let left = match alignment {
+        CaptionAlignment::Left => 0.0,
+        CaptionAlignment::Center => leftover * 0.5,
+        CaptionAlignment::Right => leftover,
+    };
+    let left = left.round() as i32;
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    o2jam_text::draw_text(
+        &mut image,
+        o2jam_text::system_font(),
+        left,
+        CAPTION_INK_ORIGIN_Y,
         text,
         ink,
         scale,
@@ -4391,6 +4505,46 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 
 #[cfg(test)]
 mod paint_tests {
+    #[test]
+    fn caption_cell_ink_lands_two_pixels_below_the_exe_cell_top() {
+        // Live caller chain: `paint_side` -> `paint_myroom_overlay` /
+        // `paint_music_shop_owned_rows` -> this cell painter. Oracle:
+        // the v3 exe rows ink at y=95 in a cell whose top is y=93,
+        // centered in the staged creator cell; the shared left/top
+        // helper misses both axes (senior note, commit 3701ddb).
+        if o2jam_text::system_font().is_none() {
+            return;
+        }
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_caption_in_cell(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            Rect {
+                x: 100,
+                y: 50,
+                w: 96,
+                h: 12,
+            },
+            "1234",
+            CP949_INK,
+            CaptionAlignment::Center,
+        );
+        let ink: Vec<(i32, i32)> = buf
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel != 0)
+            .map(|(at, _)| ((at % 800) as i32, (at / 800) as i32))
+            .collect();
+        assert!(!ink.is_empty(), "the cell inks");
+        assert_eq!(ink.iter().map(|(_, y)| *y).min(), Some(52), "GDI bearing");
+        let left = ink.iter().map(|(x, _)| *x).min().unwrap_or_default();
+        let right = ink.iter().map(|(x, _)| *x).max().unwrap_or_default();
+        assert!((left + right - 2 * 148).abs() <= 2, "ink stays centered");
+    }
+
     use super::super::side::{
         MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_EDITOR_CODE,
         MSHOP_EX_FIRST_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_PAGE_CUR_ONES_CODE,
@@ -4993,6 +5147,31 @@ mod paint_tests {
     }
 
     #[test]
+    fn idle_download_bars_ink_the_exe_dark_face() {
+        // Live caller chain: `ScreenGame::paint_side` ->
+        // `paint_music_shop_progress` with no active transfer. The
+        // v3 exe entry frame inks RGB (33,49,74) at (450,455) and
+        // (600,498); the staged progress sprite alone paints bright
+        // blue, so idle must cover it inside the staged rect.
+        let placements = [
+            shop_placement(MSHOP_CURRENT_PROGRESS_CODE, 436, 447, 334, 15),
+            shop_placement(MSHOP_TOTAL_PROGRESS_CODE, 436, 491, 334, 15),
+        ];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_music_shop_progress(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+        );
+        assert_eq!(buf[455 * 800 + 450], pack_xrgb(0x21, 0x31, 0x4A));
+        assert_eq!(buf[498 * 800 + 600], pack_xrgb(0x21, 0x31, 0x4A));
+    }
+
+    #[test]
     fn music_shop_board_paints_catalog_cells_and_pager_at_staged_rects() {
         // Synthetic `STATE_MUSICSHOP` board: one catalog row inks
         // its cells into the row-local MMS templates riding the
@@ -5134,6 +5313,10 @@ mod paint_tests {
         );
         assert!(has_ink_in(&buf, 800, 41, 567, 95, 13), "G amount paints");
         assert!(has_ink_in(&buf, 800, 166, 567, 95, 13), "W amount paints");
+        assert!(
+            has_ink_in(&buf, 800, 124, 567, 12, 13),
+            "the v3 exe inks the amount at the right edge of the staged cell"
+        );
     }
 
     #[test]

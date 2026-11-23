@@ -2162,6 +2162,112 @@ pub fn music_shop_tooltip_kept(placed: &ScenePlacement, hovered: bool) -> bool {
     placed.code != MSHOP_LIGHTBOARD_TOOLTIP_CODE || hovered
 }
 
+/// Row-local art codes that tile the five catalog rows. The
+/// `STATE_MUSICSHOP` control list pairs each code with five `.bnd`
+/// clones (`MShop_MS_MusicBox.ojs`, `MShop_MS_New.ojs`, the color and
+/// price plates and both buy plates). The NEW entry frame paints the
+/// promo backdrop instead; these clones ink only on a color filter
+/// (`story-shops/music-interact` `musicshop.png` vs `music-page.png`).
+pub const MUSIC_SHOP_ROW_ART_CODES: [u32; 9] = [
+    0x1A50_0032,
+    0x1A50_0034,
+    0x1A50_0035,
+    0x1A50_003D,
+    0x1A50_003F,
+    0x1A20_0041,
+    0x1A50_0042,
+    0x1A50_0044,
+    0x1A20_0046,
+];
+/// First row-local art code (named for the entry-state guard).
+pub const MSHOP_MS_BACK_CODE: u32 = MUSIC_SHOP_ROW_ART_CODES[0];
+/// Cart backdrop (`IDC_IMAGE_NSHOP_MYCART_BACK`, `MShop_Cart_Back.ojs`).
+/// The exe's entry frame has the Download plate there; the cart
+/// backdrop belongs to the other face toggle (#820).
+pub const MSHOP_CART_BACK_CODE: u32 = 0x1A50_005A;
+/// Entry-state chrome whose resting face is already baked into
+/// `State_MShop.ojs`: BACK and the two pager pairs. Painting their
+/// multi-frame bodies over it produced the bright blue pressed face
+/// in the v3 pair; no press is pinned at entry (#399/#814).
+const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 17] = [
+    0x1A20_0008,
+    MSHOP_GENRE_FILTER_FIRST_CODE,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 1,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 2,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 3,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 4,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 5,
+    MSHOP_RANK_HEADER_FIRST_CODE,
+    MSHOP_RANK_HEADER_FIRST_CODE + 1,
+    MSHOP_RANK_HEADER_FIRST_CODE + 2,
+    MSHOP_RANK_HEADER_FIRST_CODE + 3,
+    MSHOP_RANK_HEADER_FIRST_CODE + 4,
+    MSHOP_RANK_HEADER_FIRST_CODE + 5,
+    MSHOP_MSALL_LEFT_CODE,
+    MSHOP_MSALL_RIGHT_CODE,
+    MSHOP_MYALL_LEFT_CODE,
+    MSHOP_MYALL_RIGHT_CODE,
+];
+/// Transfer animation body (`0x1A500024`). The v3 exe entry frame
+/// has an empty dark strip here; the body stores 26 stacked frames,
+/// which read as a black bar when painted unselected. Entry hides it.
+pub const MSHOP_DN_PROG_ANI_CODE: u32 = 0x1A50_0024;
+/// Messenger popup callout (`0x1A50008A`). The v3 exe entry frame
+/// has no callout; no press/writer is pinned, so its art stays hidden.
+pub const MSHOP_MESSENGER_POPUP_CODE: u32 = 0x1A50_008A;
+
+/// Cart-only art codes: the backdrop, cart buttons, pagers, page
+/// numbers and row plates. They belong to the CART face (`#820`),
+/// not to the Download face shown at shop entry.
+const MUSIC_SHOP_CART_ART_CODES: [u32; 11] = [
+    MSHOP_CART_BACK_CODE,
+    0x1A20_005D,
+    0x1A20_005E,
+    0x1A20_005F,
+    0x1A50_0066,
+    0x1A50_0069,
+    0x1A50_006A,
+    0x1A50_006B,
+    0x1A50_006C,
+    0x1A50_006D,
+    0x1A20_0073,
+];
+
+/// Keep only the staged figures the visible musicshop face owns.
+/// The entry frame (`4f6d9a2f…`) pins NEW + Download: the promo
+/// backdrop and download panel, with no catalog clones, no cart
+/// backdrop and no TOP100 badge (entry property 0, #827). A color
+/// filter reveals the catalog clones (#813); the other tab reveals
+/// the cart plate (#820). The TOP100 badge has no nonzero writer
+/// pinned, so its art stays hidden; the press marker remains a
+/// separate painter over the staged rect. The tooltip follows the
+/// pointer as before.
+#[must_use]
+pub fn music_shop_scene_kept(
+    placed: &ScenePlacement,
+    genre: MusicShopGenreFilter,
+    face: MusicShopFace,
+    hovered: bool,
+) -> bool {
+    if !music_shop_tooltip_kept(placed, hovered) {
+        return false;
+    }
+    if placed.code == MSHOP_TOP100_CODE
+        || placed.code == MSHOP_MESSENGER_POPUP_CODE
+        || placed.code == MSHOP_DN_PROG_ANI_CODE
+        || MUSIC_SHOP_BAKED_CHROME_CODES.contains(&placed.code)
+    {
+        return false;
+    }
+    if MUSIC_SHOP_ROW_ART_CODES.contains(&placed.code) {
+        return genre != MusicShopGenreFilter::New;
+    }
+    if MUSIC_SHOP_CART_ART_CODES.contains(&placed.code) {
+        return face == MusicShopFace::Cart;
+    }
+    true
+}
+
 /// Whether the pointer sits in the staged lightboard tooltip rect.
 #[must_use]
 pub fn music_shop_tooltip_hovered(placements: &[ScenePlacement], x: i32, y: i32) -> bool {
@@ -2302,6 +2408,28 @@ impl MusicShopNotice {
 /// First owned-row hit area (`IDC_BUTTON_MY_EX1`); twelve run
 /// contiguously through `+0x0B` (block walk + staged dump).
 pub const MSHOP_OWNED_FIRST_CODE: u32 = 0x1A01_9047;
+/// Row-local owned TITLE cell (`IDC_TEXT_MMY_TITLE`, `(34,0,169,11)`).
+pub const MSHOP_OWNED_TITLE_TEXT_CODE: u32 = 0x1A40_0055;
+/// Row-local owned TIME/status cell (`IDC_TEXT_MMY_TIME`,
+/// `(209,0,96,11)`). The 7.55 entry frame centers its copy in the
+/// cell (v3 exe pair, row ink x 665..703 in cell 637..733).
+pub const MSHOP_OWNED_TIME_TEXT_CODE: u32 = 0x1A40_0056;
+/// Owner of a service-ended catalog song in the right panel
+/// (v3 exe frame, `4f6d9a2f…`; rows without a free flag ink this
+/// exact CP949 copy in the TIME cell). The wire field behind it is
+/// OPEN; the pixels and the staged control are pinned.
+pub const MSHOP_OWNED_SERVICE_ENDED_OWNER: &str = "서버스 종료자";
+/// Free owner copy for the two rows marked `Free` in the same frame.
+pub const MSHOP_OWNED_FREE_OWNER: &str = "Free";
+/// Songs in the entry right panel, top to bottom. Read from the v3
+/// exe frame `4f6d9a2f…` (row titles BMP[3M] … the Platinum
+/// Waves[3M]) and joined back to the 7.55 `OJNList.dat` ids. The
+/// server word that selects this order stays OPEN; the pixel order
+/// and the staged row rects do not.
+pub const MSHOP_ENTRY_BOARD_SONG_IDS: [u32; 12] =
+    [887, 886, 885, 884, 879, 836, 809, 806, 880, 869, 837, 832];
+/// Entry rows whose TIME cell reads `Free` in the same frame.
+pub const MSHOP_ENTRY_FREE_SONG_IDS: [u32; 2] = [836, 832];
 /// Visible owned rows (twelve `MY_EX` hit areas).
 pub const MSHOP_OWNED_ROWS: usize = 12;
 /// First cart-row hit area (`IDC_BUTTON_MSHOP_CART_EX1`); five run
@@ -2329,6 +2457,12 @@ pub const MSHOP_CART_BUY_CODE: u32 = 0x1A20_005D;
 /// `MShop_PageNumber.ojs`): current tens/ones plus total tens/ones
 /// (current/total pairing ASSUMED — same named next step).
 pub const MSHOP_PAGE_CUR_TENS_CODE: u32 = 0x1A50_0025;
+/// First of the four owned-list page-number images (`0x1A500029..2C`).
+pub const MSHOP_OWNED_PAGE_CUR_TENS_CODE: u32 = 0x1A50_0029;
+/// The exe's pager counts twelve songs per page (562 catalog rows →
+/// 47 pages in the v3 pair), even though the left board shows five
+/// row slots at a time (#814).
+pub const MSHOP_PAGER_SONGS_PER_PAGE: usize = 12;
 pub const MSHOP_PAGE_CUR_ONES_CODE: u32 = 0x1A50_0026;
 pub const MSHOP_PAGE_TOT_TENS_CODE: u32 = 0x1A50_0027;
 pub const MSHOP_PAGE_TOT_ONES_CODE: u32 = 0x1A50_0028;
@@ -2710,6 +2844,30 @@ pub fn music_shop_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rec
         rect_union(cur_tens, cur_ones),
         rect_union(tot_tens, tot_ones),
     ))
+}
+
+/// Digit frame shown by one staged `MShop_PageNumber.ojs` image
+/// control. The body stores ten frames `0..9` and the exe selects one
+/// per control; stacking all ten would show the last digit on every
+/// pager (v3 pair: 9/9/9/9 instead of 01/47).
+#[must_use]
+pub fn music_shop_page_digit(code: u32, page: usize, pages: usize) -> Option<usize> {
+    let current = page.saturating_add(1);
+    let first = [
+        MSHOP_PAGE_CUR_TENS_CODE,
+        MSHOP_OWNED_PAGE_CUR_TENS_CODE,
+        MSHOP_CART_PAGE_CUR_TENS_CODE,
+    ]
+    .into_iter()
+    .find(|first| code >= *first && code <= *first + 3)?;
+    let slot = code - first;
+    let value = if slot < 2 { current } else { pages };
+    let digit = if slot.is_multiple_of(2) {
+        value / 10
+    } else {
+        value % 10
+    };
+    Some(digit.min(9))
 }
 
 /// Staged owned-row hit areas in code order (the twelve `MY_EX`
@@ -6294,6 +6452,20 @@ pub fn paint_side_scene_live(
     paint_scene_figures_live(frame, placements, figures, keep);
 }
 
+/// [`paint_side_scene_live`] with one state frame per image control.
+/// Shop page numbers store ten digit frames; stacking them shows the
+/// last digit on every cell, so the live painter selects the frame
+/// the exe's page word names (v3 pair: 01/47).
+pub fn paint_side_scene_selected(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    keep: impl Fn(&ScenePlacement) -> bool,
+    frame_index: impl Fn(&ScenePlacement) -> Option<usize>,
+) {
+    paint_scene_figures_selected(frame, placements, figures, keep, frame_index);
+}
+
 /// Tutorial side painter: the full-canvas backdrop keeps its stacked
 /// art, the lesson bubble shows the page's record, the coach shows its
 /// current 66 ms animation record, and each of the seven kit bodies
@@ -7403,6 +7575,128 @@ mod side_tests {
             shop_action_at(&placements, 318, 565),
             Some(ShopAction::CartNext)
         );
+    }
+
+    #[test]
+    fn musicshop_entry_state_keeps_the_promo_and_download_faces_only() {
+        // Live caller chain: `visit_side(MusicShop)` stages the bound
+        // art -> `ScreenGame::paint_side` -> `paint_side_scene_live`
+        // -> this per-placement filter. Oracle: v3 exe entry frame
+        // `4f6d9a2f…` (NEW promo left, Download right) and the
+        // qualified BLGENRE frame `music-page.png`; the entry TOP100
+        // property is zero (#827). A catalog row, cart backdrop, or
+        // TOP100 badge must not paint in the entry state.
+        let art = |code: u32| ScenePlacement {
+            role: PlacementRole::Clone,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+        };
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_MS_BACK_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "NEW entry hides the catalog rows"
+        );
+        assert!(music_shop_scene_kept(
+            &art(MSHOP_MS_BACK_CODE),
+            MusicShopGenreFilter::Gold,
+            MusicShopFace::Download,
+            false
+        ));
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_CART_BACK_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "Download face hides the cart backdrop"
+        );
+        assert!(music_shop_scene_kept(
+            &art(MSHOP_CART_BACK_CODE),
+            MusicShopGenreFilter::New,
+            MusicShopFace::Cart,
+            false
+        ));
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_TOP100_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "entry property zero hides the TOP100 badge"
+        );
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_MESSENGER_POPUP_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "the messenger callout has no entry-state writer"
+        );
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_DN_PROG_ANI_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "the stacked transfer animation is not an idle panel"
+        );
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_EXIT_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "the BACK face is baked into the backdrop at entry"
+        );
+    }
+
+    #[test]
+    fn musicshop_pager_frames_spell_the_exe_01_of_47() {
+        // Live caller chain: `paint_side` -> `paint_side_scene_selected`
+        // -> this digit frame selector for the staged
+        // `MShop_PageNumber.ojs` bodies. The v3 exe pair reads 01/47;
+        // stacking the ten stored digit frames reads 9/9/9/9.
+        assert_eq!(
+            music_shop_page_digit(MSHOP_PAGE_CUR_TENS_CODE, 0, 47),
+            Some(0)
+        );
+        assert_eq!(
+            music_shop_page_digit(MSHOP_PAGE_CUR_TENS_CODE + 1, 0, 47),
+            Some(1)
+        );
+        assert_eq!(
+            music_shop_page_digit(MSHOP_PAGE_CUR_TENS_CODE + 2, 0, 47),
+            Some(4)
+        );
+        assert_eq!(
+            music_shop_page_digit(MSHOP_PAGE_CUR_TENS_CODE + 3, 0, 47),
+            Some(7)
+        );
+        assert_eq!(
+            music_shop_page_digit(MSHOP_OWNED_PAGE_CUR_TENS_CODE + 3, 0, 47),
+            Some(7)
+        );
+        assert_eq!(
+            music_shop_page_digit(MSHOP_CART_PAGE_CUR_TENS_CODE + 3, 0, 47),
+            Some(7)
+        );
+        assert_eq!(music_shop_page_digit(MSHOP_EX_FIRST_CODE, 0, 47), None);
     }
 
     #[test]
@@ -9397,6 +9691,34 @@ mod side_tests {
         assert_eq!(state.music_cash, Some(120));
         assert_eq!(state.item_cash, Some(340));
         assert_eq!(state.cash_point, Some(22));
+    }
+
+    #[test]
+    fn myroom_bag_pager_frames_spell_the_exe_01_of_03() {
+        // Live caller chain: `paint_side` -> `paint_scene_figures_selected`
+        // -> this digit frame selector. The v3 exe frame reads 01/03;
+        // stacking the ten stored digit frames reads 9/9/9/9.
+        use super::super::side::myroom::{MYROOM_BAG_PAGE_DIGITS, MYROOM_BAG_PAGE_FIRST_CODE};
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE, 0, 3),
+            Some(0)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 1, 0, 3),
+            Some(1)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 2, 0, 3),
+            Some(0)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 3, 0, 3),
+            Some(3)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + MYROOM_BAG_PAGE_DIGITS, 0, 3),
+            None
+        );
     }
 
     #[test]

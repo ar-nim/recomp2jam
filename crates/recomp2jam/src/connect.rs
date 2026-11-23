@@ -464,12 +464,17 @@ fn connect_and_login_staged(
         .then_some(installed_music_ids)
         .flatten();
     let mut staged_skipped = Vec::new();
+    let mut music_list = None;
     if staged_ids.is_some() {
         // #341: the exe asks for the room catalog before the identity
         // and room-list reads, then polls members and reports its own
-        // installed ids. Both reads tolerate channel broadcasts.
-        fetch_music_list(&mut gateway, &mut staged_skipped)
-            .context("fetching room-stage catalog")?;
+        // installed ids. Both reads tolerate channel broadcasts. Keep
+        // the answer: the Music Shop right panel joins it to the
+        // catalog titles (#878).
+        music_list = Some(
+            fetch_music_list(&mut gateway, &mut staged_skipped)
+                .context("fetching room-stage catalog")?,
+        );
     }
     let mut character = if options.character && staged_ids.is_some() {
         Some(fetch_character(&mut gateway).context("fetching character")?)
@@ -533,6 +538,7 @@ fn connect_and_login_staged(
         character,
         wallet,
         cash_sync,
+        music_list,
         avatar_layers,
         channels,
         channel_login,
@@ -1095,6 +1101,14 @@ mod connect_flow_tests {
                 gem: 5,
                 cash_point: 6
             })
+        );
+        // Live caller chain: `run_online` -> `connect_and_login_with_room_stage`
+        // -> 4030/4031 -> report -> `stage_music_shop_board` -> right
+        // panel rows. The boot already reads this answer and must not
+        // drop it before the shop paints (#878).
+        assert!(
+            report.music_list.is_some(),
+            "the 4031 room-stage answer reaches the boot report"
         );
     }
 

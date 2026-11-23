@@ -15,9 +15,9 @@ use super::super::side::{
     MusicShopNotice, MusicShopPrice, MusicShopRow, OwnedSort, WalletState, MSHOP_BAG_GEM_CODE,
     MSHOP_BAG_WON_CODE, MSHOP_BPM_SORT_CODE, MSHOP_BUYITEM_INVOKE_CODE, MSHOP_CART_BUY_CODE,
     MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_CASH_FILLUP_CODE, MSHOP_CONFERENCE_CODE,
-    MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_GEM_BUY_CODE, MSHOP_GIFT_CODE,
-    MSHOP_MESSENGER_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE, MSHOP_OWNED_ROWS,
-    MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
+    MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_ENTRY_BOARD_SONG_IDS, MSHOP_GEM_BUY_CODE,
+    MSHOP_GIFT_CODE, MSHOP_MESSENGER_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
+    MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
@@ -484,9 +484,34 @@ impl MusicShopState {
             .collect()
     }
 
+    /// Right-panel rows in the exe's entry order. The v3 pair pins
+    /// twelve titles (BMP[3M] … the Platinum Waves[3M]); join them
+    /// back to the staged catalog for the row text. This is the
+    /// Download-face board, not the 4031 owned-id page (which the
+    /// CART face keeps), and no server selector is invented (#878).
+    pub(crate) fn entry_panel_rows(&self) -> Vec<OwnedRow> {
+        MSHOP_ENTRY_BOARD_SONG_IDS
+            .iter()
+            .map(|&id| {
+                let slot_id = u16::try_from(id).unwrap_or(u16::MAX);
+                OwnedRow {
+                    song_id: slot_id,
+                    title: self.owned_title(slot_id),
+                    installed: false,
+                    marked: false,
+                }
+            })
+            .collect()
+    }
+
     /// Owned face selected by the two tab images.
     pub(crate) fn face(&self) -> MusicShopFace {
         self.music_shop_face
+    }
+
+    /// Visible catalog length behind the pager digit frames (#814).
+    pub(crate) fn catalog_len(&self) -> usize {
+        self.music_shop_songs.len()
     }
 
     /// Last pressed TOP100 board-chrome control code, if any.

@@ -608,6 +608,13 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(&mut game, report.character.as_ref());
     stage_online_wallet(&mut game, report.cash_sync.as_ref());
+    // 4031 acquired ids drive the Music Shop right panel. The v3
+    // pair had the 4031 answer on the wire but the rust board stayed
+    // row-less while the exe showed titles and download status; join
+    // the boot answer to the catalog titles (#878).
+    if let Some(answer) = report.music_list {
+        game.stage_music_shop_board(answer);
+    }
     stage_channel_list_after_relay_gate(&mut game, report.channels, relay_down);
     stage_online_rooms(&mut game, report.rooms);
     let pending_room = opts
