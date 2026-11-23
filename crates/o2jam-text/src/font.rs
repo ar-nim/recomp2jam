@@ -28,6 +28,11 @@ pub const KR_FACE_INDEX: u32 = 1;
 /// Advance of one stand-in character, as an em fraction.
 pub const ASCII_ADVANCE_EM: f32 = 0.6;
 
+/// Vertical step of an explicit line break, in em. The exe stores
+/// `0x0A` breaks in its CP949 strings; each break starts the next
+/// line one character cell below the previous one.
+pub const NEWLINE_STEP_EM: f32 = 1.0;
+
 /// Placeholder the stand-in substitutes for non-ASCII characters.
 pub const ASCII_PLACEHOLDER: char = '?';
 
@@ -251,13 +256,29 @@ fn advance_of(scaled: &PxScaleFont<&FontArc>, id: GlyphId) -> f32 {
     }
 }
 
-/// Pixel advance of `text` with `font` at `px_scale` px/em.
+/// Pixel advance of the widest row of `text` with `font` at
+/// `px_scale` px/em.
 #[must_use]
 pub fn measure_text(font: &RasterFont, text: &str, px_scale: f32) -> f32 {
     let scaled = scaled_font(font, px_scale);
-    text.chars()
-        .map(|character| advance_of(&scaled, scaled.glyph_id(character)))
-        .sum()
+    widest_row(text, |character| {
+        advance_of(&scaled, scaled.glyph_id(character))
+    })
+}
+
+/// Widest advance between explicit line breaks.
+fn widest_row(text: &str, advance: impl Fn(char) -> f32) -> f32 {
+    let mut row = 0.0_f32;
+    let mut widest = 0.0_f32;
+    for character in text.chars() {
+        if character == '\n' {
+            widest = widest.max(row);
+            row = 0.0;
+        } else {
+            row += advance(character);
+        }
+    }
+    widest.max(row)
 }
 
 /// The ASCII stand-in for `text`: ASCII characters verbatim,
@@ -279,7 +300,7 @@ pub fn ascii_stand_in(text: &str) -> String {
 /// [`ASCII_ADVANCE_EM`] advance per character).
 #[must_use]
 pub fn measure_text_stand_in(text: &str, px_scale: f32) -> f32 {
-    text.chars().count() as f32 * ASCII_ADVANCE_EM * px_scale
+    widest_row(text, |_| ASCII_ADVANCE_EM * px_scale)
 }
 
 /// An RGBA8 image that [`draw_text`] paints into.
@@ -333,7 +354,8 @@ fn blend_rgba(cell: &mut [u8], color: [u8; 4], coverage: u8) {
 
 /// Draw `text` with `font` on `image` at `(x, y)` (left/top
 /// anchored, like `TextOutA` origins in `docs/gdi-text.md`) at
-/// `px_scale` px/em; returns the x edge after the last glyph.
+/// `px_scale` px/em. An embedded `\n` starts a new row at `x`;
+/// returns the x edge after the last glyph of the final row.
 /// With `font = None` the ASCII stand-in paints fixed cells so
 /// layout survives without the system face.
 pub fn draw_text(
@@ -378,9 +400,14 @@ fn draw_shaped_text(
     px_scale: f32,
 ) -> i32 {
     let scaled = scaled_font(font, px_scale);
-    let baseline = y as f32 + font.cap_height_em * px_scale;
+    let mut baseline = y as f32 + font.cap_height_em * px_scale;
     let mut cursor = x as f32;
     for character in text.chars() {
+        if character == '\n' {
+            cursor = x as f32;
+            baseline += NEWLINE_STEP_EM * px_scale;
+            continue;
+        }
         let id = scaled.glyph_id(character);
         paint_mask_at(image, font, id, scaled.scale, cursor, baseline, color);
         cursor += advance_of(&scaled, id);
@@ -428,12 +455,21 @@ fn draw_stand_in_text(
 ) -> i32 {
     let advance = (ASCII_ADVANCE_EM * px_scale).round() as i32;
     let height = px_i32(px_scale);
-    for (index, character) in ascii_stand_in(text).chars().enumerate() {
-        if character != ' ' {
-            paint_stand_in_cell(image, x + index as i32 * advance, y, advance, height, color);
+    let line_step = px_i32(NEWLINE_STEP_EM * px_scale);
+    let mut cursor = x;
+    let mut row_top = y;
+    for character in ascii_stand_in(text).chars() {
+        if character == '\n' {
+            cursor = x;
+            row_top = row_top.saturating_add(line_step);
+            continue;
         }
+        if character != ' ' {
+            paint_stand_in_cell(image, cursor, row_top, advance, height, color);
+        }
+        cursor = cursor.saturating_add(advance);
     }
-    x.saturating_add(text.chars().count() as i32 * advance)
+    cursor
 }
 
 /// Paint one stand-in cell: an ink border around a blank interior.
@@ -500,6 +536,38 @@ mod tests {
     fn stand_in_measure_counts_every_character() {
         assert_eq!(measure_text_stand_in("한글", 10.0), 2.0 * 0.6 * 10.0);
         assert_eq!(measure_text_stand_in("", 10.0), 0.0);
+    }
+
+    /// The exe stores explicit line breaks in its CP949 strings
+    /// (`RELAY_DOWN_MESSAGE_CP949`, `docs/parity/channel.md`); a
+    /// newline must start a new row, not become a glyph cell.
+    #[test]
+    fn newline_starts_a_new_row_without_the_system_face() {
+        let mut image = Image::blank(64, 40);
+        draw_text(&mut image, None, 2, 2, "AB\nCD", [255, 255, 255, 255], 10.0);
+        let lit_in_rows = |from: usize, to: usize| -> usize {
+            let stride = image.width as usize * 4;
+            (from..to.min(image.height as usize))
+                .flat_map(|row| {
+                    image.rgba[row * stride..(row + 1) * stride]
+                        .as_chunks::<4>()
+                        .0
+                })
+                .filter(|cell| cell[3] != 0)
+                .count()
+        };
+        assert!(
+            lit_in_rows(12, 22) > 0,
+            "the second line must paint below the first"
+        );
+    }
+
+    #[test]
+    fn stand_in_measure_uses_the_widest_line_for_multiline_text() {
+        assert_eq!(
+            measure_text_stand_in("AB\nLONG", 10.0),
+            measure_text_stand_in("LONG", 10.0)
+        );
     }
 
     #[test]

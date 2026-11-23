@@ -2268,8 +2268,13 @@ pub fn paint_music_shop_cart(
 /// controls is unpinned, the rects and strings are.
 const CP949_INK: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 
+/// One GDI cell height of the TEXT control face (`Gulimche 6x12`,
+/// `docs/gdi-text.md` font table). Explicit `\n` line breaks in a
+/// CP949 message advance by one cell, not by the fitted glyph em.
+const CP949_TEXT_CELL_HEIGHT_PX: f32 = 12.0;
+
 /// Em extent fitting `text` into a `w`×`h` rect: the smaller of the
-/// height cap and the width-fit scale (advances scale linearly, so
+/// height cap and the widest-row fit (advances scale linearly, so
 /// one measure at 1 px/em fixes both). The font-absent stand-in
 /// measures through the same fit, so layout survives without the
 /// system face.
@@ -2287,6 +2292,22 @@ fn cp949_fit_scale(text: &str, w: f32, h: f32) -> f32 {
         h
     };
     h.min(width_fit).max(0.0)
+}
+
+/// Scale for a message with stored line breaks: share the rect
+/// height between rows, but never enlarge a GDI 12 px text cell.
+fn cp949_multiline_scale(text: &str, w: f32, h: f32) -> f32 {
+    let row_count = text.split('\n').count();
+    let row_height = h / row_count as f32;
+    cp949_fit_scale(text, w, row_height).min(CP949_TEXT_CELL_HEIGHT_PX)
+}
+
+/// Top inset that centers a block of `row_count` fixed-height rows
+/// inside the staged rect — the three-line channel notice lands
+/// centered in its TEXT rect in the 7.55 capture (#882).
+fn multiline_top_inset(rect_height: u32, row_count: usize, scale: f32) -> i32 {
+    let block_height = row_count as f32 * scale;
+    ((rect_height as f32 - block_height) * 0.5).round() as i32
 }
 
 /// Paint the composited text image over the frame at `rect`.
@@ -2341,16 +2362,26 @@ fn paint_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, in
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    let row_count = text.split('\n').count();
+    let scale = if row_count > 1 {
+        cp949_multiline_scale(text, rect.w as f32, rect.h as f32)
+    } else {
+        cp949_fit_scale(text, rect.w as f32, rect.h as f32)
+    };
     if scale <= 0.0 {
         return;
     }
+    let top_inset = if row_count > 1 {
+        multiline_top_inset(rect.h, row_count, scale)
+    } else {
+        0
+    };
     let mut image = o2jam_text::Image::blank(rect.w, rect.h);
     o2jam_text::draw_text(
         &mut image,
         o2jam_text::system_font(),
         0,
-        0,
+        top_inset,
         text,
         ink,
         scale,
@@ -14889,5 +14920,41 @@ mod dialog_paint_tests {
             painted, frame0,
             "a lane button paints exactly its first glyph frame"
         );
+    }
+
+    /// The relay notice's exe string stores three explicit line
+    /// breaks. Every line must land inside the staged TEXT rect,
+    /// even when no dialog art is installed (#882).
+    #[test]
+    fn relay_down_notice_paints_ink_in_each_message_row() {
+        let mut buf = vec![0u32; 800 * 600];
+        paint_information_message(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            RELAY_DOWN_MESSAGE_CP949,
+        );
+        let (message, _, _) = quit_fallback_rects();
+        let paints_white_row = |row: i32| -> bool {
+            let row = usize::try_from(row).unwrap();
+            (message.x..message.x + i32::try_from(message.w).unwrap()).any(|col| {
+                let at = row * 800 + usize::try_from(col).unwrap();
+                buf[at] != scrim_color()
+            })
+        };
+        let third = i32::try_from(message.h / 3).unwrap();
+        for (line, start) in [
+            ("first", message.y),
+            ("second", message.y + third),
+            ("third", message.y + 2 * third),
+        ] {
+            assert!(
+                (start..start + third).any(paints_white_row),
+                "{line} notice line must paint inside the message rect"
+            );
+        }
     }
 }
