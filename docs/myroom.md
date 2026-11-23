@@ -534,3 +534,15 @@ its source, never to "the data":
    body is staged, but which cell the exe highlights and whether it
    uses `Myroom_MybagSelect.oji` at all is still unpinned. Next step:
    qualified exe capture with a pressed slot/bag/gift cell.
+
+## Caption anchors (#878, 2026-11-23)
+
+The v3 myroom pair (`~/scratch/paired-shots-v3/states/myroom`, exe
+frame `f60555e9…`) shows the two G/W values right-aligned in their
+staged cells `(685,421,95,13)` / `(685,448,95,13)`, and the three cash
+cells `(705,478/500/522,74,12)` blank while the shared wallet holds
+zero. `paint_myroom_data` now uses the +2 px GDI bearing and the
+right alignment for those two cells only, and inks no zero in the
+cash cells. Other caption families keep their existing left/top
+painter; no per-caption offsets are invented. Guard:
+`wallet_values_right_align_and_zero_cash_cells_stay_blank`.

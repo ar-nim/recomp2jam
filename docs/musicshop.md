@@ -291,3 +291,40 @@ row stages the cart and queues no 5010; `BUYITEM` queues exactly one
 5010 send. No exe row-pick or BUYITEM press frame exists yet (the
 pinned BUYITEM rect showed no visible button), so the exe feedback
 arm stays OPEN (`E-T`/`E-W-5010`).
+
+## Entry face and caption anchors (#878, 2026-11-23)
+
+The quiesced v3 pair (`~/scratch/paired-shots-v3/states/musicshop`,
+exe frame `4f6d9a2f…`) pins the shop-entry face: NEW filter with the
+promo `MShop_Front_BG.ojs`, the Download panel, no catalog clones, no
+cart backdrop, no TOP100 badge, and no messenger callout. The rust leg
+had all layers painted at once; `music_shop_scene_kept` now gates each
+staged figure on the same two face words, and the overlay painter
+follows it. A color filter reveals the catalog clones (#813); the
+other tab reveals the cart plate (#820). The TOP100 entry property is
+zero (#827), so its art stays hidden; no nonzero writer is pinned.
+
+The same frame pins the right panel's twelve titles and the `01/47`
+pager. The titles join back to `OJNList.dat` ids
+`887,886,885,884,879,836,809,806,880,869,837,832`; the selector word
+that produces that order stays OPEN. `MShop_PageNumber.ojs` stores ten
+digit frames; `music_shop_page_digit` selects one per control instead
+of stacking them (which read `9/9/9/9`). The pager counts twelve
+songs per page (562 ÷ 12 = 47) while the left board still tiles five
+visible row slots. Idle progress bars use the frame's dark
+`rgb(33,49,74)` inside their staged rects.
+
+Captions follow the shared TEXT rule from `docs/gdi-text.md`: ink is
+centered or right-aligned in the staged cell as the family requires,
+with the +2 px GDI bearing (senior pin, commit `3701ddb`). The MY
+title cell is left-anchored, the owner/status cell centered, and the
+bottom wallet amounts right-aligned. Only the modern glyph outlines
+remain different (owner decision `e8d01`).
+
+Guards: `musicshop_entry_state_keeps_the_promo_and_download_faces_only`,
+`musicshop_pager_frames_spell_the_exe_01_of_47`,
+`musicshop_entry_panel_reads_the_exe_twelve_song_order`,
+`caption_cell_ink_lands_two_pixels_below_the_exe_cell_top`,
+`idle_download_bars_ink_the_exe_dark_face`,
+`music_shop_bottom_wallet_inks_gem_and_won_from_the_shared_wallet`,
+`room_stage_gateway_sends_exe_wire_sequence`.

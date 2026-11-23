@@ -7,8 +7,10 @@
 //! entry point, and [`print_connect_report`] writes it to stdout.
 
 use crate::{
-    play::RoomArenaEcho, wallet::SyncCashPointResponse, AuthResult, ChannelLoginResponse,
-    ChannelState, CharacterInfo, GameStatsUpdate, JoinRoomResponse, RoomListEntry,
+    play::{MusicListAnswer, RoomArenaEcho},
+    wallet::SyncCashPointResponse,
+    AuthResult, ChannelLoginResponse, ChannelState, CharacterInfo, GameStatsUpdate,
+    JoinRoomResponse, RoomListEntry,
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 
@@ -24,6 +26,10 @@ pub struct ConnectReport {
     /// Channel-entry `SyncCashPoint` 5029 answer (two words), read
     /// before the user list on the exe's room-stage ladder.
     pub cash_sync: Option<SyncCashPointResponse>,
+    /// Room-stage `GetMusicList` 4031 answer (acquired ids plus the
+    /// free-music word). The shop's right panel joins these ids to
+    /// the catalog titles; the song flow's copy stays in `song`.
+    pub music_list: Option<MusicListAnswer>,
     /// Worn figure layers stacked from `avatar.opa`, when requested.
     pub avatar_layers: usize,
     /// Channels the gateway listed.
@@ -295,6 +301,7 @@ mod tests {
                 gem: 5,
                 cash_point: 6,
             }),
+            music_list: None,
             wallet: Some(connect::WalletReport {
                 gem: 5,
                 cash_point: 6,
@@ -404,6 +411,7 @@ mod tests {
             character: None,
             wallet: None,
             cash_sync: None,
+            music_list: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: None,
@@ -422,6 +430,7 @@ mod tests {
             character: None,
             wallet: None,
             cash_sync: None,
+            music_list: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: Some(ChannelLoginResponse {

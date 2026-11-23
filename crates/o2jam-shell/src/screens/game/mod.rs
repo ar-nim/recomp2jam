@@ -91,28 +91,29 @@ use super::paint::{
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
     can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
-    default_room_title, lanking_action_at, music_shop_action_at, music_shop_tooltip_hovered,
-    music_shop_tooltip_kept, myroom_equip_slot, myroom_panel_kept, myroom_record_slot,
-    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_tutorial_scene,
-    password_action_at, planet_action_at, select_chrome_action_at, select_filter_button_id,
-    select_filter_choice_at, select_index_matches, select_music_rows,
-    select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
-    shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
-    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
-    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
-    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
-    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
-    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    default_room_title, lanking_action_at, music_shop_action_at, music_shop_page_digit,
+    music_shop_scene_kept, music_shop_tooltip_hovered, myroom_equip_slot, myroom_panel_kept,
+    myroom_record_slot, myroom_tab_kept, paint_side_scene, paint_side_scene_live,
+    paint_side_scene_selected, paint_tutorial_scene, password_action_at, planet_action_at,
+    select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
+    select_index_matches, select_music_rows, select_music_songs_with_labels,
+    select_row_column_text, select_row_hit, shop_action_at, shop_extmenu_kept, shop_panel_kept,
+    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
+    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
+    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
+    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
+    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet,
+    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
+    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
+    WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
+    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
+    ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
+    TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -8572,9 +8573,24 @@ impl ScreenGame {
             let hovered = self
                 .pointer
                 .is_some_and(|(x, y)| music_shop_tooltip_hovered(&self.side_placements, x, y));
-            paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
-                music_shop_tooltip_kept(placed, hovered)
-            });
+            let genre = self.music_shop.genre_filter();
+            let face = self.music_shop.face();
+            let pager_pages = self
+                .music_shop
+                .catalog_len()
+                .div_ceil(MSHOP_PAGER_SONGS_PER_PAGE);
+            let page = self.music_shop_page();
+            paint_side_scene_selected(
+                frame,
+                &self.side_placements,
+                &self.side_figures,
+                |placed| music_shop_scene_kept(placed, genre, face, hovered),
+                |placed| {
+                    (placed.sprite.as_deref() == Some("MShop_PageNumber.ojs"))
+                        .then(|| music_shop_page_digit(placed.code, page, pager_pages))
+                        .flatten()
+                },
+            );
         } else if self.side == Some(SideScreen::Tutorial) {
             let chart_ms = self.tutorial_chart_ms(now_ms);
             self.advance_tutorial_page(chart_ms);
@@ -8692,28 +8708,36 @@ impl ScreenGame {
         // flags plus the cart and both pager readouts; without
         // staged songs it paints nothing.
         if self.side == Some(SideScreen::MusicShop) {
+            // Same two face words that gate the staged art above.
+            // The NEW entry has the promo plate, not a catalog, and
+            // the Download entry has the transfer panel, not a cart.
+            let list_visible = self.music_shop.genre_filter() != MusicShopGenreFilter::New;
+            let cart_visible = self.music_shop.face() == MusicShopFace::Cart;
             paint_music_shop_genre_frames(
                 frame,
                 &self.side_placements,
                 self.music_shop_frame_index(),
             );
             paint_music_shop_face(frame, &self.side_placements, self.music_shop.face());
-            paint_music_shop_owned_rows(
-                frame,
-                &self.side_placements,
-                &self.music_shop.owned_rows(),
-            );
+            let right_rows = if cart_visible {
+                self.music_shop.owned_rows()
+            } else {
+                self.music_shop.entry_panel_rows()
+            };
+            paint_music_shop_owned_rows(frame, &self.side_placements, &right_rows);
             paint_music_shop_notice(frame, &self.side_placements, self.music_shop.notice());
             paint_music_shop_cashfillup_notice(
                 frame,
                 &self.side_placements,
                 self.music_shop_cashfillup_notice_id(),
             );
-            paint_music_shop_progress(
-                frame,
-                &self.side_placements,
-                self.music_shop_download_readout(),
-            );
+            if !cart_visible {
+                paint_music_shop_progress(
+                    frame,
+                    &self.side_placements,
+                    self.music_shop_download_readout(),
+                );
+            }
             paint_music_shop_row_selection(
                 frame,
                 &self.side_placements,
@@ -8726,32 +8750,38 @@ impl ScreenGame {
                 self.music_shop.tooltip_lines(),
             );
             let visible_rows = self.music_shop_visible_rows();
-            paint_music_shop_search(
-                frame,
-                &self.side_placements,
-                self.music_shop_search_draft(),
-                self.music_shop_search_hits(),
-                &visible_rows,
-            );
+            if list_visible {
+                paint_music_shop_search(
+                    frame,
+                    &self.side_placements,
+                    self.music_shop_search_draft(),
+                    self.music_shop_search_hits(),
+                    &visible_rows,
+                );
+            }
             paint_music_shop_top100_chrome(
                 frame,
                 &self.side_placements,
                 self.music_shop.top100_pressed(),
             );
-            paint_music_shop_board(
-                frame,
-                &self.side_placements,
-                &visible_rows,
-                self.music_shop_page(),
-                self.music_shop_list_pages(),
-            );
-            paint_music_shop_cart(
-                frame,
-                &self.side_placements,
-                &self.music_shop_visible_cart(),
-                self.music_shop_cart_page(),
-                self.music_shop_cart_pages(),
-            );
+            if list_visible {
+                paint_music_shop_board(
+                    frame,
+                    &self.side_placements,
+                    &visible_rows,
+                    self.music_shop_page(),
+                    self.music_shop_list_pages(),
+                );
+            }
+            if cart_visible {
+                paint_music_shop_cart(
+                    frame,
+                    &self.side_placements,
+                    &self.music_shop_visible_cart(),
+                    self.music_shop_cart_page(),
+                    self.music_shop_cart_pages(),
+                );
+            }
             paint_music_shop_wallet(frame, &self.side_placements, &self.wallet);
         }
         if self.side == Some(SideScreen::MyRoom) {
@@ -28323,6 +28353,9 @@ mod game_tests {
         placements.push(area(MSHOP_PAGE_CUR_ONES_CODE, 260, 534, 14, 17));
         placements.push(area(MSHOP_PAGE_TOT_TENS_CODE, 286, 534, 14, 17));
         placements.push(area(MSHOP_PAGE_TOT_ONES_CODE, 300, 534, 14, 17));
+        // A color filter lets these board tests enter the catalog
+        // face; NEW entry keeps only the promo art (#813).
+        placements.push(area(MSHOP_GENRE_FILTER_FIRST_CODE + 4, 700, 20, 40, 20));
         placements
     }
 
@@ -28439,6 +28472,7 @@ mod game_tests {
         };
         game.load_side_scene(music_shop_side_placements(), HashMap::new());
         assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(720, 30);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_side(
             &mut Frame {
@@ -28756,6 +28790,7 @@ mod game_tests {
             );
             buf
         };
+        game.click_music_shop(720, 30);
         let hint_frame = paint(&mut game);
         assert!((520..580).any(|col| hint_frame[30 * 800 + col] != 0));
         game.text_input("tun");
@@ -30204,7 +30239,7 @@ mod game_tests {
             free_music: false,
         });
         game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
-        let placements = (0..12u32)
+        let mut placements: Vec<ScenePlacement> = (0..12u32)
             .map(|slot| ScenePlacement {
                 role: PlacementRole::Single,
                 id: String::new(),
@@ -30218,8 +30253,21 @@ mod game_tests {
                 },
             })
             .collect();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: MSHOP_TAB_DELETE_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 700,
+                y: 20,
+                w: 40,
+                h: 20,
+            },
+        });
         game.load_side_scene(placements, HashMap::new());
         assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(720, 30);
 
         let rows = game.music_shop_owned_rows();
         assert_eq!(rows.len(), 2);
@@ -30258,6 +30306,7 @@ mod game_tests {
         // No install-root read: a synthetic chart name feeds the pure seat.
         let mut game = open_music_shop_board(2);
         game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+        game.click_music_shop(720, 30);
 
         let rows = game.music_shop_visible_rows();
         assert_eq!(rows.len(), 2);
@@ -30280,6 +30329,20 @@ mod game_tests {
             installed_pixel, missing_pixel,
             "only the installed row inks"
         );
+    }
+
+    #[test]
+    fn musicshop_entry_panel_reads_the_exe_twelve_song_order() {
+        // Live caller chain: `paint_side` -> `MusicShopState::entry_panel_rows`
+        // -> `paint_music_shop_owned_rows`. The v3 exe frame pins the
+        // first/last rows (`BMP[3M]`, `the Platinum Waves[3M]`) and the
+        // two `Free` creators; the hidden server selector stays OPEN.
+        use super::super::side::MSHOP_ENTRY_BOARD_SONG_IDS;
+        let game = open_music_shop_board(7);
+        let rows = game.music_shop.entry_panel_rows();
+        assert_eq!(rows.len(), MSHOP_ENTRY_BOARD_SONG_IDS.len());
+        assert_eq!(rows[0].song_id, 887);
+        assert_eq!(rows.last().map(|row| row.song_id), Some(832));
     }
 
     #[test]
