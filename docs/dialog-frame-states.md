@@ -73,3 +73,20 @@ no hover or press frame is claimed as exe-verified.
   chain on all three options sheets; `options_tab_press_holds_its_active_frame_until_release`
   pins the held tab face through release. Both use synthetic two-record
   bodies; all three sheet rows above stay OPEN.
+
+## Rest faces baked into the sheet (v3 2026-11-23)
+
+The qualified rest packs pin one more composition rule for the
+`DIALOG_INFORMATION` OK body and the Options mode/footer bodies: the
+7.55 frame shows the plate baked into the parent sheet (gray OK /
+DEFAULT / SAVE / EXIT, blue 3-key plate), not the record-0 body staged
+from `Interface1.opi`. `paint_dialog_scene_filtered` therefore withholds
+`Info_OK.ojs`, `OptionKey_Btn_3Key.ojs`, `OptionKey_Btn_7Key.ojs` and
+`Option_Default/Save/Exit.ojs` at rest; `paint_dialog_frame_states`
+still repaints record 0 on hover and record 1 on a held press. This is
+a rest-face selection pin, not a new hover/active frame claim: the
+per-sheet hover/press rows above stay OPEN. Guard:
+`dialog_rest_leaves_baked_button_plates_visible` (red proof: blue body
+over a red test plate). Exe pin: v3 quiesced channel-popup and
+options-key frames (`~/scratch/paired-shots-v3/states/`, SHA pins in
+`~/scratch/fix-chrome-a-findings.md`).

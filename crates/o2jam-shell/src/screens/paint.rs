@@ -2993,6 +2993,23 @@ pub fn paint_dialog_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_dialog_scene_filtered(frame, art, |_| true);
 }
 
+/// Bodies whose rest face is already baked into the parent sheet.
+/// The qualified 7.55 rest frames show the sheet's gray OK/Options
+/// plates and the blue 3-key plate, not the record-0 bodies staged
+/// from `Interface1.opi` (`~/scratch/paired-shots-v3` channel-popup and
+/// options-key pairs; `docs/dialog-frame-states.md` pins rest as the
+/// staged stack). Hover/press still repaint the body through
+/// `ScreenGame::paint_dialog_frame_states`; geometry stays with the
+/// parsed `.bnd` placements.
+const BAKED_PLATE_BODIES: [&str; 6] = [
+    "Info_OK.ojs",
+    "OptionKey_Btn_3Key.ojs",
+    "OptionKey_Btn_7Key.ojs",
+    "Option_Default.ojs",
+    "Option_Save.ojs",
+    "Option_Exit.ojs",
+];
+
 /// Paint a dialog sheet, withholding placements the caller keeps inert.
 /// A withheld body leaves the sheet's own baked art visible: the create-room
 /// key plates use that face while the exe's mode sentinel is unset (#844).
@@ -3012,6 +3029,9 @@ pub fn paint_dialog_scene_filtered(
         let Some(name) = placement.sprite.as_ref() else {
             continue;
         };
+        if BAKED_PLATE_BODIES.contains(&name.as_str()) {
+            continue;
+        }
         let Some(figure) = art.figures.get(name) else {
             continue;
         };
@@ -14769,6 +14789,22 @@ mod dialog_paint_tests {
     use crate::staging::{stage_dialog, Dialog, StageContext};
     use o2jam_render::{blit_rgb555, Frame, Rgb555Image};
 
+    /// One solid bound-body figure in a contrasting RGB555 colour.
+    fn filled_figure(w: usize, h: usize, word: [u8; 2]) -> AvatarFigure {
+        let mut pixels = vec![0u8; w * h * 2];
+        for pair in pixels.as_chunks_mut::<2>().0 {
+            pair.copy_from_slice(&word);
+        }
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&pixels, w, h).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
     /// One 1x1 red pixel layer (colorkey white, so the pixel paints).
     fn red_layer(dx: i32, dy: i32) -> FigureLayer {
         FigureLayer {
@@ -15054,6 +15090,98 @@ mod dialog_paint_tests {
         assert_eq!(
             painted, frame0,
             "a lane button paints exactly its first glyph frame"
+        );
+    }
+
+    /// One dialog sheet with a contrasting body over a baked plate.
+    /// The backdrop is a `Dialog_*` sprite (view origin), and the body
+    /// uses the bound-body `(0,0)` record so the `.bnd` rect owns it.
+    fn baked_plate_scene(sprite: &str, code: u32) -> SceneArt {
+        let backdrop = filled_figure(100, 100, [0x00, 0x7C]);
+        let body = filled_figure(20, 10, [0x1F, 0x00]);
+        SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    id: "sheet".to_owned(),
+                    code: 0x2110_0001,
+                    sprite: Some("Dialog_Test.ojs".to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 100,
+                        h: 100,
+                    },
+                    role: PlacementRole::Single,
+                },
+                ScenePlacement {
+                    id: "body".to_owned(),
+                    code,
+                    sprite: Some(sprite.to_owned()),
+                    rect: Rect {
+                        x: 10,
+                        y: 10,
+                        w: 20,
+                        h: 10,
+                    },
+                    role: PlacementRole::Single,
+                },
+            ],
+            figures: HashMap::from([
+                ("Dialog_Test.ojs".to_owned(), backdrop),
+                (sprite.to_owned(), body),
+            ]),
+        }
+    }
+
+    #[test]
+    fn dialog_rest_leaves_baked_button_plates_visible() {
+        // #885/#845: the 7.55 rest frames show the OK and Options
+        // button plates baked into their sheets, not the blue bodies
+        // our loader stages at record 0 (`~/scratch/paired-shots-v3`
+        // channel-popup + options-key diffs). Hover still repaints
+        // the body through the frame-state pass.
+        let red = pack_xrgb(255, 0, 0);
+        for (sprite, code) in [
+            ("Info_OK.ojs", 0x2120_0002),
+            ("OptionKey_Btn_3Key.ojs", 0x2520_1003),
+            ("Option_Default.ojs", 0x2520_0015),
+        ] {
+            let art = baked_plate_scene(sprite, code);
+            let mut buf = vec![0u32; 800 * 600];
+            paint_dialog_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &art,
+            );
+            assert_eq!(
+                buf[15 * 800 + 15],
+                red,
+                "{sprite} must leave its sheet's baked plate visible at rest"
+            );
+        }
+    }
+
+    #[test]
+    fn dialog_rest_stages_controls_without_a_baked_plate() {
+        // The suppression is per staged body, not a blanket hide of
+        // every dialog control: another body still paints at rest.
+        let art = baked_plate_scene("Other_Button.ojs", 0x2120_0099);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_dialog_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        assert_eq!(
+            buf[15 * 800 + 15],
+            pack_xrgb(0, 0, 255),
+            "an unbaked body keeps its staged frame"
         );
     }
 

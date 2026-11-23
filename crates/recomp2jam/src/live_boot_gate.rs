@@ -2353,11 +2353,22 @@ mod live_boot_gate_tests {
             "dialog raised over the board"
         );
 
-        let held = promo_changes_between(game, 0, 9_500);
-        assert!(held.is_empty(), "the dialog arm holds the banner");
+        // #876 correction: the dialog belongs to CStatePlanet, whose
+        // update keeps paging the banner behind the sheet. The v3
+        // quiesced exe pair shows a different promo frame under the
+        // Channel dialog, so the old "dialog holds" expectation was a
+        // stand-in, not an exe pin.
+        let changes = promo_changes_between(game, 0, 9_500);
+        assert_eq!(
+            changes.len(),
+            3,
+            "the dialog arm keeps the three-record cycle"
+        );
+        let shown: Vec<u32> = changes.iter().map(|(_, index)| *index).collect();
+        assert_eq!(shown, [2, 3, 1], "the dialog arm cycles the same records");
         game.enter_screen(Screen::Planet);
         let resumed = promo_changes_between(game, 9_500, 12_500);
-        assert_eq!(resumed.len(), 1, "return resumes one tick, not a backlog");
+        assert_eq!(resumed.len(), 1, "the board keeps one tick per cadence");
         assert_eq!(resumed[0].1, 2, "the cycle resumes on the next record");
     }
 

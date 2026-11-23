@@ -44,6 +44,10 @@ pub(crate) struct ChannelScene {
     pub(crate) highlight: usize,
     pub(crate) top: usize,
     pub(crate) dragging: bool,
+    /// Last row the pointer visited, kept for the select bar after the
+    /// pointer parks (#876 v3 oracle). The keyboard highlight is a
+    /// separate Confirm target; this only holds the bar's view state.
+    pub(crate) last_hovered_row: Option<usize>,
 }
 
 impl ChannelScene {
@@ -54,6 +58,7 @@ impl ChannelScene {
         self.highlight = 0;
         self.top = 0;
         self.dragging = false;
+        self.last_hovered_row = None;
     }
 
     /// Hold fetched rows behind the relay-unavailable notice (#244).
@@ -77,6 +82,23 @@ impl ChannelScene {
         let (top, shown) = channel_viewport_from_top(self.top, self.rows.len());
         let slot = channel_row_hit(x, y, shown)?;
         (top + slot < self.rows.len()).then_some(top + slot)
+    }
+
+    /// Remember the row a pointer event visited. Motion off the rows
+    /// leaves the last row in place — the 7.55 select bar stays where
+    /// the pointer last was (#876, `~/scratch/paired-shots-v3/states/channel`).
+    /// A fresh list resets it through [`Self::set_rows`].
+    pub(crate) fn remember_hover(&mut self, pointer: Option<(i32, i32)>) {
+        if let Some(row) = self.hovered(pointer) {
+            self.last_hovered_row = Some(row);
+        }
+    }
+
+    /// Row the select bar paints: pointer first, then the last row the
+    /// pointer visited. `None` lets the caller fall back to the keyboard
+    /// highlight before any pointer visit.
+    pub(crate) fn select_bar_row(&self, pointer: Option<(i32, i32)>) -> Option<usize> {
+        self.hovered(pointer).or(self.last_hovered_row)
     }
 
     /// Row whose enter face covers (`x`, `y`): the session bridge's

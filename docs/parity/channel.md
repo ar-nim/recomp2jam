@@ -231,3 +231,26 @@ and unchanged rows. The keyboard-confirm fan-out to the channel
 vftable slot stays untouched and OPEN by the channel-full lane's
 pin (next step: stopped-state breakpoint on `0x475260` with a
 focused canvas); this ticket covers the 1005 answer path only.
+
+## Ticket #876 — v3 quiesced channel row CONTENT (2026-11-23)
+
+Quiesced v3 pair (`~/scratch/paired-shots-v3/states/channel/`): full
+structural SSIM 0.8989 at baseline; region diff gave rows 0.9587 and
+promo flanks 0.6404/0.5420. The row CONTENT is not a text-source bug:
+the Ch.01–04 digit wells, population segments, enter faces and bar
+geometry are byte-close; the wells still read wire `channel_id + 1`
+(D25 pin). The only row delta is the green select bar: the exe driver
+last hovered Ch.03 at (400,365) and the bar stayed there with the
+pointer parked off-canvas; our fallback snapped to keyboard row 0.
+`ChannelScene::remember_hover` now keeps the last visited row for the
+bar (`channel_select_bar_row`), while `hovered_channel_row` stays the
+pure pointer resolver and Confirm still uses the keyboard highlight.
+The older "bar snaps back off the rows" sentence above was an
+unevidenced stand-in; the v3 exe frame overrides it and the guard is
+renamed to pin the held bar. `ScreenGame::tick_planet_promo_at` also
+keeps the carousel rotating behind this dialog (CStatePlanet update
+VA `0x48e3b0`; `docs/wine-boot.md` auto-paging pin). Quiesced re-pair
+against the v3 exe frame: raw 0.9584, structural 0.9913 (PASS 0.99).
+Next evidence step: a hover-leave A/B pack inside the dialog (to tell
+whether a leave *within* rows clears the bar); the off-canvas case is
+now pinned.
