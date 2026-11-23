@@ -616,3 +616,30 @@ frame with before/after visibility.
    frames stay OPEN.
 5. Gender buttons — PARTIAL: byte/hidden-button/refresher staged;
    the screen→object-word mapping and before/after frames stay OPEN.
+
+## #877/#886 — state-3 entry card face (2026-11-23, quiesced v3 pair)
+
+The v3 entry/cart exe frames show the `0xc` new-arrivals face: one
+`SET 0x1D000` card per featured good, with the dark inset
+`Shop_SetItem_Back.ojs` frame, a stretched catalog portrait, and the
+title/price ink in the card's staged cells. The rust legs stacked every
+frame of the multi-frame bodies and painted eight raw `ITEMNAME` rows.
+
+Pins: `FUN_00498bc0` (file `0x98bc0`, REA `ev_5bee92ef…be`) dispatches
+`0x1420100A..0E` and sets each `SUBMENU1..6` image-control frame range
+via `FUN_0042f870(2*i+1, 2*i+2)` (REA `ev_49cf8f68…11`); the four
+`SETITEM_EX` parents are `0x1401D088..8B` from `ControlList_Interface.txt`.
+The four portrait bodies' gray backdrop word `0x5294` is read from
+`avatar.opa`; the two attribute lines in the exe card are not in
+`Itemdata_Korea.dat` and stay OPEN.
+
+Implementation: staged art clones the art-less card children under each
+parent origin; the Shop paint pass selects one frame per image control,
+stretches the featured portrait into each staged `SET_AVATAR` cell, and
+inks title/price into the staged card cells with the pinned GDI bearing.
+The seam raw-catalog face (`set_catalog`) is unchanged. Guards:
+`set_item_card_children_stage_once_under_each_card_origin`,
+`entry_frame_selects_one_special_submenu_pair_and_the_dark_card_face`,
+`stretch_blit_rgb555_skips_the_staged_portrait_backdrop_key`.
+Live pair numbers and remaining OPENs are in
+`~/scratch/fix-chrome-b-findings.md`.

@@ -110,3 +110,16 @@ Guards: `waiting_notice_board_zero_words_leave_the_header_backdrop_visible`
 (lanking band), `planet_zero_key_black_plates_cover_the_board_art` and
 `channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels`
 (#371/#373), plus the renderer's `zero_color_key_leaves_black_pixels_opaque`.
+
+## v3 paired-shot note (2026-11-23, #879)
+
+The v3 `paired-shots-v3/states/lanking` pair is not a Lanking pair:
+its rust frame is byte-identical to the itemshop-entry rust frame
+(`beb29a99…568`), and both traces stop at the Item Shop. Re-driving the
+rust leg to the real Lanking board with the non-overlapping MYBAND aim
+`(470,17)` produces `~/scratch/fix-chrome-b/lanking-rust2/states/lanking.png`;
+the exe cannot be driven there — statics (`~/scratch/re-lanking-findings.md`,
+`ev_a33542ad…`, `ev_5650f76b…`, `ev_ac6983f7…b584086`) refute every
+entry control and wire word. The 0.6726 pair therefore names Item Shop
+chrome, not Lanking chrome. No Lanking painter change follows from it;
+a valid A/B needs a newly discovered live entry path first.

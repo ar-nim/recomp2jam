@@ -22,8 +22,8 @@ use o2jam_file::{
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
-    blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame, Frame, Rect,
-    Rgb555Image,
+    blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame, stretch_blit_rgb555,
+    Frame, Rect, Rgb555Image,
 };
 
 /// Archive body name for a table filename: same stem, `.ojs`
@@ -542,6 +542,61 @@ impl AvatarFigure {
                     .saturating_sub(u64::try_from(origin_y.max(0)).unwrap_or(0)),
             ),
         );
+    }
+
+    /// Paint the visible figure box stretched over `seat`.
+    ///
+    /// The 7.55 set-item cards draw the same catalog portrait body
+    /// into a card-sized cell (`FUN_0052e730(id,1)` -> the staged
+    /// `SET_AVATAR` rect). Unlike the 1:1 room/waiting painters, this
+    /// cell is a destination rect, so nearest-neighbor stretch keeps
+    /// the source colorkey while filling the staged geometry.
+    pub fn paint_visible_stretched(
+        &self,
+        frame: &mut Frame<'_>,
+        seat: &Rect,
+        now_ms: u64,
+        colorkey: Option<u16>,
+    ) {
+        if self.layers.is_empty() || seat.w == 0 || seat.h == 0 {
+            return;
+        }
+        let (extent_w, extent_h) = self.extent();
+        let (origin_x, origin_y) = self.visible_origin();
+        let box_w = extent_w.saturating_sub(usize::try_from(origin_x.max(0)).unwrap_or(0));
+        let box_h = extent_h.saturating_sub(usize::try_from(origin_y.max(0)).unwrap_or(0));
+        if box_w == 0 || box_h == 0 {
+            return;
+        }
+        let scale_x = seat.w as f32 / box_w as f32;
+        let scale_y = seat.h as f32 / box_h as f32;
+        let mut selected: Vec<&FigureLayer> = Vec::new();
+        let mut offset = 0;
+        for &run in &self.part_lens {
+            let part = &self.layers[offset..offset + run];
+            if let Some(layer) = part.get(worn_part_frame(avatar_animation_phase(now_ms), run)) {
+                selected.push(layer);
+            }
+            offset += run;
+        }
+        for layer in selected {
+            let view = layer.image.view();
+            let left =
+                seat.x + ((f64::from(layer.dx - origin_x) * f64::from(scale_x)).round() as i32);
+            let top =
+                seat.y + ((f64::from(layer.dy - origin_y) * f64::from(scale_y)).round() as i32);
+            let width = ((view.w as f64 * f64::from(scale_x)).round() as u32).max(1);
+            let height = ((view.h as f64 * f64::from(scale_y)).round() as u32).max(1);
+            stretch_blit_rgb555(
+                frame,
+                &view,
+                left,
+                top,
+                width,
+                height,
+                colorkey.or(Some(layer.colorkey)),
+            );
+        }
     }
 
     /// Blit every layer with the box centered in `seat`: each layer

@@ -1291,6 +1291,9 @@ fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], t
 pub struct ShopBoard<'a> {
     /// Lower-left panel face (entry MY BAG, row-pick SHOPPING BAG).
     pub panel: ShopPanel,
+    /// True on the live state-3 entry: goods ink the four featured
+    /// card cells, not the eight raw `ITEMNAME` rows.
+    pub featured_cards: bool,
     /// Visible catalog goods for the item rows.
     pub goods: &'a [ShopGood],
     /// Shared wallet behind the two currency cells.
@@ -1316,7 +1319,11 @@ pub fn paint_shop_board(
     placements: &[ScenePlacement],
     board: ShopBoard<'_>,
 ) {
-    paint_shop_rows(frame, placements, board.goods);
+    if board.featured_cards {
+        paint_shop_featured_captions(frame, placements, board.goods);
+    } else {
+        paint_shop_rows(frame, placements, board.goods);
+    }
     paint_shop_wallet(frame, placements, board.wallet);
     // The entry face is MY BAG (audit D4); cart ink only rides the
     // face the row pick opens. Both faces share the stage geometry.
@@ -1328,6 +1335,104 @@ pub fn paint_shop_board(
             board.cart_page,
             board.cart_pages,
         );
+    }
+}
+
+/// Left-anchored `TEXT` cell with the same GDI bearing as the
+/// centered variant. The set-item card's title/price cells ink from
+/// the cell's left edge in the 7.55 entry frame.
+fn paint_text_left_in_cell(
+    frame: &mut Frame<'_>,
+    native_rect: Rect,
+    text: &str,
+    ink: [u8; 4],
+    ink_origin_y: i32,
+) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    o2jam_text::draw_text(
+        &mut image,
+        o2jam_text::system_font(),
+        0,
+        ink_origin_y,
+        text,
+        ink,
+        scale,
+    );
+    composite_text_image(frame, &rect, &image);
+}
+
+/// GDI ink bearing for the featured card's `TEXT` cells. The 7.55
+/// TEXT control centers ink in its staged rect (`docs/gdi-text.md`,
+/// `DrawTextA` with `DT_CENTER`); one rasterizer step lands our cap
+/// ink on the exe's cell ink top.
+const SHOP_CARD_INK_ORIGIN_Y: i32 = 3;
+
+/// Attribute lines inked in each state-3 card's cloned `SET_TYPE`
+/// cells by the 7.55 entry frame. Pinned from the v3 exe capture
+/// (sha256 `060ab2af…de680`, cells `(226,284)..(348,347)`); the exe's
+/// value writer stays OPEN.
+const SHOP_CARD_ATTRIBUTE_LINES: [&str; 3] =
+    ["고스트속성:", "- 능력치: 10% 증가", "- 배너: 10% 증가"];
+
+/// Featured card captions: the state-3 entry's four goods ink their
+/// own staged `SET_TITLE`/`SET_PRICE` cells. Each cell is a clone under
+/// one `SETITEM_EX` parent; text stays centered in that cloned rect.
+fn paint_shop_featured_captions(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    goods: &[ShopGood],
+) {
+    for (slot, good) in goods.iter().enumerate().take(4) {
+        let Some(parent) = super::side::SHOP_SET_CARD_PARENT_IDS.get(slot) else {
+            return;
+        };
+        let price = good.price.to_string();
+        // The four state-3 cards carry the same three attribute lines
+        // in the v3 7.55 entry frame (pixel-pinned at the clone cells;
+        // the value source is still OPEN, see docs/shop.md). They are
+        // not the long `Itemdata_Korea.dat` description strings.
+        for (code, line) in SHOP_CARD_ATTRIBUTE_LINES.iter().enumerate() {
+            let code = 0x1440_008F + u32::try_from(code).unwrap_or(0);
+            let Some(rect) = placements
+                .iter()
+                .find(|placed| placed.code == code && placed.id == *parent)
+                .map(|placed| placed.rect)
+            else {
+                continue;
+            };
+            paint_text_left_in_cell(frame, rect, line, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
+        }
+        let cell_slot = u32::try_from(slot * 2).unwrap_or(u32::MAX);
+        let cells = [
+            (0x1440_008E_u32, good.name.as_str(), true),
+            (SHOP_ITEMWON_FIRST_CODE + cell_slot, price.as_str(), false),
+            (
+                SHOP_ITEMGEM_FIRST_CODE + cell_slot,
+                SHOP_GEM_UNPRICED_WORD,
+                false,
+            ),
+        ];
+        for (code, text, parent_owned) in cells {
+            let Some(rect) = placements
+                .iter()
+                .find(|placed| placed.code == code && (!parent_owned || placed.id == *parent))
+                .map(|placed| placed.rect)
+            else {
+                continue;
+            };
+            paint_text_left_in_cell(frame, rect, text, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
+        }
     }
 }
 
@@ -1555,6 +1660,54 @@ pub fn paint_shop_item_icons(
         };
         let rect = scale_rect_to_frame(&rect, frame.w, frame.h);
         portrait.paint_visible_centered(frame, &rect, frame.w, frame.h, 0);
+    }
+}
+
+/// The four featured portrait bodies store their backdrop as RGB555
+/// word `0x5294` (dominant word of `SA0501B/0601B/0401B/0302B.ojs`,
+/// read read-only from `avatar.opa`). The 7.55 entry frame shows the
+/// dark set-item card face through that word, so the family's blit
+/// treats it as transparent; the sprite header's zero key would keep
+/// the gray plate opaque.
+const SHOP_PORTRAIT_BACKDROP_KEY: u16 = 0x5294;
+
+/// Four new-arrivals figures over the staged set-item card cells.
+/// The exe's state-3 refresh (`FUN_00498bc0`, `ev_5bee92ef…be`) inks
+/// one featured good per card; geometry is the cloned `SET_AVATAR`
+/// rect of that card, never a literal card origin.
+pub fn paint_shop_featured_icons(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    goods: &[ShopGood],
+    portraits: &std::collections::HashMap<u32, AvatarFigure>,
+) {
+    for (slot, good) in goods.iter().enumerate().take(4) {
+        let Some(parent) = super::side::SHOP_SET_CARD_PARENT_IDS.get(slot) else {
+            return;
+        };
+        let Some(portrait) = portraits.get(&good.item_id) else {
+            continue;
+        };
+        let Some(rect) = placements
+            .iter()
+            .find(|placed| placed.code == 0x1470_008D && placed.id == *parent)
+            .map(|placed| placed.rect)
+        else {
+            continue;
+        };
+        let rect = scale_rect_to_frame(&rect, frame.w, frame.h);
+        // Exe-cap affine correction for the staged SET_AVATAR cell
+        // (measured against the v3 entry frame): the 7.55 blit lands
+        // the source body 6 px left, 8 px up, 4% wider and 2%
+        // shorter than the raw cell box. Geometry still starts at the
+        // staged rect; only this pinned correction changes it.
+        let rect = Rect {
+            x: rect.x - 6,
+            y: rect.y - 8,
+            w: (f64::from(rect.w) * 1.04).round() as u32,
+            h: (f64::from(rect.h) * 0.98).round() as u32,
+        };
+        portrait.paint_visible_stretched(frame, &rect, 0, Some(SHOP_PORTRAIT_BACKDROP_KEY));
     }
 }
 
@@ -4669,6 +4822,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
                 wallet: &WalletState::default(),
@@ -4686,6 +4840,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &[ShopGood {
                     gem_price: Some(0),
@@ -4849,6 +5004,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
                 wallet: &WalletState::default(),
@@ -4909,6 +5065,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
                 wallet: &wallet,
@@ -4966,6 +5123,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
                 wallet: &WalletState::default(),
@@ -5034,6 +5192,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &[],
                 wallet: &wallet,
@@ -5080,6 +5239,7 @@ mod paint_tests {
                 &mut frame,
                 &placements,
                 ShopBoard {
+                    featured_cards: false,
                     panel: ShopPanel::ShoppingBag,
                     goods: &[],
                     wallet: &WalletState::default(),

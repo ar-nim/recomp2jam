@@ -11,6 +11,7 @@ use super::super::side::{
     SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
     SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
     SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS,
+    SHOP_SUBMENU_FIRST_CODE,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -58,6 +59,10 @@ pub(crate) struct ShopState {
     /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
     /// see [`Self::set_shop_catalog`]).
     pub(crate) shop_goods: Vec<ShopGood>,
+    /// True after the state-3 new-arrivals landing, whose four
+    /// featured goods mount the set-item card face instead of the
+    /// eight raw `ITEMNAME` rows (ticket #877).
+    entry_catalog: bool,
     /// Item-list page (eight rows per page, the staged `ITEMBUY`
     /// hit areas).
     pub(crate) shop_page: usize,
@@ -185,6 +190,7 @@ impl ShopState {
     /// the cart keeps its checks.
     pub(crate) fn set_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
         self.reset_catalog(shop_goods(table));
+        self.entry_catalog = false;
     }
 
     /// Stage the catalog the exe shows on state-3 entry: the
@@ -193,6 +199,12 @@ impl ShopState {
     /// `ScreenGame::stage_exe_item_shop_catalog`.
     pub(crate) fn stage_exe_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
         self.reset_catalog(exe_new_arrivals_goods(table));
+        self.entry_catalog = true;
+        // The 7.55 entry frame (`~/scratch/paired-shots-v3/states/
+        // itemshop-entry/exe.png`) lights the second special-shop
+        // submenu (코스튬). The reset helper in `FUN_00498bc0`
+        // (`ev_5bee92ef…be`) selects that cell before any press.
+        self.selected_submenu = Some(SHOP_SUBMENU_FIRST_CODE + 1);
     }
 
     /// One catalog landing resets the browse faces; the cart keeps
@@ -519,6 +531,11 @@ impl ShopState {
     /// Submenu control forced by the last LUCKYBAG press.
     pub(crate) fn selected_submenu(&self) -> Option<u32> {
         self.selected_submenu
+    }
+
+    /// Whether the live new-arrivals face staged the set-item cards.
+    pub(crate) fn is_entry_catalog(&self) -> bool {
+        self.entry_catalog
     }
 
     /// Object byte `+0x16` written by LUCKYBAG.
