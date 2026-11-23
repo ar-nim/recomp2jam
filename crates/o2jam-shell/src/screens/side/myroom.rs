@@ -74,6 +74,9 @@ pub const MYROOM_GIFT_BACK_CODE: u32 = 0x1550_0047;
 pub const MYROOM_GIFT_PAGE_FIRST_CODE: u32 = 0x1550_0054;
 /// Gift page-number digit count (`0x15500054..57`).
 pub const MYROOM_GIFT_PAGE_DIGITS: u32 = 4;
+/// Inventory slots in the 7.55 bag (the 5003 reply carries 30 item
+/// words; the v3 exe pager reads 01/03 with ten cells per page).
+pub const MYROOM_BAG_CAPACITY_SLOTS: usize = 30;
 /// First bag pager digit (`MShop_PageNumber.ojs`, `0x1550002F..32`).
 /// The v3 exe frame reads 01/03; the rust leg stacked all ten digit
 /// frames and read 9/9/9/9 (#878).

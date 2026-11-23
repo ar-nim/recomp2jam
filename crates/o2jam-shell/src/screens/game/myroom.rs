@@ -22,8 +22,8 @@ use crate::screens::side::{
     myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_rank_caption,
     myroom_record_slot, myroom_tab_kept, myroom_wallet_captions, myroom_worn_well_items,
     MyRoomAction, MyRoomLowerTab, MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState,
-    SideScreen, MYROOM_ALARM_POPUP_CODE, MYROOM_BAG_CELLS, MYROOM_NOTICE_TEXT_CODE,
-    MYROOM_RANK_CODE,
+    SideScreen, MYROOM_ALARM_POPUP_CODE, MYROOM_BAG_CAPACITY_SLOTS, MYROOM_BAG_CELLS,
+    MYROOM_NOTICE_TEXT_CODE, MYROOM_RANK_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -177,6 +177,12 @@ impl ScreenGame {
             (Some(table), Some(character)) => myroom_bag_pages(&character.inventory, table),
             _ => 1,
         }
+    }
+
+    /// Total pager pages: the exe counts the bag's 30 slots, not the
+    /// number of occupied rows (v3 frame reads 01/03).
+    pub(super) fn myroom_bag_pager_pages(&self) -> usize {
+        MYROOM_BAG_CAPACITY_SLOTS.div_ceil(MYROOM_BAG_CELLS)
     }
 
     /// Gift-box pages over the staged box run (page 0 without data).
@@ -567,7 +573,7 @@ impl ScreenGame {
                                 myroom_bag_page_digit(
                                     placed.code,
                                     self.myroom.bag_page(),
-                                    self.myroom_bag_page_count(),
+                                    self.myroom_bag_pager_pages(),
                                 )
                             })
                             .or_else(|| myroom_pc_room_mark_frame(placed, pass_word, &art.figures))

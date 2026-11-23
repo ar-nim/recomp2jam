@@ -8569,7 +8569,7 @@ impl ScreenGame {
                             myroom_bag_page_digit(
                                 placed.code,
                                 self.myroom.bag_page(),
-                                self.myroom_bag_page_count(),
+                                self.myroom_bag_pager_pages(),
                             )
                         })
                         .or_else(|| {
