@@ -161,6 +161,21 @@ cross-platform rasterizer, decision e8d01); positions/sizes ride the
 bnd rects. Glyph rasterization is presentation; the strings and rects
 are gameplay-pinned as above.
 
+### Caption ink anchor (2026-11-23, #880b)
+
+The oracle pair `~/scratch/paired-shots-v3/states/planet/{exe,rust}.png`
+(both 800x600, 7.55 SHA-256 `83a04541…72c823b`, quiesced
+first-board phase) pins all five TEXT ink bands: first ink y 127 in
+the 94x13 cells whose top is y 125, centered on cell x 385/256/
+138/666/559 (HARD/NORMAL/EASY/FREE/DRUM). The +2 px bearing and
+horizontal centering are the TEXT control's GDI cell and `DT_CENTER`
+mode (`docs/gdi-text.md`, painter `0x42c650`); our rasterizer's cap
+rounding needs origin y+3 to land the ink at y 127. The shell's
+`paint_planet_captions` now uses that anchor; the shared caption
+helper keeps its own left/top rule. Guard:
+`planet_caption_ink_lands_on_the_exe_cell_anchor`; full before/after
+band table in `~/scratch/fix880b-findings.md`.
+
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
 
 ## Difficulty-pick highlight — EXE-RENDERING PINNED, shell OPEN (2026-11-11)
