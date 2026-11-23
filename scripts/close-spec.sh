@@ -20,10 +20,15 @@ fi
 SPEC="$1"
 BLOCKED=0
 
-# (a) open sub-issues — lowercase state, no filter-shortcut.
-OPEN_SUBS=$(gh api "repos/ar-nim/recomp2jam/issues/${SPEC}/sub_issues" \
-    --jq '[.[] | select(.state == "open") | {number, title}]')
-OPEN_COUNT=$(printf '%s' "$OPEN_SUBS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+# (a) open sub-issues — lowercase state, paginated (retro: the default
+# 30-item page hid 4 open sub-issues under #290 and 2 under #291 in
+# the first version of this script; the unfiltered count below is the
+# known-positive control, retro #871).
+SUBS_JSON=$(gh api --paginate "repos/ar-nim/recomp2jam/issues/${SPEC}/sub_issues" --jq '.[]')
+OPEN_SUBS=$(printf '%s\n' "$SUBS_JSON" | jq -s 'map(select(.state == "open") | {number, title})')
+OPEN_COUNT=$(printf '%s' "$OPEN_SUBS" | jq 'length')
+TOTAL_COUNT=$(printf '%s' "$SUBS_JSON" | jq -s 'length')
+echo "sub-issue control: ${TOTAL_COUNT} total, ${OPEN_COUNT} open"
 if [ "$OPEN_COUNT" -ne 0 ]; then
     echo "BLOCKED: ${OPEN_COUNT} open sub-issue(s) under #${SPEC}:"
     printf '%s\n' "$OPEN_SUBS" | jq -r '.[] | "  #\(.number): \(.title)"'
