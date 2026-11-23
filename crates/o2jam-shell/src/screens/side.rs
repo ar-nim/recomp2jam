@@ -2185,6 +2185,33 @@ pub const MSHOP_MS_BACK_CODE: u32 = MUSIC_SHOP_ROW_ART_CODES[0];
 /// The exe's entry frame has the Download plate there; the cart
 /// backdrop belongs to the other face toggle (#820).
 pub const MSHOP_CART_BACK_CODE: u32 = 0x1A50_005A;
+/// Entry-state chrome whose resting face is already baked into
+/// `State_MShop.ojs`: BACK and the two pager pairs. Painting their
+/// multi-frame bodies over it produced the bright blue pressed face
+/// in the v3 pair; no press is pinned at entry (#399/#814).
+const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 17] = [
+    0x1A20_0008,
+    MSHOP_GENRE_FILTER_FIRST_CODE,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 1,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 2,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 3,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 4,
+    MSHOP_GENRE_FILTER_FIRST_CODE + 5,
+    MSHOP_RANK_HEADER_FIRST_CODE,
+    MSHOP_RANK_HEADER_FIRST_CODE + 1,
+    MSHOP_RANK_HEADER_FIRST_CODE + 2,
+    MSHOP_RANK_HEADER_FIRST_CODE + 3,
+    MSHOP_RANK_HEADER_FIRST_CODE + 4,
+    MSHOP_RANK_HEADER_FIRST_CODE + 5,
+    MSHOP_MSALL_LEFT_CODE,
+    MSHOP_MSALL_RIGHT_CODE,
+    MSHOP_MYALL_LEFT_CODE,
+    MSHOP_MYALL_RIGHT_CODE,
+];
+/// Transfer animation body (`0x1A500024`). The v3 exe entry frame
+/// has an empty dark strip here; the body stores 26 stacked frames,
+/// which read as a black bar when painted unselected. Entry hides it.
+pub const MSHOP_DN_PROG_ANI_CODE: u32 = 0x1A50_0024;
 /// Messenger popup callout (`0x1A50008A`). The v3 exe entry frame
 /// has no callout; no press/writer is pinned, so its art stays hidden.
 pub const MSHOP_MESSENGER_POPUP_CODE: u32 = 0x1A50_008A;
@@ -2225,7 +2252,11 @@ pub fn music_shop_scene_kept(
     if !music_shop_tooltip_kept(placed, hovered) {
         return false;
     }
-    if placed.code == MSHOP_TOP100_CODE || placed.code == MSHOP_MESSENGER_POPUP_CODE {
+    if placed.code == MSHOP_TOP100_CODE
+        || placed.code == MSHOP_MESSENGER_POPUP_CODE
+        || placed.code == MSHOP_DN_PROG_ANI_CODE
+        || MUSIC_SHOP_BAKED_CHROME_CODES.contains(&placed.code)
+    {
         return false;
     }
     if MUSIC_SHOP_ROW_ART_CODES.contains(&placed.code) {
@@ -7615,6 +7646,24 @@ mod side_tests {
             ),
             "the messenger callout has no entry-state writer"
         );
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_DN_PROG_ANI_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "the stacked transfer animation is not an idle panel"
+        );
+        assert!(
+            !music_shop_scene_kept(
+                &art(MSHOP_EXIT_CODE),
+                MusicShopGenreFilter::New,
+                MusicShopFace::Download,
+                false
+            ),
+            "the BACK face is baked into the backdrop at entry"
+        );
     }
 
     #[test]
@@ -9642,6 +9691,34 @@ mod side_tests {
         assert_eq!(state.music_cash, Some(120));
         assert_eq!(state.item_cash, Some(340));
         assert_eq!(state.cash_point, Some(22));
+    }
+
+    #[test]
+    fn myroom_bag_pager_frames_spell_the_exe_01_of_03() {
+        // Live caller chain: `paint_side` -> `paint_scene_figures_selected`
+        // -> this digit frame selector. The v3 exe frame reads 01/03;
+        // stacking the ten stored digit frames reads 9/9/9/9.
+        use super::super::side::myroom::{MYROOM_BAG_PAGE_DIGITS, MYROOM_BAG_PAGE_FIRST_CODE};
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE, 0, 3),
+            Some(0)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 1, 0, 3),
+            Some(1)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 2, 0, 3),
+            Some(0)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 3, 0, 3),
+            Some(3)
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + MYROOM_BAG_PAGE_DIGITS, 0, 3),
+            None
+        );
     }
 
     #[test]

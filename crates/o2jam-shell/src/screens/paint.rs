@@ -1616,6 +1616,11 @@ const MUSIC_SHOP_NOTICE_TONE: u32 = pack_xrgb(0x30, 0x30, 0x90);
 /// the staged `MS_EX` rect (#815).
 const MUSIC_SHOP_SEARCH_HIT_TONE: u32 = pack_xrgb(0xC0, 0xD0, 0x40);
 
+/// Gray hint ink sampled from the v3 exe frame at (60,542):
+/// `rgb(99,113,107)`. The white edit plate makes white CP949 ink
+/// invisible; the typed draft keeps the normal white ink.
+const MUSIC_SHOP_SEARCH_HINT_INK: [u8; 4] = [0x63, 0x71, 0x6B, 0xFF];
+
 /// Ink the search edit's Korean hint or typed draft, and mark the
 /// matching song rows. Unstaged edit/rows paint nothing.
 pub fn paint_music_shop_search(
@@ -1629,12 +1634,12 @@ pub fn paint_music_shop_search(
         .iter()
         .find(|placed| placed.code == MSHOP_SEARCH_EDIT_CODE)
     {
-        let text = if draft.is_empty() {
-            MSHOP_SEARCH_HINT
+        let (text, ink) = if draft.is_empty() {
+            (MSHOP_SEARCH_HINT, MUSIC_SHOP_SEARCH_HINT_INK)
         } else {
-            draft
+            (draft, CP949_INK)
         };
-        paint_text_into_rect(frame, edit.rect, text, CP949_INK);
+        paint_text_into_rect(frame, edit.rect, text, ink);
     }
     for (row, slot) in visible_rows.iter().zip(music_shop_slots(placements)) {
         if !hits.contains(&row.song.song_id) {
@@ -2252,10 +2257,11 @@ pub fn paint_music_shop_wallet(
         (MSHOP_MONEY_GEM_CODE, wallet.gem),
         (MSHOP_MONEY_WON_CODE, wallet.cash_point),
     ];
-    let labels = ["G", "W"];
-    for ((code, amount), label) in cells.into_iter().zip(labels) {
+    for (code, amount) in cells {
         if let Some(rect) = music_shop_caption_rect(placements, code) {
-            let text = format!("{} {}", label, wallet_amount_caption(amount));
+            // The G/W labels are baked into the staged backdrop; the
+            // TEXT cells hold only the amount (v3 exe pair).
+            let text = wallet_amount_caption(amount);
             // The v3 exe pair inks the amount at the cell's right
             // edge (x 135 in rect 41..136); left anchoring missed it
             // by half the cell (senior note, commit 3701ddb).

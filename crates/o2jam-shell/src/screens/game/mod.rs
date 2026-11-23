@@ -92,10 +92,10 @@ use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, RO
 use super::side::{
     can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
     default_room_title, lanking_action_at, music_shop_action_at, music_shop_page_digit,
-    music_shop_scene_kept, music_shop_tooltip_hovered, myroom_equip_slot, myroom_panel_kept,
-    myroom_record_slot, myroom_tab_kept, paint_side_scene, paint_side_scene_live,
-    paint_side_scene_selected, paint_tutorial_scene, password_action_at, planet_action_at,
-    select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
+    music_shop_scene_kept, music_shop_tooltip_hovered, myroom_bag_page_digit, myroom_equip_slot,
+    myroom_panel_kept, myroom_record_slot, myroom_tab_kept, paint_side_scene,
+    paint_side_scene_live, paint_side_scene_selected, paint_tutorial_scene, password_action_at,
+    planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
     select_index_matches, select_music_rows, select_music_songs_with_labels,
     select_row_column_text, select_row_hit, shop_action_at, shop_extmenu_kept, shop_panel_kept,
     shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
@@ -108,12 +108,12 @@ use super::side::{
     SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
     TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
     WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
-    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
-    ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
-    TUTORIAL_EXIT_SPRITE,
+    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
+    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -8560,10 +8560,18 @@ impl ScreenGame {
                     myroom_panel_kept(placed, panel)
                         && myroom_tab_kept(placed, tab)
                         && myroom_pc_room_mark_kept(placed, pass_word)
+                        && placed.code != MYROOM_ALARM_POPUP_CODE
                 },
                 |placed| {
                     myroom_notice_board_frame(placed, &self.side_figures)
                         .or_else(|| myroom_page_number_frame(placed, tab, &self.side_figures))
+                        .or_else(|| {
+                            myroom_bag_page_digit(
+                                placed.code,
+                                self.myroom.bag_page(),
+                                self.myroom_bag_page_count(),
+                            )
+                        })
                         .or_else(|| {
                             myroom_pc_room_mark_frame(placed, pass_word, &self.side_figures)
                         })
@@ -8586,9 +8594,20 @@ impl ScreenGame {
                 &self.side_figures,
                 |placed| music_shop_scene_kept(placed, genre, face, hovered),
                 |placed| {
-                    (placed.sprite.as_deref() == Some("MShop_PageNumber.ojs"))
-                        .then(|| music_shop_page_digit(placed.code, page, pager_pages))
-                        .flatten()
+                    if placed.sprite.as_deref() == Some("MShop_PageNumber.ojs") {
+                        return music_shop_page_digit(placed.code, page, pager_pages);
+                    }
+                    // The exe's image controls show one state face.
+                    // Stacking all stored frames paints the last
+                    // (pressed/hover) face over the rest face: the v3
+                    // pair has a grey BACK plate and green box lines,
+                    // not the stacked blue/amber last frames.
+                    placed
+                        .sprite
+                        .as_deref()
+                        .and_then(|sprite| self.side_figures.get(sprite))
+                        .filter(|figure| figure.len() > 1)
+                        .map(|_| 0)
                 },
             );
         } else if self.side == Some(SideScreen::Tutorial) {
@@ -8750,15 +8769,20 @@ impl ScreenGame {
                 self.music_shop.tooltip_lines(),
             );
             let visible_rows = self.music_shop_visible_rows();
-            if list_visible {
-                paint_music_shop_search(
-                    frame,
-                    &self.side_placements,
-                    self.music_shop_search_draft(),
-                    self.music_shop_search_hits(),
-                    &visible_rows,
-                );
-            }
+            // The hint is baked into neither face: the edit cell
+            // carries it on both the promo and the catalog board.
+            // Row-hit bands belong only to the catalog face.
+            paint_music_shop_search(
+                frame,
+                &self.side_placements,
+                self.music_shop_search_draft(),
+                if list_visible {
+                    self.music_shop_search_hits()
+                } else {
+                    &[]
+                },
+                if list_visible { &visible_rows } else { &[] },
+            );
             paint_music_shop_top100_chrome(
                 frame,
                 &self.side_placements,

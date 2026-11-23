@@ -17,12 +17,13 @@ use crate::screens::paint::{
     paint_screen,
 };
 use crate::screens::side::{
-    myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
+    myroom_action_at, myroom_bag_page_digit, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_freeinfo_captions, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
     myroom_gift_views, myroom_identity_captions, myroom_panel_kept, myroom_rank_caption,
     myroom_record_slot, myroom_tab_kept, myroom_wallet_captions, myroom_worn_well_items,
     MyRoomAction, MyRoomLowerTab, MyRoomMessengerState, MyRoomNotice, MyRoomPanel, MyRoomState,
-    SideScreen, MYROOM_BAG_CELLS, MYROOM_NOTICE_TEXT_CODE, MYROOM_RANK_CODE,
+    SideScreen, MYROOM_ALARM_POPUP_CODE, MYROOM_BAG_CELLS, MYROOM_NOTICE_TEXT_CODE,
+    MYROOM_RANK_CODE,
 };
 use o2jam_file::AvatarItemTable;
 use o2jam_net::gift::{ClaimGift, GiftType};
@@ -171,7 +172,7 @@ impl ScreenGame {
 
     /// Bag pages over the staged inventory (page 0 without data).
     #[must_use]
-    fn myroom_bag_page_count(&self) -> usize {
+    pub(super) fn myroom_bag_page_count(&self) -> usize {
         match (&self.myroom_items, &self.myroom_character) {
             (Some(table), Some(character)) => myroom_bag_pages(&character.inventory, table),
             _ => 1,
@@ -557,10 +558,18 @@ impl ScreenGame {
                         myroom_panel_kept(placed, panel)
                             && myroom_tab_kept(placed, tab)
                             && myroom_pc_room_mark_kept(placed, pass_word)
+                            && placed.code != MYROOM_ALARM_POPUP_CODE
                     },
                     |placed| {
                         myroom_notice_board_frame(placed, &art.figures)
                             .or_else(|| myroom_page_number_frame(placed, tab, &art.figures))
+                            .or_else(|| {
+                                myroom_bag_page_digit(
+                                    placed.code,
+                                    self.myroom.bag_page(),
+                                    self.myroom_bag_page_count(),
+                                )
+                            })
                             .or_else(|| myroom_pc_room_mark_frame(placed, pass_word, &art.figures))
                     },
                 );
