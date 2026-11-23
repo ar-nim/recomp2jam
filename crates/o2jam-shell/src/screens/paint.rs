@@ -2277,16 +2277,105 @@ fn cp949_fit_scale(text: &str, w: f32, h: f32) -> f32 {
     if w <= 0.0 || h <= 0.0 || text.is_empty() {
         return h.max(0.0);
     }
-    let width_per_em = match o2jam_text::system_font() {
-        Some(font) => o2jam_text::measure_text(font, text, 1.0),
-        None => o2jam_text::font::measure_text_stand_in(text, 1.0),
-    };
+    let width_per_em = cp949_width_at_scale(text, 1.0);
     let width_fit = if width_per_em > 0.0 {
         w / width_per_em
     } else {
         h
     };
     h.min(width_fit).max(0.0)
+}
+
+/// Advance of `text` at `px_scale`, through the same font the painter uses.
+fn cp949_width_at_scale(text: &str, px_scale: f32) -> f32 {
+    match o2jam_text::system_font() {
+        Some(font) => o2jam_text::measure_text(font, text, px_scale),
+        None => o2jam_text::font::measure_text_stand_in(text, px_scale),
+    }
+}
+
+/// Exe TEXT cell width for dialogs: Gulimche 6x12 (`docs/gdi-text.md`,
+/// stager `0x50f280`). The modern face keeps this cell; only the glyph
+/// outlines differ (owner decision `e8d01`).
+const MESSAGE_CELL_WIDTH_PX: f32 = 6.0;
+/// Exe TEXT cell height for dialogs, in native pixels.
+const MESSAGE_CELL_HEIGHT_PX: i32 = 12;
+/// First wrapped ink row below the staged message rect top: the paired
+/// 2026-11-23 cart frame inks at y=285 in rect `(341,247)-(523,358)`.
+const WRAPPED_MESSAGE_INK_TOP_PX: i32 = 38;
+/// Left bearing of that ink inside the staged rect (x=342 in x=341).
+const WRAPPED_MESSAGE_INK_LEFT_PX: i32 = 1;
+
+/// Split a caption at word boundaries so every line fits `max_width`.
+/// A single word longer than the rect stays whole; the canvas clips it.
+fn wrap_caption_lines(text: &str, max_width: f32, px_scale: f32) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if current.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{current} {word}")
+        };
+        if current.is_empty() || cp949_width_at_scale(&candidate, px_scale) <= max_width {
+            current = candidate;
+        } else {
+            lines.push(current);
+            current = word.to_owned();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Paint a caption too wide for one line at the exe's cells, wrapping it
+/// inside its staged `.bnd` rect. The first line's bearing and the line
+/// pitch come from the paired exe frame; only glyph shapes are ours.
+fn paint_message_caption_in_rect(
+    frame: &mut Frame<'_>,
+    native_rect: Rect,
+    text: &str,
+    ink: [u8; 4],
+) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let frame_scale = rect.w as f32 / native_rect.w as f32;
+    let cell_per_em = cp949_width_at_scale("가", 1.0);
+    if cell_per_em <= 0.0 {
+        return;
+    }
+    let px_scale = MESSAGE_CELL_WIDTH_PX * frame_scale / cell_per_em;
+    let lines = wrap_caption_lines(text, rect.w as f32, px_scale);
+    if lines.len() < 2 {
+        paint_text_into_rect(frame, native_rect, text, ink);
+        return;
+    }
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    for (row, line) in lines.iter().enumerate() {
+        let top = (WRAPPED_MESSAGE_INK_TOP_PX + row as i32 * MESSAGE_CELL_HEIGHT_PX) as f32;
+        let y = (top * frame_scale).round() as i32;
+        if y >= rect.h as i32 {
+            break;
+        }
+        let x = (WRAPPED_MESSAGE_INK_LEFT_PX as f32 * frame_scale).round() as i32;
+        o2jam_text::draw_text(
+            &mut image,
+            o2jam_text::system_font(),
+            x,
+            y,
+            line,
+            ink,
+            px_scale,
+        );
+    }
+    composite_text_image(frame, &rect, &image);
 }
 
 /// Paint the composited text image over the frame at `rect`.
@@ -3118,7 +3207,7 @@ fn paint_question1_staged(frame: &mut Frame<'_>, art: &SceneArt, caption: &[u8])
     let origin = dialog_origin(&art.placements);
     for placement in &art.placements {
         if placement.code == super::side::QUIT_MESSAGE_CODE {
-            paint_cp949_into_rect(
+            paint_message_caption_in_rect(
                 frame,
                 Rect {
                     x: placement.rect.x + origin.0,
@@ -3126,7 +3215,8 @@ fn paint_question1_staged(frame: &mut Frame<'_>, art: &SceneArt, caption: &[u8])
                     w: placement.rect.w,
                     h: placement.rect.h,
                 },
-                caption,
+                &o2jam_text::decode_cp949_lossy(caption),
+                CP949_INK,
             );
         }
     }
@@ -5008,6 +5098,51 @@ mod paint_tests {
             sprite: None,
             rect: Rect { x, y, w, h },
         }
+    }
+
+    /// The paired 2026-11-23 cart frame puts the pinned O2CASH shortfall
+    /// caption in two rows inside the `Dialog_Question1.bnd` message rect.
+    /// Live chain: `main.rs::run_play` -> `OnlineSession::ingest_snapshot`
+    /// -> `click_side_screen` -> `click_shop` -> `ShopAction::CartBuy`
+    /// -> `shop_charge_confirm_open` -> `paint_side`
+    /// -> `paint_shop_charge_confirm` -> `paint_message_caption_in_rect`.
+    /// Seam suffices for the bearing itself: the test uses the parsed BND
+    /// rect and caption bytes, while the paired re-shot proves the live leg.
+    #[test]
+    fn shop_shortfall_caption_inks_both_exe_lines_in_the_staged_message_rect() {
+        let backdrop = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "DIALOG_QUESTION1".to_owned(),
+            code: 0x2240_0000,
+            sprite: Some("Dialog_Question1.ojs".to_owned()),
+            rect: Rect {
+                x: 240,
+                y: 189,
+                w: 320,
+                h: 221,
+            },
+        };
+        let art = SceneArt {
+            placements: vec![
+                backdrop,
+                shop_placement(super::super::side::QUIT_MESSAGE_CODE, 101, 58, 182, 111),
+            ],
+            figures: HashMap::from([(
+                "Dialog_Question1.ojs".to_owned(),
+                solid_figure(1, 1, [0, 0x7C]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+
+        paint_shop_charge_confirm(&mut frame, Some(&art));
+
+        assert!(has_ink_in(&buf, 800, 342, 285, 188, 8), "first exe line");
+        assert!(has_ink_in(&buf, 800, 342, 296, 120, 8), "second exe line");
     }
 
     fn has_ink_in(buf: &[u32], w: usize, x: i32, y: i32, rw: u32, rh: u32) -> bool {
