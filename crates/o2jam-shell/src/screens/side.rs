@@ -887,8 +887,82 @@ pub const SHOP_EXTMENU_GROUP_CODES: [u32; 8] = [
     0x1460_0036,
 ];
 
-/// Four side controls the open arm hides (`0x1401d088..8b`).
+/// Four side controls the open arm hides (`0x1401d088..8b`). They are
+/// also the four `SET 0x1D000` parents that host the set-item card
+/// children in `FUN_00498bc0` (`ev_5bee92ef…be`).
 pub const SHOP_EXTMENU_SIDE_CODES: [u32; 4] = [0x1401_D088, 0x1401_D089, 0x1401_D08A, 0x1401_D08B];
+
+/// Art-less children of the `SET 0x1D000` set-item card group. The
+/// ControlList declares one template; the exe clones it under each
+/// `SETITEM_EX` parent (`docs/ui-loader.md` step 8), which is why
+/// staging offsets each rect by its parent origin. The sprite-bearing
+/// siblings are cloned by the generic `SET` rule already.
+/// Staged `Shop_SetItem_Back.ojs` clones: one per set-item parent.
+pub const SHOP_SET_CARD_BACK_CODE: u32 = 0x1450_008C;
+
+/// Control ids of the four `SETITEM_EX` parents; each cloned child
+/// carries its parent's id, so a painter can ink the card's cell
+/// without a literal card coordinate.
+pub const SHOP_SET_CARD_PARENT_IDS: [&str; 4] = [
+    "IDC_BUTTON_SSHOP_SETITEM_EX1",
+    "IDC_BUTTON_SSHOP_SETITEM_EX2",
+    "IDC_BUTTON_SSHOP_SETITEM_EX3",
+    "IDC_BUTTON_SSHOP_SETITEM_EX4",
+];
+
+pub const SHOP_SET_CARD_CHILD_CODES: [u32; 10] = [
+    0x1470_008D, // SET_AVATAR
+    0x1440_008E, // SET_TITLE
+    0x1440_008F, // SET_TYPE1
+    0x1440_0090, // SET_TYPE2
+    0x1440_0091, // SET_TYPE3
+    0x1440_0092, // SET_TYPE4
+    0x1440_0093, // SET_TYPE5
+    0x1440_0094, // SET_PRICE
+    0x1450_0097, // SET_RESERVE
+    0x1450_0098, // SET_RESERVE2
+];
+
+/// The 7.55 image controls show one sprite frame, not the whole
+/// stack. `FUN_00498bc0` (`ev_5bee92ef…be`) maps a category press to
+/// `FUN_0042f870(2*i+1, 2*i+2)` on each `SUBMENU1..6` body and resets
+/// them with `FUN_0048c810(0, 0x14208012, 6)`; `FUN_0042f870`
+/// (`ev_49cf8f68…11`) writes the control's current frame. The paired
+/// frames in `Shop_SubMenu*.ojs` are `[inactive, selected]` per
+/// category (archive bytes read read-only, 10 frames per body). The
+/// entry frame shows the `0xc` new-arrivals face with the second
+/// submenu lit (`~/scratch/paired-shots-v3/states/itemshop-entry/exe.png`).
+/// `None` means the caller keeps the verified all-layer stack.
+#[must_use]
+pub fn shop_shop_frame_for(
+    placed: &ScenePlacement,
+    category: Option<usize>,
+    selected_submenu: Option<u32>,
+) -> Option<usize> {
+    if let Some(slot) = placed
+        .code
+        .checked_sub(SHOP_CATEGORY_FIRST_CODE)
+        .and_then(|offset| usize::try_from(offset).ok())
+    {
+        if slot < SHOP_CATEGORY_BUTTONS {
+            return Some(usize::from(slot == category.unwrap_or(0)));
+        }
+    }
+    if let Some(slot) = placed.code.checked_sub(SHOP_SUBMENU_FIRST_CODE) {
+        if slot < SHOP_SUBMENU_BUTTONS as u32 {
+            let pair = category.unwrap_or(0).min(SHOP_CATEGORY_BUTTONS - 1);
+            let selected = selected_submenu == Some(SHOP_SUBMENU_FIRST_CODE + slot);
+            return Some(pair * 2 + usize::from(selected));
+        }
+    }
+    if placed.code == SHOP_SET_CARD_BACK_CODE {
+        // The v3 7.55 entry frame shows the dark inset card face;
+        // `Shop_SetItem_Back.ojs` frame 1 carries that face. The
+        // selected/lit variant stays OPEN until a set-pick pin.
+        return Some(1);
+    }
+    None
+}
 
 /// Whether one staged control paints with the ext-menu state. The
 /// 12 filters appear on open and hide on close; the eight first-row
@@ -1761,6 +1835,15 @@ fn shop_gender_action(code: u32) -> Option<ShopAction> {
         SHOP_BOY_CODE => Some(ShopAction::SelectGender(ShopGender::Boy)),
         _ => None,
     }
+}
+
+/// Zero-based index of one staged category tab (`None` outside the
+/// five buttons). The entry face paints only the active tab's sprite;
+/// inactive tabs show the gray plate baked into the backdrop.
+#[must_use]
+pub fn shop_category_index(code: u32) -> Option<usize> {
+    let slot = shop_row_slot(SHOP_CATEGORY_FIRST_CODE, code)?;
+    (slot < SHOP_CATEGORY_BUTTONS).then_some(slot)
 }
 
 /// Category tab behind one `SHOP_CATEGORY_FIRST_CODE` code
@@ -6294,6 +6377,20 @@ pub fn paint_side_scene_live(
     paint_scene_figures_live(frame, placements, figures, keep);
 }
 
+/// [`paint_side_scene_live`] with one image-control frame selected per
+/// body, for scene families whose multi-frame sprites are states and
+/// not stacked layers (the shop's category, submenu, and set-card
+/// chrome).
+pub fn paint_side_scene_selected(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    keep: impl Fn(&ScenePlacement) -> bool,
+    frame_index: impl Fn(&ScenePlacement) -> Option<usize>,
+) {
+    paint_scene_figures_selected(frame, placements, figures, keep, frame_index);
+}
+
 /// Tutorial side painter: the full-canvas backdrop keeps its stacked
 /// art, the lesson bubble shows the page's record, the coach shows its
 /// current 66 ms animation record, and each of the seven kit bodies
@@ -9817,5 +9914,60 @@ mod side_tests {
             &HashMap::new(),
         );
         assert_eq!(buf, vec![0x123456u32; 8 * 8]);
+    }
+}
+
+#[cfg(test)]
+mod shop_entry_frame_tests {
+    use super::*;
+    use crate::avatar::PlacementRole;
+
+    fn placement(code: u32) -> ScenePlacement {
+        ScenePlacement {
+            role: PlacementRole::Clone,
+            id: "IDC_BUTTON_SSHOP_SETITEM_EX1".into(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+        }
+    }
+
+    #[test]
+    fn entry_frame_selects_one_special_submenu_pair_and_the_dark_card_face() {
+        // Live caller chain: ScreenGame::paint_side -> paint_side_scene_selected
+        // -> shop_shop_frame_for -> paint_placement_layer. The v3 exe entry
+        // frame inks 신상품/코스튬/... with 코스튬 lit, and the dark inset
+        // `Shop_SetItem_Back.ojs` face behind each of the four outfits.
+        let selected = Some(SHOP_SUBMENU_FIRST_CODE + 1);
+        assert_eq!(
+            shop_shop_frame_for(&placement(0x1420_8012), None, selected),
+            Some(0),
+            "first submenu cell keeps the inactive special face"
+        );
+        assert_eq!(
+            shop_shop_frame_for(&placement(0x1420_8013), None, selected),
+            Some(1),
+            "the lit 코스튬 cell shows the selected special face"
+        );
+        assert_eq!(
+            shop_shop_frame_for(&placement(SHOP_SET_CARD_BACK_CODE), None, selected),
+            Some(1),
+            "set-item card shows the dark inset face"
+        );
+        assert_eq!(
+            shop_shop_frame_for(&placement(SHOP_CATEGORY_FIRST_CODE), None, selected),
+            Some(1),
+            "special category tab is lit on entry"
+        );
+        assert_eq!(
+            shop_shop_frame_for(&placement(SHOP_CATEGORY_FIRST_CODE + 1), None, selected),
+            Some(0),
+            "fashion category tab stays unlit"
+        );
     }
 }

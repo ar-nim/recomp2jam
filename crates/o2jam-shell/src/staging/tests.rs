@@ -2240,3 +2240,45 @@ fn merged_payment_sheet_keeps_both_declared_page_groups() {
         .collect();
     assert_eq!(counts, vec![9, 12]);
 }
+
+/// Entry state 3 mounts four set-item cards. The exe clones the
+/// art-less `SET` children (title, avatar, prices, type lines) at each
+/// `SETITEM_EX` parent origin; `FUN_00498bc0` / `FUN_004a0660`
+/// (`ev_5bee92ef…be`, `ev_fcb4e981…cc54`) refresh that block, and the
+/// 7.55 entry frame shows one caption/avatar stack per card.
+/// Live caller chain: `main.rs::stage_online_identity` ->
+/// `ScreenGame::stage_exe_item_shop_catalog` -> `visit_side(Shop)` ->
+/// `mount_staged_side_art` -> `stage_state(STATE_SHOP)`.
+#[test]
+fn set_item_card_children_stage_once_under_each_card_origin() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+    let Some(interface) = read_install_archives(&root).interface else {
+        println!("skip: missing install-root interface archive");
+        return;
+    };
+    let art = stage_state(&interface, State::Shop, StageContext::default())
+        .art
+        .expect("STATE_SHOP stages from the installed bind file");
+    let avatar_cells: Vec<_> = art
+        .placements
+        .iter()
+        .filter(|placed| placed.code == 0x1470_008D)
+        .collect();
+    assert_eq!(
+        avatar_cells.len(),
+        4,
+        "four set-item cards, not one template"
+    );
+    let origins = [220, 361, 502, 643];
+    for (slot, placed) in avatar_cells.iter().enumerate() {
+        assert_eq!(placed.rect.x, origins[slot], "card {slot} avatar x");
+        assert_eq!(placed.rect.y, 86, "card {slot} avatar y");
+        assert_eq!(placed.role, crate::avatar::PlacementRole::Clone);
+    }
+    let titles: Vec<_> = art
+        .placements
+        .iter()
+        .filter(|placed| placed.code == 0x1440_008E)
+        .collect();
+    assert_eq!(titles.len(), 4, "one title caption per card");
+}

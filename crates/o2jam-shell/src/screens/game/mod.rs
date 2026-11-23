@@ -76,7 +76,7 @@ use super::paint::{
     paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
     paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
     paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
     paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
@@ -93,26 +93,26 @@ use super::side::{
     can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
     default_room_title, lanking_action_at, music_shop_action_at, music_shop_tooltip_hovered,
     music_shop_tooltip_kept, myroom_equip_slot, myroom_panel_kept, myroom_record_slot,
-    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_tutorial_scene,
-    password_action_at, planet_action_at, select_chrome_action_at, select_filter_button_id,
-    select_filter_choice_at, select_index_matches, select_music_rows,
+    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_side_scene_selected,
+    paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
+    select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
     select_music_songs_with_labels, select_row_column_text, select_row_hit, shop_action_at,
-    shop_extmenu_kept, shop_panel_kept, shop_submenu_caption_kept, shop_tooltip_kept,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
-    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
-    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
-    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
-    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
-    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    shop_category_index, shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for,
+    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
+    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
+    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
+    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
+    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet,
+    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
+    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
+    WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
+    INFORMATION_OK_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
+    ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID,
+    SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS,
+    TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -7265,6 +7265,13 @@ impl ScreenGame {
         self.shop.category()
     }
 
+    /// Whether the live state-3 landing mounted the four set-item
+    /// cards (ticket #877). Seam catalogs keep the eight-row face.
+    #[must_use]
+    pub fn shop_entry_catalog(&self) -> bool {
+        self.shop.is_entry_catalog()
+    }
+
     /// Whether one ext-menu filter or group control paints now.
     #[must_use]
     pub fn shop_extmenu_control_visible(&self, code: u32) -> bool {
@@ -8609,12 +8616,30 @@ impl ScreenGame {
             let shelf_hovered = self.hovered_item_show_slot().is_some();
             let gender = self.shop.gender();
             let ext_menu_open = self.shop.ext_menu_open();
-            paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
+            let featured = self.shop_entry_catalog();
+            let active_category = self.shop.category().unwrap_or(0);
+            let keep = |placed: &ScenePlacement| {
                 shop_panel_kept(placed, panel)
                     && shop_tooltip_kept(placed, shelf_hovered)
                     && shop_submenu_caption_kept(placed.code, gender)
                     && shop_extmenu_kept(placed, ext_menu_open)
-            });
+                    && (!featured
+                        || shop_category_index(placed.code)
+                            .is_none_or(|slot| slot == active_category))
+            };
+            if featured {
+                let category = self.shop.category();
+                let submenu = self.shop.selected_submenu();
+                paint_side_scene_selected(
+                    frame,
+                    &self.side_placements,
+                    &self.side_figures,
+                    keep,
+                    |placed| shop_shop_frame_for(placed, category, submenu),
+                );
+            } else {
+                paint_side_scene_live(frame, &self.side_placements, &self.side_figures, keep);
+            }
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -8646,17 +8671,28 @@ impl ScreenGame {
         // or preview figure on the paint clock) into staged rects;
         // without staged goods it paints nothing.
         if self.side == Some(SideScreen::Shop) {
-            paint_shop_item_icons(
-                frame,
-                &self.side_placements,
-                &self.shop_visible_goods(),
-                &self.shop_item_portraits,
-            );
+            let featured = self.shop_entry_catalog();
+            if featured {
+                paint_shop_featured_icons(
+                    frame,
+                    &self.side_placements,
+                    &self.shop_visible_goods(),
+                    &self.shop_item_portraits,
+                );
+            } else {
+                paint_shop_item_icons(
+                    frame,
+                    &self.side_placements,
+                    &self.shop_visible_goods(),
+                    &self.shop_item_portraits,
+                );
+            }
             let panel = self.shop_panel();
             paint_shop_board(
                 frame,
                 &self.side_placements,
                 ShopBoard {
+                    featured_cards: featured,
                     panel,
                     goods: &self.shop_visible_goods(),
                     wallet: &self.wallet,

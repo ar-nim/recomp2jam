@@ -29,8 +29,9 @@ use crate::screens::side::{
     CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, GIFT_PAGE, INFORMATION_DIALOG_BLOCK,
     PASSWORD_DIALOG_BLOCK, PAYMENT2_BIND_FILE, PAYMENT2_BLOCK, PAYMENT_BIND_FILE, PAYMENT_BLOCK,
     PAYMENT_PAGE, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK, SHOPPINGBAG_ADD_DIALOG_BLOCK,
-    SHOP_CHILD_ORIGIN_Y, TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE,
-    TUTORIAL_INSTRUCTION_SPRITE, TUTORIAL_RECEPTOR_SPRITES,
+    SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_SIDE_CODES, SHOP_SET_CARD_CHILD_CODES,
+    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
+    TUTORIAL_RECEPTOR_SPRITES,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -900,6 +901,47 @@ fn stage_shop_child_origin(art: &mut StagedArt) {
     }
 }
 
+/// Clone the set-item card's art-less `SET` children under each
+/// `SETITEM_EX` parent. The generic `SET` expansion clones only
+/// sprite-bearing members; the exe's `FUN_00498bc0` refresher
+/// (`ev_5bee92ef…be`) writes title/type/price cells for every card, so
+/// the art-less children need the same parent-origin write-back. The
+/// parent rects and child templates both come from `.bnd` pairing;
+/// no literal card coordinate is introduced.
+fn stage_shop_set_card_children(art: &mut StagedArt) {
+    let parents: Vec<(String, Rect)> = art
+        .placements
+        .iter()
+        .filter(|placed| SHOP_EXTMENU_SIDE_CODES.contains(&placed.code))
+        .map(|placed| (placed.id.clone(), placed.rect))
+        .collect();
+    let templates: Vec<ScenePlacement> = art
+        .placements
+        .iter()
+        .filter(|placed| {
+            SHOP_SET_CARD_CHILD_CODES.contains(&placed.code) && placed.role != PlacementRole::Clone
+        })
+        .cloned()
+        .collect();
+    if parents.is_empty() || templates.is_empty() {
+        return;
+    }
+    art.placements.retain(|placed| {
+        !(SHOP_SET_CARD_CHILD_CODES.contains(&placed.code) && placed.role != PlacementRole::Clone)
+    });
+    for (parent_id, parent_rect) in &parents {
+        for template in &templates {
+            art.placements.push(ScenePlacement {
+                role: PlacementRole::Clone,
+                id: parent_id.clone(),
+                code: template.code,
+                sprite: template.sprite.clone(),
+                rect: at_parent_origin(template.rect, *parent_rect),
+            });
+        }
+    }
+}
+
 /// Native ordinals of the three `Dialog_ChargeCash.bnd` rects, paired
 /// by `(code & 0xFFF) - 1` (exe pairing, docs/file-formats/opi.md).
 const CASH_CHARGE_FRAME_ORDINAL: u32 = 1;
@@ -1174,6 +1216,7 @@ fn stage_bound_row_hiding(
     };
     if row.state == State::Shop {
         stage_shop_child_origin(&mut art);
+        stage_shop_set_card_children(&mut art);
     }
     let visible_names: Vec<String> = staged_names(&resolved.names, row.extra_sprites)
         .into_iter()

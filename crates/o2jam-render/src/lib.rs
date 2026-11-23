@@ -206,6 +206,52 @@ pub fn blit_rgb555_clipped(
     }
 }
 
+/// Stretch one RGB555 sprite over a destination rect, keeping the
+/// source colorkey transparent. Used for shop card portraits, where
+/// the exe draws the same item body into a card-sized cell.
+pub fn stretch_blit_rgb555(
+    frame: &mut Frame<'_>,
+    sprite: &Sprite<'_>,
+    dx: i32,
+    dy: i32,
+    dst_w: u32,
+    dst_h: u32,
+    colorkey: Option<u16>,
+) {
+    if sprite.stride == 0
+        || sprite.w == 0
+        || sprite.h == 0
+        || dst_w == 0
+        || dst_h == 0
+        || frame.buf.len() < frame.w * frame.h
+        || sprite.pixels.len() < sprite.stride * sprite.h
+    {
+        return;
+    }
+    let key = colorkey.and_then(transparent_rgb);
+    for row in 0..dst_h as usize {
+        let dest_y = dy + i32::try_from(row).unwrap_or(i32::MAX);
+        if dest_y < 0 || dest_y >= frame.h as i32 {
+            continue;
+        }
+        let source_y = stretch_index(row, dst_h as usize, sprite.h);
+        let source_y = source_y.min(sprite.h - 1);
+        for col in 0..dst_w as usize {
+            let dest_x = dx + i32::try_from(col).unwrap_or(i32::MAX);
+            if dest_x < 0 || dest_x >= frame.w as i32 {
+                continue;
+            }
+            let source_x = stretch_index(col, dst_w as usize, sprite.w);
+            let source_x = source_x.min(sprite.w - 1);
+            let rgb = decoded_xrgb(sprite.pixels[source_y * sprite.stride + source_x]);
+            if key == Some(rgb) {
+                continue;
+            }
+            frame.buf[dest_y as usize * frame.w + dest_x as usize] = rgb;
+        }
+    }
+}
+
 /// Whether a destination row falls outside the clip rect.
 fn is_clipped_y(clip: Option<&Rect>, dest_y: i32) -> bool {
     clip.is_some_and(|rect| dest_y < rect.y || dest_y >= rect.y + rect.h as i32)
@@ -3525,6 +3571,38 @@ mod tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(buf[1], pack_xrgb(0, 255, 0));
         assert_eq!(buf[native_w], 0x000000);
+    }
+
+    #[test]
+    fn stretch_blit_rgb555_skips_the_staged_portrait_backdrop_key() {
+        let key = 0x5294_u16;
+        let ink_word = 0x1234_u16;
+        let ink = decoded_xrgb(ink_word);
+        let src = vec![key, ink_word];
+        let sprite = Sprite {
+            pixels: &src,
+            w: 2,
+            h: 1,
+            stride: 2,
+        };
+        let mut buf = vec![0x0102_0304_u32; 4];
+        stretch_blit_rgb555(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 2,
+            },
+            &sprite,
+            0,
+            0,
+            2,
+            2,
+            Some(key),
+        );
+        assert_eq!(buf[0], 0x0102_0304, "key pixel leaves the card face");
+        assert_eq!(buf[1], ink);
+        assert_eq!(buf[2], 0x0102_0304);
+        assert_eq!(buf[3], ink);
     }
 
     #[test]
