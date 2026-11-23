@@ -179,6 +179,20 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         }
         assert!(game.visit_side(side), "Waiting -> {side:?}");
         shots.push(shoot_side(&mut game, side)?);
+        if side == SideScreen::Tutorial {
+            // Mid-lesson frame: wind the visit clock to the shipped
+            // first onset (49.2 s onset, 2 s lookahead — mid-fall) so a note paints
+            // in flight — the player-visible chart-clock proof on
+            // the scripted walk (#868).
+            game.set_tutorial_wall_elapsed(std::time::Duration::from_millis(48_500));
+            shots.push(shoot_side_named_at(
+                &mut game,
+                side,
+                "tutorial-mid",
+                48_500,
+            )?);
+            game.set_tutorial_wall_elapsed(std::time::Duration::ZERO);
+        }
         if has_native_companion(side) {
             shots.push(shoot_side_native(&mut game, side)?);
         }
@@ -1362,11 +1376,24 @@ fn shoot_side_native(game: &mut ScreenGame, side: SideScreen) -> anyhow::Result<
 /// Rasterize an open side screen: the flow stays on the lobby while
 /// the side overlay paints through `paint_side_scene`.
 fn shoot_side(game: &mut ScreenGame, side: SideScreen) -> anyhow::Result<Shot> {
-    let name = side_shot_name(side);
+    shoot_side_named_at(game, side, side_shot_name(side), 0)
+}
+
+/// Rasterize an open side screen under an explicit shot name (the
+/// mid-lesson Tutorial frame reuses the visit at a wound clock).
+/// Rasterize an open side screen under an explicit shot name at an
+/// explicit paint clock (the mid-lesson Tutorial frame reuses the
+/// visit at the first onset's mid-fall instant).
+fn shoot_side_named_at(
+    game: &mut ScreenGame,
+    side: SideScreen,
+    name: &'static str,
+    now_ms: u64,
+) -> anyhow::Result<Shot> {
     if game.side() != Some(side) {
-        anyhow::bail!("shot {name}: side {:?}, want {side:?}", game.side());
+        anyhow::bail!("shot {name}: side {:?}, want {side:?}", game.side(),);
     }
-    shoot(game, name, 0)
+    shoot(game, name, now_ms)
 }
 
 /// Rasterize a result instant under `name`, failing when the walk
@@ -2110,6 +2137,9 @@ mod tests {
             "waiting-guest",
         ];
         expected.extend_from_slice(&side_names);
+        if side_stage_data(SideScreen::Tutorial).is_some() {
+            expected.push("tutorial-mid");
+        }
         expected.extend_from_slice(&[
             "musicselect",
             "loading",
@@ -4145,10 +4175,12 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Seventeen fixed scenes (avi, planet, options, channel with
-        // its open-row and closed-row wire-mirror natives) plus one
-        // preview per staged side and one native per staged #207 side.
-        assert_eq!(shots.len(), 17 + side_count + native_count);
+        // Seventeen fixed scenes plus the mid-lesson tutorial frame
+        // (avi, planet, options, channel with its open-row and
+        // closed-row wire-mirror natives) plus one preview per staged
+        // side and one native per staged #207 side.
+        let fixed = 17 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        assert_eq!(shots.len(), fixed + side_count + native_count);
         let loading_staged = loading_caption_staged();
         for shot in shots {
             if !loading_staged && shot.name == "loading" {
@@ -4177,10 +4209,12 @@ mod tests {
             .into_iter()
             .filter(|side| side_stage_data(*side).is_some())
             .count();
-        // Seventeen fixed files (avi, planet, options, channel plus its
+        // Eighteen fixed files (avi, planet, options, channel plus its
         // open-row and closed-row wire-mirror natives, loading, the
-        // playing/result family) plus staged previews and #207 natives.
-        assert_eq!(written.len(), 17 + side_count + native_count);
+        // playing/result family, the mid-lesson tutorial frame) plus
+        // staged previews and #207 natives.
+        let fixed = 17 + usize::from(side_stage_data(SideScreen::Tutorial).is_some());
+        assert_eq!(written.len(), fixed + side_count + native_count);
         assert!(dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
         assert!(dir.join("channel-native.png").exists());
