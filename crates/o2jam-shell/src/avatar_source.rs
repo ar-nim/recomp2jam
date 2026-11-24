@@ -16,7 +16,7 @@ use o2jam_file::{
     find_opi_entry, opi_entry_body, parse_avatar_item_table, parse_opi, AvatarItemTable,
 };
 
-use crate::avatar::{load_shop_portraits, AvatarFigure};
+use crate::avatar::{load_shop_featured_figures, load_shop_portraits, AvatarFigure};
 
 /// Archive path under an install root.
 pub const AVATAR_ARCHIVE_RELATIVE: &str = "O2Jam/Image/avatar.opa";
@@ -30,6 +30,7 @@ pub struct AvatarSource {
     archive: Arc<Vec<u8>>,
     table: AvatarItemTable,
     shop_portraits: Arc<HashMap<u32, AvatarFigure>>,
+    shop_featured_figures: Arc<HashMap<u32, AvatarFigure>>,
 }
 
 impl AvatarSource {
@@ -48,10 +49,12 @@ impl AvatarSource {
     #[must_use]
     pub fn with_table(archive: Vec<u8>, table: AvatarItemTable) -> Self {
         let shop_portraits = Arc::new(load_shop_portraits(&archive, &table));
+        let shop_featured_figures = Arc::new(load_shop_featured_figures(&archive, &table));
         Self {
             archive: Arc::new(archive),
             table,
             shop_portraits,
+            shop_featured_figures,
         }
     }
 
@@ -71,6 +74,12 @@ impl AvatarSource {
     #[must_use]
     pub fn shop_portraits(&self) -> &Arc<HashMap<u32, AvatarFigure>> {
         &self.shop_portraits
+    }
+
+    /// Full-body figures for the set-item cards, keyed by item id.
+    #[must_use]
+    pub fn shop_featured_figures(&self) -> &Arc<HashMap<u32, AvatarFigure>> {
+        &self.shop_featured_figures
     }
 }
 

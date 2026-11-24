@@ -1378,12 +1378,23 @@ fn paint_text_left_in_cell(
 /// ink on the exe's cell ink top.
 const SHOP_CARD_INK_ORIGIN_Y: i32 = 3;
 
-/// Attribute lines inked in each state-3 card's cloned `SET_TYPE`
-/// cells by the 7.55 entry frame. Pinned from the v3 exe capture
-/// (sha256 `060ab2af…de680`, cells `(226,284)..(348,347)`); the exe's
-/// value writer stays OPEN.
-const SHOP_CARD_ATTRIBUTE_LINES: [&str; 3] =
-    ["고스트속성:", "- 능력치: 10% 증가", "- 배너: 10% 증가"];
+/// Card attribute cells: the exe formats two percentages from the
+/// selected item row (`FUN_00529230`, file `0x529230`). Its format
+/// strings live at VA `0x64c6cc` (`경험치`) and `0x64c6b4` (`잼머니`);
+/// a zero word blanks that cell (REA `ev_ee6fcc7…fb`). The header is
+/// the card's own caption, pinned from the v3 exe entry frame.
+fn shop_card_attribute_lines(
+    experience_percent: u32,
+    jam_money_percent: u32,
+) -> [Option<String>; 3] {
+    let bonus_line =
+        |label: &str, percent: u32| (percent != 0).then(|| format!("- {label} : {percent}% 증가"));
+    [
+        Some("고스트속성:".to_owned()),
+        bonus_line("경험치", experience_percent),
+        bonus_line("잼머니", jam_money_percent),
+    ]
+}
 
 /// Featured card captions: the state-3 entry's four goods ink their
 /// own staged `SET_TITLE`/`SET_PRICE` cells. Each cell is a clone under
@@ -1398,11 +1409,14 @@ fn paint_shop_featured_captions(
             return;
         };
         let price = good.price.to_string();
-        // The four state-3 cards carry the same three attribute lines
-        // in the v3 7.55 entry frame (pixel-pinned at the clone cells;
-        // the value source is still OPEN, see docs/shop.md). They are
-        // not the long `Itemdata_Korea.dat` description strings.
-        for (code, line) in SHOP_CARD_ATTRIBUTE_LINES.iter().enumerate() {
+        // Each card inks the bonuses of its own selected good into the
+        // cloned `SET_TYPE1..3` cells; a zero bonus leaves its cell dark.
+        let attribute_lines =
+            shop_card_attribute_lines(good.experience_bonus_percent, good.jam_money_bonus_percent);
+        for (code, line) in attribute_lines.iter().enumerate() {
+            let Some(line) = line else {
+                continue;
+            };
             let code = 0x1440_008F + u32::try_from(code).unwrap_or(0);
             let Some(rect) = placements
                 .iter()
@@ -1663,51 +1677,49 @@ pub fn paint_shop_item_icons(
     }
 }
 
-/// The four featured portrait bodies store their backdrop as RGB555
-/// word `0x5294` (dominant word of `SA0501B/0601B/0401B/0302B.ojs`,
-/// read read-only from `avatar.opa`). The 7.55 entry frame shows the
-/// dark set-item card face through that word, so the family's blit
-/// treats it as transparent; the sprite header's zero key would keep
-/// the gray plate opaque.
-const SHOP_PORTRAIT_BACKDROP_KEY: u16 = 0x5294;
+/// Native blit offsets from each `SETITEM_EX` parent origin to the
+/// pose frame's image top-left. Measured against the v3 7.55 entry
+/// frame (sha256 `060ab2af…de680`) for the four full-body sprites;
+/// geometry still starts from staged parent rects, never literals in
+/// the painter (owner pin f38f3).
+const SHOP_FEATURED_FIGURE_BLIT_OFFSETS: [(i32, i32); 4] = [(9, 2), (40, 1), (29, 19), (53, 25)];
 
-/// Four new-arrivals figures over the staged set-item card cells.
-/// The exe's state-3 refresh (`FUN_00498bc0`, `ev_5bee92ef…be`) inks
-/// one featured good per card; geometry is the cloned `SET_AVATAR`
-/// rect of that card, never a literal card origin.
+/// Four featured card figures: the exe paints slot-2 full-body sprites
+/// at a fixed pose frame, native size, under their own archive color
+/// key. Geometry is the staged `SETITEM_EX` parent origin plus the
+/// pinned blit offset; a good without a decoded body paints nothing.
 pub fn paint_shop_featured_icons(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     goods: &[ShopGood],
-    portraits: &std::collections::HashMap<u32, AvatarFigure>,
+    figures: &std::collections::HashMap<u32, AvatarFigure>,
 ) {
     for (slot, good) in goods.iter().enumerate().take(4) {
-        let Some(parent) = super::side::SHOP_SET_CARD_PARENT_IDS.get(slot) else {
+        let Some((offset_x, offset_y)) = SHOP_FEATURED_FIGURE_BLIT_OFFSETS.get(slot) else {
             return;
         };
-        let Some(portrait) = portraits.get(&good.item_id) else {
+        let Some(figure) = figures.get(&good.item_id) else {
             continue;
         };
-        let Some(rect) = placements
+        let Some(layer) = figure.layer(0) else {
+            continue;
+        };
+        let parent_code = 0x1401_D088 + u32::try_from(slot).unwrap_or(u32::MAX);
+        let Some(parent) = placements
             .iter()
-            .find(|placed| placed.code == 0x1470_008D && placed.id == *parent)
+            .find(|placed| placed.code == parent_code)
             .map(|placed| placed.rect)
         else {
             continue;
         };
-        let rect = scale_rect_to_frame(&rect, frame.w, frame.h);
-        // Exe-cap affine correction for the staged SET_AVATAR cell
-        // (measured against the v3 entry frame): the 7.55 blit lands
-        // the source body 6 px left, 8 px up, 4% wider and 2%
-        // shorter than the raw cell box. Geometry still starts at the
-        // staged rect; only this pinned correction changes it.
-        let rect = Rect {
-            x: rect.x - 6,
-            y: rect.y - 8,
-            w: (f64::from(rect.w) * 1.04).round() as u32,
-            h: (f64::from(rect.h) * 0.98).round() as u32,
-        };
-        portrait.paint_visible_stretched(frame, &rect, 0, Some(SHOP_PORTRAIT_BACKDROP_KEY));
+        // The decoded layer carries the archive sprite's placement
+        // anchor; subtract it so `paint` lands the image at the
+        // measured top-left, with the sprite's own color key.
+        figure.paint(
+            frame,
+            parent.x + offset_x - layer.dx,
+            parent.y + offset_y - layer.dy,
+        );
     }
 }
 
@@ -4659,6 +4671,85 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 #[cfg(test)]
 mod paint_tests {
     #[test]
+    fn featured_card_blits_the_full_body_sprite_at_the_exe_native_box() {
+        // Live caller chain: `paint_side` -> `paint_shop_featured_icons`
+        // -> this blit. The seam uses the installed sprite and a staged
+        // parent rect; the paired re-shot is the live proof.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+        let Some(source) = crate::avatar_source::read_installed_avatar(&root) else {
+            println!("skip: missing install-root avatar archive");
+            return;
+        };
+        let figures = crate::avatar::load_shop_featured_figures(source.archive(), source.table());
+        let figure = figures.get(&1541).expect("card full-body figure");
+        let layer = figure.layer(0).expect("one pose frame");
+        let goods = [ShopGood {
+            item_id: 1541,
+            name: "블루".to_owned(),
+            price: 4500,
+            gem_price: None,
+            experience_bonus_percent: 10,
+            jam_money_bonus_percent: 10,
+        }];
+        let placements = [shop_placement(0x1401_D088, 213, 62, 138, 301)];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_shop_featured_icons(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+            &figures,
+        );
+        let (left, top) = (213 + 9, 62 + 2);
+        let changed = |x: usize, y: usize| buf[y * 800 + x] != 0;
+        assert!(changed(left + 60, top + 80), "figure body inks its box");
+        assert!(!changed(left - 1, top + 80), "left edge is pinned");
+        assert!(!changed(left + 60, top - 1), "top edge is pinned");
+        let last_ink = (0..layer.image.words.len())
+            .rev()
+            .find(|&index| layer.image.words[index] != layer.colorkey)
+            .expect("figure has visible pixels");
+        let last_x = last_ink % layer.image.w;
+        let last_y = last_ink / layer.image.w;
+        assert!(
+            changed(left + last_x, top + last_y),
+            "last inked pixel lands"
+        );
+        assert!(!changed(left + layer.image.w, top + last_y));
+    }
+
+    #[test]
+    fn card_attribute_lines_name_the_exe_experience_and_jam_bonuses() {
+        // Live caller chain: `paint_side` -> `paint_shop_board` ->
+        // `paint_shop_featured_captions` -> this line builder. The
+        // 7.55 strings are pinned at exe VAs `0x64c6cc`/`0x64c6b4`;
+        // both values come from the selected item row.
+        assert_eq!(
+            shop_card_attribute_lines(10, 10),
+            [
+                Some("고스트속성:".to_owned()),
+                Some("- 경험치 : 10% 증가".to_owned()),
+                Some("- 잼머니 : 10% 증가".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn card_attribute_lines_leave_zero_bonus_cells_blank() {
+        assert_eq!(
+            shop_card_attribute_lines(0, 10),
+            [
+                Some("고스트속성:".to_owned()),
+                None,
+                Some("- 잼머니 : 10% 증가".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn caption_cell_ink_lands_two_pixels_below_the_exe_cell_top() {
         // Live caller chain: `paint_side` -> `paint_myroom_overlay` /
         // `paint_music_shop_owned_rows` -> this cell painter. Oracle:
@@ -4812,6 +4903,8 @@ mod paint_tests {
             name: "Hair".to_owned(),
             price: 4500,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(
@@ -4844,6 +4937,8 @@ mod paint_tests {
                 panel: ShopPanel::ShoppingBag,
                 goods: &[ShopGood {
                     gem_price: Some(0),
+                    experience_bonus_percent: 0,
+                    jam_money_bonus_percent: 0,
                     ..goods[0].clone()
                 }],
                 wallet: &WalletState::default(),
@@ -4994,6 +5089,8 @@ mod paint_tests {
             name: "Hair".to_owned(),
             price: 4500,
             gem_price: Some(3000),
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(
@@ -5044,12 +5141,16 @@ mod paint_tests {
                 name: "Hair".to_owned(),
                 price: 1000,
                 gem_price: None,
+                experience_bonus_percent: 0,
+                jam_money_bonus_percent: 0,
             },
             ShopGood {
                 item_id: 2,
                 name: "Boots".to_owned(),
                 price: 2500,
                 gem_price: None,
+                experience_bonus_percent: 0,
+                jam_money_bonus_percent: 0,
             },
         ];
         let wallet = WalletState {
@@ -5107,12 +5208,16 @@ mod paint_tests {
             name: "PreviewHair".to_owned(),
             price: 14000,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         };
         let goods = vec![ShopGood {
             item_id: 1,
             name: "Hair".to_owned(),
             price: 1000,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(
@@ -5182,6 +5287,8 @@ mod paint_tests {
             name: "Hair".to_owned(),
             price: 1000,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         }];
         let mut buf = vec![0u32; 800 * 600];
         paint_shop_board(
@@ -5227,6 +5334,8 @@ mod paint_tests {
             name: "TotalGood".to_owned(),
             price: 1200,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         };
         let cells_ink = |cart: &[ShopGood]| {
             let mut buf = vec![0u32; 800 * 600];

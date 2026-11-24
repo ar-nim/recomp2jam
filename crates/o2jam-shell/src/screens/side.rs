@@ -1218,6 +1218,12 @@ pub struct ShopGood {
     /// beside won `4500`, so no table→entry map is pinned yet. Only
     /// an explicitly staged pinned word may set this (#395 partial).
     pub gem_price: Option<u32>,
+    /// Experience bonus percent from the item row's exe-pinned word
+    /// `+0x24`; inks the card's `경험치` line.
+    pub experience_bonus_percent: u32,
+    /// Jam-money bonus percent from the item row's exe-pinned word
+    /// `+0x28`; inks the card's `잼머니` line.
+    pub jam_money_bonus_percent: u32,
 }
 
 /// Try-on gate fields the exe reads from a staged item record:
@@ -1547,6 +1553,8 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
             name: row.name.clone(),
             price: row.price,
             gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
         })
         .collect()
 }
@@ -1588,6 +1596,8 @@ pub fn exe_new_arrivals_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
                 row.price
             },
             gem_price: None,
+            experience_bonus_percent: row.costume_bonus_percent().0,
+            jam_money_bonus_percent: row.costume_bonus_percent().1,
         })
         .collect()
 }

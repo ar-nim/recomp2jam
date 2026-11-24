@@ -1112,6 +1112,9 @@ pub struct ScreenGame {
     /// Per-item goods portraits from the archive's slot-0 shop icon,
     /// keyed by item id so paged rows paint their own art (#363).
     shop_item_portraits: Arc<HashMap<u32, AvatarFigure>>,
+    /// Full-body card figures from the archive's slot-2 sprites, keyed
+    /// by item id; only the state-3 featured cards paint these.
+    shop_featured_figures: Arc<HashMap<u32, AvatarFigure>>,
     /// Last staged shop gift press ([`ShopGiftNoop`]); `None` until a
     /// gift button answers.
     shop_gift_noop: Option<ShopGiftNoop>,
@@ -1510,6 +1513,7 @@ impl ScreenGame {
             wallet: WalletState::default(),
             shop_avatar: None,
             shop_item_portraits: Arc::new(HashMap::new()),
+            shop_featured_figures: Arc::new(HashMap::new()),
             shop_gift_noop: None,
             music_shop: MusicShopState::default(),
             side_placements: Vec::new(),
@@ -6924,6 +6928,7 @@ impl ScreenGame {
         // avatar archive lands.
         self.shop.set_catalog(source.table());
         self.shop_item_portraits = Arc::clone(source.shop_portraits());
+        self.shop_featured_figures = Arc::clone(source.shop_featured_figures());
         self.myroom_items = Some(source.table().clone());
         self.avatar_source = Some(Arc::clone(source));
         self.restage_waiting_figures();
@@ -8741,7 +8746,7 @@ impl ScreenGame {
                     frame,
                     &self.side_placements,
                     &self.shop_visible_goods(),
-                    &self.shop_item_portraits,
+                    &self.shop_featured_figures,
                 );
             } else {
                 paint_shop_item_icons(

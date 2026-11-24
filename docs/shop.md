@@ -630,8 +630,16 @@ Pins: `FUN_00498bc0` (file `0x98bc0`, REA `ev_5bee92ef…be`) dispatches
 via `FUN_0042f870(2*i+1, 2*i+2)` (REA `ev_49cf8f68…11`); the four
 `SETITEM_EX` parents are `0x1401D088..8B` from `ControlList_Interface.txt`.
 The four portrait bodies' gray backdrop word `0x5294` is read from
-`avatar.opa`; the two attribute lines in the exe card are not in
-`Itemdata_Korea.dat` and stay OPEN.
+`avatar.opa`; the two attribute lines were later pinned to exe format
+strings (VA `0x64c6cc`/`0x64c6b4`) whose `%d` values are item-row words
+at file offsets `+22`/`+26` (see #877/#886 below).
+
+The first re-pair plateau was a wrong-sprite staging bug, not font
+rasterizer noise: the cards paint slot-2 full-body sprites at pose
+frame 21 with their archive color key, not stretched slot-0 thumbnails.
+Pixel-match offsets from each `SETITEM_EX` parent origin are pinned in
+`paint_shop_featured_icons`; the named residual is now the approved
+modern-font glyph delta plus other non-card chrome.
 
 Implementation: staged art clones the art-less card children under each
 parent origin; the Shop paint pass selects one frame per image control,
