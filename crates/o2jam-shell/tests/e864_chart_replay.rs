@@ -20,6 +20,12 @@ const SONG_ID: u16 = 864;
 /// Level 1 is the Normal slice: `o2ma864.ojn` header `+44` holds 554
 /// playable notes and its second event slice starts at byte 28392.
 const LEVEL: u8 = 1;
+/// Cool bucket of `Score::counts`, documented as `[cool, good, bad,
+/// miss]` at `crates/o2jam-game/src/lib.rs:1414`.
+const COOL_BUCKET_INDEX: usize = 0;
+/// Exe-pinned EASY emblem aim (`docs/planet.md:132`,
+/// `docs/wine-boot.md:1139`; t240 `wine-drive.log`).
+const EASY_EMBLEM: (i32, i32) = (136, 88);
 
 fn installed_chart() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -45,10 +51,13 @@ fn gcd(mut left: u64, mut right: u64) -> u64 {
 
 #[test]
 fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
-    // Live chain: window snapshot -> GameLoop::ingest_snapshot ->
-    // ScreenGame::lane_key -> ScreenGame::strike_at ->
-    // LivePlay::strike_lane -> Score::counts. The test enters at the
-    // portable snapshot seam; OS key injection stays a rig leg.
+    // seam: behavior defined entirely by a seam contract (ADR-0013,
+    // docs/adr/0013-per-frame-pulled-input-state.md). The window freezes
+    // one InputSnapshot per frame and feeds `ingest_snapshot`; the ADR
+    // consequence explicitly lets scenario tests construct snapshots.
+    // Downstream: lane_key -> strike_at -> LivePlay::strike_lane ->
+    // Score::counts. This guard constructs ScreenGame directly and does
+    // not claim a live chain; OS injection stays a rig leg.
     let chart_path = installed_chart();
     if !chart_path.is_file() {
         println!("skip: missing installed chart {}", chart_path.display());
@@ -76,7 +85,7 @@ fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
     // Walk the documented boot path, not a direct screen assignment:
     // splash -> planet -> channel -> room -> waiting -> loading.
     game.menu_key(MenuKey::Back, true);
-    game.click_planet(136, 88);
+    game.click_planet(EASY_EMBLEM.0, EASY_EMBLEM.1);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
@@ -95,8 +104,8 @@ fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
     );
     game.set_loading_status(LoadingStatus {
         progress: 1.0,
-        title: "Dancing on the fire".to_owned(),
-        artist: "DJ Schedule1".to_owned(),
+        title: header.title,
+        artist: header.artist,
     });
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Playing);
@@ -118,9 +127,9 @@ fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
             applied_ms, press.at_ms,
             "paint reaches the intended press time"
         );
-        let before = game.live_play().score().counts[0];
+        let before = game.live_play().score().counts[COOL_BUCKET_INDEX];
         game.ingest_snapshot(&InputSnapshot::lane_key(usize::from(press.lane), true));
-        let after = game.live_play().score().counts[0];
+        let after = game.live_play().score().counts[COOL_BUCKET_INDEX];
         assert_eq!(after, before + 1, "each chart press rates one Cool hit");
     }
 
@@ -131,7 +140,7 @@ fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
         "every parsed 864 note is judged"
     );
     assert_eq!(
-        usize::try_from(counts[0]).expect("cool count fits"),
+        usize::try_from(counts[COOL_BUCKET_INDEX]).expect("cool count fits"),
         replay.note_count(),
         "chart-timed presses rate Cool, not borrowed 757 tallies"
     );
