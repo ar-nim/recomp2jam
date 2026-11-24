@@ -2278,8 +2278,11 @@ pub const MSHOP_CART_BACK_CODE: u32 = 0x1A50_005A;
 /// `State_MShop.ojs`: BACK and the two pager pairs. Painting their
 /// multi-frame bodies over it produced the bright blue pressed face
 /// in the v3 pair; no press is pinned at entry (#399/#814).
-const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 17] = [
+const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 20] = [
     0x1A20_0008,
+    MSHOP_OWNED_TITLE_SORT_CODE,
+    MSHOP_OWNED_PLAYTIME_SORT_CODE,
+    MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
     MSHOP_GENRE_FILTER_FIRST_CODE,
     MSHOP_GENRE_FILTER_FIRST_CODE + 1,
     MSHOP_GENRE_FILTER_FIRST_CODE + 2,
@@ -7766,6 +7769,42 @@ mod side_tests {
             ),
             "the BACK face is baked into the backdrop at entry"
         );
+    }
+
+    #[test]
+    fn musicshop_entry_keeps_the_baked_sort_button_faces() {
+        // Live caller chain: `visit_side(MusicShop)` stages the bound
+        // art -> `ScreenGame::paint_side` -> `paint_side_scene_selected`
+        // -> `music_shop_scene_kept`. Oracle: the v4 quiesced pair
+        // shows dark 곡명/만료일/다운 plates in `State_MShop.ojs`;
+        // painting the staged bodies over them makes them bright.
+        for code in [
+            MSHOP_RANK_BUTTON_FIRST_CODE,
+            MSHOP_OWNED_PLAYTIME_SORT_CODE,
+            MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
+        ] {
+            let art = ScenePlacement {
+                role: PlacementRole::Clone,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 40,
+                    h: 20,
+                },
+            };
+            assert!(
+                !music_shop_scene_kept(
+                    &art,
+                    MusicShopGenreFilter::New,
+                    MusicShopFace::Download,
+                    false
+                ),
+                "baked sort face {code:#x} must not be overpainted"
+            );
+        }
     }
 
     #[test]

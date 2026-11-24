@@ -348,6 +348,9 @@ banner (0.9378), right list (0.9394/0.9465), and bottom pager band
   the string's protocol source stays OPEN — the pixel pair pins
   only the rendered copy and the staged rect.
 
-The other residual cells (right list and bottom wallet) are glyph
-raster and chrome faces under the owner's presentation rule
-(`e8d01`); no element is missing.
+The right-panel sort buttons `0x1A200016..18` also have a dark rest
+face baked into `State_MShop.ojs`; the staged bodies overpaint it
+bright in the v4 rust leg. They join the baked-chrome gate (click
+dispatch keeps the staged rects). The remaining right-list and
+bottom-wallet cells are glyph raster under the owner's presentation
+rule (`e8d01`); no element is missing.
