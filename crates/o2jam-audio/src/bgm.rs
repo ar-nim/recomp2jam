@@ -1,7 +1,9 @@
 //! Scene BGM channel: the exe's `play_scene_music(id, loop)`
-//! contract — one track at a time, id `-1` silences, records are
-//! one-based over `Music/BGM.ojm`. The replay rate is `repeat`
-//! (`true` repeats until replaced, `false` plays once).
+//! contract — one track at a time, id `-1` silences. Except for Result,
+//! cue ids name one-based `Music/BGM.ojm` records; Result's `0x13` names
+//! a worker cache slot filled by `BGMwinter.ojm`'s `bgResult` record.
+//! `repeat` is the replay rate (`true` repeats until replaced, `false`
+//! plays once).
 //!
 //! Pins (OTwo.exe 7.55, 5,029,888 B, SHA-256 `83a04541…72c823b`;
 //! file offset = VA − `0x400000`; image base `0x400000`):
@@ -32,17 +34,29 @@
 //! - Two of our earlier (audit) numbers move toward the exe: the
 //!   result cue is `(0x13, once)` (the exe pushes `0x0` for loop)
 //!   and the music-shop cue is decimal `10` (the exe pushes `0xA`),
-//!   not hex `0x10`. Record 19 then exceeds `BGM.ojm`'s 10
-//!   records, so the result scene stays silent here; its bank is
-//!   OPEN (next step: identify which bank the worker holds when
-//!   `0x4C1B90` cues it — `BGMwinter.ojm`, which carries a result
-//!   track, is the candidate).
+//!   not hex `0x10`. The result id is a **worker cache slot**, not a
+//!   `BGM.ojm` record: `0x4C1B90` hands it to the worker at
+//!   `soundmgr + 0x340c0` (`ev_1cbc946c…`, `ev_fa3f6f8b…`,
+//!   `ev_78e65d82…`, `ev_b34b89d8…`). The boot loader fills that
+//!   array at `bank mode-3 base + fetch ordinal`; `BGMwinter.ojm`
+//!   has base `0x0d`, so slot `0x13 = 0x0d + 6` names its mode-3
+//!   entry 6, `bgResult.ogg` (`ev_75ba7fe1…`, `ev_f73477ba…`).
 
 use crate::PcmSamples;
 
 /// Selection id that silences the BGM channel (the exe cues it as
 /// `0xFFFFFFFF`; any negative id silences, only `-1` is pinned).
 pub const BGM_SILENCE_ID: i32 = -1;
+
+/// Worker cache slot addressed by the Result state's `(0x13, once)` cue.
+pub const RESULT_WORKER_SLOT: usize = 0x13;
+
+/// Mode-3 cache-slot base of `Music/BGMwinter.ojm` in the exe boot table.
+pub const RESULT_WORKER_BANK_BASE_SLOT: usize = 0x0d;
+
+/// Fetch ordinal of `bgResult.ogg` inside `BGMwinter.ojm`: the mode-3
+/// entry at `RESULT_WORKER_BANK_BASE_SLOT + ordinal = RESULT_WORKER_SLOT`.
+pub const RESULT_WORKER_RECORD_ORDINAL: usize = RESULT_WORKER_SLOT - RESULT_WORKER_BANK_BASE_SLOT;
 
 /// Linear gain that applies no scaling (`1.0`): the volume a caller
 /// that scales nothing (the launch client's path) cues with.
@@ -255,6 +269,17 @@ mod tests {
             channels: 1,
         });
         bank
+    }
+
+    #[test]
+    fn result_slot_names_the_winter_bank_result_record() {
+        // seam: pure slot arithmetic pinned to the exe boot table; the
+        // data-dependent cue guard lives in `main.rs`.
+        assert_eq!(RESULT_WORKER_RECORD_ORDINAL, 6);
+        assert_eq!(
+            RESULT_WORKER_BANK_BASE_SLOT + RESULT_WORKER_RECORD_ORDINAL,
+            RESULT_WORKER_SLOT
+        );
     }
 
     #[test]
