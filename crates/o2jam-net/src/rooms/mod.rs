@@ -3316,6 +3316,8 @@ mod notice_tests {
         // no 2031 → `Result_Imgs_Rank` consumer yet; next step is to
         // wire that table into rank-frame selection. No live caller
         // chain exists to name, so this pins the index at the seam.
+        // Red proof: swapping row bytes 2/3 in `decode_body` failed this
+        // guard with `[5, 7, 3, 1]` vs `[7, 5, 3, 1]`; reverted.
         // Named decoder #898: `docs/net-protocol.md` §4c 2031 handler
         // VA `0x55b590` (file `0x15b590`), row read `0x15b5fa`.
         // Claim D22 (`docs/claims/50-net.md:26`):

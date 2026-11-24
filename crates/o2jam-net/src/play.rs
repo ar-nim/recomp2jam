@@ -1780,6 +1780,8 @@ mod song_sync_tests {
         // `push 8` at `0x15fc17` is the flag memset, the only `8`
         // compare is the member guard at `0x15fd54`, and the loop
         // exits at `0x15fc80`/`0x15fce2`/`0x15fd28` test the count.
+        // Red proof: forcing `count.min(8)` in `decode_body` failed this
+        // guard with `TrailingBytes(45)` (nine funded rows).
         let entry = live_score_entry();
         let completed = ScoreCompleted {
             room_master: 0,
@@ -1804,6 +1806,9 @@ mod song_sync_tests {
         // exits test the count word at `0x15fc80`/`0x15fce2`/`0x15fd28`
         // (signed `jge`). No count clamp exists: a negative count
         // yields zero rows, any funded count decodes.
+        // Red proof: the same `count.min(8)` mutation failed this guard
+        // with `TruncatedMessage { need: 365, have: 5 }` instead of the
+        // computed `need: 4500005`. Both mutations were reverted.
         let count: i32 = 100_000;
         let mut body = Vec::from(count.to_le_bytes());
         body.push(0x00);
