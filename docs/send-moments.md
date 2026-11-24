@@ -46,6 +46,8 @@ next evidence step, not an omission.
 |---|---|---|---|
 | 1000 Authorize | Launch blob (`USER_INDEX_ID`, token, gender) parsed; first gateway frame of the session | live tap 2026-11-18 (`scripts/rig-wine-run.sh --wire-tap`, `docs/net-protocol.md` §4c), body 96 B; static call site OPEN | LIVE. Next: name the builder call site in the net-init district. |
 | 1002 GetChannelList | After authorize, to populate the Planet/Channel dialog rows | live sequence authorize → 1002/1003 (`docs/net-protocol.md`, `docs/wine-boot.md`); site OPEN | LIVE. Next: one tap with the exact send file offset. |
+| 1007 SessionKeys | Session-key exchange in the planet/login family after channel enter | opcode family in `docs/net-protocol.md` §4a; no site or captured moment | OPEN. Next: tap a boot exchange and name the trigger frame. |
+| 2024 SendMusicList | Installed-catalog announce after the `Music\*.ojn` scan; id high nibble carries the installed flag | codec `o2jam-net::SendMusicList` at `crates/o2jam-net/src/message.rs:132`; opcode `0x07e8` in `crates/o2jam-net/src/command.rs`; moment not captured | PARTIAL. Next: one wired boot tap naming when the scan result is sent. |
 | 1004 ChannelLogin | Channel entry-face click on an active row; the inactive row calls the "cannot enter channel" box instead | active-byte read file `0x75345`, opcode `0x3ec` pushed by the standard send path (`docs/net-protocol.md` §4c) | PINNED |
 | 2000 / 2002 | Channel enter completed (1005), then character and channel-info fetch | live sequence 1005 → 2001/2002/2026/2003 (`docs/net-protocol.md` §4c, `docs/planet.md`) | LIVE. Next: file offsets for both sends. |
 | 2010 GetUserList | One Room side-entry fuse per Room visit; a processed 07DB or starved overdue sheet latches it | guarded by state global, at most one 07DA per visit; guard `side_entry_sends_exactly_one_user_list_pair_on_the_scripted_gateway` (`docs/net-protocol.md` §4b) | PINNED (wire + gate). Static send site OPEN: next, one stopped-state read. |
@@ -68,6 +70,7 @@ next evidence step, not an omission.
 | 2015 Announce | `/n ` admin notice branch, behind nonzero byte gate `0x768b6c` | files `0x8f585`/`0x8f5dc`, opcode `0x7df` (`docs/net-protocol.md` §4c) | PINNED |
 | 2030 / 2032 | Ranking dialog fetch: 2030 when role word `0x77ee86` is 2 or own seat `0x77cd30` is set; both gated by one-way latch `0x779964` | files `0xac402`–`0xac43d`, `0xb2622`–`0xb265a`; 2032 via vtable `+0x64` files `0x4151a`–`0x41532` (`docs/overnight-evidence/u4-ranking-packs.md`) | PINNED (site + gate). Body of 2032 stays OPEN: next, proxy rewrite or stopped-state vtable read. |
 | 2034 GetFreeMusicStatus | Free-music status request; trigger not located | opcode only in `docs/net-protocol.md` §4a | OPEN. Next: scan for the `0x7f2` send builder and tap the owning click. |
+| 2027 GetMusicPlayRanking | Lanking song-to-board fetch | `docs/lanking.md:76`: the exe never sends 2027; a pick only names the `MUSICNAME` caption | PINNED negative (static + capture-backed). Next: one live replay before claiming any board-fetch frame. |
 
 ## 4. Room
 
@@ -83,8 +86,12 @@ next evidence step, not an omission.
 
 | Op | Moment | Site / gate | Status; next step |
 |---|---|---|---|
-| 4000 SetRoomMusic | Select-dialog row whose difficulty bit is set; also the master-only key-mode event `0xbb9` after comparing new/old mode bytes | select handlers VAs `0x4ad940`/`0x4b42d0`; key-mode send VA `0x4b10de` (`docs/music-availability.md` §3, `crates/o2jam-net/src/rooms/mod.rs` `KeyModeChanged`) | PINNED (moment), body of the key-mode arm OPEN: next, tap that arm. |
+| 4000 SetRoomMusic | Select-dialog row whose difficulty bit is set; also the master-only key-mode event `0xbb9` after comparing new/old mode bytes | select handlers VAs `0x4ad940`/`0x4b42d0`; key-mode send VA `0x4b10de` (`docs/parity/waiting.md:374`, `crates/o2jam-net/src/rooms/mod.rs:884` `KeyModeChanged`) | PINNED (moment), body of the key-mode arm OPEN: next, tap that arm. |
 | 4002 SetRoomArena | Arena picker wrap arm stages the high-word flag and sends the room-mode word | files `0xbb600`/`0xbb64d`, receive echo handler file `0x15f3c0` (`docs/caption-sources.md`, `docs/net-protocol.md` §4c) | PINNED |
+| 4006 SetInstrument | Instrument choice in Waiting | opcode in `docs/net-protocol.md` §4a; no send site pinned | OPEN. Next: sweep for the `0xfa6` push, then tap the owning control. |
+| 4030 GetMusicList | Native-only confirm step in the Waiting song-flow sequence | `docs/captures/journey-audit/291-waiting.md:35` marks the 4000/4002/4030 → 4010/4011 → 4012 walk as native-only, not an exe claim | OPEN. Next: one native wire-log run with the exe send site pinned before any exe moment is asserted. |
+| 4051 StartSelectMusic | MUSELECT pick: no start-select frame is emitted | `docs/captures/journey-audit/291-waiting.md:29` pins the negative on both sides; only 4000 follows a master row pick | PINNED negative. Next: scripted-gateway guard named in that matrix, to keep the absence explicit. |
+| 4053 CancelSelectMusic | MUSELECT exit: no cancel-select frame is emitted | same negative row in `docs/captures/journey-audit/291-waiting.md:29` | PINNED negative. Next: same scripted-gateway guard, with 4053 absence logged separately. |
 | 4004 → 4008(0) | Team buttons `0x16201004..0x0B`; press sends team then ready zero when the role gate is clear | files `0xb22d0`/`0x48c810`/`0x556680` (`docs/claims.md` B27) | PINNED |
 | 4008 Ready | Guest readiness toggle; five sites push a zero word then `0xfa8` (no flag byte) | files `0xacebe`, `0xb24f6`, `0xb36a0`, `0xb8450`, `0xb871f` (`crates/o2jam-net/src/play.rs`) | PINNED |
 | 4010 StartGame | START control `0x16202012`: gate verdict `1`; also the 4035 state-zero arm when master and gate are positive | `0xfaa` push in the start arm, gate VA `0x4b5560` (`docs/music-availability.md` §4a) | PINNED |
@@ -115,6 +122,7 @@ next evidence step, not an omission.
 | relay op 5 RelayStats | Live tick: global `0x77ee84 == 1` and seat byte `0x77cd33 == 5` | packer file `0xea230`, send helper file `0x187870`, sole tick caller file `0xeb0c9` (`docs/op5-writer.md`, claims D9) | PINNED |
 | relay ops 6 / 7 | Combo broken / combo started; autoplay word is always 1 in the exe, `code` is 0 on client sends | ctors files `0x16dfe0`/`0x16e080`; evidence ids in `docs/relay.md` §6 | PINNED |
 | 4048 TestNetworkLatency | After the 4047 punch echo sets its session flag | flag gate checked at file `0xeae6d` (`docs/relay.md` §9) | PARTIAL. Next: tap one Live exchange and read the 4048 body. |
+| 4041 FinalizeRank | Song-end tally leg: the bot session sends it next to 4016 at end of play | `docs/overnight-evidence/e2-attempt13-wedge.md:56` (`host_play.log` bot 4016/4041); no qualified exe button/site pin | PARTIAL. Next: one exe Result-entry tap naming the 4041 send site. |
 
 ## 8. Result
 
@@ -133,6 +141,10 @@ next evidence step, not an omission.
 | 5007 ExitShop | BACK: full-bleed plate tap and static control `0x14200002`; GOMYROOM `0x14200003` sends nothing | live tap (`~/scratch/evidence-shops/gifted-boot`), static `FUN_00499760` (`docs/shop.md` #178) | PINNED (BACK), PINNED negative (GOSHOP static). Next: one tapped GOSHOP wire tap. |
 | 5028 SyncCashPoint | After 5007 BACK, then 5029 wallet answer | live tapped BACK leg (`docs/shop-buy.md`) | PINNED |
 | 5015 StartPayment | BUYITEM/GIFTITEM behind web-busy gate, empty-cart and cash/gem checks; mode word `+0x969` = 1/2 | `FUN_00499760`, `ev_f3ad15be…` (`docs/shop.md`); qualified live taps emitted no 5000-family frame — contradiction preserved | PARTIAL + CONTRADICTION. Next: one valid-cart payment tap with 5015/5016 logged. |
+| 5013 SyncPoint | Point-sync request; trigger not located | opcode in `docs/net-protocol.md` §4a | OPEN. Next: capture one cash/point change and name the owning click. |
+| 5038 RefreshBag | BAGSORT control `0x142000b7`, gated on cart state `FUN_004a1010` | virtual send `0x13ae` at file `0x9bfa8`, `ev_ec83763a…` (`docs/shop.md:396`); contradicts the older "BAGSORT records nothing" note | PARTIAL + CONTRADICTION. Next: one BAGSORT wire tap; a NULL tap retires the static claim. |
+| 5034 PenaltyReset | Penalty-reset request; trigger not located | opcode in `docs/net-protocol.md` §4a | OPEN. Next: tap the owning account-control click. |
+| 5036 BagExpansion | Bag-expansion request; trigger not located | opcode in `docs/net-protocol.md` §4a | OPEN. Next: tap one expansion purchase. |
 | 5000 SyncItemPurchase | Catalog purchase arm kept from earlier work; item-shop BUYITEM with a valid cart did not emit it live | empty builder case file `0x8ee81` (`docs/gifts.md`, `docs/shop.md`) | PARTIAL. Next: wire tap of a completed item purchase. |
 
 ## 10. Music Shop (`CStateMShop`)
@@ -141,7 +153,7 @@ next evidence step, not an omission.
 |---|---|---|---|
 | 5015 StartPayment | Cart BUYITEM `0x1a20005d` / GIFTITEM `0x1a200073` after web-busy, non-empty bag, cash and gem checks; writes `+0x14d` = 1/2 | `FUN_004c7f70` file `0xc7f70`, `ev_26ac6479…` (`docs/musicshop.md`) | PARTIAL. Next: one tapped payment leg with 5015/5011 logged. |
 | 5010 SyncMusicPurchase | Per-row and cart buy arms (assumed wire side; static buy arm is the opcode-arg builder) | file `0xf3fa8` (`docs/shop.md`, `docs/musicshop.md`) | PARTIAL. Next: one successful music-purchase tap. |
-| 5012 in shop | Download START/CANCEL controls dispatch no opcode | `docs/musicshop.md` Download controls (#410); inert guard `music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned` | OPEN. Next: pin the shop-side 5012 send site before enabling the controls. |
+| 5012 in shop | Download START/CANCEL controls stage with the shop but dispatch no opcode | `docs/musicshop.md:260-265` (Download controls #410): both rects are inert because the shop-side 5012 send site is OPEN. No guard name is claimed here: grep finds no `fn .*inert` in `crates`, so the old guard citation was false | OPEN. Next: pin the shop-side 5012 send site before enabling the controls. |
 
 ## 11. MyRoom
 
@@ -161,6 +173,7 @@ next evidence step, not an omission.
 | 5004 EquipItem (two sites) | Shop-control path and equip-apply path, both push slot then item | VAs `0x4a4af4`/`0x4a4bcb`, builder VA `0x4a4ec8` (`docs/equip.md`) | PINNED |
 | 5002 SellItem / 5030 ChangeName / 5032 CheckName | Sell click; rename confirm; rename pre-check with a `strlen` gate that shows a notice instead of sending | send switch file `0xa4df0`; cases VAs `0x4a510c`/`0x4a520f`; check-name builder VA `0x45c3af` (`docs/shop-buy.md`) | PINNED (static) |
 | 5028 SyncCashPoint | Shared wallet refresh after shop BACK | virtual-send site VA `0x48ee81` (`docs/gifts.md`); live BACK leg (`docs/shop-buy.md`) | PINNED |
+| 5040 CheckGiftFreePass | No 7.55 wire send: raw-byte sweep finds no `0xb0 0x13` immediate and `0x13b0` falls outside the receive range | claim D15 in `docs/claims.md:250`, details in `docs/gifts.md`; codec kept for server interop only | PINNED negative. Next: none for the absence; a new wire capture would refute it. |
 
 ## 13. Payment / Payment2 (web views)
 
