@@ -210,6 +210,70 @@ UDP relay datagram: `[u16 uncompressedLen][zlib([u8 type][u8 seq][u16 innerSize]
 type ∈ {1 Unreliable, 2 Reliable, 3 Ack}; Ack = 4 bytes `[0x03][seq][0x00][0x00]`.
 UDP is primary for Live, TCP fallback (freeze-prone at game start).
 
+## 4e. Named decoder list (#898)
+
+This is the named decoder bar. It covers the S→C decoders in
+`crates/o2jam-net` whose 7.55 handler or read site carries a file offset
+in this document (or in the in-code type docs repeated below). Every
+listed decoder has a guard whose comment cites those offsets. Decoders
+whose only evidence is a Memoryer shape with no exe offset stay OPEN and
+are not in this bar; their next step is a handler sweep in the 7.55 copy.
+Historic ticket line numbers (132/133) have drifted; section names are
+the stable anchors.
+
+| Decoder | Opcode | Guard(s) | Doc offsets |
+|---|---|---|---|
+| `ChannelList` | 1003 | `channel_list_decodes_count_prefixed_rows` | §4c: dispatcher `0x1583f1`, handler VA `0x559ff0` / file `0x159ff0` |
+| `RoomCreated` | 2005 | `room_created_decodes_the_live_twenty_one_byte_broadcast` | §4b: opcode `0x07D5`, 21-byte body probe |
+| `RoomRemoved` | 2007 | `room_removed_decodes_the_live_disband_broadcast` | §4b: opcode `0x07D7`, live disband probe |
+| `MainRoomUserMessage` | 2013 | `user_message_carries_sender_plus_raw_content` | §4c: handler file `0x15bfa0` |
+| `MainRoomAdminMessage` | 2014 | `admin_message_carries_sender_plus_raw_content` | §4c: receive sites `0x15c075`/`0x15c11a`/`0x15c151` |
+| `Announcement` | 2016 | `announcement_decodes_live_capture` | §4c: dispatch base `0x1582ec`, case `0x1584df`, handler VA `0x55c0a0` / file `0x15c0a0` |
+| `SendWhisperResponse` | 2018 | `whisper_answer_reports_invalid_without_content` | §4c: receive site file `0x15c20b` |
+| `ReceiveWhisper` | 2019 | `receive_whisper_carries_sender_plus_text` | §4c: receive site file `0x15c5b0` |
+| `RankNotification` | 2029 | `rank_notification_matches_wire_order` | §4c: case `0x158556`, handler VA `0x55b4d0` / file `0x15b4d0`, invalid gate `0x15b527` |
+| `MusicScoreListAnswer` | 2031 | `score_list_answer_pins_easy_normal_hard_byte_order` | §4c: handler VA `0x55b590` / file `0x15b590`, row read `0x15b5fa`; D22 scan `0x40d5b`–`0x40f4f` |
+| `UserJoinedWaiting` | 3004 | `user_joined_waiting_decodes_the_captured_wire_body` | §4c: opcode `0x0BBC`, 103-byte wire body |
+| `UserLeftWaiting` | 3007 | `user_left_waiting_decodes_the_captured_wire_body` | §4c: opcode `0x0BBF`, eight-byte wire body |
+| `WaitingUserMessage` | 3012 | `user_message_matches_encore_vector` | §4c: ten receive sites from file `0x15e601` |
+| `WaitingAdminMessage` | 3013 | `admin_message_matches_encore_vector` | §4c: three receive sites from file `0x15f051` |
+| `RoomArenaEcho` | 4003 | `room_arena_echo_encodes_plain_stage` | §4c 4002: handler VA `0x55f3c0` / file `0x15f3c0`, read `0x15f3c3`, case `0x158655` |
+| `RoomTeamChanged` | 4007 | `room_team_changed_round_trips_slot_and_key` | handler file `0x15f470` (type doc), slot/key reads, UI forward `0x478d50` |
+| `MemberReadyStateChanged` | 4009 | `member_ready_state_changed_encodes_member_then_flag` | handler file `0x15f5b0`, seat store `0x140d77`, ready gate `0xb5560` (type doc) |
+| `ScoreSubmission` | 4017 | `score_submission_round_trips_member_byte` | §4c: handler file `0x15fba0`, one-byte read `0x15fbad`, case `0x1586cc` |
+| `ScoreCompleted` | 4018 | `score_completed_decodes_live_capture`, `score_completed_reports_unfunded_count_without_capping` | §4c: handler file `0x15fbe0`, memset `0x15fc17`, loop exits `0x15fc80`/`0x15fce2`/`0x15fd28` |
+| `GameRankUpdate` | 4040 | `game_rank_update_round_trips_leader_places`, `decoded_4040_places_never_change_the_result_banner_frame` | §4c: handler file `0x159a60`, writer `0x1414ad`, no result-screen reader |
+
+## 4f. Named scripted-gateway flow list (#899)
+
+This is the named CI bar for request/response round trips. Each row is
+driven by `every_named_flow_round_trips_through_the_scripted_gateway` in
+`crates/o2jam-net/src/gateway_flows.rs` (tier 2, ADR-0014): the guard
+sends the request through `GatewayConnection::exchange`, checks the bytes
+at the in-test gateway, and decodes the answer with the production codec.
+Event-only flows and player-visible UI legs stay on their existing guards
+(`rank_update_traces_the_eight_place_bytes_from_the_gateway`,
+`shop_buy_round_trips_through_scripted_gateway`,
+`myroom_gift_claim_round_trips_and_lands_in_bag_through_scripted_gateway`); they are
+not duplicated here.
+
+| Flow | C→S | S→C | Answer codec |
+|---|---|---|---|
+| `authorize_1000_1001` | 1000 | 1001 | `AuthResponse` |
+| `channel_list_1002_1003` | 1002 | 1003 | `ChannelList` |
+| `channel_login_1004_1005` | 1004 | 1005 | `ChannelLoginResponse` |
+| `character_info_2000_2001` | 2000 | 2001 | `CharacterInfo` |
+| `room_list_2002_2003` | 2002 | 2003 | `RoomList` |
+| `create_room_2004_2006` | 2004 | 2006 | `CreateRoomResponse` |
+| `join_waiting_3002_3003` | 3002 | 3003 | `JoinRoomResponse` |
+| `music_score_list_2030_2031` | 2030 | 2031 | `MusicScoreListAnswer` |
+| `submit_score_4016_4018` | 4016 | 4018 | `ScoreCompleted` |
+| `shop_buy_5000_5001` | 5000 | 5001 | `SyncItemPurchaseReply` (observed 152-byte shape) |
+| `gift_list_5017_5018` | 5017 | 5018 | `GetGiftMessageListResponse` |
+| `payment_5015_5016` | 5015 | 5016 | `StartPaymentResponse` |
+| `cash_refresh_5028_5029` | 5028 | 5029 | `SyncCashPointResponse` |
+| `free_pass_5025_5026` | 5025 | 5026 | `SyncFreePassResponse` |
+
 ## 5. Offline-playable verdict
 
 Plays offline (no server): chart load/decrypt (`new`-XOR + `ojn` slices), OJM decode,

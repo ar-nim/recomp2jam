@@ -1689,6 +1689,26 @@ pub struct MusicScoreRow {
     pub difficulty_ranks: [u8; 4],
 }
 
+impl MusicScoreRow {
+    /// Rank byte for one chart difficulty.
+    ///
+    /// Claim D22 (`docs/claims/50-net.md:26`) pins the row scan at files
+    /// `0x40d5b`–`0x40f4f`: the chooser reads `row[2 + d]` with `d`
+    /// from the select entry's difficulty word (`0` Easy, `1` Normal,
+    /// `2` Hard), then caches the byte at `0x7797c4` for the
+    /// `Result_Imgs_Rank` frame. The fourth byte is Memoryer RX.
+    ///
+    /// Seam scope (`docs/live-path-reachability.md`): pure codec
+    /// index helper with no runtime caller yet. No live path reaches
+    /// it — the shell stages no 2031 → `Result_Imgs_Rank` chooser.
+    /// Next step: wire the 2031 table into rank-frame selection;
+    /// until then the byte order is pinned only at this seam.
+    #[must_use]
+    pub fn rank_for(self, difficulty: Difficulty) -> u8 {
+        self.difficulty_ranks[difficulty as usize]
+    }
+}
+
 /// Wire size of one [`MusicScoreRow`]: `u16` id + four rank bytes.
 const MUSIC_SCORE_ROW_LEN: usize = 6;
 
@@ -2593,7 +2613,9 @@ mod waiting_chat_tests {
 
     #[test]
     fn user_message_matches_encore_vector() {
-        // Encore vector: (`ab`, `abc`, seat 5) -> body below.
+        // Named decoder #898: `docs/net-protocol.md` §4c 3012 — ten
+        // receive sites push 3012 beside parent `0x762B44` from file
+        // `0x15e601`. Encore vector: (`ab`, `abc`, seat 5) -> body below.
         let message = WaitingUserMessage {
             sender: "ab".to_owned(),
             content: vec![0x61, 0x62, 0x63],
@@ -2610,7 +2632,9 @@ mod waiting_chat_tests {
 
     #[test]
     fn admin_message_matches_encore_vector() {
-        // Encore vector: (`ab`, `a`, seat 7) -> body below.
+        // Named decoder #898: `docs/net-protocol.md` §4c 3013 — three
+        // receive sites push 3013 beside parent `0x762B44` from file
+        // `0x15f051`. Encore vector: (`ab`, `a`, seat 7) -> body below.
         let message = WaitingAdminMessage {
             sender: "ab".to_owned(),
             content: vec![0x61],
@@ -2761,6 +2785,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn user_message_carries_sender_plus_raw_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2013 —
+        // handler file `0x15bfa0` reads sender then content to end.
         let message = MainRoomUserMessage {
             sender: "ab".to_owned(),
             content: vec![0x61, 0x62, 0x63],
@@ -2776,6 +2802,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn admin_message_carries_sender_plus_raw_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2014 —
+        // three receive sites at files `0x15c075`/`0x15c11a`/`0x15c151`.
         let message = MainRoomAdminMessage {
             sender: "ab".to_owned(),
             content: vec![0x61],
@@ -2836,6 +2864,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn whisper_answer_reports_invalid_without_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2018 —
+        // receive site file `0x15c20b`, i32 invalid + strings.
         // Undelivered whisper: result word plus recipient only.
         let message = SendWhisperResponse {
             invalid: true,
@@ -2876,6 +2906,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn receive_whisper_carries_sender_plus_text() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2019 —
+        // receive site file `0x15c5b0`, two NUL-terminated strings.
         let message = ReceiveWhisper {
             sender: "ab".to_owned(),
             content: "cd".to_owned(),
@@ -2966,6 +2998,9 @@ mod notice_tests {
 
     #[test]
     fn announcement_decodes_live_capture() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2016 —
+        // dispatch base `0x1582ec`, case `0x1584df`, handler VA
+        // `0x55c0a0` (file `0x15c0a0`), one NUL-terminated string.
         // Live bytes 2026-11-08 via the relay.md §12 proxy method
         // (127.0.0.1:15011 -> 15010, local Memoryer Full-mode):
         // C->S 2015 `LIVE-PROBE-2016 hello` echoed as S->C 2016 with the
@@ -3002,6 +3037,9 @@ mod notice_tests {
 
     #[test]
     fn rank_notification_matches_wire_order() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2029 — case
+        // `0x158556`, handler VA `0x55b4d0` (file `0x15b4d0`), invalid
+        // gate `0x15b527`; field order is Memoryer corroboration.
         // invalid i32, music id i32, nickname string, ranking i32.
         let message = RankNotification {
             invalid: false,
@@ -3271,6 +3309,47 @@ mod notice_tests {
     }
 
     #[test]
+    fn score_list_answer_pins_easy_normal_hard_byte_order() {
+        // Seam suffices (`docs/live-path-reachability.md`): pure codec
+        // byte-order helper with no live caller. The exe caches the
+        // rank byte at `0x7797c4` for the chooser, but our shell has
+        // no 2031 → `Result_Imgs_Rank` consumer yet; next step is to
+        // wire that table into rank-frame selection. No live caller
+        // chain exists to name, so this pins the index at the seam.
+        // Red proof: swapping row bytes 2/3 in `decode_body` failed this
+        // guard with `[5, 7, 3, 1]` vs `[7, 5, 3, 1]`; reverted.
+        // Named decoder #898: `docs/net-protocol.md` §4c 2031 handler
+        // VA `0x55b590` (file `0x15b590`), row read `0x15b5fa`.
+        // Claim D22 (`docs/claims/50-net.md:26`):
+        // scan files `0x40d5b`–`0x40f4f`, chooser cache `0x7797c4`.
+        // Byte 2 Easy, 3 Normal, 4 Hard; byte 5 is RX (no exe reader).
+        // Decode a row whose four rank bytes are all distinct, then
+        // read them back through the difficulty-ordered accessor.
+        let body = [
+            0x00, 0x00, 0x00, 0x00, // result 0
+            0x01, 0x00, // one row
+            0xF5, 0x02, // music id 757
+            0x07, 0x05, 0x03, 0x01, // Easy, Normal, Hard, RX ranks
+        ];
+        let answer = MusicScoreListAnswer::decode_body(&body).unwrap();
+        let row = answer.rows[0];
+        assert_eq!(row.music_id, 757);
+        assert_eq!(row.difficulty_ranks, [7, 5, 3, 1]);
+        assert_eq!(row.rank_for(Difficulty::Ex), 7);
+        assert_eq!(row.rank_for(Difficulty::Nx), 5);
+        assert_eq!(row.rank_for(Difficulty::Hx), 3);
+        assert_eq!(row.rank_for(Difficulty::Rx), 1);
+
+        // A changed Easy byte leaves Normal and Hard unchanged.
+        let mut changed = body;
+        changed[8] = 6;
+        let changed_row = MusicScoreListAnswer::decode_body(&changed).unwrap().rows[0];
+        assert_eq!(changed_row.rank_for(Difficulty::Ex), 6);
+        assert_eq!(changed_row.rank_for(Difficulty::Nx), 5);
+        assert_eq!(changed_row.rank_for(Difficulty::Hx), 3);
+    }
+
+    #[test]
     fn score_list_answer_treats_negative_result_as_empty() {
         // Negative results skip the rows but still refresh the UI.
         let answer = MusicScoreListAnswer::decode_body(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
@@ -3390,6 +3469,8 @@ mod notice_tests {
 
     #[test]
     fn user_joined_waiting_decodes_the_captured_wire_body() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 3004 event
+        // `0x0BBC`; the 103-byte captured body pins the field order.
         let body = hex_bytes(concat!(
             "017465737465723200010000000172020000010000100000001e000000780100007f0100",
             "008501000000000000000000000000000000000000000000000000000023000000000000",
@@ -3436,6 +3517,8 @@ mod notice_tests {
 
     #[test]
     fn user_left_waiting_decodes_the_captured_wire_body() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 3007 event
+        // `0x0BBF`; the eight-byte captured body pins the field order.
         let event = UserLeftWaiting::decode_body(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap();
         assert_eq!(
             event,

@@ -19,6 +19,8 @@ pub mod command;
 pub mod connect_report;
 pub mod error;
 pub mod frame;
+#[cfg(test)]
+mod gateway_flows;
 mod inflate;
 // `message` precedes `gift`/`shop`/`wallet`: its `empty_message!`
 // macro expands there (`macro_rules!` travels by textual scope).

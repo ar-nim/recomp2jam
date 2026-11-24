@@ -6,7 +6,6 @@
 //! existing scenario guards stay unchanged (#139 paint split).
 
 use super::*;
-
 /// Battle verdict art mounted by the result builder `FUN_004c2390`
 /// (file `0xc2390`): `StateResult_Top.ojs` plus
 /// `StateResult_Bottom.ojs` plus `Result_WinLose.ojs` (file `0x24a35c`).
@@ -967,5 +966,167 @@ pub(crate) fn paint_result_digit_field_if_staged(
 ) {
     if let Some(value) = value {
         paint_result_digit_field(frame, figures.get(sprite), value, last_x, y);
+    }
+}
+
+#[cfg(test)]
+mod result_banner_tests {
+    use std::collections::HashMap;
+
+    use o2jam_game::RoomTeams;
+    use o2jam_net::frame::decode_frame;
+    use o2jam_net::{GameRankUpdate, WireMessage};
+    use o2jam_render::{expand_rgb555, pack_xrgb, Frame, Rgb555Image};
+
+    use super::{
+        battle_verdict, paint_result_scene, winlose_frame, BattleVerdict, ResultPaint,
+        ResultVerdict, RESULT_WINLOSE_SPRITE,
+    };
+    use crate::avatar::{AvatarFigure, FigureLayer};
+    use crate::screens::paint::SceneArt;
+
+    /// Loss for local team 0 behind team 1's higher submitted total,
+    /// the same mirror `OnlineSession::apply_score_completed` stages.
+    fn losing_teams() -> RoomTeams {
+        let mut teams = RoomTeams::new();
+        teams.set_team(0, 0);
+        teams.set_team(1, 1);
+        teams.submit(0, 200);
+        teams.submit(1, 50_000);
+        teams
+    }
+
+    /// Four synthetic banner layers at the pinned frame anchors,
+    /// each carrying a distinct solid ink (black colorkey).
+    fn banner_art() -> SceneArt {
+        let mut figure = AvatarFigure::default();
+        for (index, (dx, dy)) in [(100, 190), (100, 190), (151, 190), (126, 190)]
+            .into_iter()
+            .enumerate()
+        {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image {
+                    w: 2,
+                    h: 2,
+                    words: vec![0x0001u16 << (index + 1); 4],
+                },
+                dx,
+                dy,
+                colorkey: 0x0000,
+            });
+        }
+        SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(RESULT_WINLOSE_SPRITE.to_owned(), figure)]),
+        }
+    }
+
+    /// Painted banner ink for one verdict (`frame_ink` in the paint
+    /// suite): frame *n* selects image *n−1*.
+    fn banner_ink(index: usize) -> u32 {
+        let (red, green, blue) = expand_rgb555(0x0001u16 << (index + 1));
+        pack_xrgb(red, green, blue)
+    }
+
+    /// Paint one whole native result scene and return its pixels.
+    fn paint_banner(verdict: ResultVerdict) -> Vec<u32> {
+        let art = banner_art();
+        let score = o2jam_game::Score::default();
+        let mut buffer = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buffer,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                portrait_slots: None,
+                score: &score,
+                rows: &[],
+                art: &art,
+                verdict,
+                grade: None,
+                album: None,
+                life_readout: None,
+                bottom_counter: None,
+            },
+        );
+        buffer
+    }
+
+    /// Pixel at a banner anchor in an 800×600 result buffer.
+    fn ink_at(buffer: &[u32], x: usize, y: usize) -> u32 {
+        buffer[y * 800 + x]
+    }
+
+    /// Decode one full 4040 frame, the same codec the session's
+    /// `apply_rank_update` uses before storing `last_rank_places`.
+    fn decoded_places(first: u8, second: u8) -> GameRankUpdate {
+        let ranks = GameRankUpdate {
+            member_ranks: [first, second, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        };
+        let frame = decode_frame(&ranks.encode()).expect("4040 frame");
+        GameRankUpdate::decode_frame(&frame).expect("4040 body")
+    }
+
+    #[test]
+    fn decoded_4040_places_never_change_the_result_banner_frame() {
+        // Live caller chain: `main.rs::run_play` → `setup_online` →
+        // `run_windowed_session` → `OnlineSession::paint` →
+        // `ScreenGame::paint_result` → `ScreenGame::result_verdict` →
+        // `battle_verdict` → `paint_result_scene` → `winlose_frame`.
+        // The 4040 arm ends earlier: `OnlineSession::apply_rank_update`
+        // → `self.last_rank_places`; no banner consumer exists.
+        // Evidence: `docs/net-protocol.md` §4c `4040 GameRankUpdate` —
+        // handler VA `0x559a60` (file `0x159a60`) stores each place at
+        // `+0x217d` (writer `0x1414ad`, REA `ev_4684b913…`); the banner
+        // reads win flag `+0x21d2` (files `0xc31ca`/`0xc320c`/
+        // `0xc3300`/`0xc3343`) and the rank column reads `+0x10d2c`
+        // (`FUN_004c49a0`), with no `+0x217d` reader (`ev_94ff31c9…`).
+        // Red proof: wiring the decoded first 4040 place into
+        // `battle_verdict` flipped this local team Lose→Win; the
+        // verdict assertion failed with `Win` vs `Lose` (frame 1 vs 2)
+        // and the painted pixel failed too: win ink `16` vs expected
+        // lose ink `33` at (100,190).
+        // The mutation was reverted; this guard then passed.
+        let teams = losing_teams();
+        let verdict = battle_verdict(&teams, Some(0));
+        let banner = winlose_frame(ResultVerdict::Battle(verdict));
+        assert_eq!(verdict, Some(BattleVerdict::Lose));
+        assert_eq!(banner, Some(2));
+        let expected_ink = banner_ink(1);
+        let baseline_pixels = paint_banner(ResultVerdict::Battle(verdict));
+        assert_eq!(ink_at(&baseline_pixels, 100, 190), expected_ink);
+
+        let first = decoded_places(0, 1);
+        let second = decoded_places(1, 0);
+        assert_ne!(first.member_ranks, second.member_ranks);
+
+        let first_pixels = paint_banner(ResultVerdict::Battle(battle_verdict(&teams, Some(0))));
+        let second_pixels = paint_banner(ResultVerdict::Battle(battle_verdict(&teams, Some(0))));
+        assert_eq!(ink_at(&first_pixels, 100, 190), expected_ink);
+        assert_eq!(ink_at(&second_pixels, 100, 190), expected_ink);
+        assert_ne!(ink_at(&second_pixels, 100, 190), banner_ink(0));
+        assert_eq!(first_pixels, baseline_pixels);
+        assert_eq!(second_pixels, baseline_pixels);
+
+        assert_eq!(battle_verdict(&teams, Some(0)), verdict);
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(battle_verdict(&teams, Some(0)))),
+            banner
+        );
+
+        // Positive control: a changed 4018 total does move the banner.
+        let mut winning = teams;
+        winning.submit(0, 100_000);
+        let winning_verdict = battle_verdict(&winning, Some(0));
+        assert_eq!(winning_verdict, Some(BattleVerdict::Win));
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(winning_verdict)),
+            Some(1)
+        );
+        let winning_pixels = paint_banner(ResultVerdict::Battle(winning_verdict));
+        assert_eq!(ink_at(&winning_pixels, 100, 190), banner_ink(0));
+        assert_ne!(ink_at(&winning_pixels, 100, 190), expected_ink);
     }
 }
