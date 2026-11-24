@@ -836,6 +836,13 @@ pub struct ScreenGame {
     /// of its 32-bit id; our wire id is a `u16`, so the same nibble is
     /// bits 12..15 here.
     room_song_variant_nibble: u8,
+    /// Local song-selection state on Waiting entry. `FUN_004aac80`
+    /// (file `0xaac80`) seeds `DAT_007789dc` from `FUN_004bb2c0` when
+    /// no song stands, and that helper always sets bit 31 (falling
+    /// back to `0x80000001`). So the exe enters Waiting with a
+    /// random-flagged local selection and mounts the `?` mini cards.
+    /// Cleared only when an explicit 4001 room song is staged.
+    waiting_local_selection_random: bool,
     /// Level ceiling the auto-pick arm applies to catalog rows (`
     /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
     /// writer of that global stays OPEN, so an unstaged cap admits
@@ -1429,6 +1436,7 @@ impl ScreenGame {
             waiting_start_armed: false,
             waiting_back_armed: false,
             room_song_variant_nibble: 0,
+            waiting_local_selection_random: true,
             auto_pick_level_cap: u16::MAX,
             selected_music: None,
             loading_status: None,
@@ -2612,8 +2620,13 @@ impl ScreenGame {
         if let Some(stage) = arena_stage_word(room.arena) {
             self.arena_stage = stage;
         }
+        // The exe seeds the random default only while its song word
+        // is zero (`FUN_004aac80`); a room that already names a song
+        // enters on that explicit selection.
+        let enters_without_song = room.music_id == 0;
         self.waiting = Some(room);
         self.stage_venue_theme();
+        self.waiting_local_selection_random = enters_without_song;
         self.announced_room_master_id = None;
         self.local_download_badge_armed = false;
         self.chat.clear_waiting();
@@ -3851,6 +3864,7 @@ impl ScreenGame {
         // painters read that flag for the random caption and AX badge.
         self.room_song_variant_nibble =
             u8::try_from((u32::from(music_id) >> 12) & 0xF).unwrap_or(0);
+        self.waiting_local_selection_random = false;
         if let Some(room) = self.waiting.as_mut() {
             room.music_id = music_id;
             room.difficulty = difficulty;
@@ -3865,7 +3879,8 @@ impl ScreenGame {
     /// names the same flag.
     #[must_use]
     fn waiting_random_song(&self) -> bool {
-        self.room_song_variant_nibble != 0
+        self.waiting_local_selection_random
+            || self.room_song_variant_nibble != 0
             || self
                 .waiting
                 .as_ref()
@@ -5249,6 +5264,7 @@ impl ScreenGame {
     /// Also resolves the album cover (see [`Self::resolve_song_cover`]).
     pub fn set_selected_music(&mut self, selection: SetRoomMusic) -> &mut Self {
         self.selected_music = Some(selection);
+        self.waiting_local_selection_random = false;
         self.apply_life_difficulty();
         self.resolve_song_cover();
         self
@@ -11967,6 +11983,81 @@ mod game_tests {
         );
         assert!(buf[50 * 800 + 50] != 0, "guest READY should paint");
         assert!(buf[10 * 800 + 10] == 0, "guest START should not paint");
+    }
+
+    #[test]
+    fn default_waiting_entry_inks_the_mini_question_cards() {
+        // REA pin: `FUN_004aac80` (Waiting entry, file `0xaac80`) seeds
+        // `DAT_007789dc` with `FUN_004bb2c0` when no room song stands;
+        // that helper always ORs `0x80000000`, falling back to
+        // `0x80000001`. `FUN_004ad350` therefore takes its random arm on
+        // entry and mounts the `?` mini cards. Live chain:
+        // `ScreenGame::set_joined_room` -> `paint_at` -> `paint_waiting`
+        // -> `paint_waiting_scene_with_confirm` -> `paint_waiting_staged`
+        // -> `paint_waiting_random_effect_cards`. Red on the old code:
+        // the two rects stayed empty because `captions.random` was false.
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::{Frame, Rgb555Image};
+        let mut body = AvatarFigure::default();
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C].repeat(89 * 65), 89, 65)
+                .expect("synthetic card pixels"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let placement =
+            |id: &str, sprite: Option<&str>, x: i32, y: i32, w: i32, h: i32| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code: 0,
+                sprite: sprite.map(str::to_owned),
+                rect: Rect {
+                    x,
+                    y,
+                    w: u32::try_from(w).unwrap_or(0),
+                    h: u32::try_from(h).unwrap_or(0),
+                },
+            };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                placement("IDC_IMAGE_SWAIT_COVERAVATAR1", None, 28, 53, 141, 175),
+                placement(
+                    "IDC_IMAGE_SWAIT_RANDMAP",
+                    Some("Card.ojs"),
+                    619,
+                    468,
+                    89,
+                    65,
+                ),
+                placement("IDC_IMAGE_SWAIT_EFFECT_1", None, 719, 450, 60, 48),
+                placement("IDC_IMAGE_SWAIT_EFFECT_2", None, 719, 507, 60, 48),
+            ],
+            HashMap::from([("Card.ojs".to_owned(), body)]),
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(
+            buf[460 * 800 + 740],
+            pack_xrgb(255, 0, 0),
+            "entry state inks the first ? mini card"
+        );
+        assert_eq!(
+            buf[520 * 800 + 740],
+            pack_xrgb(255, 0, 0),
+            "entry state inks the second ? mini card"
+        );
     }
 
     #[test]

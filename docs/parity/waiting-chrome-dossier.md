@@ -16,10 +16,11 @@ never from literals in the painter.
   `ev_b3755aabd025cdf0f695783ed706bffc07583d1d9a89dc36ce38a9021d0ee096`)
   is the song-change applier. It range-checks the low 16 bits of the room
   word, then branches on the variant nibble (the high 16 bits):
-  - plain song: `RANDMAP` (`0x1650004F`, control-search matches at files
-    `0xad46d`/`0xad555`) takes frame 0; it composes
-    `Wait_Effect<songid>_1.ojs` / `_2.ojs` from the strings at file
-    `0x249868` and the table at `0x2496b0`.
+  - unflagged word: `RANDMAP` (`0x1650004F`, control-search matches at
+    files `0xad46d`/`0xad555`) takes frame 0; it composes the
+    stage-numbered `Wait_Effect<1|2>_1.ojs` / `_2.ojs` from the low-word
+    parity (zero folds to 2), using the strings at file `0x249868` and
+    the table at `0x2496b0`.
   - random song: `RANDMAP` takes frame 1 and the two effect controls
     `EFFECT_1/2` (`0x16500045/46`) receive the fixed bodies
     `Wait_Effect_Rand1.ojs` / `Wait_Effect_Rand2.ojs` (strings at files
@@ -27,6 +28,22 @@ never from literals in the painter.
     codes at files `0xad75b`/`0xad795` and `0xad872`). The same function
     then sets a frame on each of those two controls and starts their
     animation.
+- Entry default (new v9 pin): `FUN_004aac80` (Waiting entry, file
+  `0xaac80`, batch dossier
+  `ev_c10cd3fa4167b8119c9df3156b5e4963987ffa251d55a0344880b4a674b194a9`)
+  calls the role setup, then when `DAT_007789dc == 0` seeds it from
+  `FUN_004bb2c0` before calling `FUN_004ad350`. `FUN_004bb2c0` (file
+  `0xbb2c0`, dossier
+  `ev_17124597c0cfc47ad96457d9127450d22f7ab63df25d149977533df277b757ed`)
+  always ORs `0x80000000` into its result and falls back to
+  `0x80000001` when no map art or slot count stands. So the exe enters
+  Waiting with a random-flagged local selection and the random arm
+  mounts all three `?` cards. An explicit `4001` word from `FUN_0055f2d0`
+  (file `0x15f2d0`, dossier
+  `ev_2ab33fe44e6867fb6059f03986273ca10e6681994c135918db635d88ff15824e`)
+  stores the id plus its lifted nibble and is the explicit end of that
+  default. v9 refutes the earlier “random-only” assumption: the exe leg
+  had zero clicks, a normal 757/2/1 room song, and still showed `?`.
 - Byte scans for the two control immediates
   (`ev_e94fdec1fd56bf4579ed1d91f01ec6f92f4132f8d7192eaad95ad9ea630c73f9`,
   `ev_4587850db441cf3f7d097a6234e9d8d0ccf8e5b7f45d42be14ad880ce836359b`)
@@ -42,10 +59,14 @@ never from literals in the painter.
   both fixed bodies are one raw RGB555 60x48 image at anchor `(0,0)`,
   colorkey `0x7D5F`, and carry the striped `?` card. The big card
   `Wait_Map_Random.ojs` (slot 1276) is a 89x65 copy of the same art.
-- Shell fix: while `WaitingCaptions.random` stands, the painter inks
-  both staged effect rects from the staged Random card body. The body
-  selection is presentation; the rects stay parsed. With no staged
-  card body, or on a plain song, both rects stay empty.
+- Shell fix: `set_joined_room` sets
+  `waiting_local_selection_random = room.music_id == 0`, mirroring the
+  exe's zero-word seed, so `captions.random` stands without a click and
+  the painter inks both staged effect rects from the staged Random card
+  body. An explicit 4001 (`set_room_music`) or staged local pick
+  (`set_selected_music`) clears that default. The body selection is
+  presentation; the rects stay parsed. With no staged card body
+  nothing is invented.
 
 ## 2. Bottom-left white chat bubble — PINNED (issue #883)
 
@@ -148,6 +169,7 @@ never from literals in the painter.
 | `random_song_inks_both_mini_cards_from_the_staged_card_body` | FAIL (`0` vs `255`) | PASS |
 | `messenger_lamps_hide_at_rest_and_ink_only_on_an_alert` | FAIL (rest rects inked) | PASS |
 | `wire_master_flag_paints_start_and_the_live_skill_arrows` | FAIL (`is_room_master` false) | PASS |
+| `default_waiting_entry_inks_the_mini_question_cards` | FAIL (`0` vs `16711680`) | PASS |
 | `handoff_master_id_wins_over_stale_member_rows` | FAIL (local `+0x30` flag won) | PASS |
 
 Logs: `~/scratch/waiting-chrome/red-random.log`, `red-lamp.log`,
