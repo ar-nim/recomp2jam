@@ -185,8 +185,12 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    explicitly UNVERIFIED. Version stamps that only look like hashes are
    labeled as stamps, not commits. Post a correction comment on the
    affected issue; do not let a stale token stand in a closed comment's
-   history (retro #309). `scripts/tracker-audit.sh` cannot enforce this
+   history (retro #309). `scripts/tracker-audit.sh` does not enforce this
    rule; the reviewer check at posting time is the enforcement point.
+   `scripts/check-cited-hashes.sh FILE` (or the same script with `-` for an
+   issue body on stdin) resolves every cited token with `git cat-file -t`
+   and prints its full 40-character object name for close tables; it exits
+   1 on stale tokens (issue #887).
 
 
 7. **Live-path reachability for player-visible closes.** Every guard named
