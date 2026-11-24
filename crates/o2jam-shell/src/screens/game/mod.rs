@@ -82,12 +82,12 @@ use super::paint::{
     paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
-    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
-    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master, waiting_map_cycle,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep,
+    WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -3606,7 +3606,7 @@ impl ScreenGame {
     pub fn is_room_master(&self) -> bool {
         self.waiting
             .as_ref()
-            .is_some_and(|room| room.member_id == self.announced_room_master_id.unwrap_or(0))
+            .is_some_and(|room| waiting_local_is_master(room, self.announced_room_master_id))
     }
 
     /// Every occupied peer seat ready: the `START 0x16202012` click
@@ -9356,9 +9356,11 @@ impl ScreenGame {
     /// nothing. The `Random` `?` cards name no per-card entries (big card
     /// on `RANDMAP 0x1650004F` → rect 78, small cards on spriteless
     /// `EFFECT_1/2` rects 68/69); `SelectMusic_Random*.ojs` bodies belong
-    /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
-    /// `paint_waiting_staged` never paints those rects (see the
-    /// `paint_waiting_music` docs and the chat/cards absence tests).
+    /// to `DAILOG_SELECTMUSIC` filter buttons. No card carries per-card
+    /// wire data: the big card paints its staged rest record, and on a
+    /// random song `paint_waiting_random_effect_cards` inks the two mini
+    /// rects from that staged body (the plain-song negative stays in
+    /// `waiting_random_cards_carry_no_card_data`).
     fn paint_waiting(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.waiting_stamp_armed && self.waiting_stamp_started_at.is_none() {
             self.waiting_stamp_started_at = Some(now_ms);
@@ -9391,7 +9393,7 @@ impl ScreenGame {
                     art,
                     &captions,
                     WaitingConfirmState::new(
-                        self.announced_room_master_id.unwrap_or(0),
+                        self.announced_room_master_id,
                         self.waiting_confirm_armed(),
                     ),
                     self.has_staged_waiting_figure(),
@@ -11968,6 +11970,111 @@ mod game_tests {
     }
 
     #[test]
+    fn wire_master_flag_paints_start_and_the_live_skill_arrows() {
+        // Statics: the exe's START/READY face and the six skill arrows
+        // read the local seat's master word (`0x77cd30`, writer
+        // `FUN_005400b0`, file `0x1400b0`; setup `FUN_004ae350`, file
+        // `0xe38e`, and `FUN_004b4a00`, file `0xb4a00`). The 3003
+        // snapshot carries that word as `RoomMember.master`. Before
+        // the fix a master on seat 1 fell back to seat 0 and painted
+        // READY plus the disabled gray skill covers (#884).
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::{Frame, Rgb555Image};
+        let figure = |word: [u8; 2]| {
+            let mut body = AvatarFigure::default();
+            body.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            body
+        };
+        let mut room = waiting_room();
+        room.member_id = 1;
+        room.slots = vec![RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(RoomMember {
+                master: true,
+                ..waiting_room().slots[0].member.clone().unwrap()
+            }),
+        }];
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let placement = |id: &str, sprite: &str, x: i32, y: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect { x, y, w: 4, h: 4 },
+        };
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                placement("IDC_BUTTON_SWAIT_START", "Start.ojs", 10, 10),
+                placement("IDC_BUTTON_SWAIT_READY", "Ready.ojs", 50, 50),
+                placement("IDC_BUTTON_SWAIT_1SKILLLEFT", "Arrow.ojs", 90, 90),
+                placement("IDC_IMAGE_SWAIT_COVERSKILLLEFT", "Cover.ojs", 130, 130),
+            ],
+            HashMap::from([
+                ("Start.ojs".to_owned(), figure([0x00, 0x7C])),
+                ("Ready.ojs".to_owned(), figure([0x1F, 0x00])),
+                ("Arrow.ojs".to_owned(), figure([0x00, 0x7C])),
+                ("Cover.ojs".to_owned(), figure([0x1F, 0x00])),
+            ]),
+        );
+        assert!(game.is_room_master(), "the wire master word wins");
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_ne!(buf[10 * 800 + 10], 0, "a master paints START");
+        assert_eq!(buf[50 * 800 + 50], 0, "a master hides READY");
+        assert_ne!(buf[90 * 800 + 90], 0, "the enabled arrow body paints");
+        assert_eq!(buf[130 * 800 + 130], 0, "the gray cover stays hidden");
+    }
+
+    #[test]
+    fn handoff_master_id_wins_over_stale_member_rows() {
+        // Live chain: `OnlineSession::apply_user_left` ->
+        // `ScreenGame::promote_waiting_master` -> `is_room_master` ->
+        // `paint_waiting_scene_with_confirm` (START/READY, skill arrows).
+        // A 3007 handoff names seat 1; if an older 3003 snapshot is
+        // folded back in, the old seat-0 master flag must not win.
+        let mut room = waiting_room();
+        let peer = room.slots[0].member.clone().expect("staged member");
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        assert!(
+            game.is_room_master(),
+            "seat 0 owns the room before the handoff"
+        );
+        game.promote_waiting_master(1);
+        game.waiting.as_mut().expect("joined room").slots[0]
+            .member
+            .as_mut()
+            .expect("stale seat")
+            .master = true;
+        assert!(
+            !game.is_room_master(),
+            "the announced master id beats the stale row flag"
+        );
+    }
+
+    #[test]
     fn click_staged_back_returns_to_rooms() {
         let mut game = waiting_game_with_button(
             "IDC_BUTTON_SWAIT_BACK",
@@ -12017,7 +12124,10 @@ mod game_tests {
         room.member_id = member_id;
         // The local seat is the joined member, marked ready: the word
         // the READY face follows (self ready byte `0x77cd32`).
-        let local = room.slots[0].member.clone().expect("staged member");
+        let mut local = room.slots[0].member.clone().expect("staged member");
+        if member_id != 0 {
+            local.master = false;
+        }
         room.slots = (0..=member_id)
             .map(|index| RoomSlot {
                 index,

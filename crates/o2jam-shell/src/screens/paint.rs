@@ -78,8 +78,8 @@ use o2jam_net::{
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
-    blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
-    text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
+    blit_rgb555, blit_rgb555_scaled, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
+    scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -4612,7 +4612,9 @@ pub use self::room::{
     paint_room_scene, paint_room_scene_with_hover, paint_room_user_panel, ROOM_HOVER_SPRITE,
     ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE, ROOM_PASSWORD_SPRITE, ROOM_STATE_SPRITE,
 };
-pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
+pub(crate) use self::waiting::{
+    paint_waiting_members, waiting_bnd_origin, waiting_local_is_master,
+};
 pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
@@ -13151,10 +13153,11 @@ mod paint_tests {
 
     #[test]
     fn waiting_random_cards_carry_no_card_data() {
-        // The `?` cards name no per-card data: the big card sits on
-        // `RANDMAP` (rect 78 `(619,468,708,533)`) and the small cards on
-        // the spriteless `EFFECT_1/2` rects (68/69) — caption and frames
-        // baked into the staged backdrop, no wire field behind them.
+        // The `?` cards name no per-card wire data: the big card sits
+        // on `RANDMAP` (rect 78 `(619,468,708,533)`) and the small cards
+        // on the spriteless `EFFECT_1/2` rects (68/69). A plain song
+        // must still leave both mini rects empty — the random-song
+        // mount is guarded separately by the next test.
         let placements = vec![
             waiting_probe("IDC_IMAGE_SWAIT_RANDMAP", None, (619, 468, 708, 533)),
             waiting_probe("IDC_IMAGE_SWAIT_EFFECT_1", None, (719, 450, 779, 498)),
@@ -13172,6 +13175,121 @@ mod paint_tests {
             &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn random_song_inks_both_mini_cards_from_the_staged_card_body() {
+        // Statics: a random song mounts `Wait_Effect_Rand1/2.ojs` onto
+        // EFFECT_1/2 (`FUN_004ad350`, file `0xad350`); the shipped body
+        // is a 60x48 `?` card. Our staged Waiting block has no sprite
+        // for those two controls, so the painter inks the pinned rects
+        // from the staged Random card body instead (#883/#884). Red:
+        // before the fix both rects stay empty.
+        let art = SceneArt {
+            placements: vec![
+                waiting_probe(
+                    "IDC_IMAGE_SWAIT_RANDMAP",
+                    Some("RandomProbe.ojs"),
+                    (619, 468, 708, 533),
+                ),
+                waiting_probe("IDC_IMAGE_SWAIT_EFFECT_1", None, (719, 450, 779, 498)),
+                waiting_probe("IDC_IMAGE_SWAIT_EFFECT_2", None, (719, 507, 779, 555)),
+            ],
+            figures: HashMap::from([(
+                "RandomProbe.ojs".to_owned(),
+                solid_figure(89, 65, [0x00, 0x7C]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &art,
+            &WaitingCaptions {
+                random: true,
+                ..WaitingCaptions::default()
+            },
+        );
+        assert_eq!(
+            buf[460 * 800 + 740],
+            pack_xrgb(255, 0, 0),
+            "the first mini card shows the staged ? body"
+        );
+        assert_eq!(
+            buf[520 * 800 + 740],
+            pack_xrgb(255, 0, 0),
+            "the second mini card shows the staged ? body"
+        );
+    }
+
+    #[test]
+    fn messenger_lamps_hide_at_rest_and_ink_only_on_an_alert() {
+        // Statics: `FUN_004c0690(0)` stops the two lamp animations
+        // (`FUN_0042f4f0`, file `0x2f4f0`) and never paints a rest
+        // record; the quiesced pair shows only the purple MESSENGER
+        // body, no white popup. Red: the old toggle-group painted a
+        // chat bubble for both lamps while unlit.
+        let mut first = waiting_probe(
+            "IDC_IMAGE_SWAIT_MESSENGER_ALRAM",
+            Some("LampProbe.ojs"),
+            (668, 569, 708, 593),
+        );
+        first.code = 0x1650_006B;
+        let mut second = waiting_probe(
+            "IDC_IMAGE_SWAIT_MESSENGER_ALRAM1",
+            Some("LampProbe.ojs"),
+            (657, 545, 691, 574),
+        );
+        second.code = 0x1650_006C;
+        let art = SceneArt {
+            placements: vec![first, second],
+            figures: HashMap::from([(
+                "LampProbe.ojs".to_owned(),
+                solid_figure(40, 24, [0x00, 0x7C]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        paint_waiting_staged(
+            &mut frame,
+            &champion_room(),
+            &art,
+            &WaitingCaptions {
+                messenger_lamp_lit: false,
+                ..WaitingCaptions::default()
+            },
+        );
+        assert!(
+            frame.buf.iter().all(|pixel| *pixel == 0),
+            "both lamps stay hidden without an alert"
+        );
+        paint_waiting_staged(
+            &mut frame,
+            &champion_room(),
+            &art,
+            &WaitingCaptions {
+                messenger_lamp_lit: true,
+                ..WaitingCaptions::default()
+            },
+        );
+        assert_eq!(
+            frame.buf[575 * 800 + 675],
+            pack_xrgb(255, 0, 0),
+            "an alert inks the first lamp"
+        );
+        assert_eq!(
+            frame.buf[550 * 800 + 665],
+            pack_xrgb(255, 0, 0),
+            "an alert inks the popup lamp"
+        );
     }
 
     #[test]
