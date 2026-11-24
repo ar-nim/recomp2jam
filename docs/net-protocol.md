@@ -244,7 +244,7 @@ at the in-test gateway, and decodes the answer with the production codec.
 Event-only flows and player-visible UI legs stay on their existing guards
 (`rank_update_traces_the_eight_place_bytes_from_the_gateway`,
 `shop_buy_round_trips_through_scripted_gateway`,
-`myroom_gift_list_fetch_round_trips_through_scripted_gateway`); they are
+`myroom_gift_claim_round_trips_and_lands_in_bag_through_scripted_gateway`); they are
 not duplicated here.
 
 | Flow | C→S | S→C | Answer codec |
