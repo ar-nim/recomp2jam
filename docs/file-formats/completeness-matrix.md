@@ -2,9 +2,16 @@
 
 Version pin for every row: `AngelO2Jam.exe`/`OTwo.exe` 5,029,888 B,
 SHA-256 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`;
-`Interface1.opi` 75,100,702 B (`d6654119…bdd50584`), `Playing1.opi`
-221,737,026 B (`8c1c7566…aed9eed40`), `avatar.opa` 144,761,749 B
-(`ced3ed1e…2953b16`), `OJNList.dat` 215,848 B (`3be8ca00…`). Tools:
+`Interface1.opi` 75,100,702 B
+(`d66541198965d622ff0177b306d916885ae4d64ae07b2c2264fcbdd850d50584`),
+`Playing1.opi` 221,737,026 B
+(`8c1c7566dc857f2bf0f5f58a5d581e2b2576f4f8a83fa551b31666aed9eed408`),
+`avatar.opa` 144,761,749 B
+(`ced3ed1e82aaf7136003a7dd7ff94ee1395b95d38035589275c2959534b29c16`),
+`OJNList.dat` 215,848 B
+(`3be8ca0063710d53bdb013a1154d09cbde7c5beb9aa38b0658d52f75a61a07fc`).
+Hashes re-verified with `sha256sum` against the read-only
+`install-root/O2Jam/Image/` files. Tools:
 Python 3.14 byte walks, GNU objdump 2.47, Ghidra 12.x REA evidence where
 named. File offset = VA − `0x400000`. No original bytes or decompiled text
 are reproduced.
@@ -293,6 +300,10 @@ pinned header field; fields without a consumer are marked accordingly.
   the `.oja` fixed-plane reading (refuted by compacted bodies), the `xTd`
   code reading (refuted by the pointer decode), and the patched-song reader
   (dead data) remain named in the sibling docs.
+- Correction record: the earlier abbreviated suffixes for `avatar.opa`,
+  `Interface1.opi` and `Playing1.opi` were wrong; the full hashes above are
+  the `sha256sum` result. `docs/file-formats/opi.md` remains owned by
+  another lane and is not edited here.
 - Claim IDs are stable; evidence IDs depend on the pinned SHA-256 above.
   An unpinned field can be closed only by a new byte walk or stopped-state
   read recorded in the relevant sibling doc, then linked here.
