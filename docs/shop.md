@@ -788,3 +788,57 @@ re-pair (`~/scratch/review-shop-price-row/score-price-row.log`) moves
 region x 214–760, y 240–272 from structural 0.7943 to **0.8455**
 (raw 0.8206). Pixel fidelity of the glyph shape stays OPEN; next
 evidence step is a staged-font seam for an exact sprite match.
+
+## #877 — bottom-right preview-figure statics pin (close-out lane, 2026-11-26)
+
+Naming correction (`#877` triage said "preview"): the bottom-right
+figure is the shop master mascot, not a try-on preview; try-on uses
+the separate upper-left avatar pane.
+
+Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a04541…c823b`; Ghidra 12.2 / REA 6.10.1; file offsets are
+VA − `0x400000`. Oracle: v3 quiesced entry frame
+`~/scratch/paired-shots-v3/states/itemshop-entry/exe.png` (the figure
+is visibly present on entry, so this is not a post-click-only state).
+
+**Host is the shop-master image, not the try-on avatar.**
+`ControlList_Interface.txt` names `IDC_IMAGE_SSHOP_SHOPMASTER` at code
+`0x14600053` (art-less) and `IDC_IMAGE_SSHOP_AVATAR` at `0x14700034`
+(art-less). `State_ItemShop.bnd` (slot 1463, data offset `65475546`,
+186 rects, code-ordinal pairing) gives `0x14600053` rect
+`(600,445)-(798,566)` (198×121) — the bottom-right cluster — while
+`0x14700034` is `(35,79)-(158,229)`, the upper-left doll pane.
+The dotted field is the empty state of the art-less shop-master
+image control; it does not mean a figure was staged and lost.
+
+State open `FUN_004984d0` (file `0x984d0`, REA `ev_09f3512fd86e…98`)
+calls `FUN_0048c8c0(0x14700034, scratch)` at file `0x8630`–`0x8642`
+(REA `ev_12bf9ba37138…487`: ordinal-indexed control table,
+`-0x5A/-0x3C` child offsets), then loads the four runtime font bodies
+and calls `FUN_0049ffe0` at file `0x4987c9`. `FUN_0049ffe0` (REA
+batch `ev_8f449bcdcdff…8494`) decodes 36 `Shop_master_*` bodies into
+state arrays `+0x2340`/`+0x2344` (main, close-eye, say per variant)
+and activates the entry category tab. Click arms on the same host
+control are in `FUN_00499760` (file `0x4998b3`, REA
+`ev_cb2962539363…383a`: sound slots `0x28+`, flag `+0x2354`) and
+`FUN_00498bc0` (file `0x498c3a`, REA `ev_d0c41e4412c2…3f4`: cycles
+`DAT_0067e018` and arms `+0x2354`). Direct code-constant scans:
+`ev_087eb38c5526…aa` (`0x14700034`) and `ev_59b128821669…b97`
+(`0x14600053`). Try-on writes the *other* pane: `ITEMPRE`/`ITEMBACK`
+call `FUN_0052b480(state+0x65)` only when control `0x14700034` is
+staged (`ev_cb2962539363…383a`). No evidence dresses the shop master
+with a good: the entry figure is the site mascot, not a try-on result.
+
+**Which figure.** `Shop_Master_main.ojs` in `Interface1.opi`
+(75,100,702 B, SHA-256 `d6654119…d50584`; slot body at archive offset
+`31568066`, size `30388`, colorkey `0x7d5f`) has one 132×115 frame with
+anchor `(654,446)`. Blitting its non-key pixels at that anchor onto
+the v3 exe frame matches 7599/7599 ink pixels (mean squared RGB
+rounding error 3.6). The blink and speech overlays are separate
+bodies (`Shop_Master_CloseEye.ojs` anchor `(716,469)` 32×16;
+`Shop_Master_Say.ojs` frames at `(724,488)`/`(724,487)` 16×9); the
+entry frame shows only the main body. Planet/event variants exist in
+the same 36-body array; the v3 frame shows the default main variant.
+Archive offsets and sprite pixels are local file facts, not REA IDs.
+Scratch proof: `~/scratch/shop-preview-pin/` (`Shop_Master_main.png`,
+`exe-br-crop.png`).
