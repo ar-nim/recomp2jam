@@ -150,7 +150,7 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | Avi (logo splash) | 8 | 0 — play once | `CStateAvi::v4` `0x4F5730` |
 | Planet / channel | 9 | 1 — loop | `CStatePlanet::v4` `0x48DD10` |
 | Room | 3 | loop | |
-| Payment / Payment2 | 3 | loop | |
+| Payment / Payment2 | 3 | loop | exe calls at files `0xF3622` (`CStatePayment`) and `0xF47D5` (`CStatePayment2`), each pushing `(3, 1)` (REA `ev_253910337fd05717afa792b478774a28238a67c78ccb7be96939fdeb56234196` / `ev_ece2f2f0c79d9624e7fa50610dc33411bdf4c12c922c90f2f2c7d6d86f405ec6`; push bytes `ev_2cf158a9df537c4d08490035a6644e1bfb6c9b27cf1dfeeb3f835b5f453644bc` / `ev_9f0db4e70ce8d3fa96eb18eedc1c857ed97897460655d89e84040e1cba53ba4f`) |
 | Shop | 4 | loop | |
 | Myroom | 5 | loop | |
 | Waiting | 6 | loop | |
@@ -165,7 +165,14 @@ layers implemented; **DOC** = documented/pinned only, no code;
   decomp2jam's `CStatePlanet.cpp` documents only the bar mount into
   `+0x8C` (already pinned on our side). Next evidence step: trace the
   caller chain that mounts the `0x12` Channel block on `parent+0xF6C`
-  when the phase flag at `parent+0xF64` flips to 1.
+  when the phase flag at `parent+0xF64` flips to 1. Refined by
+  `docs/overnight-evidence/e1-channel-dialog-trigger.md`: the emblem
+  handler selects a channel family and emits effect id 1, while the
+  phase flag has only a constructor clear and a 500-tick pump toggle.
+  The dialog stage virtual (`0x474110`) and stager (`0x432510`) have no
+  resolved `0x551820`/`0x551870` call. Inventory item OPEN-10 in
+  `docs/audio-cue-inventory.md` keeps the separate re-cue OPEN with a
+  stopped-state watch + Wine audio step; Planet/Channel share record 9.
 
 ## Cue-map coverage (2026-11-21, #307)
 
@@ -211,6 +218,13 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   base 0) maps slots `1/2/5/9/0x23` to entries `2/3/6/10/36`;
   slots `>= 0x34` and blank entries never sound. The correction to the
   old "field never read" note is committed in `docs/file-formats/ojm.md`.
+  Name correction (#907): caller `0x54ebe0` resets the fetch counter at
+  `+0x15c` to zero (`ev_525f3560811138ff9588c2afa769e2d7a1bef671ea7fb2228f1d4ab4375a6531`)
+  before `0x54eca0` copies and increments it
+  (`ev_2a873a12408328105111740b73af0e85776d1c8a9ee6e6dc388994c30e9f14ac`).
+  Slots `1/2/5/6` therefore name mode-2 indices `1/2/5/6` (`02/03/06/07`),
+  not `01/02/05/06` as the scratch name column says; the slot→entry numbers
+  above stay correct. Full inventory: `docs/audio-cue-inventory.md`.
   Guards: `boot_bank_table_names_all_seven_exe_archives`,
   `pinned_effects_round_trip_through_their_cache_slots`,
   `pinned_ui_effect_ids_name_the_exe_handler_cues`,
