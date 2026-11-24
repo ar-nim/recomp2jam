@@ -243,3 +243,43 @@ exact panel-gradient source stays OPEN; next step is one qualified
 rest/press A/B pack that names the panel's alpha or frame-selection
 rule. Panel animation frames and 3K R Shift/Enter slot order remain
 OPEN as above.
+
+## v5 capture-phase pin and residual (2026-11-24, #845)
+
+The v5 sweep's 0.6669 options-key pair was a **capture artifact**, not a
+dialog regression. Its three rust shots are byte-identical
+(`e12d53d2…`): the wave sent no wake clicks, and after c92672f moved the
+promo *timer* to `planet_board_mounted()`, `GameLoop::idle_repaint_interval`
+still gated the wakeup on `bare_planet_board()`. An open modal therefore
+accumulated carousel time without a repaint and froze the banner at its
+open-time phase. Both gates now use `planet_board_mounted()` on Planet and
+Channel; the quit-sheet guard was corrected with the shared-state
+inference (no quit-specific A/B pack exists). Red proof:
+`promo_heartbeat_pulses_behind_a_planet_options_modal` failed with
+`left: None, right: Some(1s)` before the change.
+
+Fresh quiesced rust leg (build `cb27112b…`, v3 exe frame reused, no wake
+clicks, hidden parked pointer, owned null sink): six shots at 3 s
+gave structural 0.98946 / 0.89171 / 0.66687, repeating — the banner now
+advances behind the open sheet with no input, and shot 2 is the old frozen
+frame. The matched shot re-pairs at raw 0.9848, structural (sigma=2)
+**0.9895**: 0.0005 short of the 0.99 gate. Pair and diff strips:
+`~/scratch/impl-845/final-pairs/options-key/` and
+`~/scratch/impl-845/diff-strips/`.
+
+Panel ramp source is now pinned by statics + the paired frame, with no
+painter change. `Dialog_Option_Key.ojs` bakes one dark red ramp across the
+whole note area; `OptionKey_3Keydown.ojs` stages three column records at
+anchors `(87,166)`, `(144,166)`, `(198,166)` from dialog origin `(217,42)`
+and adds the bright bars and pad bodies. The v3 exe row at screen y=300
+reads 0x21 in all three columns — the sheet ramp (0x20, allowing Wine's
+tone drift) — while the staged panel word there expands to 0x5A. Two
+candidate fixes were measured and refuted: withholding the panel body at
+rest scores 0.9734 (the sheet's displaced baked bars show through), and
+keying out its dark ramp words scores 0.9823 (same unmasking). Both legs
+are in `~/scratch/impl-845/repair/legs/options-key/`.
+
+OPEN: the exe rule that selects sheet ramp under staged bars/pads
+(colorkey range, blend, or z-order for control `0x25500013` — one REA pass
+on the image-control blit plus a rest/press A/B pack). The 0.0005 residual
+is *not* claimed as a pass.
