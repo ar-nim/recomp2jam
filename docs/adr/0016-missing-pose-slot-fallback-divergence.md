@@ -27,7 +27,7 @@ Ghidra 12.2 evidence IDs:
 and
 `ev_407fcd2991e5ff7c2d30e1b024f09eb661a6a5a9c044219c136bf8790c521fab`.
 Oracle: `OTwo.exe`, 5,029,888 B, SHA-256
-`83a04541b8219ba340681766b33de2bfbb5ff51b813ef4d2e9dd1def72c823b`.
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`.
 
 A parity patch was tried first, TDD style: three new guards failed on the
 old picker, then passed after the picker read only the exact pose and
