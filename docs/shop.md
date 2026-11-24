@@ -676,9 +676,10 @@ destination. `FUN_00529230` writes **no scale factor** for the figure;
 the brief's "fit/scale" premise is not supported by the exe.
 
 Pixel pin: against `060ab2af…de680`, slot-2 pose frame 21 matches
-1:1 (no stretch) at native sizes, with all four image bottoms on
-y=234. Parent origins come from `State_ItemShop.bnd` code-ordinal
-rects; offsets are parent → image top-left:
+1:1 (no stretch) at native sizes. Sprite last-ink rows are
+233/233/233/234; exclusive bottoms are 234/234/234/235. Parent
+origins come from `State_ItemShop.bnd` code-ordinal rects; offsets are
+parent → image top-left:
 
 | Card | Parent | Sprite / native size | Image origin | Offset | Old → new colour loss |
 |---|---|---|---|---|---|
@@ -699,6 +700,12 @@ no new scale is invented. Guards: the synthetic
 `featured_card_figures_land_on_the_pinned_exe_baseline_for_each_parent`
 (install-root-free; red before the fix) plus the archive-backed
 `featured_card_blits_the_full_body_sprite_at_the_exe_native_box`.
+Interim post-fix evidence (reviewer):
+`~/scratch/review-shop-figure/postfix-featured.png` paints the four
+figures at the claimed origins with mean squared 5-bit RGB loss
+0.37/0.35/0.42/0.37 (~0.4 each). That is not the live proof. The
+post-fix v6 quiesced re-pair rerun, owned by the controller after
+merge, is the live proof; this lane does not claim it.
 OPEN: no literal per-card offset exists in the exe; the baseline is
 pinned by pixel alignment on a 7.55 frame. Next evidence step: one
 winedbg stopped-state read of the four image-control rects. Cart-frame

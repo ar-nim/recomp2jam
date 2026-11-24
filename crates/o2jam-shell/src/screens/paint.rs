@@ -1679,9 +1679,10 @@ pub fn paint_shop_item_icons(
 
 /// Native blit offsets from each `SETITEM_EX` parent origin to the
 /// pose frame's image top-left. Pinned against the v6 7.55 entry
-/// frame: the four slot-2 bodies draw 1:1 with their bottoms on
-/// y=234 — image origins (212,66), (380,66), (522,87), (669,94) —
-/// not stretched into the card's `SET_AVATAR` cell. Geometry still
+/// frame: the four slot-2 bodies draw 1:1. Their last-ink rows are
+/// 233/233/233/234 and exclusive bottoms 234/234/234/235; image
+/// origins are (212,66), (380,66), (522,87), (669,94) — not stretched
+/// into the card's `SET_AVATAR` cell. Geometry still
 /// starts from staged parent rects, never literals in the painter
 /// (owner pin f38f3).
 const SHOP_FEATURED_FIGURE_BLIT_OFFSETS: [(i32, i32); 4] = [(-1, 4), (26, 4), (27, 25), (33, 32)];
@@ -4729,11 +4730,12 @@ mod paint_tests {
 
     #[test]
     fn featured_card_figures_land_on_the_pinned_exe_baseline_for_each_parent() {
-        // Live caller chain: `paint_side` -> `paint_shop_featured_icons`
-        // -> this blit. Oracle: the 7.55 entry frame
-        // `060ab2af…de680` matches each full-body sprite
-        // at native size with image bottoms on y=234. The four image
-        // origins are (212,66), (380,66), (522,87), (669,94).
+        // Live caller chain: `write_shots` -> `shoot_side_native` ->
+        // `paint_at` -> `paint_side` -> `paint_shop_featured_icons`.
+        // Oracle: the 7.55 entry frame `060ab2af…de680` matches each
+        // full-body sprite at native size; last-ink rows are
+        // 233/233/233/234 (exclusive bottoms 234/234/234/235). The
+        // image origins are (212,66), (380,66), (522,87), (669,94).
         let figure = featured_figure_probe();
         let figures: std::collections::HashMap<u32, AvatarFigure> =
             (1..=4).map(|id| (id, figure.clone())).collect();
@@ -4779,9 +4781,13 @@ mod paint_tests {
 
     #[test]
     fn featured_card_blits_the_full_body_sprite_at_the_exe_native_box() {
-        // Live caller chain: `paint_side` -> `paint_shop_featured_icons`
-        // -> this blit. The seam uses the installed sprite and a staged
-        // parent rect; the paired re-shot is the live proof.
+        // Live caller chain: `write_shots` -> `shoot_side_native` ->
+        // `paint_at` -> `paint_side` -> `paint_shop_featured_icons`.
+        // The seam uses the installed sprite and a staged parent rect.
+        // Interim post-fix evidence: the reviewer frame
+        // `~/scratch/review-shop-figure/postfix-featured.png` (loss
+        // 0.4 at each claimed origin). The live proof is the post-fix
+        // v6 re-pair rerun after merge, not the pre-fix wave.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
         let Some(source) = crate::avatar_source::read_installed_avatar(&root) else {
             println!("skip: missing install-root avatar archive");
