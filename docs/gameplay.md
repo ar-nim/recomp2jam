@@ -940,3 +940,40 @@ local paint/scroll/bookkeeping and report nothing to the network.
 Modeled in `o2jam-game::rating_sink` (codes 1/9/14 with outcomes;
 all other codes silent) with guard
 `paint_timing_and_nop_codes_report_nothing`.
+
+## E-864 chart replay (#653) — DATA-derived plan, tap-only
+
+Pack `s8` (input sha256 `951e0787…cbddc886`, cited in
+`docs/captures/journey-audit/293-playing-story-matrix.md`) pressed a
+40-event timeline from song 757's level 1 while the room played song
+864. Its COOL/GOOD/BAD/MISS tallies are therefore incidental, not
+chart parity. The replacement plan reads the installed chart itself:
+`o2ma864.ojn`, 299413 B, sha256
+`d86b21184fdc5fa194b51cbcee796df40d790bde7c836c29f91c7dd6fc30a11b`;
+header `song_id=864`, BPM 125, level 1 playable count
+554 at header `+44` (total 2381 at `+32`), slice bytes 28392..61020.
+`build_level_chart` + `ChartReplay::new` turn that slice into 554
+key-downs; onsets run 2400..90240 ms, 403 distinct times, all on a
+120 ms grid. Evidence class: DATA (`o2jam-file` parser over shipped
+bytes), not an exe consumer trace.
+
+`ChartReplay` emits taps only: per-note hold/expression flags stay
+opaque in `build_level_chart`, and shell key-up routing to the tail
+judge is OPEN (#625). A hold-aware replay needs that seam before it
+can claim tail parity.
+
+Guard `e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path`
+(`crates/o2jam-shell/tests/e864_chart_replay.rs`) loads the parsed
+chart into the client, then sends each planned press through the
+portable input seam `GameLoop::ingest_snapshot` →
+`ScreenGame::lane_key` → `strike_at` → `LivePlay::strike_lane` under
+a fixed song clock. It skips cleanly when `install-root` is absent.
+
+Seam suffices — behavior defined entirely by a seam contract
+(ADR-0013, `docs/adr/0013-per-frame-pulled-input-state.md`): the window
+freezes one `InputSnapshot` per frame and feeds `ingest_snapshot`, and
+the ADR consequence explicitly lets scenario tests construct snapshots.
+This guard constructs `ScreenGame` directly; it does not claim a live
+chain. Production enters through `OnlineSession::ingest_snapshot`
+(`crates/recomp2jam/src/session.rs:4261`); driving that entry, OS-level
+key injection, and an E-864 Wine capture remain OPEN (tier 4).
