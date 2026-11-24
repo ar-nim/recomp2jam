@@ -2980,6 +2980,9 @@ mod notice_tests {
 
     #[test]
     fn announcement_decodes_live_capture() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2016 —
+        // dispatch base `0x1582ec`, case `0x1584df`, handler VA
+        // `0x55c0a0` (file `0x15c0a0`), one NUL-terminated string.
         // Live bytes 2026-11-08 via the relay.md §12 proxy method
         // (127.0.0.1:15011 -> 15010, local Memoryer Full-mode):
         // C->S 2015 `LIVE-PROBE-2016 hello` echoed as S->C 2016 with the
@@ -3016,6 +3019,9 @@ mod notice_tests {
 
     #[test]
     fn rank_notification_matches_wire_order() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2029 — case
+        // `0x158556`, handler VA `0x55b4d0` (file `0x15b4d0`), invalid
+        // gate `0x15b527`; field order is Memoryer corroboration.
         // invalid i32, music id i32, nickname string, ranking i32.
         let message = RankNotification {
             invalid: false,
@@ -3286,7 +3292,9 @@ mod notice_tests {
 
     #[test]
     fn score_list_answer_pins_easy_normal_hard_byte_order() {
-        // seam: pure codec. Claim D22 (`docs/claims/50-net.md:26`):
+        // seam: pure codec. Named decoder #898: `docs/net-protocol.md`
+        // §4c 2031 handler VA `0x55b590` (file `0x15b590`), row read
+        // `0x15b5fa`. Claim D22 (`docs/claims/50-net.md:26`):
         // scan files `0x40d5b`–`0x40f4f`, chooser cache `0x7797c4`.
         // Byte 2 Easy, 3 Normal, 4 Hard; byte 5 is RX (no exe reader).
         // Decode a row whose four rank bytes are all distinct, then
@@ -3435,6 +3443,8 @@ mod notice_tests {
 
     #[test]
     fn user_joined_waiting_decodes_the_captured_wire_body() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 3004 event
+        // `0x0BBC`; the 103-byte captured body pins the field order.
         let body = hex_bytes(concat!(
             "017465737465723200010000000172020000010000100000001e000000780100007f0100",
             "008501000000000000000000000000000000000000000000000000000023000000000000",
@@ -3481,6 +3491,8 @@ mod notice_tests {
 
     #[test]
     fn user_left_waiting_decodes_the_captured_wire_body() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 3007 event
+        // `0x0BBF`; the eight-byte captured body pins the field order.
         let event = UserLeftWaiting::decode_body(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap();
         assert_eq!(
             event,

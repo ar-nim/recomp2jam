@@ -1683,6 +1683,9 @@ mod song_sync_tests {
 
     #[test]
     fn score_submission_round_trips_member_byte() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 4017 —
+        // handler file `0x15fba0`, one-byte read `0x15fbad`, case
+        // `0x1586cc`; the member byte is the whole body.
         let submitted = ScoreSubmission { member_id: 2 };
         assert_eq!(submitted.encode_body(), vec![0x02]);
         let frame = decode_frame(&submitted.encode()).unwrap();
@@ -1739,7 +1742,9 @@ mod song_sync_tests {
 
     #[test]
     fn score_completed_decodes_live_capture() {
-        // Solo submit against the local Memoryer Full-mode gateway:
+        // Named decoder #898: `docs/net-protocol.md` §4c 4018 —
+        // handler file `0x15fbe0`, count read `0x15fc28`, row reader
+        // `0x1411a0`. Solo submit against the local Memoryer gateway:
         // count 1, master 0, one full row echoing the 4016 tally
         // (10/20/5/3, combo 100, jam 9, 123456, life survived) plus
         // server rewards and post-game levels.
@@ -1904,6 +1909,9 @@ mod song_sync_tests {
 
     #[test]
     fn game_rank_update_round_trips_leader_places() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 4040 —
+        // handler file `0x159a60`, eight place reads from `0x159a82`,
+        // slot writer `0x1414ad` at `+0x217d`.
         let ranks = GameRankUpdate {
             member_ranks: [1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
         };
@@ -2026,6 +2034,9 @@ mod song_sync_tests {
 
     #[test]
     fn room_arena_echo_encodes_plain_stage() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 4002/4003 —
+        // handler VA `0x55f3c0` (file `0x15f3c0`), size-4 read push
+        // `0x15f3c3`, dispatch case `0x158655`; no member slot.
         let echo = RoomArenaEcho::new(7);
         assert_eq!(echo.encode_body(), vec![0x07, 0x00, 0x00, 0x00]);
         let frame = decode_frame(&echo.encode()).unwrap();
@@ -2594,6 +2605,9 @@ mod song_sync_tests {
 
     #[test]
     fn room_team_changed_round_trips_slot_and_key() {
+        // Named decoder #898: handler file `0x15f470` (repeated in the
+        // `RoomTeamChanged` type doc), slot/key reads then UI forward
+        // `0x478d50`; the doc list in §4e pins this anchor.
         let changed = RoomTeamChanged {
             slot: 2,
             member_key: -7,
@@ -2633,6 +2647,9 @@ mod song_sync_tests {
 
     #[test]
     fn member_ready_state_changed_encodes_member_then_flag() {
+        // Named decoder #898: handler file `0x15f5b0`, seat store
+        // `0x140d77`, START gate `0xb5560` (repeated in the type doc
+        // and the §4e list); two one-byte reads.
         let ready = MemberReadyStateChanged {
             member_id: 1,
             ready: true,

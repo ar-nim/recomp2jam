@@ -1588,6 +1588,9 @@ mod tests {
 
     #[test]
     fn channel_list_decodes_count_prefixed_rows() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 1003 —
+        // dispatcher file `0x1583f1`, handler VA `0x559ff0`
+        // (file `0x159ff0`); count then 13-byte rows, no active skip.
         let list = ChannelList::decode_body(&synthetic_channel_list_body()).unwrap();
         assert_eq!(list.channels.len(), 2);
         assert_eq!(
@@ -1828,6 +1831,7 @@ mod tests {
 
     #[test]
     fn room_removed_decodes_the_live_disband_broadcast() {
+        // Named decoder #898: `docs/net-protocol.md` §4b opcode `0x07D7`.
         // ~/scratch/p380-wire-probe.log: opcode 2007 (0x07D7), body
         // `00000000` for room number 0, sent to both room members.
         let frame = decode_frame(&[8, 0, 0xD7, 0x07, 0, 0, 0, 0]).unwrap();
@@ -1853,6 +1857,8 @@ mod tests {
 
     #[test]
     fn room_created_decodes_the_live_twenty_one_byte_broadcast() {
+        // Named decoder #898: `docs/net-protocol.md` §4b opcode `0x07D5`
+        // and its 21-byte push; the peer stages the row from this event.
         let body = hex_body("0000000050333736524f4f4d000000000163000000");
         let event = RoomCreated::decode_body(&body).unwrap();
         assert_eq!(event.number, 0);
