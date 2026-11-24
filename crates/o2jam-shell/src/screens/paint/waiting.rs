@@ -519,6 +519,31 @@ impl WaitingConfirmState {
     }
 }
 
+/// The exe's local master word (`0x77cd30`) selects START, the enabled
+/// skill arrows and the master seat emblem; the guest arm selects
+/// READY and the gray covers (`FUN_004ae350`, file `0xe38e`;
+/// `FUN_004b4a00`, file `0xb4a00`; `FUN_004b4d30`, file `0xb4d30`).
+/// A joined-room snapshot carries that word as the local seat's
+/// `RoomMember.master`; a 3007 promotion names the announced seat.
+/// When no seat claims master and no handoff stands, keep the seat-0
+/// default for rooms staged without member rows.
+#[must_use]
+pub(crate) fn waiting_local_is_master(room: &JoinedRoom, announced_seat_id: Option<u8>) -> bool {
+    let announced = announced_seat_id.unwrap_or(0);
+    let master_claimed = room
+        .slots
+        .iter()
+        .any(|slot| slot.member.as_ref().is_some_and(|member| member.master));
+    if !master_claimed && announced_seat_id.is_none() {
+        return room.member_id == announced;
+    }
+    room.slots
+        .iter()
+        .find(|slot| slot.index == room.member_id)
+        .and_then(|slot| slot.member.as_ref())
+        .map_or(room.member_id == announced, |member| member.master)
+}
+
 /// Paint one Waiting frame with the exe's announced master seat.
 /// Callers without a live room use [`paint_waiting_scene`] and its
 /// seat-0 default.
@@ -536,7 +561,7 @@ pub fn paint_waiting_scene_with_confirm(
         captions.local_name,
         captions.local_download_badge_armed,
     );
-    let is_room_master = room.member_id == confirm.master_seat_id;
+    let is_room_master = waiting_local_is_master(room, Some(confirm.master_seat_id));
     paint_waiting_backdrop(frame, art, member_role);
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
         placed.sprite.as_deref() != Some(WAITING_BACKDROP_SPRITE)
@@ -1435,6 +1460,7 @@ pub(crate) fn paint_waiting_staged(
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed_art(frame, speed, art);
     paint_waiting_random_card(frame, art);
+    paint_waiting_random_effect_cards(frame, art, captions.random);
     paint_waiting_speed_arrows(frame, art);
     paint_waiting_skills(frame, room, captions.skill_slots, placements);
     paint_waiting_skillcounts(
@@ -1753,12 +1779,27 @@ fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, channel: Waiti
 }
 
 /// Paint the two messenger lamps from one alert word. The exe starts
-/// an 800 ms animation on both controls (`FUN_004c0690`, file
-/// `0xc06e5`); the shell pins the ON interval but not the individual
-/// animation frames (OPEN: one qualified messenger-alert capture).
+/// an 800 ms animation on both controls when the word is nonzero and
+/// only calls the animation stopper when it is zero (`FUN_004c0690`,
+/// file `0xc0690`, stopper `FUN_0042f4f0`, file `0x2f4f0`); the
+/// quiesced pair shows no white popup at rest, so the lamps stay
+/// hidden until an alert stands. The ON interval is pinned; the
+/// individual animation frames stay OPEN.
 fn paint_waiting_messenger_lamps(frame: &mut Frame<'_>, art: &SceneArt, lit: bool) {
-    let alert_code = if lit { 0x1650_006B } else { 0 };
-    paint_waiting_toggle_group(frame, art, &WAIT_MESSENGER_LAMP_IDS, alert_code);
+    if !lit {
+        return;
+    }
+    let shared = shared_sprite_names(&art.placements);
+    for id in WAIT_MESSENGER_LAMP_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
+    }
 }
 
 /// Paint the armed WAITING stamp: the exe shows the wait-text image
@@ -1842,6 +1883,42 @@ fn paint_waiting_speed_art(frame: &mut Frame<'_>, speed: u8, art: &SceneArt) {
         paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
     } else {
         paint_waiting_speed(frame, speed, &art.placements);
+    }
+}
+
+/// The two spriteless mini-card controls. On a random song the exe
+/// mounts `Wait_Effect_Rand1/2.ojs` on them (`FUN_004ad350`, file
+/// `0xad350`, strings at files `0x24988c`/`0x249874`); the shipped
+/// Waiting block names no sprite for these controls, so the painter
+/// inks their pinned rects from the staged Random card body. The
+/// body choice is presentation (owner decision on font/art
+/// rasterization); the geometry stays in the parsed rects.
+const WAITING_RANDOM_EFFECT_IDS: [&str; 2] =
+    ["IDC_IMAGE_SWAIT_EFFECT_1", "IDC_IMAGE_SWAIT_EFFECT_2"];
+
+/// Ink one `?` mini card per staged effect rect while the room song
+/// carries the random flag. With no staged card body, or on a plain
+/// song, nothing is invented (#883/#884).
+fn paint_waiting_random_effect_cards(frame: &mut Frame<'_>, art: &SceneArt, random: bool) {
+    if !random {
+        return;
+    }
+    let donor = art
+        .placements
+        .iter()
+        .find(|placed| placed.id == WAITING_RANDMAP_ID)
+        .and_then(|placed| placed.sprite.as_deref())
+        .and_then(|sprite| art.figures.get(sprite))
+        .and_then(|figure| figure.layer(0));
+    let Some(donor) = donor else {
+        return;
+    };
+    for id in WAITING_RANDOM_EFFECT_IDS {
+        let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        blit_rgb555_scaled(frame, &donor.image.view(), &dest, Some(donor.colorkey));
     }
 }
 
