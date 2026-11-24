@@ -10,19 +10,27 @@
 use crate::{chart::LevelChart, Lane};
 
 /// One key-down in a replay, stamped with its intended song position.
+///
+/// `sequence` and `sample_id` are evidence metadata: they pin trace
+/// order and key-sound identity for assertions and future live use.
+/// No production caller consumes them yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChartPress {
-    /// Zero-based order in the replay.
+    /// Zero-based order in the replay (evidence metadata).
     pub sequence: usize,
     /// Lane 0..=6 (`kind - 2` in the source chart).
     pub lane: Lane,
     /// Intended song position in ms, from the chart tempo map.
     pub at_ms: u64,
-    /// Key-sound sample id carried by the chart note.
+    /// Key-sound sample id carried by the chart note (evidence metadata).
     pub sample_id: u32,
 }
 
 /// A whole difficulty level as an ordered key-down plan.
+///
+/// `song_id` and `level` are evidence metadata: they identify the
+/// source slice for assertions and future live use. No production
+/// caller consumes them yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartReplay {
     song_id: u16,

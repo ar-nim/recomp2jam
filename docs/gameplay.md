@@ -968,6 +968,12 @@ chart into the client, then sends each planned press through the
 portable input seam `GameLoop::ingest_snapshot` →
 `ScreenGame::lane_key` → `strike_at` → `LivePlay::strike_lane` under
 a fixed song clock. It skips cleanly when `install-root` is absent.
-Seam suffices for the key-down path: this is the same boundary the
-window freezes each frame; OS-level key injection and an E-864 Wine
-capture remain OPEN (tier 4).
+
+Seam suffices — behavior defined entirely by a seam contract
+(ADR-0013, `docs/adr/0013-per-frame-pulled-input-state.md`): the window
+freezes one `InputSnapshot` per frame and feeds `ingest_snapshot`, and
+the ADR consequence explicitly lets scenario tests construct snapshots.
+This guard constructs `ScreenGame` directly; it does not claim a live
+chain. Production enters through `OnlineSession::ingest_snapshot`
+(`crates/recomp2jam/src/session.rs:4261`); driving that entry, OS-level
+key injection, and an E-864 Wine capture remain OPEN (tier 4).
