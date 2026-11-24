@@ -234,3 +234,18 @@ found none — no `BSWAP`/`XCHG`/word-rotate on sample buffers in:
 Per-stripe/per-row/order/transpose variants stay ruled out; cause
 TBD — no Rust change made (unverified transforms stay out of
 `o2jam-file`).
+
+### Negative-pin guard and red proof (issue #911)
+
+`tests::decoded_odd_stripes_stay_unswapped` in
+`crates/o2jam-file/src/lib.rs` decodes a synthetic 17-lane body with the
+2.9 descriptor and compares every decoded byte with the source,
+including odd stripes. A pairwise swap cannot hide behind the cipher
+or de-interleave permutation.
+
+Red proof, 2026-11-24: temporarily adding a pairwise byte swap to odd
+stripes in `decode_new_variant_pcm` (`crates/o2jam-file/src/ojm.rs`)
+made `cargo test -p o2jam-file --lib tests::decoded_odd_stripes_stay_unswapped -- --exact`
+fail with `assertion left == right failed: odd stripes keep their byte
+order` (first swapped pair `34, 33` against expected `33, 34`). The
+mutation was restored before commit; no swap code ships.

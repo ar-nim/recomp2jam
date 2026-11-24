@@ -153,7 +153,6 @@ fn is_sof_marker(marker: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     use super::*;
     use crate::parse_opi;
@@ -360,16 +359,6 @@ mod tests {
         assert_eq!(frame.buf[9 * 10 + 9], 0);
     }
 
-    /// Runtime install root's interface archive (git-ignored game data).
-    fn interface_archive() -> PathBuf {
-        crate::data_root::install_root().join("O2Jam/Image/Interface1.opi")
-    }
-
-    /// Runtime install root's `Music` chart folder.
-    fn music_folder() -> PathBuf {
-        crate::data_root::install_root().join("O2Jam/Music")
-    }
-
     /// Real OJN covers end to end: all 14 shipped 7.55 charts (old
     /// Tutorial.ojn plus the 13 new-format files) locate a SOI at the
     /// third slice end, and the EOI-less stream decodes to an
@@ -377,9 +366,14 @@ mod tests {
     /// `install-root` is absent.
     #[test]
     fn real_ojn_covers_extract_and_decode() {
-        let Ok(folder) = std::fs::read_dir(music_folder()) else {
-            return;
+        let Some(data_dir) = crate::data_root::pack_dir_for_test(
+            &crate::data_root::install_root(),
+            "real OJN covers",
+        ) else {
+            return; // gate printed SKIP
         };
+        let folder =
+            std::fs::read_dir(data_dir.join("Music")).expect("present pack has a Music folder");
         let mut charts = Vec::new();
         for entry in folder.flatten() {
             let path = entry.path();
@@ -421,9 +415,15 @@ mod tests {
     /// no invented pixels. Skips when `install-root` is absent.
     #[test]
     fn real_album_art_bodies_decode_and_paint() {
-        let Ok(archive) = std::fs::read(interface_archive()) else {
-            return;
+        let Some(data_dir) = crate::data_root::pack_dir_for_test(
+            &crate::data_root::install_root(),
+            "real album art bodies",
+        ) else {
+            return; // gate printed SKIP
         };
+        let archive_path = data_dir.join("Image/Interface1.opi");
+        let archive = std::fs::read(&archive_path)
+            .unwrap_or_else(|error| panic!("{}: {error}", archive_path.display()));
         let entries = parse_opi(&archive).expect("archive table parses");
         let mut bodies = Vec::new();
         for entry in &entries {

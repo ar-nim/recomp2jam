@@ -9,7 +9,7 @@ Version pinned to 7.55 client files (sizes + SHA-256):
 |---|---|---|
 | `Interface1.opi` | 75,100,702 | `d6654119…bdd50584` |
 | `Playing1.opi` | 221,737,026 | `8c1c7566…aed9eed40` |
-| `avatar.opa` | 144,761,749 | `ced3ed1e…2953b16` |
+| `avatar.opa` | 144,761,749 | `ced3ed1e82aa…75c2959534b29c16` |
 
 (Analysis method: static structure walk over the installed files
 with Python 3.14 — offsets and counts below, no disassembly.)
@@ -372,6 +372,23 @@ stride-end checked), `is_jpeg_body` (`FF D8 … FF D9`, 47/47) +
 unit tests; `o2jam-dump opi` for local listing. Still TBD: the
 `.oja` frame-data words, `album`/`AlbumList`/`SMI`/`SetInfo`/
 `Itemdata` strides, and the Playing rect subset.
+
+## Guard red proofs (issue #910)
+
+Both stride guards were proven to fail on 2026-11-24 by temporary local
+mutations that were restored immediately afterwards (working tree clean
+again before commit). Commands were run in the linked agent worktree.
+
+- `tests::opi_slots_reject_stride_running_past_file`: removing the
+  `stride_end > bytes.len()` bound in `read_opi_slot` made
+  `cargo test -p o2jam-file --lib tests::opi_slots_reject_stride_running_past_file -- --exact`
+  fail with `assertion failed: matches!(parse_opi_slots(&blob),
+  Err(FileError::Truncated { .. }))` (`src/lib.rs:1057`).
+- `resolve::tests::body_slices_size_not_reserved_size`: slicing the body
+  by `reserved_size` instead of `size` in `opi_entry_body` made
+  `cargo test -p o2jam-file --lib resolve::tests::body_slices_size_not_reserved_size -- --exact`
+  fail with `left: [99, 100, 101, 102, 103, 104, 105, 106]`,
+  `right: [99, 100, 101]` (`src/resolve.rs:656`).
 
 ## Open questions
 

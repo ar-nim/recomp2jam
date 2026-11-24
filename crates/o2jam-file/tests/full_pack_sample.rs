@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use o2jam_file::data_root::install_root;
+use o2jam_file::data_root::{install_root, pack_dir_for_test};
 use sha2::{Digest, Sha256};
 
 /// One hash-pinned chart from the committed sample manifest.
@@ -100,10 +100,10 @@ fn sample_manifest_digests_are_full_length_hex() {
 
 #[test]
 fn full_pack_sample_compares_every_pinned_chart_hash() {
-    let music_dir = install_root().join("O2Jam/Music");
-    if !music_dir.is_dir() {
-        return; // no game data: skip cleanly (CI hidden arm)
-    }
+    let Some(data_dir) = pack_dir_for_test(&install_root(), "full pack sample") else {
+        return; // gate printed SKIP
+    };
+    let music_dir = data_dir.join("Music");
     let charts = read_pinned_charts(&sample_manifest());
     let verified = verify_charts(&music_dir, &charts)
         .unwrap_or_else(|error| panic!("sample chart check failed: {error}"));

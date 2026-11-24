@@ -642,6 +642,9 @@ STATE_ROOM 0x02\n\
 
     #[test]
     fn body_slices_size_not_reserved_size() {
+        // Doc pin: docs/file-formats/opi.md "Entry (152 B)" +136 `size`
+        // (stored body) versus +140 `reserved_size` (allocation stride);
+        // open question 1 resolves to "read exactly `size` bytes".
         let archive = b"abcdefghij";
         let entry = OpiEntry {
             name: "a.ojs".to_string(),
