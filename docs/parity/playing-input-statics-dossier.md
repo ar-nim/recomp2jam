@@ -20,15 +20,17 @@ a player-visible guard.
 | Pin | File offset | Check | Evidence |
 |---|---|---|---|
 | input inversion | `0x1714b0` (body `0x1714b0`–`0x1714f6`) | function body branches on pressed argument; nonzero forwards event byte 0 to ring producer, zero forwards byte 1 | `ev_6b5bbb28c385d8af658cf0873c34cb22423a05e950b97ab6881921a67799adac`, prose `ev_1fa6185809f8f9ce7b3ba2cf8135959842ef756618926a855ee721d8480bf714` |
-| incoming queue calls | `0x17c6`/`0x1877`/`0x1b12` | three direct calls into the forward from the queue drain | `ev_525a1a4874fa6db633e74f854342aa315f142dcbff0d1d474d89697842bf7e14` |
+| incoming queue calls | `0xe17c6`/`0xe1877`/`0xe1b12` (VA `0x4e17c6`/`0x4e1877`/`0x4e1b12`) | three direct calls into the forward from the queue drain | `ev_525a1a4874fa6db633e74f854342aa315f142dcbff0d1d474d89697842bf7e14`, `ev_1d26c92638724ca5cc39863f9e3663cf1cb3619647511c3bb7bb156ca80ae979`, `ev_ecfec93ab5c75db773b1508260af31551e4e7fd14b1e0c29cebe4ee19dd3aa74` |
 | ring edge producer | `0x179b80` | 128-slot ring at `+0x400`; per-lane flags at `+0x408` start set; event byte is the forwarded value, not the raw key state | `ev_c8d4203c9c8e9c5012be2344f167a3424f2dbd0f2dcc45135d722d11adb16b64` |
 | event-byte branch | `0x1765d1` in `FUN_00576540` | compares event byte with 1; byte 1 falls into the cursor branch, byte 0 falls into the walk/head branch | `ev_0eba18edc06ddb06c481687b712413e9c3642f649ccc41057643cc1deed9adfc`, function `ev_957650308f9b926db34bcd7d92924500f7af59bdcb22031a281d3547def5de85` |
 | cursor load | `0x1765e4` | key-up branch reads per-lane pointer `+0x864[lane]` | `ev_7c73360fc576b113019f295e5e50a995e5ad0c8d61b385569e40942ad4c6128a` |
 | key-up bit-25 region | `0x176c3b`/`0x176c41` | these are interior bytes of two instructions at `0x176c3a` (load record word) and `0x176c3c` (mask `0x3000000`); the compare at `0x176c42` tests equality with `0x2000000` | `ev_1099c554a6aad3240e686a7db6d5cb7b13f8d7573bd7b9aad8a69c5835ec448b`, `ev_eca1e1820c5add5d0b2e649805d54cf01e9b8629c2a7eca76d95e8ddfbe91af9`, `ev_34603f617fea2322c5a66548f6185468dc0dcb1a4974d042b454021d41f8f0ed`, `ev_c790e5cf17f40a53ac9fc9584df1e1cdba74f933736eb99941f325c5ec211075` |
 | tail compare chain | `0x176646`–`0x17667a` | absolute difference against record time is tiered at 6/18/25, then 26+ misses; tier is OR-ed into the record at `0x176687` | `ev_8cacce34232ccf12da2f16bffea7fe3a1e25a46edb3085b8051af1bb0822d98a`, `ev_5f5557853faa8dc5a61ea01f252bb5af9989364626531d00ea5380a4147913cc`, `ev_067f50c6300d5a438671a519f67a3e15dd7719a7669a77709574c1e14bad3fbe` |
 | head-side bit-25 gate | `0x1766cb` | after a key-up tail rating, only a bit-25 record emits rating event `0xe` | `ev_229f0bc00696dcee9a2862c9b38e2077d599037a3e5b9ed25a392bf437cb20f7` |
-| cursor clear | `0x176709` | key-up branch stores zero to `+0x864[lane]` after rating | `ev_41e018a18648f0d6500b8b0dae696110ecb841a3f7049820acb23d0304b40570` |
-| cursor arm | `0x176e60` (mode-0 judge) and `0x1761c4` (second judge) | both store the next record from the lane walk into `+0x864[lane]` after a Cool/Good head | `ev_3ba2c4bfa0c1968c27396ed5a79ca23e49d364e2484df1b3d303a14c9cfb53f5`, `ev_a8d0b63fbf2d585a1725fc0603cf762cc4855af61074f1f553150a4fd2b0a246` |
+| cursor clear | `0x176709` | key-up branch in the mode-0 judge stores zero to `+0x864[lane]` after rating | `ev_41e018a18648f0d6500b8b0dae696110ecb841a3f7049820acb23d0304b40570` |
+| cursor arm (player-key paths) | `0x176e60` (mode-0 judge) and `0x1761c4` (second judge) | both store the next record from the lane walk into `+0x864[lane]` after a Cool/Good head | `ev_3ba2c4bfa0c1968c27396ed5a79ca23e49d364e2484df1b3d303a14c9cfb53f5`, `ev_a8d0b63fbf2d585a1725fc0603cf762cc4855af61074f1f553150a4fd2b0a246` |
+| other cursor clears | `0x175ade`, `0x1760e4`, `0x1771d4` | play reset, second judge, and auto judge also zero the same field | `ev_6b65f20b1e04a5d76f20010bc37f01e530b27820c488a0255cafc5a21d8764a9`, `ev_b101232338d2f059fefba31510b8e65a4d39db4c8b892d90a459cf16daa4d815`, `ev_65fce122166e6d1bb44ef9078a2bf51b83727365d2a2aaac244839da145831a0` |
+| cursor arm (auto judge) | `0x1772b4` | the auto judge arms the same field after rating a due head | `ev_9340f1790b1e610c32c77f1f16aa7f0c902c8614c45c5e79b6da5335d7f6b864`, `ev_71a1086f688a1609936996f80f548f30179b468e22cfa0108222c86e35ed8a8a` |
 
 Whole-function prose for the mode-0 judge: `ev_9d2a86414d8c44eac0a4447128225a0d0a0bd53d81fab4a4627e0b2961fde11b`.
 The earlier queue kind→pressed mapping (kind 1 press, kind 2 release)
@@ -37,9 +39,10 @@ did not re-run that dossier.
 
 ### Completed static picture
 
-1. The queue drain calls the forward at file `0x17c6`, `0x1877`,
-   `0x1b12`. The forward at file `0x1714b0` inverts: a press (nonzero
-   argument) is forwarded as ring byte 0; a release (zero argument) is
+1. The queue drain calls the forward at file `0xe17c6`, `0xe1877`,
+   `0xe1b12` (VA `0x4e17c6`, `0x4e1877`, `0x4e1b12`). The forward at
+   file `0x1714b0` inverts: a press (nonzero argument) is forwarded
+   as ring byte 0; a release (zero argument) is
    forwarded as ring byte 1. The relay at file `0x177ff0` and the
    producer at file `0x179b80` copy that byte into the ring and detect
    edges against `+0x408[lane]`.
@@ -58,9 +61,26 @@ did not re-run that dossier.
      record (`0x1766cb`), then clear the cursor to zero at `0x176709`.
 3. Therefore `+0x864[lane]` is a **one-shot per-lane tail cursor**, not
    a hold flag and not a timing value: it holds a record pointer that
-   only a key-up consumes. Writers are the head-strike paths at
-   `0x176e60` (mode 0) and `0x1761c4` (second judge); the sole reader
-   is the key-up branch at `0x1765e4`; the clear is at `0x176709`.
+   a key-up consumes. Scoped to the player-key paths: the armers are
+   the head-strike paths at `0x176e60` (mode 0) and `0x1761c4`
+   (second judge), and the key-up clear is `0x176709`. This is not an
+   exhaustive list of writers. An exhaustive byte sweep for the
+   displacement `0x864` returned 13 raw hits
+   (`ev_eb2988ea6d646d0b4df9c9fce02cc888e2632fe8cdafee9a1d74fd5dda7c8fd5`);
+   eight are the Playing cursor. Besides the three player-key sites
+   above and the read at `0x1765e4`, the others are: play reset clear
+   `0x175ade` (`ev_7aaa5962b4755ba8bb37a50d3d85c89db351a08a4afed5dfe7a7bd883a8d5e39`),
+   second-judge clear `0x1760e4`, auto-judge clear `0x1771d4`, and
+   auto-judge arm `0x1772b4`. The auto judge
+   `FUN_00577090` (`0x177090`) rates due records itself, clears the
+   cursor, then arms it from a bit-25 head in the same loop
+   (`ev_71a1086f688a1609936996f80f548f30179b468e22cfa0108222c86e35ed8a8a`).
+   The other five raw hits fall outside the Playing judge family
+   (`0x4d8bf6`, `0x4de94c`, `0x4df111`, `0x4df140`, `0x54f0b4`);
+   inspected examples are stack-MOV byte coincidences, not
+   `+0x864[lane]` accesses in this path. The sole reader of the Playing cursor
+   in that sweep is the key-up branch at `0x1765e4`; this is the
+   checked scope, not a claim over every possible encoding in the exe.
 4. Bit-25 test locations are consistent: equality form
    `payload & 0x3000000 == 0x2000000` in the key-up arming path
    (`0x176c3c`–`0x176c42`) and in the second judge, bit-25-only form on
@@ -70,8 +90,9 @@ did not re-run that dossier.
    `0x176c3c`.
 
 Verdict per arm: inversion **CONFIRMED**; head routing **CONFIRMED**;
-tail routing through `+0x864` **CONFIRMED**; writers/reader/clear
-**COMPLETED**; live judged log **OPEN** (blocked earlier on the DI
+tail routing through `+0x864` **CONFIRMED**; player-key
+writers/reader/clear **COMPLETED**, with auto-judge armers/clearers
+listed separately; live judged log **OPEN** (blocked earlier on the DI
 interposer, #700; first-hit alignment leg #699).
 
 ### Rig brief — what the live capture must show
@@ -102,8 +123,8 @@ Expected signature by branch:
 ## 2 — #649 NoteTail staged-art plan
 
 Verdict: **STATIC ARM COMPLETE; PIXEL ARM OPEN**. The table and all
-four pinned consumers are traced. The option does not select a set of
-per-style hold-art frames; it scales a time-gated 0..120 geometry
+pinned consumers (eight functions) are traced. The option does not
+select a set of per-style hold-art frames; it scales a time-gated 0..120 geometry
 scalar in the `CNewNote` subobject at Playing `+0xfec`, which feeds
 per-lane clipped sprite blits. Which pixels change, and whether the
 hold body itself changes, needs the staged-art capture.
@@ -156,8 +177,14 @@ hold body itself changes, needs the staged-art capture.
    `ev_a21a113eac0c92556289e3babfda401ae5b3312c878d0da7fce705eb00de8537`,
    `ev_dab5728b10dabc21570192577ea71de90a20a687922efccda81669e1a0e40bcc`.
 4. Per frame, `FUN_00571060` calls stepper `0x56bda0`, which walks
-   current `+0` toward target `+4` by one unit per 20 ms after a
-   1000 ms hysteresis gate, then `0x56c060` fans out to seven lanes
+   current `+0` toward target `+4` by one unit only while the two
+   differ: after 1000 ms without a step it resets its timer to now,
+   then a step needs another 20 ms. The stepper therefore pauses when
+   the pair is steady and can resume on a later target change
+   (`ev_c8c2cc0c7fbb9d273a6fe4fe7c5c343ad145b75c8e9d18a2b56bfbd37f374c36`).
+   Render event `0xb` also recomputes the target through `0x56be30`
+   (`ev_a21a113eac0c92556289e3babfda401ae5b3312c878d0da7fce705eb00de8537`).
+   Then `0x56c060` fans out to seven lanes
    and `0x56c670` invokes the lane builder. The builder creates its
    segment list (`0x56c810`) and emits two clipped sprite blits per
    lane through `0x56c2f0`, whose final painter is a DirectDraw sprite
@@ -194,8 +221,11 @@ that, not this dossier.
   again at the same hold-tail position for each value. The region is
   the seven lane columns (x 5..165, y 28..487) plus the hold body;
   record the full 800x600 frame too, since the ramp may paint outside
-  the lane clip. Also sample ~2.4 s after play start, when the
-  0..120 stepper has settled.
+  the lane clip. Do **not** pick a settled frame by wall-clock alone:
+  the stepper only moves while `+0 != +4`, pauses after a steady pair,
+  and render event `0xb` can retarget it. Take the settled sample only
+  after observing a steady `+0`/`+4` pair on the rendered target (two
+  consecutive reads with no change), and log the pair with the frame.
 - Log the injector epoch, judged tally, and `option.ini` value per
   boot. If stopped-state reads are available, read `+0xfec` object
   `+0`, `+4`, `+0x64`, `+0x68` to pair the scalar with the pixels.
