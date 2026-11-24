@@ -12,12 +12,13 @@
 
 use std::path::PathBuf;
 
+use o2jam_file::data_root::{install_root, pack_dir_for_test};
 use o2jam_file::decrypt_ojn_new_format;
 
-/// Runtime install root's `Music` folder (git-ignored game data).
-fn music_dir() -> Option<PathBuf> {
-    let dir = o2jam_file::data_root::install_root().join("O2Jam/Music");
-    dir.is_dir().then_some(dir)
+/// Runtime `Music` folder, or `None` after the gate prints SKIP.
+fn music_dir(test_name: &str) -> Option<PathBuf> {
+    let data_dir = pack_dir_for_test(&install_root(), test_name)?;
+    Some(data_dir.join("Music"))
 }
 
 fn u32le(bytes: &[u8], off: usize) -> u32 {
@@ -81,8 +82,8 @@ fn sweep_chart(bytes: &[u8]) -> Vec<Bit26Hit> {
 /// on a playable lane (docs/ojn-bit26.md).
 #[test]
 fn shipped_charts_set_bit26_only_on_tutorial_bgm_records() {
-    let Some(dir) = music_dir() else {
-        return; // no game data: skip cleanly
+    let Some(dir) = music_dir("shipped bit-26 sweep") else {
+        return; // gate printed SKIP
     };
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .expect("read Music dir")

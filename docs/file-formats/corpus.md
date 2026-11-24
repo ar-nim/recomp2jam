@@ -39,3 +39,24 @@ scratch install root, launch that build under Wine with a fresh prefix,
 capture the visible failure and any log, then add version/hash/tool
 versions and REA evidence IDs here. Until then the corpus pins only
 our parser behavior; it does not claim exe parity.
+
+## Real-data pack gate (#906)
+
+`data_root::pack_dir_for_test` is the single seam for the eight
+real-data tests in `o2jam-file`. When `install-root/` is absent it
+prints `SKIP <test>: install-root absent (<root>)` and returns `None`.
+When the data folder is present it requires `Interface1.opi`,
+`Playing1.opi`, `avatar.opa`, a `Music` folder and at least 14 `.ojn`
+charts; a gap panics with `PACK GAP <test>: missing <path>`. The gate
+uses `O2JAM_INSTALL_ROOT` at runtime, so no test bakes in a worktree
+path.
+
+Red proof, 2026-11-24: temporarily disabling `require_pack_artifacts`
+made `present_pack_with_missing_archive_fails_instead_of_skipping` fail
+with `present pack missing avatar.opa must fail loudly`; the check was
+restored. A present-but-gapped root passed through
+`O2JAM_INSTALL_ROOT=<root> cargo test -p o2jam-file --test real_data_gate`
+and failed with `PACK GAP ... missing .../Image/avatar.opa`.
+With the main checkout's real install root the whole `o2jam-file` suite
+passed; with no install root all eight tests printed SKIP and the suite
+passed.

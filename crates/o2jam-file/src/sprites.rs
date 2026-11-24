@@ -950,7 +950,6 @@ pub fn parse_sprite55_prefixed(bytes: &[u8]) -> Result<Sprite55Prefixed<'_>, Fil
 #[cfg(test)]
 mod sprite55_prefixed_tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
 
     use super::*;
     use crate::parse_opi;
@@ -1059,14 +1058,12 @@ mod sprite55_prefixed_tests {
         assert_eq!((spans[3].x, spans[3].y), (0, 2));
     }
 
-    /// Repository-local `install-root` (git-ignored game data).
-    fn install_archive(name: &str) -> Option<Vec<u8>> {
-        std::fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image")
-                .join(name),
-        )
-        .ok()
+    /// One archive from the gated pack; absent pack prints SKIP.
+    fn install_archive(name: &str, test_name: &str) -> Option<Vec<u8>> {
+        let data_dir =
+            crate::data_root::pack_dir_for_test(&crate::data_root::install_root(), test_name)?;
+        let path = data_dir.join("Image").join(name);
+        Some(std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())))
     }
 
     /// Real repeated-y bodies (codec gap ④): the in-play chat window
@@ -1117,8 +1114,8 @@ mod sprite55_prefixed_tests {
         ];
         for case in cases {
             let name = case.body;
-            let Some(bytes) = install_archive(case.archive) else {
-                return;
+            let Some(bytes) = install_archive(case.archive, "repeated-y walk") else {
+                return; // gate printed SKIP
             };
             let entries = parse_opi(&bytes).expect("archive table parses");
             let entry = entries
@@ -1228,7 +1225,6 @@ mod sprite55_prefixed_tests {
 
 #[cfg(test)]
 mod oja55_tests {
-    use std::path::PathBuf;
 
     use super::*;
     use crate::parse_opi;
@@ -1499,14 +1495,12 @@ mod oja55_tests {
         assert!(matches!(parse_oja55(b"short"), Err(FileError::TooShort(_))));
     }
 
-    /// Repository-local `install-root` (git-ignored game data).
-    fn install_archive(name: &str) -> Option<Vec<u8>> {
-        std::fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image")
-                .join(name),
-        )
-        .ok()
+    /// One archive from the gated pack; absent pack prints SKIP.
+    fn install_archive(name: &str, test_name: &str) -> Option<Vec<u8>> {
+        let data_dir =
+            crate::data_root::pack_dir_for_test(&crate::data_root::install_root(), test_name)?;
+        let path = data_dir.join("Image").join(name);
+        Some(std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())))
     }
 
     /// Archive body bytes by exact name.
@@ -1529,8 +1523,8 @@ mod oja55_tests {
     /// when `install-root` is absent.
     #[test]
     fn oja_click_bodies_decode_from_the_archive() {
-        let Some(archive) = install_archive("Playing1.opi") else {
-            return;
+        let Some(archive) = install_archive("Playing1.opi", "oja click bodies") else {
+            return; // gate printed SKIP
         };
         let click = archive_body(&archive, "Note_Click.oja");
         let long = archive_body(&archive, "LongNote_Effect.oja");
@@ -1594,8 +1588,8 @@ mod oja55_tests {
     /// Skips when `install-root` is absent.
     #[test]
     fn oja_jam_body_decodes_from_the_archive() {
-        let Some(archive) = install_archive("Playing1.opi") else {
-            return;
+        let Some(archive) = install_archive("Playing1.opi", "oja jam body") else {
+            return; // gate printed SKIP
         };
         let body = archive_body(&archive, "Playing_Effect_Jam.oja");
         let oja = parse_oja55(&body).unwrap();

@@ -39,11 +39,69 @@ pub fn root_from_override(value: Option<&OsStr>) -> PathBuf {
         .unwrap_or_else(checkout_install_root)
 }
 
+/// The 7.55 data folder inside `root`, under either casing.
+#[must_use]
+pub fn game_data_dir(root: &Path) -> Option<PathBuf> {
+    ["O2Jam", "o2jam"]
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_dir())
+}
+
 /// True when `root` exposes the 7.55 data folder under either casing.
 /// Matches the gate's `data_root_has_archives` probe.
 #[must_use]
 pub fn root_has_game_data(root: &Path) -> bool {
-    root.join("O2Jam").is_dir() || root.join("o2jam").is_dir()
+    game_data_dir(root).is_some()
+}
+
+/// The SKIP line a real-data test emits when the pack is absent.
+#[must_use]
+pub fn pack_skip_report(root: &Path, test_name: &str) -> String {
+    format!("SKIP {test_name}: install-root absent ({})", root.display())
+}
+
+/// Resolve the data folder for a real-data test. An absent pack prints
+/// the named SKIP line and yields `None`; a present pack must pass the
+/// artifact check, so a gap fails the test instead of skipping (issue
+/// #906).
+#[must_use]
+pub fn pack_dir_for_test(root: &Path, test_name: &str) -> Option<PathBuf> {
+    let Some(data_dir) = game_data_dir(root) else {
+        println!("{}", pack_skip_report(root, test_name));
+        return None;
+    };
+    require_pack_artifacts(&data_dir, test_name);
+    Some(data_dir)
+}
+
+/// Fail when a present pack lacks an artifact the file-format guards
+/// read. The 14-chart floor is the small-install invariant already
+/// pinned by the bit-26 sweep; a wider pack only raises it.
+fn require_pack_artifacts(data_dir: &Path, test_name: &str) {
+    for name in ["Interface1.opi", "Playing1.opi", "avatar.opa"] {
+        let path = data_dir.join("Image").join(name);
+        assert!(
+            path.is_file(),
+            "PACK GAP {test_name}: missing {}",
+            path.display()
+        );
+    }
+    let music_dir = data_dir.join("Music");
+    assert!(
+        music_dir.is_dir(),
+        "PACK GAP {test_name}: missing {}",
+        music_dir.display()
+    );
+    let chart_count = std::fs::read_dir(&music_dir)
+        .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {music_dir:?}: {error}"))
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ojn"))
+        .count();
+    assert!(
+        chart_count >= 14,
+        "PACK GAP {test_name}: expected at least 14 charts, found {chart_count}"
+    );
 }
 
 /// True when two root spellings name one directory. An absent root

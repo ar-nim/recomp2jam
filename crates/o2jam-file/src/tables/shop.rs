@@ -296,12 +296,15 @@ mod tests {
 
     #[test]
     fn installed_new_arrival_rows_carry_the_exe_card_percentages() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
-        let archive_path = root.join("O2Jam/Image/avatar.opa");
-        let Ok(archive) = std::fs::read(&archive_path) else {
-            println!("skip: missing install-root avatar archive");
-            return;
+        let Some(data_dir) = crate::data_root::pack_dir_for_test(
+            &crate::data_root::install_root(),
+            "new arrival card percentages",
+        ) else {
+            return; // gate printed SKIP
         };
+        let archive_path = data_dir.join("Image/avatar.opa");
+        let archive = std::fs::read(&archive_path)
+            .unwrap_or_else(|error| panic!("{}: {error}", archive_path.display()));
         let entries = crate::parse_opi(&archive).expect("installed avatar archive parses");
         let table_entry = crate::find_opi_entry(&entries, "Itemdata_Korea.dat")
             .expect("installed avatar archive carries the item table");
