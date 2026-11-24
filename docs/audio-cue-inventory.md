@@ -55,9 +55,11 @@ The exe has three selectors, and they use different record spaces:
    cache slot (`docs/file-formats/ojm.md`). They belong to Playing and are
    listed there, not folded into the lobby tables.
 
-The fetch ordinal starts at zero. Fresh decompiler check of `0x54eca0`
-shows the fetch counter at object `+0x15c` is reset to 0 and copied to the
-entry id at `+0x150` before the post-fetch increment (evidence
+The first fetch ordinal is zero. Caller `0x54ebe0` resets the fetch
+counter at object `+0x15c` to 0 before it calls the fetcher (evidence
+`ev_525f3560811138ff9588c2afa769e2d7a1bef671ea7fb2228f1d4ab4375a6531`);
+the fetcher `0x54eca0` copies that counter to the entry id at `+0x150`
+and increments it after the fetch (evidence
 `ev_2a873a12408328105111740b73af0e85776d1c8a9ee6e6dc388994c30e9f14ac`,
 page `ev_a673c456f60f2b508d6cf5f0e950fd08ee617fc5b96699b4e597fcd46bda747f`).
 Therefore slot 1 is mode-2 entry index 1 (`02`), not entry index 0
@@ -80,7 +82,7 @@ the OPEN ledger.
 | `STATE_SHOP 0xA4` / `CStateShop` | `(4, loop)` → `BGM.ojm` mode-3 entry 3, `bgItemShop.ogg`; file `0x987BE` | `0xa` tab/confirm (`0x98C8F`, `0x98F93`); `0x2c..0x2e` greeting voice (`0x99360`, dynamic index); `0x1c` equip/gender (`0x9941E`); `0x14`/`0x13` buy/sell (`0x9C653`, `0x9C853`); `0x28` finish (`0xA0357`); `0x22` confirm (`0xAC456`); `0x21` tab (`0xB24A1`); `6`/`0x23` dialog scroll (`0xB8344`…`0xB840C`) | **PINNED** statically (#718 survey §2, dossier `ev_5bee92ef…`); buy/sell and NPC-voice wiring OPEN (coverage-audit §Cue-map coverage) |
 | `STATE_MUSICSHOP 0x6B` / `CStateMShop` | `(10, loop)` → `BGM.ojm` mode-3 entry 9, `bgMusicShop.ogg`; file `0xC6E51`. Decimal 10, not hex `0x10` | `0x23` side-scene confirm (`0xC827B`); shared shop-confirm/tab families (`0x4B2540`, `0x4B6620`) carry `0x22`/`0x21`; preview is OPEN | Music **PINNED** (exe push `0xA`); shared-handler state attribution and preview OPEN-2/OPEN-9 |
 | `STATE_MYROOM 0x6A` / `CStateMyroom` | `(5, loop)` → `BGM.ojm` mode-3 entry 4, `bgMyroom.ogg`; file `0xA3911` | `0xd` WEBAVATAR (`0xA3ED4`, `docs/myroom.md` §WEBAVATAR); `0x1f` dress/equip (`0xA4AB9`); `0x23`/`0x18` exit/list (`0xA4057`, `0xA415E`) | **PINNED** (#718 survey §2, dossier `ev_94d5c641…`; `docs/myroom.md`) |
-| `STATE_PAYMENT 0x09` / `STATE_PAYMENT2 0x0C` / `CDPayment` | `(3, loop)` → `BGM.ojm` mode-3 entry 2, `bgRoom.ogg` (same record as Room); `docs/coverage-audit.md` §Fresh pins | No `0x551870` call pinned in the web-billing branch set | Music **PINNED**; cue set OPEN-2 |
+| `STATE_PAYMENT 0x09` / `STATE_PAYMENT2 0x0C` / `CDPayment` | `(3, loop)` → `BGM.ojm` mode-3 entry 2, `bgRoom.ogg` (same record as Room); exe calls at files `0xF3622` (`CStatePayment`) and `0xF47D5` (`CStatePayment2`), each pushing `(3, 1)` (REA `ev_253910337fd05717afa792b478774a28238a67c78ccb7be96939fdeb56234196`, `ev_ece2f2f0c79d9624e7fa50610dc33411bdf4c12c922c90f2f2c7d6d86f405ec6`) | No `0x551870` call pinned in the web-billing branch set | Music **PINNED**; cue set OPEN-2 |
 | `STATE_TUTORIAL 0x00` stub / `CStateTutorial` | No `BGM.ojm` cue. Exe state helper loads `Tutorial.ojm` at file `0xF0A50` and calls its playback helper at `0xF0AB0` (`ev_c9875194…`). Our shell cues `Tutorial.ojm` mode-3 entry 0 (`bgsplit-01.ogg`) at entry and advances record N at page deadline (`0x4F19E0` → `FUN_0042F870`, table `0x67E2C0`, file `0x27E2C0`) | No UI-effect call pinned in the tutorial handler set | Hook **PINNED** (`firststep_tutorial_entry_cues_the_pinned_tutorial_ojm_record`, `tutorial_ojm_advances_at_the_pinned_page_deadline`); which exe record sounds OPEN-3; cue set OPEN-4 |
 | Loading gate (overlay, no state header) | No `0x551820` caller pinned; shell uses `-1` silence as a stand-in, not an exe claim | No `0x551870` call pinned in the gate chain (`0x4E47A0` → `0x5718B0` → `0x4F8B80` → `0x412180`) | **OPEN-5** (`docs/lifecycle.md` §9) |
 | `STATE_PLAYING` / `CStateNormalPlaying`, `CStateLivePlaying` | No scene selector cue pinned; shell uses `-1`. Song audio is chart-timed through `0x5703f0`: M30 `o2ma*.ojm` music ids `980–991` (`[WAV980]mr1`…`[WAV991]mr12`), or mode-3 splits on new-variant charts | Note/strike ids come from the chart (`decode_note_value`: value − 1, bit26 → +`0x3E8`), not from the UI emitter | **OPEN-6** for per-song bank mapping/in-song gain; negative scene cue from coverage-audit §Cue-map coverage |
@@ -95,10 +97,10 @@ entry I−1. Installed names are local-only data facts:
 
 | Cue id | Loop | Bank + mode + entry | Installed name | Call site / evidence |
 |---:|---|---|---|---|
-| 3 | loop | `BGM.ojm` mode-3 entry 2 | `bgRoom.ogg` | file `0x8EB87`; guard `shipped_bank_records_select_the_shipped_tracks` |
+| 3 | loop | `BGM.ojm` mode-3 entry 2 | `bgRoom.ogg` | file `0x8EB87` (Room); files `0xF3622`/`0xF47D5` (Payment/Payment2, pushes `3`/`1`, byte reads `ev_2cf158a9df537c4d08490035a6644e1bfb6c9b27cf1dfeeb3f835b5f453644bc`, `ev_9f0db4e70ce8d3fa96eb18eedc1c857ed97897460655d89e84040e1cba53ba4f`); guard `shipped_bank_records_select_the_shipped_tracks` |
 | 4 | loop | `BGM.ojm` mode-3 entry 3 | `bgItemShop.ogg` | file `0x987BE`; `scene_bgm_cues_follow_the_pinned_table` |
 | 5 | loop | `BGM.ojm` mode-3 entry 4 | `bgMyroom.ogg` | file `0xA3911`; `side_bgm_cues_follow_the_pinned_table` |
-| 6 | loop | `BGM.ojm` mode-3 entry 5 | `bgWaiting.ogg` | file `0xB62C3`; Payment/Payment2 share this id |
+| 6 | loop | `BGM.ojm` mode-3 entry 5 | `bgWaiting.ogg` | file `0xB62C3`; Waiting only — Payment/Payment2 cue id 3 above |
 | 8 | once | `BGM.ojm` mode-3 entry 7 | `bgLogo.ogg` | file `0xF57D4`; `avi_launch_cue_selects_the_logo_record_once` |
 | 9 | loop | `BGM.ojm` mode-3 entry 8 | `bgMainRoom.ogg` | file `0x8DE28`; Planet and Channel share this id |
 | 10 | loop | `BGM.ojm` mode-3 entry 9 | `bgMusicShop.ogg` | file `0xC6E51`; `music_shop_cue_loops_record_ten` |
@@ -239,19 +241,28 @@ exe claim.
    item 6). Already documented, not silently changed here.
 2. **Result loop flag** — older audit wrote loop; the exe pushes 0 at
    file `0xC1CA5`. The exe arbitrates: once (coverage-audit item 6).
-3. **Effect sample-name off-by-one** — the #718 scratch table labels slots
-   `1/2/5` with names `01/02/05`. The exe fetch counter starts at zero
-   (`0x54eca0`, evidence above), so those slots hold mode-2 entries 2/3/6
-   (`02/03/06`). The slot→entry numbers `2/3/6/10/36` in
-   `docs/coverage-audit.md` remain correct; only the parenthetical names
-   in that sentence and the scratch name column are shifted. No code
-   changes: the emitter selects by slot, never by name.
+3. **Effect sample-name off-by-one** — the #718 scratch name column
+   (`/home/arnim/scratch/ui-sfx-static-findings.md` lines 90–93) labels
+   slots `1/2/5/6` with names `01/02/05/06`. The first fetch ordinal is
+   zero (`0x54ebe0` reset, `0x54eca0` copy-and-increment; evidence above),
+   so those slots hold mode-2 entries 2/3/6/7 (`02/03/06/07`). The
+   slot→entry numbers `2/3/6/10/36` in `docs/coverage-audit.md` §Cue-map
+   coverage, bank-table bullet, remain correct; the scratch name column
+   is shifted for those four rows. No code changes: the emitter selects
+   by slot, never by name.
 4. **Planet BGM trigger** — `docs/planet.md` item 7 called it a no-trigger;
    the v4 call site proves the entry cue exists. Superseded in
    `docs/coverage-audit.md` §Contradictions item 1.
 5. **Dialog host** — `+0xF6C` is both the manager's current-state slot and
    the `CStatePlanet` dialog host; live reads reconcile them (coverage-audit
    item 4). No separate `CStateChannel` exists.
+6. **Payment/Payment2 cue annotation** — the first draft of this inventory
+   wrote "Payment/Payment2 share this id" on the cue-6 (`bgWaiting.ogg`)
+   row. The exe settles it: `CStatePayment` calls `0x551820` at file
+   `0xF3622` and `CStatePayment2` at `0xF47D5`, each with pushes `1` (loop)
+   then `3` (id) before the call (evidence above). They share cue 3 with
+   Room, `BGM.ojm` mode-3 entry 2 (`bgRoom.ogg`), not cue 6. The scene
+   record table is corrected; no OPEN label remains for this fact.
 
 ## Coverage summary
 
