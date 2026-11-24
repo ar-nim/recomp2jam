@@ -84,21 +84,31 @@ never from literals in the painter.
   which stores the argument at seat `+0x30`. Its network caller
   `FUN_00559b50` (file `0x159b50`, dossier
   `ev_3cad68dd2f4463f40bae572f3ca4f02b52cc547b6e95ee38d25a131d3eb2462b`)
-  reads the member id from the 4043 live-state header and derives that
-  word from the requesting member id. The joined-room snapshot
+  reads one byte from the 4043 live-state header, stores it as the local
+  member id through `FUN_0053fff0` (file `0x13fff0`, dossier
+  `ev_69f3bfa8aae5d068678fc9da08f3f0c49d9eb03301f911e739b4d8693063fdd0`,
+  writing seat `+4` / `DAT_0077cd04`), then branches on that stored id
+  when writing `+0x30`. The joined-room snapshot
   (3003 `RoomInfo`) carries the same word as `RoomMember.master`; the
   3007 leave promotion names the announced master id. Direct `0x77cd30`
   reads (`ev_767d75e2...`) and per-instruction reads
   (`ev_db71843f...`, `ev_3dacddb1...`, `ev_5e3f393e...`) confirm that
-  the label, MUSELECT and START gate all read this word.
+  the label, MUSELECT and START gate all read this word. Full IDs:
+  `ev_767d75e2a70846b2454af133ecc6381b2381a371e62d4db57f7e199a04fc442f`,
+  `ev_db71843f9bdf6408d7abb329b27e48fd3d694544bed0aae791487aa3f2104d8f`,
+  `ev_3dacddb1fa9f00c69023493222c552c4fce035992aef48cef9c359b7636114f7`,
+  `ev_5e3f393edc17f73450c45d19515f43e78a8b87095c7a083cc2b2fa1c1fef0434`.
 - `FUN_004b4a00` (file `0xb4a00`, dossier
   `ev_7e1e50fd329664ebacb23214247916f1d24a559f0cafa686cba71759a3d8c547`)
   is the master arm: it enables START and all six skill arrow controls
   `0x16200050..55`, and clears the three gray skill covers
   `0x1650005B..5D`. `FUN_004b4d30` (file `0xb4d30`, dossier
   `ev_87a8bffa39dbb33077311ecd66b3aa361a2296690557ef09a83854814a6c2baf`)
-  is the guest arm: it disables those arrows and shows the covers.
-  `FUN_00409bf0` (file `0x9bf0`, dossier
+  is the guest arm, but only its no-skill-selection branch disables all
+  arrows and sets every skill cover to frame 1. With a skill selected it
+  arms `SKILLSEL` and the first two arrows (`0x16200050/51`), disables
+  the last four (`0x16200052..55`), and sets covers `0x1650005B/5C` to
+  frame 2 and `0x1650005D` to frame 0. `FUN_00409bf0` (file `0x9bf0`, dossier
   `ev_694dfc15dd90b0d7d13d1aa9525d030825dfd20c458cdd894cca987bfcfe282a`)
   writes the control's `+0x24` arm word (1 enabled, 0 disabled); this
   is the enabled-state tint, not a new sprite frame.
@@ -107,20 +117,22 @@ never from literals in the painter.
   1589/1590) hold the gray disabled arrows; `Wait_No_skill_Image.ojs`
   (slot 1280) is the X box. The quiesced exe frame shows bright arrows
   with gray X boxes; our guest-painted frame showed the gray covers.
-- Shell fix: the local role helper prefers the joined snapshot's local
-  `RoomMember.master` flag; a 3007 handoff names the announced seat.
-  When no seat claims master and no handoff stands, it keeps the seat-0
-  default for rooms staged without member rows. Both
+- Shell fix: a 3007 handoff id wins over member rows; without a handoff,
+  the joined snapshot's local `RoomMember.master` flag wins. When no
+  seat claims master and no handoff stands, it keeps the seat-0 default
+  for rooms staged without member rows. Both
   `ScreenGame::is_room_master` and the Waiting painter consume that
   helper, so START/READY, the enabled arrows and the master emblem
   agree with one wire field.
 
 ## Refutation / remaining OPEN
 
-- The v6 master-name delta (`사람손` exe vs `서이이` ours) stays a
-  content mismatch: the two legs used different accounts on the shared
-  Memoryer. No paint change can close it; a same-account pair is the
-  next evidence step (owner A/B rule).
+- The v6 master-name delta (`사람손` exe vs `서이이` ours) has OPEN cause.
+  The earlier “different accounts” claim is withdrawn: the v3 and v6
+  recipes both log in as user 1 and both hosts use user 3, so the
+  attribution is unsupported. Per the owner A/B rule its next evidence
+  step is wire plus server log from the two legs. No paint change is
+  warranted either way.
 - The messenger ON animation frames, the code-mounted normal-song
   effect bodies `Wait_Effect<songid>_1/2.ojs`, and the exact pixel path
   from the control `+0x24` word to the arrow tint remain OPEN. The
@@ -136,6 +148,7 @@ never from literals in the painter.
 | `random_song_inks_both_mini_cards_from_the_staged_card_body` | FAIL (`0` vs `255`) | PASS |
 | `messenger_lamps_hide_at_rest_and_ink_only_on_an_alert` | FAIL (rest rects inked) | PASS |
 | `wire_master_flag_paints_start_and_the_live_skill_arrows` | FAIL (`is_room_master` false) | PASS |
+| `handoff_master_id_wins_over_stale_member_rows` | FAIL (local `+0x30` flag won) | PASS |
 
 Logs: `~/scratch/waiting-chrome/red-random.log`, `red-lamp.log`,
 `red-role.log`, `green-focused2.log`, `shell-lib2.log`.

@@ -9352,9 +9352,11 @@ impl ScreenGame {
     /// nothing. The `Random` `?` cards name no per-card entries (big card
     /// on `RANDMAP 0x1650004F` → rect 78, small cards on spriteless
     /// `EFFECT_1/2` rects 68/69); `SelectMusic_Random*.ojs` bodies belong
-    /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
-    /// `paint_waiting_staged` never paints those rects (see the
-    /// `paint_waiting_music` docs and the chat/cards absence tests).
+    /// to `DAILOG_SELECTMUSIC` filter buttons. No card carries per-card
+    /// wire data: the big card paints its staged rest record, and on a
+    /// random song `paint_waiting_random_effect_cards` inks the two mini
+    /// rects from that staged body (the plain-song negative stays in
+    /// `waiting_random_cards_carry_no_card_data`).
     fn paint_waiting(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.waiting_stamp_armed && self.waiting_stamp_started_at.is_none() {
             self.waiting_stamp_started_at = Some(now_ms);
@@ -9387,7 +9389,7 @@ impl ScreenGame {
                     art,
                     &captions,
                     WaitingConfirmState::new(
-                        self.announced_room_master_id.unwrap_or(0),
+                        self.announced_room_master_id,
                         self.waiting_confirm_armed(),
                     ),
                     self.has_staged_waiting_figure(),
@@ -12033,6 +12035,39 @@ mod game_tests {
         assert_eq!(buf[50 * 800 + 50], 0, "a master hides READY");
         assert_ne!(buf[90 * 800 + 90], 0, "the enabled arrow body paints");
         assert_eq!(buf[130 * 800 + 130], 0, "the gray cover stays hidden");
+    }
+
+    #[test]
+    fn handoff_master_id_wins_over_stale_member_rows() {
+        // Live chain: `OnlineSession::apply_user_left` ->
+        // `ScreenGame::promote_waiting_master` -> `is_room_master` ->
+        // `paint_waiting_scene_with_confirm` (START/READY, skill arrows).
+        // A 3007 handoff names seat 1; if an older 3003 snapshot is
+        // folded back in, the old seat-0 master flag must not win.
+        let mut room = waiting_room();
+        let peer = room.slots[0].member.clone().expect("staged member");
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        assert!(
+            game.is_room_master(),
+            "seat 0 owns the room before the handoff"
+        );
+        game.promote_waiting_master(1);
+        game.waiting.as_mut().expect("joined room").slots[0]
+            .member
+            .as_mut()
+            .expect("stale seat")
+            .master = true;
+        assert!(
+            !game.is_room_master(),
+            "the announced master id beats the stale row flag"
+        );
     }
 
     #[test]
