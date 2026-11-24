@@ -1551,6 +1551,12 @@ impl WireMessage for ScoreCompleted {
 /// byte sweep `ev_94ff31c9…` finds the reset and writer here but no
 /// gameplay reader, so this word is traced, never painted as a rank.
 pub const RESULT_RANK_PLACE_OFFSET: u32 = 0x217d;
+/// Member-slot offset the Result banner reads for its win flag
+/// (read sites files `0xc31ca`/`0xc320c`/`0xc3300`/`0xc3343`).
+/// It is distinct from the 4040 place byte at
+/// [`RESULT_RANK_PLACE_OFFSET`] and the computed rank column at
+/// [`RESULT_RANK_COLUMN_OFFSET`].
+pub const RESULT_BANNER_WIN_FLAG_OFFSET: u32 = 0x21d2;
 /// Member-slot offset the Result rank column reads: the locally
 /// computed team table built by `FUN_004c49a0` (REA `ev_51da7213…`).
 pub const RESULT_RANK_COLUMN_OFFSET: u32 = 0x10d2c;
@@ -1855,6 +1861,45 @@ mod song_sync_tests {
                 reason: "not 0 or 1"
             })
         );
+    }
+
+    #[test]
+    fn changed_4040_rank_byte_cannot_change_result_banner() {
+        // seam: pure wire decoders. The banner's only wire input is the
+        // 4018 row verdict; 4040 places have no read path into it.
+        // Evidence: `docs/net-protocol.md` §4c `4040 GameRankUpdate`
+        // (ticket #901 cites line 133; the section has moved since):
+        // handler VA `0x559a60` (file `0x159a60`) stores each place at
+        // slot `+0x217d` through writer VA `0x5414a0` (file `0x1414ad`),
+        // REA `ev_4684b913…` / `ev_94ff31c9…`. The banner reads the
+        // separate win flag at `+0x21d2` (files `0xc31ca`/`0xc320c`/
+        // `0xc3300`/`0xc3343`) and the rank column reads the locally
+        // computed table at `+0x10d2c` (`FUN_004c49a0`); no reader of
+        // `+0x217d` exists on either path.
+        use crate::{
+            GameRankUpdate, MatchResult, ScoreCompleted, RESULT_BANNER_WIN_FLAG_OFFSET,
+            RESULT_RANK_COLUMN_OFFSET, RESULT_RANK_PLACE_OFFSET,
+        };
+
+        assert_eq!(RESULT_RANK_PLACE_OFFSET, 0x217d);
+        assert_eq!(RESULT_BANNER_WIN_FLAG_OFFSET, 0x21d2);
+        assert_eq!(RESULT_RANK_COLUMN_OFFSET, 0x10d2c);
+
+        let score_body = live_completed_body();
+        let banner_verdict =
+            |body: &[u8]| ScoreCompleted::decode_body(body).unwrap().scores[0].result;
+        let original = banner_verdict(&score_body);
+        assert_eq!(original, MatchResult::Win);
+
+        let before = GameRankUpdate::decode_body(&[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        let after = GameRankUpdate::decode_body(&[1, 0, 2, 3, 4, 5, 6, 7]).unwrap();
+        assert_ne!(before.member_ranks, after.member_ranks);
+        assert_eq!(banner_verdict(&score_body), original);
+
+        // Positive control: the 4018 verdict byte still feeds the banner.
+        let mut changed_score_body = score_body;
+        changed_score_body[5 + 31] = MatchResult::Lose as u8;
+        assert_eq!(banner_verdict(&changed_score_body), MatchResult::Lose);
     }
 
     #[test]
