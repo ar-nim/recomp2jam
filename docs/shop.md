@@ -842,3 +842,30 @@ the same 36-body array; the v3 frame shows the default main variant.
 Archive offsets and sprite pixels are local file facts, not REA IDs.
 Scratch proof: `~/scratch/shop-preview-pin/` (`Shop_Master_main.png`,
 `exe-br-crop.png`).
+
+### MESSAGE-sheet hide (v8 cart regression, 2026-11-26)
+
+The v8 cart frame (`~/scratch/paired-shots-v3/states/itemshop-cart/exe.png`)
+shows the same art-less control as an empty dotted field while the
+O2CASH-shortfall `Dialog_Question1` sheet is up. The sheet rect
+`(171,3)-(648,595)` does not reach x 654–786, so the missing mascot is
+an active hide, not sheet overlap and not a cart-face staging gap
+(the entry frame stages the same control).
+
+Statics pin: BUYITEM's shortfall arm posts a type-2 event with host
+`0x14200004` and caption VA `0x648b38` (`FUN_00499760`, file
+`0x9f41`–`0x9f55`, `ev_f3ad15be…`); `FUN_00478c90` packs
+`(type << 16) | (host & 0xfff)` (`ev_e6496eab…`). The queue pump
+`FUN_00476330` (file `0x76330`, `ev_62d790e447a9…`) case 2 at VA
+`0x476e6a` constructs `CDQuestion1` at `0x434270` (vftable `0x644a34`,
+`ev_b7e8be0297c3…`, instruction walk `ev_5b978f7d615f…`) and calls the
+dialog's `+0x68` method (`0x4323d0`, `ev_cf766cb42325…`). The exact
+control-hide write is not pinned: an exhaustive immediate scan for
+`0x14600053` (`ev_a174e9d6ed87…`) finds only the two click/animation
+arms (`FUN_00498bc0` file `0x98c3a`, `FUN_00499760` file `0x4998b3`);
+no state-family or sheet path hides that literal. The hide is therefore
+pinned by the exe frame plus the negative statics result, and our
+painter gates the staged mascot on the sheet-open flag
+(`ScreenGame::shop_charge_confirm_open`) rather than inventing a control
+write. Next evidence step (F5, controller): a stopped-state control
+write or a sheet-open/close frame pair naming the hiding class method.
