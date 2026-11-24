@@ -2607,7 +2607,9 @@ mod waiting_chat_tests {
 
     #[test]
     fn user_message_matches_encore_vector() {
-        // Encore vector: (`ab`, `abc`, seat 5) -> body below.
+        // Named decoder #898: `docs/net-protocol.md` §4c 3012 — ten
+        // receive sites push 3012 beside parent `0x762B44` from file
+        // `0x15e601`. Encore vector: (`ab`, `abc`, seat 5) -> body below.
         let message = WaitingUserMessage {
             sender: "ab".to_owned(),
             content: vec![0x61, 0x62, 0x63],
@@ -2624,7 +2626,9 @@ mod waiting_chat_tests {
 
     #[test]
     fn admin_message_matches_encore_vector() {
-        // Encore vector: (`ab`, `a`, seat 7) -> body below.
+        // Named decoder #898: `docs/net-protocol.md` §4c 3013 — three
+        // receive sites push 3013 beside parent `0x762B44` from file
+        // `0x15f051`. Encore vector: (`ab`, `a`, seat 7) -> body below.
         let message = WaitingAdminMessage {
             sender: "ab".to_owned(),
             content: vec![0x61],
@@ -2775,6 +2779,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn user_message_carries_sender_plus_raw_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2013 —
+        // handler file `0x15bfa0` reads sender then content to end.
         let message = MainRoomUserMessage {
             sender: "ab".to_owned(),
             content: vec![0x61, 0x62, 0x63],
@@ -2790,6 +2796,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn admin_message_carries_sender_plus_raw_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2014 —
+        // three receive sites at files `0x15c075`/`0x15c11a`/`0x15c151`.
         let message = MainRoomAdminMessage {
             sender: "ab".to_owned(),
             content: vec![0x61],
@@ -2850,6 +2858,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn whisper_answer_reports_invalid_without_content() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2018 —
+        // receive site file `0x15c20b`, i32 invalid + strings.
         // Undelivered whisper: result word plus recipient only.
         let message = SendWhisperResponse {
             invalid: true,
@@ -2890,6 +2900,8 @@ mod main_room_chat_tests {
 
     #[test]
     fn receive_whisper_carries_sender_plus_text() {
+        // Named decoder #898: `docs/net-protocol.md` §4c 2019 —
+        // receive site file `0x15c5b0`, two NUL-terminated strings.
         let message = ReceiveWhisper {
             sender: "ab".to_owned(),
             content: "cd".to_owned(),

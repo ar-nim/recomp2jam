@@ -222,11 +222,17 @@ the stable anchors.
 | `ChannelList` | 1003 | `channel_list_decodes_count_prefixed_rows` | §4c: dispatcher `0x1583f1`, handler VA `0x559ff0` / file `0x159ff0` |
 | `RoomCreated` | 2005 | `room_created_decodes_the_live_twenty_one_byte_broadcast` | §4b: opcode `0x07D5`, 21-byte body probe |
 | `RoomRemoved` | 2007 | `room_removed_decodes_the_live_disband_broadcast` | §4b: opcode `0x07D7`, live disband probe |
+| `MainRoomUserMessage` | 2013 | `user_message_carries_sender_plus_raw_content` | §4c: handler file `0x15bfa0` |
+| `MainRoomAdminMessage` | 2014 | `admin_message_carries_sender_plus_raw_content` | §4c: receive sites `0x15c075`/`0x15c11a`/`0x15c151` |
 | `Announcement` | 2016 | `announcement_decodes_live_capture` | §4c: dispatch base `0x1582ec`, case `0x1584df`, handler VA `0x55c0a0` / file `0x15c0a0` |
+| `SendWhisperResponse` | 2018 | `whisper_answer_reports_invalid_without_content` | §4c: receive site file `0x15c20b` |
+| `ReceiveWhisper` | 2019 | `receive_whisper_carries_sender_plus_text` | §4c: receive site file `0x15c5b0` |
 | `RankNotification` | 2029 | `rank_notification_matches_wire_order` | §4c: case `0x158556`, handler VA `0x55b4d0` / file `0x15b4d0`, invalid gate `0x15b527` |
 | `MusicScoreListAnswer` | 2031 | `score_list_answer_pins_easy_normal_hard_byte_order` | §4c: handler VA `0x55b590` / file `0x15b590`, row read `0x15b5fa`; D22 scan `0x40d5b`–`0x40f4f` |
 | `UserJoinedWaiting` | 3004 | `user_joined_waiting_decodes_the_captured_wire_body` | §4c: opcode `0x0BBC`, 103-byte wire body |
 | `UserLeftWaiting` | 3007 | `user_left_waiting_decodes_the_captured_wire_body` | §4c: opcode `0x0BBF`, eight-byte wire body |
+| `WaitingUserMessage` | 3012 | `user_message_matches_encore_vector` | §4c: ten receive sites from file `0x15e601` |
+| `WaitingAdminMessage` | 3013 | `admin_message_matches_encore_vector` | §4c: three receive sites from file `0x15f051` |
 | `RoomArenaEcho` | 4003 | `room_arena_echo_encodes_plain_stage` | §4c 4002: handler VA `0x55f3c0` / file `0x15f3c0`, read `0x15f3c3`, case `0x158655` |
 | `RoomTeamChanged` | 4007 | `room_team_changed_round_trips_slot_and_key` | handler file `0x15f470` (type doc), slot/key reads, UI forward `0x478d50` |
 | `MemberReadyStateChanged` | 4009 | `member_ready_state_changed_encodes_member_then_flag` | handler file `0x15f5b0`, seat store `0x140d77`, ready gate `0xb5560` (type doc) |
