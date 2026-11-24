@@ -2248,6 +2248,12 @@ pub const MSHOP_NO_SEARCH_HITS_NOTICE: &str = "검색된 곡이 없습니다.";
 pub const MSHOP_LIGHTBOARD_TOOLTIP_CODE: u32 = 0x1A50_006E;
 pub const MSHOP_LIGHTBOARD_FONT: &str = "굴림체";
 pub const MSHOP_LIGHTBOARD_FALLBACK: &str = "신나는 음악게임 오투잼";
+/// Magenta rest notice on the lightboard, read from the v4 quiesced
+/// exe frame (`~/scratch/paired-shots-v4/states/musicshop/exe.png`,
+/// ink bbox (709,21)-(772,30)) and inked into the staged tooltip
+/// rect until a pointer hover replaces it. The exe's notice writer
+/// is not in the static walk; its text source stays OPEN.
+pub const MSHOP_LIGHTBOARD_ENTRY_NOTICE: &str = "바뀐 음악점수 확인";
 
 /// Whether a lightboard figure stays painted at a hover point.
 #[must_use]
@@ -2282,8 +2288,11 @@ pub const MSHOP_CART_BACK_CODE: u32 = 0x1A50_005A;
 /// `State_MShop.ojs`: BACK and the two pager pairs. Painting their
 /// multi-frame bodies over it produced the bright blue pressed face
 /// in the v3 pair; no press is pinned at entry (#399/#814).
-const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 17] = [
+const MUSIC_SHOP_BAKED_CHROME_CODES: [u32; 20] = [
     0x1A20_0008,
+    MSHOP_OWNED_TITLE_SORT_CODE,
+    MSHOP_OWNED_PLAYTIME_SORT_CODE,
+    MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
     MSHOP_GENRE_FILTER_FIRST_CODE,
     MSHOP_GENRE_FILTER_FIRST_CODE + 1,
     MSHOP_GENRE_FILTER_FIRST_CODE + 2,
@@ -2352,7 +2361,9 @@ pub fn music_shop_scene_kept(
     {
         return false;
     }
-    if MUSIC_SHOP_ROW_ART_CODES.contains(&placed.code) {
+    if MUSIC_SHOP_ROW_ART_CODES.contains(&placed.code)
+        || MSHOP_ENTRY_PAGER_DIGIT_CODES.contains(&placed.code)
+    {
         return genre != MusicShopGenreFilter::New;
     }
     if MUSIC_SHOP_CART_ART_CODES.contains(&placed.code) {
@@ -2559,6 +2570,15 @@ pub const MSHOP_PAGER_SONGS_PER_PAGE: usize = 12;
 pub const MSHOP_PAGE_CUR_ONES_CODE: u32 = 0x1A50_0026;
 pub const MSHOP_PAGE_TOT_TENS_CODE: u32 = 0x1A50_0027;
 pub const MSHOP_PAGE_TOT_ONES_CODE: u32 = 0x1A50_0028;
+/// Catalog pager digits hidden on the NEW entry face. The baked
+/// `State_MShop.ojs` separator stays visible; the v4 paired frame
+/// shows no digit bodies until a color filter opens the catalog.
+pub const MSHOP_ENTRY_PAGER_DIGIT_CODES: [u32; 4] = [
+    MSHOP_PAGE_CUR_TENS_CODE,
+    MSHOP_PAGE_CUR_ONES_CODE,
+    MSHOP_PAGE_TOT_TENS_CODE,
+    MSHOP_PAGE_TOT_ONES_CODE,
+];
 /// Row TEXT templates in cell order (title, bought flag, artist,
 /// editor, genre, tempo).
 pub const MSHOP_ROW_TEXT_CODES: [u32; 6] = [
@@ -7759,6 +7779,86 @@ mod side_tests {
             ),
             "the BACK face is baked into the backdrop at entry"
         );
+    }
+
+    #[test]
+    fn musicshop_entry_keeps_the_baked_sort_button_faces() {
+        // Live caller chain: `visit_side(MusicShop)` stages the bound
+        // art -> `ScreenGame::paint_side` -> `paint_side_scene_selected`
+        // -> `music_shop_scene_kept`. Oracle: the v4 quiesced pair
+        // shows dark 곡명/만료일/다운 plates in `State_MShop.ojs`;
+        // painting the staged bodies over them makes them bright.
+        for code in [
+            MSHOP_RANK_BUTTON_FIRST_CODE,
+            MSHOP_OWNED_PLAYTIME_SORT_CODE,
+            MSHOP_OWNED_DOWNSTATUS_SORT_CODE,
+        ] {
+            let art = ScenePlacement {
+                role: PlacementRole::Clone,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 40,
+                    h: 20,
+                },
+            };
+            assert!(
+                !music_shop_scene_kept(
+                    &art,
+                    MusicShopGenreFilter::New,
+                    MusicShopFace::Download,
+                    false
+                ),
+                "baked sort face {code:#x} must not be overpainted"
+            );
+        }
+    }
+
+    #[test]
+    fn musicshop_entry_hides_the_catalog_pager_digits() {
+        // Live caller chain: `visit_side(MusicShop)` stages the bound
+        // art -> `ScreenGame::paint_side` -> `paint_side_scene_selected`
+        // -> `music_shop_scene_kept`. Oracle: the v4 content-matched
+        // pair (`~/scratch/paired-shots-v4/states/musicshop`) has only
+        // the baked "/" separator on the entry face; rust reads
+        // 01/47 because it paints the staged digit bodies there too.
+        for code in [
+            MSHOP_PAGE_CUR_TENS_CODE,
+            MSHOP_PAGE_CUR_ONES_CODE,
+            MSHOP_PAGE_TOT_TENS_CODE,
+            MSHOP_PAGE_TOT_ONES_CODE,
+        ] {
+            let art = ScenePlacement {
+                role: PlacementRole::Clone,
+                id: String::new(),
+                code,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 40,
+                    h: 20,
+                },
+            };
+            assert!(
+                !music_shop_scene_kept(
+                    &art,
+                    MusicShopGenreFilter::New,
+                    MusicShopFace::Download,
+                    false
+                ),
+                "entry hides pager digit {code:#x}"
+            );
+            assert!(music_shop_scene_kept(
+                &art,
+                MusicShopGenreFilter::Gold,
+                MusicShopFace::Download,
+                false
+            ));
+        }
     }
 
     #[test]

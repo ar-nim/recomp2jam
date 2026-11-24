@@ -546,3 +546,29 @@ right alignment for those two cells only, and inks no zero in the
 cash cells. Other caption families keep their existing left/top
 painter; no per-caption offsets are invented. Guard:
 `wallet_values_right_align_and_zero_cash_cells_stay_blank`.
+
+## Ticket #878: gift-row chrome on the empty MY BAG face (2026-11-24)
+
+Version pin: `AngelO2Jam.exe`, 5,029,888 B, SHA-256
+`83a04541…72c823b`; Ghidra 12.2 via REA.
+
+The state-entry writer `FUN_004a3730` (file `0xa3730`, EV
+`ev_8235c9a4e37c09b457770dd6151cb5f64363b6e86567176f7a4285349576374d`)
+walks ten MYBAGITEM controls `0x15600023..2C`. The bag refresh
+`FUN_004a7490` (file `0xa7490`, EV
+`ev_76ca9f045d605569607cf02370c2ffddb5c5f037efcd102de9030dda541e616d`)
+first calls `FUN_004a7610`, which clears every SKILLCOUNT text
+`0x1540005c..65` to empty bytes, then inks a count only when the
+inventory record's word at `+4` is nonzero. `FUN_004a8ba0` (same
+batch) shows the gift family only on the PRESENT BOX tab;
+`FUN_0051ee60` selects gift type-image frame 0 for absent gifts.
+
+The v4 paired frame (`~/scratch/paired-shots-v4/states/myroom`,
+structural 0.9891) had the empty bag matched, but rust still painted
+five `Myroom_Gift_TypeImage.ojs` potion icons and five
+`Myroom_Btn_GiftMove.ojs` `이동` buttons on the MY BAG face. Those
+bodies are staged at `0x15500050` and `0x15500053` clones; the exe
+does not show either on the bag face. The ticket wording "0개" was
+a misread of the baked `이동` label. Fix: both codes join the gift
+half of `myroom_control_tab`, so `paint_side`'s existing
+`myroom_tab_kept` filter hides them without moving geometry.

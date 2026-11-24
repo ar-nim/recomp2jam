@@ -328,3 +328,29 @@ Guards: `musicshop_entry_state_keeps_the_promo_and_download_faces_only`,
 `idle_download_bars_ink_the_exe_dark_face`,
 `music_shop_bottom_wallet_inks_gem_and_won_from_the_shared_wallet`,
 `room_stage_gateway_sends_exe_wire_sequence`.
+
+## Entry chrome residual (ticket #878, v4 pair, 2026-11-24)
+
+The v4 content-matched pair (`~/scratch/paired-shots-v4/states/musicshop`,
+structural σ2 0.9888, target bar 0.99) has no content mismatch. Region
+diff (100x100 cells, σ2) finds the largest gaps in the top-right
+banner (0.9378), right list (0.9394/0.9465), and bottom pager band
+(0.9500/0.9550). Two are paint-state claims:
+
+- The 01/47 pager digit bodies (`0x1A500025..28`) are hidden on the
+  NEW entry face; the v4 exe frame shows only the baked `/`
+  separator. The digits paint once a color filter opens the
+  catalog (`music_shop_scene_kept`).
+- The lightboard (`0x1A50006E`) carries a magenta rest notice at
+  rest, ink bbox (709,21)-(772,30), exact copy `바뀐 음악점수 확인`
+  read from the v4 exe pixels. A hover replaces it with the pinned
+  tooltip lines. The exe's notice writer is not in the static walk;
+  the string's protocol source stays OPEN — the pixel pair pins
+  only the rendered copy and the staged rect.
+
+The right-panel sort buttons `0x1A200016..18` also have a dark rest
+face baked into `State_MShop.ojs`; the staged bodies overpaint it
+bright in the v4 rust leg. They join the baked-chrome gate (click
+dispatch keeps the staged rects). The remaining right-list and
+bottom-wallet cells are glyph raster under the owner's presentation
+rule (`e8d01`); no element is missing.
