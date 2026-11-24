@@ -779,15 +779,36 @@ owner's v6 visual note called both digit runs green/gold; the
 exe's own sprite bytes make only the prefix glyphs green/gold and
 the digits gray. The exe is the oracle; the note stays as history.
 
-Implementation note: the shell's modern-font seam (owner decision
-`e8d01`) paints the two prefix glyphs as text at the pinned colors
-and geometry, because these runtime font bodies are not named in
-`ControlList_Interface.txt` and staging them would need changes
-outside this lane's owned paths. The reviewer's post-fix paired
-re-pair (`~/scratch/review-shop-price-row/score-price-row.log`) moves
-region x 214–760, y 240–272 from structural 0.7943 to **0.8455**
-(raw 0.8206). Pixel fidelity of the glyph shape stays OPEN; next
-evidence step is a staged-font seam for an exact sprite match.
+Implementation note (close-out, #877): the shell now stages both
+runtime font bodies by literal name from `Interface1.opi` through
+`staging::stage_shop_price_fonts` (the `STATE_SHOP` arm publishes
+them for the placement-only `paint_shop_board` seam). The archive
+entries verify at won slot 640 / data offset `31401138` / size
+`2384` and gem slot 639 / `31398754` / `2384`, each with 12 RGB555
+frames at anchor `(0,0)`. `paint_shop_price_sprite_row` selects won
+frame 11 for `₩`, won frame 10 for `G`, atlas frames `0..9` for
+digits, at the pinned anchors and 8-px pitch. Since neither body is
+named in `ControlList_Interface.txt`, literal-name staging is the
+only geometry-free route; no `.bnd` rect is invented. The
+modern-font seam (owner decision `e8d01`) remains only the no-data
+fallback, never the sprite raster when art staged. The paired
+re-pair (`~/scratch/review-shop-price-row/lane-glyph-score-final.log`,
+region x 214–760, y 240–272 vs the v3 exe frame) moves from
+structural 0.8455 / raw 0.8206 (modern text) to structural
+**0.9579** / raw **0.9123** (staged sprites). Remaining delta is
+outside the glyph raster; per-cell provenance of the gem word stays
+OPEN as above.
+
+Guard: `live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs`
+— live chain: `main.rs::run_play` →
+`session::OnlineSession::stage_live_art` → `stage_live_scenes` →
+`stage_interface_scenes` → `stage_state(State::Shop)` →
+`stage_shop_price_fonts` → `staged_shop_price_fonts` →
+`ScreenGame::visit_side` → `ScreenGame::paint_at` → `paint_shop_board`
+→ `paint_shop_card_price_row` → `paint_shop_price_sprite_row`. It
+data-gates with `pack_skip_report` and asserts the sprite core pixels;
+breaking the staging publish makes it fail (mutation log
+`~/scratch/review-glyph-gate/live-guard-mutation-red.log`).
 
 ## #877 — bottom-right preview-figure statics pin (close-out lane, 2026-11-26)
 
