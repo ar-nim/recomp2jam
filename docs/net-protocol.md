@@ -234,6 +234,36 @@ the stable anchors.
 | `ScoreCompleted` | 4018 | `score_completed_decodes_live_capture`, `score_completed_reports_unfunded_count_without_capping` | §4c: handler file `0x15fbe0`, memset `0x15fc17`, loop exits `0x15fc80`/`0x15fce2`/`0x15fd28` |
 | `GameRankUpdate` | 4040 | `game_rank_update_round_trips_leader_places`, `changed_4040_rank_byte_cannot_change_result_banner` | §4c: handler file `0x159a60`, writer `0x1414ad`, no result-screen reader |
 
+## 4f. Named scripted-gateway flow list (#899)
+
+This is the named CI bar for request/response round trips. Each row is
+driven by `every_named_flow_round_trips_through_the_scripted_gateway` in
+`crates/o2jam-net/src/gateway_flows.rs` (tier 2, ADR-0014): the guard
+sends the request through `GatewayConnection::exchange`, checks the bytes
+at the in-test gateway, and decodes the answer with the production codec.
+Event-only flows and player-visible UI legs stay on their existing guards
+(`rank_update_traces_the_eight_place_bytes_from_the_gateway`,
+`shop_buy_round_trips_through_scripted_gateway`,
+`myroom_gift_list_fetch_round_trips_through_scripted_gateway`); they are
+not duplicated here.
+
+| Flow | C→S | S→C | Answer codec |
+|---|---|---|---|
+| `authorize_1000_1001` | 1000 | 1001 | `AuthResponse` |
+| `channel_list_1002_1003` | 1002 | 1003 | `ChannelList` |
+| `channel_login_1004_1005` | 1004 | 1005 | `ChannelLoginResponse` |
+| `character_info_2000_2001` | 2000 | 2001 | `CharacterInfo` |
+| `room_list_2002_2003` | 2002 | 2003 | `RoomList` |
+| `create_room_2004_2006` | 2004 | 2006 | `CreateRoomResponse` |
+| `join_waiting_3002_3003` | 3002 | 3003 | `JoinRoomResponse` |
+| `music_score_list_2030_2031` | 2030 | 2031 | `MusicScoreListAnswer` |
+| `submit_score_4016_4018` | 4016 | 4018 | `ScoreCompleted` |
+| `shop_buy_5000_5001` | 5000 | 5001 | `SyncItemPurchaseReply` (observed 152-byte shape) |
+| `gift_list_5017_5018` | 5017 | 5018 | `GetGiftMessageListResponse` |
+| `payment_5015_5016` | 5015 | 5016 | `StartPaymentResponse` |
+| `cash_refresh_5028_5029` | 5028 | 5029 | `SyncCashPointResponse` |
+| `free_pass_5025_5026` | 5025 | 5026 | `SyncFreePassResponse` |
+
 ## 5. Offline-playable verdict
 
 Plays offline (no server): chart load/decrypt (`new`-XOR + `ojn` slices), OJM decode,
