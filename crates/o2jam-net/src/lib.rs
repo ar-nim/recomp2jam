@@ -62,8 +62,8 @@ pub use play::{
     MemberReadyStateChanged, MusicState, Ready, RoomTeamChanged, ScoreCompleted, ScoreEntry,
     ScoreSubmission, SetDownloadProgress, SetRoomArena, SetRoomMusic, SetRoomTeam, StartGame,
     StatKind, SubmitScore, SyncMemberMusicState, SyncMemberMusicStateEvent, SyncMusicDownload,
-    UpdateGameStats, UpdateMusicState, WaitingMusicChanged, RESULT_BANNER_WIN_FLAG_OFFSET,
-    RESULT_RANK_COLUMN_OFFSET, RESULT_RANK_PLACE_OFFSET,
+    UpdateGameStats, UpdateMusicState, WaitingMusicChanged, RESULT_RANK_COLUMN_OFFSET,
+    RESULT_RANK_PLACE_OFFSET,
 };
 pub use relay::{
     ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,

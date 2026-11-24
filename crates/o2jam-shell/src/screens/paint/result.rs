@@ -6,7 +6,6 @@
 //! existing scenario guards stay unchanged (#139 paint split).
 
 use super::*;
-
 /// Battle verdict art mounted by the result builder `FUN_004c2390`
 /// (file `0xc2390`): `StateResult_Top.ojs` plus
 /// `StateResult_Bottom.ojs` plus `Result_WinLose.ojs` (file `0x24a35c`).
@@ -967,5 +966,79 @@ pub(crate) fn paint_result_digit_field_if_staged(
 ) {
     if let Some(value) = value {
         paint_result_digit_field(frame, figures.get(sprite), value, last_x, y);
+    }
+}
+
+#[cfg(test)]
+mod result_banner_tests {
+    use o2jam_game::RoomTeams;
+    use o2jam_net::frame::decode_frame;
+    use o2jam_net::{GameRankUpdate, WireMessage};
+
+    use super::{battle_verdict, winlose_frame, BattleVerdict, ResultVerdict};
+
+    /// Loss for local team 0 behind team 1's higher submitted total,
+    /// the same mirror `OnlineSession::apply_score_completed` stages.
+    fn losing_teams() -> RoomTeams {
+        let mut teams = RoomTeams::new();
+        teams.set_team(0, 0);
+        teams.set_team(1, 1);
+        teams.submit(0, 200);
+        teams.submit(1, 50_000);
+        teams
+    }
+
+    /// Decode one full 4040 frame, the same codec the session's
+    /// `apply_rank_update` uses before storing `last_rank_places`.
+    fn decoded_places(first: u8, second: u8) -> GameRankUpdate {
+        let ranks = GameRankUpdate {
+            member_ranks: [first, second, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        };
+        let frame = decode_frame(&ranks.encode()).expect("4040 frame");
+        GameRankUpdate::decode_frame(&frame).expect("4040 body")
+    }
+
+    #[test]
+    fn decoded_4040_places_never_change_the_result_banner_frame() {
+        // Live caller chain: `main.rs::run_play` → `setup_online` →
+        // `run_windowed_session` → `OnlineSession::paint` →
+        // `ScreenGame::paint_result` → `ScreenGame::result_verdict` →
+        // `battle_verdict` → `winlose_frame` → `paint_result_scene`.
+        // The 4040 arm ends earlier: `OnlineSession::apply_rank_update`
+        // → `self.last_rank_places`; no banner consumer exists.
+        // Evidence: `docs/net-protocol.md` §4c `4040 GameRankUpdate` —
+        // handler VA `0x559a60` (file `0x159a60`) stores each place at
+        // `+0x217d` (writer `0x1414ad`, REA `ev_4684b913…`); the banner
+        // reads win flag `+0x21d2` (files `0xc31ca`/`0xc320c`/
+        // `0xc3300`/`0xc3343`) and the rank column reads `+0x10d2c`
+        // (`FUN_004c49a0`), with no `+0x217d` reader (`ev_94ff31c9…`).
+        // Red proof: wiring the decoded first 4040 place into
+        // `battle_verdict` flipped this local team Lose→Win; the
+        // assertion below failed with `Win` vs `Lose` (frame 1 vs 2).
+        // The mutation was reverted; this guard then passed.
+        let teams = losing_teams();
+        let verdict = battle_verdict(&teams, Some(0));
+        let banner = winlose_frame(ResultVerdict::Battle(verdict));
+        assert_eq!(verdict, Some(BattleVerdict::Lose));
+        assert_eq!(banner, Some(2));
+
+        let first = decoded_places(0, 1);
+        let second = decoded_places(1, 0);
+        assert_ne!(first.member_ranks, second.member_ranks);
+
+        assert_eq!(battle_verdict(&teams, Some(0)), verdict);
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(battle_verdict(&teams, Some(0)))),
+            banner
+        );
+
+        // Positive control: a changed 4018 total does move the banner.
+        let mut winning = teams;
+        winning.submit(0, 100_000);
+        assert_eq!(battle_verdict(&winning, Some(0)), Some(BattleVerdict::Win));
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(battle_verdict(&winning, Some(0)))),
+            Some(1)
+        );
     }
 }

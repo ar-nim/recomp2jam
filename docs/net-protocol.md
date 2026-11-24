@@ -232,7 +232,7 @@ the stable anchors.
 | `MemberReadyStateChanged` | 4009 | `member_ready_state_changed_encodes_member_then_flag` | handler file `0x15f5b0`, seat store `0x140d77`, ready gate `0xb5560` (type doc) |
 | `ScoreSubmission` | 4017 | `score_submission_round_trips_member_byte` | §4c: handler file `0x15fba0`, one-byte read `0x15fbad`, case `0x1586cc` |
 | `ScoreCompleted` | 4018 | `score_completed_decodes_live_capture`, `score_completed_reports_unfunded_count_without_capping` | §4c: handler file `0x15fbe0`, memset `0x15fc17`, loop exits `0x15fc80`/`0x15fce2`/`0x15fd28` |
-| `GameRankUpdate` | 4040 | `game_rank_update_round_trips_leader_places`, `changed_4040_rank_byte_cannot_change_result_banner` | §4c: handler file `0x159a60`, writer `0x1414ad`, no result-screen reader |
+| `GameRankUpdate` | 4040 | `game_rank_update_round_trips_leader_places`, `decoded_4040_places_never_change_the_result_banner_frame` | §4c: handler file `0x159a60`, writer `0x1414ad`, no result-screen reader |
 
 ## 4f. Named scripted-gateway flow list (#899)
 
