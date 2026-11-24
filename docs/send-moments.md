@@ -153,7 +153,7 @@ next evidence step, not an omission.
 |---|---|---|---|
 | 5015 StartPayment | Cart BUYITEM `0x1a20005d` / GIFTITEM `0x1a200073` after web-busy, non-empty bag, cash and gem checks; writes `+0x14d` = 1/2 | `FUN_004c7f70` file `0xc7f70`, `ev_26ac6479…` (`docs/musicshop.md`) | PARTIAL. Next: one tapped payment leg with 5015/5011 logged. |
 | 5010 SyncMusicPurchase | Per-row and cart buy arms (assumed wire side; static buy arm is the opcode-arg builder) | file `0xf3fa8` (`docs/shop.md`, `docs/musicshop.md`) | PARTIAL. Next: one successful music-purchase tap. |
-| 5012 in shop | Download START/CANCEL controls stage with the shop but dispatch no opcode | `docs/musicshop.md:260-265` (Download controls #410): both rects are inert because the shop-side 5012 send site is OPEN. No guard name is claimed here: grep finds no `fn .*inert` in `crates`, so the old guard citation was false | OPEN. Next: pin the shop-side 5012 send site before enabling the controls. |
+| 5012 in shop | Download START/CANCEL controls stage with the shop but dispatch no opcode | `docs/musicshop.md:260-265` (Download controls #410): both rects are inert because the shop-side 5012 send site is OPEN. No guard name is claimed here: the exact guard `music_shop_download_controls_stay_inert_until_a_5012_send_is_pinned` does not exist in `crates`; the similarly named `create_room_key_modes_inert` is unrelated | OPEN. Next: pin the shop-side 5012 send site before enabling the controls. |
 
 ## 11. MyRoom
 
