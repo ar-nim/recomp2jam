@@ -1426,6 +1426,30 @@ mod live_art_tests {
             && py < rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(0))
     }
 
+    /// First differing pixel outside every allowed rect. Unlike the
+    /// render helper, this walks all changed pixels so one permitted
+    /// region cannot hide a later stray ink.
+    fn first_change_outside_allowed(
+        before: &[u32],
+        after: &[u32],
+        w: usize,
+        allowed: &[o2jam_render::Rect],
+    ) -> Option<(usize, usize)> {
+        let width = w.max(1);
+        let height = before.len().min(after.len()) / width;
+        for y in 0..height {
+            for x in 0..width {
+                if allowed.iter().any(|rect| rect_contains(*rect, x, y)) {
+                    continue;
+                }
+                if before[y * width + x] != after[y * width + x] {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
+    }
+
     /// Native rect of one staged Waiting caption, read from placements.
     fn staged_caption_rect(game: &ScreenGame, id: &str) -> o2jam_render::Rect {
         game.scene_placements(Screen::Waiting)
@@ -1446,6 +1470,17 @@ mod live_art_tests {
         // above the chat rows (a literal `(w/8, h*3/4)` scrim over the
         // staged `State_Waiting.bnd` backdrop). A pick may now re-ink
         // the pinned `MUSICNAME` rect and nothing else.
+        //
+        // #883 default-state refutation: the v3 waiting-master exe frame
+        // shows `?` on all three random cards with a normal 757/2/1 room
+        // song and zero clicks. `FUN_004aac80` seeds `DAT_007789dc` from
+        // `FUN_004bb2c0` (which always sets bit 31) on Waiting entry
+        // (`ev_c10cd3fa4167b8119c9df3156b5e4963987ffa251d55a0344880b4a674b194a9`,
+        // `ev_17124597c0cfc47ad96457d9127450d22f7ab63df25d149977533df277b757ed`),
+        // so the default entry state mounts the pinned EFFECT_1/2 mini
+        // cards (`0x16500045/46`). Those two staged rects are therefore
+        // permitted here; any other ink outside the seat grid and BPM
+        // caption still fails the guard.
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
@@ -1475,22 +1510,49 @@ mod live_art_tests {
             w: bpm.w + 8,
             h: bpm.h + 11,
         };
+        let placements = picked.scene_placements(Screen::Waiting);
+        let effect_rects = [
+            ("IDC_IMAGE_SWAIT_EFFECT_1", 0x1650_0045u32),
+            ("IDC_IMAGE_SWAIT_EFFECT_2", 0x1650_0046u32),
+        ]
+        .map(|(id, code)| {
+            let placed = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .unwrap_or_else(|| panic!("{id} placement missing from staged Waiting art"));
+            assert_eq!(
+                placed.code, code,
+                "the pinned mini-card control code must match the staged rect"
+            );
+            placed.rect
+        });
         let bare_frame = painted_pixels(&mut bare, 0);
         let picked_frame = painted_pixels(&mut picked, 0);
-        let changed =
-            o2jam_render::first_change_outside(&bare_frame, &picked_frame, width, seat_grid);
+        let changed = first_change_outside_allowed(
+            &bare_frame,
+            &picked_frame,
+            width,
+            &[seat_grid, bpm_with_scrim, effect_rects[0], effect_rects[1]],
+        );
         // #535: the pick's BPM caption sits below the covers, so it
-        // may ink there; every other pixel below the grid stays put.
-        let (x, y) = changed.expect("the pick inks its BPM caption below the grid");
-        assert!(
-            rect_contains(bpm_with_scrim, x, y),
-            "the pick inked outside the seat grid and BPM caption: {changed:?}"
+        // may ink there; #883 adds the two default `?` mini-card rects.
+        // Every other pixel below the grid stays put.
+        assert_eq!(
+            changed, None,
+            "the pick inked outside the seat grid, BPM and pinned mini-cards: {changed:?}"
         );
         assert_ne!(
             o2jam_render::pixels_in_rect(&bare_frame, width, bpm),
             o2jam_render::pixels_in_rect(&picked_frame, width, bpm),
             "the BPM caption must follow the staged pick"
         );
+        for rect in effect_rects {
+            assert_ne!(
+                o2jam_render::pixels_in_rect(&bare_frame, width, rect),
+                o2jam_render::pixels_in_rect(&picked_frame, width, rect),
+                "the default entry state must ink each pinned ? mini card"
+            );
+        }
     }
 
     /// Pinned `LEVEL` badge rect of the live-staged Waiting art
