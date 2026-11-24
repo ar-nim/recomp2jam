@@ -1019,6 +1019,10 @@ mod tests {
 
     #[test]
     fn opi_slots_reject_stride_running_past_file() {
+        // Doc pin: docs/file-formats/opi.md "Entry (152 B)" +140
+        // `reserved_size` is the on-disk stride to the next slot; the
+        // "Data-region coverage" walk pins it (`ControlList_Interface.txt`
+        // at off 74438614 + reserved 419496 = table start 74858110).
         let mut blob = opi_blob();
         let first_aux_at = OPI_HEADER_LEN + 5 + 6 + OPI_RESERVED_OFF;
         blob[first_aux_at..first_aux_at + 4].copy_from_slice(&99999u32.to_le_bytes());
