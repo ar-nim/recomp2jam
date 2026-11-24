@@ -1697,6 +1697,12 @@ impl MusicScoreRow {
     /// from the select entry's difficulty word (`0` Easy, `1` Normal,
     /// `2` Hard), then caches the byte at `0x7797c4` for the
     /// `Result_Imgs_Rank` frame. The fourth byte is Memoryer RX.
+    ///
+    /// Seam scope (`docs/live-path-reachability.md`): pure codec
+    /// index helper with no runtime caller yet. No live path reaches
+    /// it — the shell stages no 2031 → `Result_Imgs_Rank` chooser.
+    /// Next step: wire the 2031 table into rank-frame selection;
+    /// until then the byte order is pinned only at this seam.
     #[must_use]
     pub fn rank_for(self, difficulty: Difficulty) -> u8 {
         self.difficulty_ranks[difficulty as usize]
@@ -3304,9 +3310,15 @@ mod notice_tests {
 
     #[test]
     fn score_list_answer_pins_easy_normal_hard_byte_order() {
-        // seam: pure codec. Named decoder #898: `docs/net-protocol.md`
-        // §4c 2031 handler VA `0x55b590` (file `0x15b590`), row read
-        // `0x15b5fa`. Claim D22 (`docs/claims/50-net.md:26`):
+        // Seam suffices (`docs/live-path-reachability.md`): pure codec
+        // byte-order helper with no live caller. The exe caches the
+        // rank byte at `0x7797c4` for the chooser, but our shell has
+        // no 2031 → `Result_Imgs_Rank` consumer yet; next step is to
+        // wire that table into rank-frame selection. No live caller
+        // chain exists to name, so this pins the index at the seam.
+        // Named decoder #898: `docs/net-protocol.md` §4c 2031 handler
+        // VA `0x55b590` (file `0x15b590`), row read `0x15b5fa`.
+        // Claim D22 (`docs/claims/50-net.md:26`):
         // scan files `0x40d5b`–`0x40f4f`, chooser cache `0x7797c4`.
         // Byte 2 Easy, 3 Normal, 4 Hard; byte 5 is RX (no exe reader).
         // Decode a row whose four rank bytes are all distinct, then
