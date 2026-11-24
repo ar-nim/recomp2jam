@@ -155,7 +155,7 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | Myroom | 5 | loop | |
 | Waiting | 6 | loop | |
 | MusicShop | 10 (decimal) | loop | exe push `0xA` at file `0xC6E51`; the earlier audit's `0x10` shorthand is refuted |
-| Result | `0x13` | once | exe push `0` at file `0xC1CAF`; the earlier audit's "loop" is refuted. `0x13` is a **worker cache slot**, not a `BGM.ojm` record: slot `0xD + 6` holds `bgResult.ogg`, mode-3 entry 6 of `BGMwinter.ojm` (#904, static trace below) |
+| Result | `0x13` | once | exe call at file `0xC1CAF` (pushes at `0xC1CA5`/`0xC1CA7`); the earlier audit's "loop" is refuted. `0x13` is a **worker cache slot**, not a `BGM.ojm` record: slot `0xD + 6` holds `bgResult.ogg`, mode-3 entry 6 of `BGMwinter.ojm` (#904, static trace below) |
 | Song preview | 0 | — | |
 | Silence | −1 | — | |
 
@@ -177,9 +177,10 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   above is the single source in `Screen::bgm_cue` and
   `SideScreen::bgm_cue`; `recomp2jam::scene_bgm_cue` delegates to it. Every
   entry re-cues through `ScreenGame::enter_screen`/`visit_side`; the exe's
-  push sites file `0xF57D4` (Avi 8 once), `0x8DE28` (Planet 9 loop),
-  `0xC6E51` (MusicShop 10), and `0xC1CAF` (Result `0x13` once) arbitrate
-  over the earlier audit shorthand. Guards: `avi_launch_cue_selects_the_logo_record_once`,
+  cue sites file `0xF57D4` (Avi 8 once), `0x8DE28` (Planet 9 loop),
+  `0xC6E51` (MusicShop 10), and `0xC1CAF` (call; pushes at `0xC1CA5`/`0xC1CA7`,
+  Result `0x13` once) arbitrate over the earlier audit shorthand.
+  Guards: `avi_launch_cue_selects_the_logo_record_once`,
   `scene_bgm_cues_follow_the_pinned_table`, `music_shop_cue_loops_record_ten`,
   `result_cue_plays_bg_result_from_the_winter_worker_bank`,
   `same_record_cue_keeps_the_running_track`, `cue_switches_on_a_different_record`.
@@ -244,7 +245,8 @@ data row offsets below come from `address-to-file-offset`.
 
 Live caller chain: state dispatch → `FUN_004c1b90` (VA `0x4C1B90`,
 file `0x1b90`; `ev_1cbc946c4f582ac36fd98fa5e0bb05ebb4e4d102cfbda1aacf0740c62a9be16f`)
-→ `FUN_00551820(0x13, 0)` (file `0x151820`; push at `0xC1CAF`;
+→ `FUN_00551820(0x13, 0)` (file `0x151820`; call at `0xC1CAF`,
+pushes at `0xC1CA5`/`0xC1CA7`;
 `ev_fa3f6f8b9b47e9c71918d9d900856410c3070ef80ef813da9626f4d186d15da3`)
 → bank sub-object at `soundmgr + 0x340c0` (file `0x151832`, `add ecx,0x340c0`)
 → `FUN_0054bc50` (`ev_78e65d82656b266c69966b80db8ed056ae97b06d35ba3b2b3231914113eef4a3`):
@@ -318,9 +320,10 @@ seven-bank worker layout; it no longer claims an OPEN exe bank.
    Miss −10). Same VA, same family; naming variance only.
 6. **Our own audit shorthand** — the original Fresh-pins table listed
    MusicShop `0x10` (hex shorthand) and Result loop; the exe pushes
-   `0xA` at file `0xC6E51` and `0` at `0xC1CAF`. The exe arbitrates:
-   the table above and the code table (`Screen::bgm_cue`) use decimal 10
-   and once. Tracked here, not silently resolved (#307).
+   `0xA` at file `0xC6E51` and `0` at `0xC1CA5` before the `0x13` push
+   at `0xC1CA7` and the call at `0xC1CAF`. The exe arbitrates: the table
+   above and the code table (`Screen::bgm_cue`) use decimal 10 and once.
+   Tracked here, not silently resolved (#307).
 
 ## Delta list — ranked by owner-visible value
 

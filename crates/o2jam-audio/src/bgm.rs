@@ -1,7 +1,9 @@
 //! Scene BGM channel: the exe's `play_scene_music(id, loop)`
-//! contract — one track at a time, id `-1` silences, records are
-//! one-based over `Music/BGM.ojm`. The replay rate is `repeat`
-//! (`true` repeats until replaced, `false` plays once).
+//! contract — one track at a time, id `-1` silences. Except for Result,
+//! cue ids name one-based `Music/BGM.ojm` records; Result's `0x13` names
+//! a worker cache slot filled by `BGMwinter.ojm`'s `bgResult` record.
+//! `repeat` is the replay rate (`true` repeats until replaced, `false`
+//! plays once).
 //!
 //! Pins (OTwo.exe 7.55, 5,029,888 B, SHA-256 `83a04541…72c823b`;
 //! file offset = VA − `0x400000`; image base `0x400000`):
