@@ -890,7 +890,7 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
 /// leaves that control art-less, so the bound arm merges the body by
 /// name and attaches it to the parsed rect.
 const SHOP_MASTER_MASCOT_SPRITE: &str = "Shop_Master_main.ojs";
-const SHOP_MASTER_MASCOT_CODE: u32 = 0x1460_0053;
+pub const SHOP_MASTER_MASCOT_CODE: u32 = 0x1460_0053;
 
 /// Attach the code-mounted shop-mascot body to its bound image
 /// control. The `.bnd` rect stays the geometry source; the sprite's

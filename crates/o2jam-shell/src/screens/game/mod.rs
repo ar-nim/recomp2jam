@@ -119,7 +119,7 @@ use super::side::{
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
-use crate::staging::MessengerSheet;
+use crate::staging::{MessengerSheet, SHOP_MASTER_MASCOT_CODE};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
@@ -8689,6 +8689,7 @@ impl ScreenGame {
             let ext_menu_open = self.shop.ext_menu_open();
             let featured = self.shop_entry_catalog();
             let active_category = self.shop.category().unwrap_or(0);
+            let charge_sheet_open = self.shop_charge_confirm_open;
             let keep = |placed: &ScenePlacement| {
                 shop_panel_kept(placed, panel)
                     && shop_tooltip_kept(placed, shelf_hovered)
@@ -8697,6 +8698,9 @@ impl ScreenGame {
                     && (!featured
                         || shop_category_index(placed.code)
                             .is_none_or(|slot| slot == active_category))
+                    // v8 cart frame: the exe hides the shop master while
+                    // BUYITEM's native MESSAGE sheet is up (#877).
+                    && !(charge_sheet_open && placed.code == SHOP_MASTER_MASCOT_CODE)
             };
             if featured {
                 let category = self.shop.category();
