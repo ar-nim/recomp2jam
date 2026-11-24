@@ -165,7 +165,14 @@ layers implemented; **DOC** = documented/pinned only, no code;
   decomp2jam's `CStatePlanet.cpp` documents only the bar mount into
   `+0x8C` (already pinned on our side). Next evidence step: trace the
   caller chain that mounts the `0x12` Channel block on `parent+0xF6C`
-  when the phase flag at `parent+0xF64` flips to 1.
+  when the phase flag at `parent+0xF64` flips to 1. Refined by
+  `docs/overnight-evidence/e1-channel-dialog-trigger.md`: the emblem
+  handler selects a channel family and emits effect id 1, while the
+  phase flag has only a constructor clear and a 500-tick pump toggle.
+  The dialog stage virtual (`0x474110`) and stager (`0x432510`) have no
+  resolved `0x551820`/`0x551870` call. Inventory item OPEN-10 in
+  `docs/audio-cue-inventory.md` keeps the separate re-cue OPEN with a
+  stopped-state watch + Wine audio step; Planet/Channel share record 9.
 
 ## Cue-map coverage (2026-11-21, #307)
 
@@ -211,6 +218,10 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   base 0) maps slots `1/2/5/9/0x23` to entries `2/3/6/10/36`;
   slots `>= 0x34` and blank entries never sound. The correction to the
   old "field never read" note is committed in `docs/file-formats/ojm.md`.
+  Name correction (#907): the fetch counter at `0x54eca0` starts at zero
+  (`ev_2a873a12408328105111740b73af0e85776d1c8a9ee6e6dc388994c30e9f14ac`),
+  so slot 1 names mode-2 index 1 (`02`), not `01`; the slot→entry numbers
+  above stay correct. Full inventory: `docs/audio-cue-inventory.md`.
   Guards: `boot_bank_table_names_all_seven_exe_archives`,
   `pinned_effects_round_trip_through_their_cache_slots`,
   `pinned_ui_effect_ids_name_the_exe_handler_cues`,
