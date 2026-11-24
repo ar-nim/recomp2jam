@@ -47,7 +47,7 @@ from the template; guards alone never prove exe behavior.
 | **PICK-ECHO** (self:master) | LIVE-FILLED — CP04 before/after pick pack `d8a3cf108b26833f6ea902ce8cf32174c6ef80ed3d73e218ee8a52e81e70d49d` + `4000/4001` wire; exe pick frame still OPEN | EVIDENCED — owner observation #274: exe `SPEED_NUM`/BPM read ROOM echo, not staged pick; `docs/caption-sources.md` | EVIDENCED — guest keeps BPM cover after room echo; c3 frame, #274/#275 pins (visual confirm still OPEN) | OWNER-PARKED — #553 CLOSED — catalog rows name charts + tempo comparison (fd8cd8a); room-list song field capture OPEN — exe room-list song-field capture still OPEN ; FINAL SWEEP #382 (prior GAP): GAP — room-list song field after 2008/2023 not pinned; OPEN — tap 2008/2023 and read painted row | LIVE-FILLED — `C2S 4000 len=8 hex=64000101` → `S2C 4001 len=8 hex=64000101`, `full01/tap.log` 15:43:48; create `2004 → 2006` 15:43:30 |
 | **READY** (self:peer) | NA-DESIGN — no peer to ready | EVIDENCED — seat ready mark / gate input; static pin file `0xb237d`, clear VA `0x4b2540`, #163 seat guards | EVIDENCED — `C2S:4008 / S2C:4009`, stays Waiting; c1 `drive.log:52-55` + wire `40efa…` | OWNER-PARKED — #556 CLOSED — peer 4004→4008→4009 echo folds into joined-room mirror (0af6739) — 2009 user-count on ready still OPEN ; FINAL SWEEP #382 (prior GAP): GAP — 2009 user-count on ready not pinned; OPEN — scripted tap during 4008 | EVIDENCED — 4008/4009 wire pin, `docs/net-protocol.md` §4; c1 matched window |
 | **START-GATE** (self:master) | EVIDENCED — exe emits `4010` then full gate/score flow; `s1-master-ui` manifest `4bd221b8…` | EVIDENCED — gate order readiness → team → music, VA `0x4b5560`; #276 close record + solo pack | EVIDENCED — host-driven start leaves Waiting to Loading; p343 proof, c1 `host/host.log:13` | OWNER-PARKED — #576 CLOSED — joined-room readout follows 3007 promotion (9c16500) — 2020 RoomStateChanged on start still OPEN on the observer socket ; FINAL SWEEP #382 (prior GAP): GAP — 2020 RoomStateChanged on start unpinned; OPEN — channel-observer socket during 4010 | EVIDENCED — `4010/4011/4012/4013` wire family, solo pack + `docs/net-protocol.md` |
-| **TEAM-CHAT** (self:any seated) | LIVE-FILLED — CP05 master chat pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c`, `C2S 3011` → `S2C 3012` tap; 4004 toggle still unpinned | LIVE-FILLED — CP05 master chat-row pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c` + `3011/3012` wire; emblem still OPEN (#303) | EVIDENCED — #567 CLOSED — CP05 3011→3012 chat pin in close-wr/full01/tap.log — CP05 3011→3012 tap; #613 CLOSED — room-pixels master c93c9cf7… + peer c24a0ccf…, 4009 0101/0100 + 3012 body ; FINAL SWEEP #382 (prior GAP): GAP — Waiting chat row feed has no exe reader pin; OPEN — 3012/3013 payload-to-row capture | NA-DESIGN — Waiting chat is not channel chat | EVIDENCED — 4004/4008, 3011/3012/3013 layouts, `docs/net-protocol.md` §4c (Memoryer corroboration + exe send sites) |
+| **TEAM-CHAT** (self:any seated) | LIVE-FILLED — CP05 master chat pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c`, `C2S 3011` → `S2C 3012` tap; 4004 toggle still unpinned | LIVE-FILLED — CP05 master chat-row pack `4899ad2a7c8720cd003507c8c70a2e0d0536278ab5e1c2557eca8e2336696a9c` + `3011/3012` wire; emblem still OPEN (#303) | EVIDENCED — #567 CLOSED — CP05 3011→3012 chat pin in close-wr/full01/tap.log — CP05 3011→3012 tap; #613 CLOSED — room-pixels master c93c9cf7… + peer c24a0ccf…, 4009 0101/0100 + 3012 body ; STATIC PIN #895: 3012/3013 → parent queue → CStateWaiting tick → `LIST_SWAIT_CHAT` row ring; buffer, writer and 5-row cap pinned in §6 | NA-DESIGN — Waiting chat is not channel chat | EVIDENCED — 4004/4008, 3011/3012/3013 layouts, `docs/net-protocol.md` §4c (Memoryer corroboration + exe send sites) |
 | **DOWNLOAD** (self:server) | OWNER-PARKED — #559 OPEN — 4039→4037 badge cleanup pinned; equal-07E8 A/B OPEN — matched solo download badge A/B still OPEN ; FINAL SWEEP #382 (prior GAP): GAP — no solo-master badge frame; OPEN — matched solo download capture | EVIDENCED — `states/gate-closed.png`, `member-downloading.png` in matched-ab-339; p343 proof | EVIDENCED — 4026/4037/3009 matched wire + badge crop `7d4d586c…` | OWNER-PARKED — #559 OPEN — 4039→4037 badge cleanup pinned; equal-07E8 A/B OPEN — channel-visible download state probe still OPEN ; FINAL SWEEP #382 (prior GAP): GAP — no channel-visible download state; OPEN — 2003 row state probe during download | EVIDENCED — `S2C:4026/4037/3009` in p343 proof; 5012 completion pin in `docs/net-protocol.md` |
 | **PEER-JOIN** (self:peer, while Waiting) | NA-DESIGN — no peer | LIVE-FILLED — merged #379 fix stages the peer seat label/icon in CP06 master pack `b7da707e040a33fadfaae001d00ddfadac845076fed396b7c2c5cca9fc117775`, wire `S2C 3004 len=107`; peer figure still renders as a red status icon (pixel parity OPEN) | EVIDENCED — joiner sees master seated; c3 `waiting.png` `f394dcaa…`, #376 peer-side fix | EVIDENCED — #573 CLOSED — observer 2003 lists PLAYMULTI through the non-last exit (CP04) — observer 2003 lists PLAYMULTI through join ; FINAL SWEEP #382 (prior GAP): GAP — 2009/2003 user-count change on join unpinned; OPEN — channel-observer socket with a real join | EVIDENCED — `0BBA/0BBB` c1/c3 wire + #376 `2005` broadcast pin; server state shared by both clients |
 | **PEER-LEAVE** (self:peer, non-last) | NA-DESIGN — no peer | EVIDENCED — #573 CLOSED — observer 2003 lists PLAYMULTI through the non-last exit (CP04) — observer 2003 lists PLAYMULTI through non-last exit ; FINAL SWEEP #382 (prior GAP): GAP — wire-only CP35 pins `3007` to master, but no master frame before/after a real `3005`; OPEN — master frame pair | EVIDENCED — #575 CLOSED — room-pixels2 RPX2-01 leaver-side exit-to-Room frame ; FINAL SWEEP #382 (prior GAP): GAP — leaver's exit-to-Room frame unpinned; OPEN — one leaver-side capture with `3005/3006` | LIVE-FILLED — wire-only CP35: `3007 body=0100000000000000` to master, no 2007; observer 2003 still lists `S291WIRE` (wire only, no Room paint frame) | LIVE-FILLED — wire-only CP35: peer `C2S 3005`, `S2C 3006 body=00000000`, master `ASYNC 3007 len=8 hex=0100000000000000` (`wire-only/master.log`, `peer.log`) |
@@ -173,3 +173,94 @@ stale frame-dump popup detector; boot 2 off-by-one room-row y; boot 3 XTEST
 boot 5 same observer failure after CP06 (CP01–CP06 survive); boot 6 local
 driver argument order. Boot 4/5 failures are recorded as failed attempts,
 not as behavior evidence. The wire-only leg spent no boot.
+
+## 6. Lane statics batch — #895 (2026-11-24): Waiting chat-row reader pinned
+
+Oracle: `OTwo.exe`, 5,029,888 B, SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`.
+Method: read-only REA 6.9.0 CLI (`rea-agents` 6.9.0, provider Ghidra 12.2)
+against `~/scratch/run-full/OTwo.exe`; GNU objdump 2.47 and Python 3.14.10
+byte scans for call sites. No disassembly or decompiler text is copied here;
+only behavior, file offsets and REA evidence IDs. No code change in #895.
+
+### 6.1 Caller chain from the wire to the painted row
+
+| Step | Behavior (own words) | File offsets | REA evidence |
+|---|---|---|---|
+| 3012 user chat | Receive handler `FUN_0055e740` (VA `0x55e740`) reads sender, content and trailing seat byte, composes `[%12s] <content>`, then enqueues it under opcode `0xbc4` (flag 0 at file `0x15ec4d`, flag 5 at `0x15ec68`). | `0x15e740`, `0x15ec4d`, `0x15ec68` | `ev_4e099aecca24b2d856a9c8ab031cbb9f68df19801c2e3a9bf442b35090c9582f` |
+| 3013 admin chat | Twin handler `FUN_0055eca0` (VA `0x55eca0`) uses opcode `0xbc5` (files `0x15f1a7` / `0x15f1c2`) with the same composition. | `0x15eca0`, `0x15f1a7`, `0x15f1c2` | `ev_55f5ae9e10c8029b326b405e33b49adb52c573d8c85bd8954276849fbe46e914` |
+| Queue push | `FUN_00479010` (VA `0x479010`) copies the composed line into a `0x10c`-byte string record, packs `(flag << 16) | opcode`, and pushes the record onto the ControlList parent `0x762B44` queue at parent+`0x17c`. Count/pull accessors are `0x479350` / `0x4790d0`. | `0x79010`, `0x79053`–`0x7906c`, `0x79084`, `0x79350`, `0x790d0` | `ev_adecca19b127bf2863d8add251c742017533e876ba05b60b351a6d8593fc9479`, `ev_c5f70bf1ad84365ecd9c894c05085a5446d07bc7cabd798cfdcc4e60222dec9d`, `ev_3ceb3d439f8b9e138d40ebe7d6ae6a8e7cc55fc1d659be042b7de73f2a344493` |
+| Live consumer | `CStateWaiting` tick `FUN_004b9dc0` (VA `0x4b9dc0`; vftable VA `0x649ad8` slot 10, called from waiting drivers `0x4ad940` / `0x4b42d0`) drains that queue. Opcode `0xbc4` is accepted when the packed high word equals the state's mode word at `this+0x10`, then calls the append helper with color `0xdedede`; `0xbc5` uses `0x71e6`. The high word is the flag 0/5 chosen by the wire handler's state query (`FUN_00478a00`, file `0x78a00`). | `0xb9dc0`, `0xb9e82`, `0xb9ea8`, `0xb9f63`–`0xb9fbf`, `0x78a00` | `ev_ce0e4f58e5afa40b1ba365695d544423343b9e320b9ae52cfa98dcf251499f68`, `ev_ce4d9acbeec6173c5b016af9c4186b269dfb678fc1ce542788d9d97ab3510987` |
+| Append | `FUN_004bb6c0` (VA `0x4bb6c0`) resolves `LIST_SWAIT_CHAT 0x1680002B` via control lookup `0x48bcf0`, null-guards it, and hands the line plus color to the row writer `0x510730`. | `0xbb6c0`, `0xbb6c9`, `0xbb6d1`, `0xbb6ea` | `ev_c71f32d0b5daf712901562564488fd1873362ff63e4aad7a2255f3ede4c5183a` |
+
+This closes the shared residual of the two #291 rows: the reader is the same
+`CStateWaiting` tick on master and peer, with no role-specific branch.
+
+### 6.2 The buffer / VA that feeds painted rows
+
+There is no fixed global chat-string buffer. The feed is the staged
+`LIST_SWAIT_CHAT` control object's row store, reached by the chain above:
+
+- Row vector: control+`0x198` holds begin (`+4`) and end (`+8`); control+`0x1ac`
+  selects the current row. Each row is `0x6a5c` bytes (writer files
+  `0x110752`–`0x110826`; REA `ev_a3beddb9a288d8fbd4d1cd6f671bd0826e385bb120afa512912fe8e58b2668eb`).
+- Within the row, the newest row id is at `+0x6a44`, the first-visible id at
+  `+0x6a48`, and the row color table is 100 dwords at `+0x68b0` indexed by id
+  mod 100 (writer file `0x1108aa`; helper VAs `0x511ab0`/`0x511b30`/
+  `0x511bb0`, REA `ev_147193656c1b26b3eecc0166b3184cde1f822dfda57f4723482f381abba2a674`,
+  `ev_67411ed55b1418c6ce052982a78e9ed2f8a468f9260bd4fa688f2f18098545f0`,
+  `ev_78833b3bf3223328621f0a9c89c9e527a0f1c10cdd0698c082605089c3270d89`).
+- The line text itself lives in a 100-cell ring: cell address = row base +
+  `(row_id % 100) * 0x10c`. A row copy constructor allocates exactly 100 cells
+  of `0x10c` and copies the color table (VA `0x460480`, file `0x60480`, REA
+  `ev_d0c6bffb443b5020d67df6840f8add30b50cbb0defb94ef137ad26e1194d7899`).
+  The writer copies at most 255 bytes into the cell's string holder
+  (files `0x1107aa`, `0x110aa2`–`0x110ab3`; REA `ev_a3beddb9a288d8fbd4d1cd6f671bd0826e385bb120afa512912fe8e58b2668eb`).
+  Short lines sit inline at cell+`0xc`; longer lines use the heap pointer at
+  cell+`0x8` (`FUN_004089f0`, REA
+  `ev_dd647c96eb7ac803ee58fc3143552e808b797b36d67bf88a74b7e626ef3d418e`,
+  string setter `ev_9e56ebd10ddb22c95ae838ae6f30967452d1712a6d47a18e3b39c34a6e21a3e8`).
+  A generic list text reader uses the same cell expression at file `0x1119c9`
+  (VA `0x5119c9`, REA
+  `ev_9e0ff6e4480c2d173339799b8c13edf08973e92711dd9af211968663180a1a6d`).
+- `TEXT_SWAIT_CHAT 0x1640003C` has no immediate code reference because the
+  generic list consumes these staged cells; the row template is not a second
+  text buffer. This corrects the stale "exact row-feed call stays OPEN" wording
+  left in `docs/net-protocol.md` §4c; that sentence is outside #895's edit scope.
+
+### 6.3 Row cap and scroll rule
+
+- History ring: `FUN_00510730` increments the row id on each append and keeps
+  the first-visible id within 100 of the newest; when the gap would exceed 100
+  it advances the first-visible id by 100 and updates the scroll helpers
+  (`0x50efe0`, `0x50ebf0`; files `0x110f7a`–`0x111437`, `0x111738`, same REA
+  `ev_a3beddb9a288d8fbd4d1cd6f671bd0826e385bb120afa512912fe8e58b2668eb`).
+- Visible cap: the chat-edit Enter arm of `FUN_004b8d00` (case `0xd`, VA
+  `0x4b8d00`, file `0xb8d00`) reads the same two ids and, when
+  newest − first-visible > 5, sets first-visible to newest − 5
+  (files `0xb8e35`–`0xb8e6d`; REA
+  `ev_116b99d2bab78fc4987bc0f0c1650a79f2a1e21e95e0ca143b0cdb11d1c028a2`).
+  This is the static half of the five-row, 17 px-pitch viewport measured in
+  `~/scratch/geom-open-close/findings.md` §1a; the pitch itself stays a live
+  geometry pin, not a static claim.
+
+### 6.4 Same-claim sentences for the two open rows
+
+- When a seated player sends `3011` chat, the exe's `CStateWaiting` tick takes
+  the `3012`/`3013` line from the parent queue and paints it in the
+  `LIST_SWAIT_CHAT` row ring with color `0xdedede`/`0x71e6`, capped to the
+  newest five rows (wire `C2S:3011` → `S2C:3012`; static pin above).
+- When master and peer both sit in Waiting, each runs the same tick and row
+  writer, so the chat half of the social chrome uses one reader on both sides;
+  the emblem half stays on its own #303 pin.
+
+### 6.5 Still OPEN (not needed for the two same-claim checks)
+
+- Game-facing meaning of the high-word flag values `0` and `5`, and the writer
+  of the gate word `this+0x10`; only the equality gate and the two enqueue
+  sites are pinned here.
+- What the slot-16 dialog dispatch renders from the emote record.
+- Pixel proof of the five-row pitch under a provenance manifest; the current
+  pitch evidence is the earlier scratch geometry note, not a qualified capture.
+- No exe pack and no client boot were spent in #895; this section is static
+  evidence only and does not re-grade the EVIDENCED/LIVE-FILLED cells.
