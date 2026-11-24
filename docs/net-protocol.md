@@ -93,6 +93,10 @@ emits the `0x00` terminator per string (its builder appends raw
 
 ## 4. Packet families (opcodes decimal; Memoryer `Source/Memoryer` Commands.cs)
 
+> Dispatch inventory: every dispatched opcode maps to a codec or OPEN in
+> `docs/dispatch-inventory.md` (guarded by `dispatch_inventory.rs`). The per-opcode
+> status table lives there by lane-partition rule (ticket #896).
+
 ### 4a. Game TCP — requests C→S
 
 | Range | Opcodes | Family |
