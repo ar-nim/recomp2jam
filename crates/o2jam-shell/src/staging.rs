@@ -193,7 +193,7 @@ pub const STAGE_TABLE: &[StageRow] = &[
         block: Some("STATE_SHOP"),
         archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
-        extra_sprites: &[],
+        extra_sprites: &[SHOP_MASTER_PREVIEW_SPRITE],
     },
     StageRow {
         state: State::MusicShop,
@@ -883,6 +883,26 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
     )
 }
 
+/// Code-mount body the 7.55 shop entry paints in the bottom-right
+/// pane: `IDC_IMAGE_SSHOP_SHOPMASTER` (`0x14600053`) hosts
+/// `Shop_Master_main.ojs`, whose record anchor `(654,446)` places the
+/// mascot 1:1 on the exe frame (`docs/shop.md`, #877). `ControlList`
+/// leaves that control art-less, so the bound arm merges the body by
+/// name and attaches it to the parsed rect.
+const SHOP_MASTER_PREVIEW_SPRITE: &str = "Shop_Master_main.ojs";
+const SHOP_MASTER_PREVIEW_CODE: u32 = 0x1460_0053;
+
+/// Attach the code-mounted shop-mascot body to its bound image
+/// control. The `.bnd` rect stays the geometry source; the sprite's
+/// own anchor decides where its pixels land (owner `f38f3`).
+fn stage_shop_master_preview(art: &mut StagedArt) {
+    for placed in &mut art.placements {
+        if placed.code == SHOP_MASTER_PREVIEW_CODE {
+            placed.sprite = Some(SHOP_MASTER_PREVIEW_SPRITE.to_owned());
+        }
+    }
+}
+
 /// Put the exe's child origin on the shop controls that have no
 /// sprite anchor to carry it: art-less TEXT ink and the art-less
 /// gift half. Anchored ITEMBUY/ITEMPRE placements keep the raw rect
@@ -1217,6 +1237,7 @@ fn stage_bound_row_hiding(
     if row.state == State::Shop {
         stage_shop_child_origin(&mut art);
         stage_shop_set_card_children(&mut art);
+        stage_shop_master_preview(&mut art);
     }
     let visible_names: Vec<String> = staged_names(&resolved.names, row.extra_sprites)
         .into_iter()

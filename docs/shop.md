@@ -791,6 +791,10 @@ evidence step is a staged-font seam for an exact sprite match.
 
 ## #877 — bottom-right preview-figure statics pin (close-out lane, 2026-11-26)
 
+Naming correction (`#877` triage said "preview"): the bottom-right
+figure is the shop master mascot, not a try-on preview; try-on uses
+the separate upper-left avatar pane.
+
 Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
 `83a04541…c823b`; Ghidra 12.2 / REA 6.10.1; file offsets are
 VA − `0x400000`. Oracle: v3 quiesced entry frame
