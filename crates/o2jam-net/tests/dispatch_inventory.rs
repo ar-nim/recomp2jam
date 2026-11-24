@@ -6,7 +6,9 @@
 //! `RelayCommand::from_id`, and the `WireMessage::COMMAND` checks used by
 //! `WireMessage::decode_frame` and the session's typed arms. Those public
 //! declarations, plus the opcode table in `docs/net-protocol.md`, are the
-//! set of dispatched ids. A new arm without an inventory row fails here.
+//! set of dispatched ids, together with named session constants matching
+//! `*_COMMAND`, `*_OPCODE` or `*_ID`. A new arm without an inventory row
+//! fails here.
 //!
 //! This is a documentation invariant, not a player-visible behavior test:
 //! it pins coverage of the live seam above. No install data is read, so CI
@@ -180,10 +182,9 @@ fn constant_commands(source: &str, known: &BTreeMap<String, u16>) -> BTreeSet<u1
         .filter_map(|line| {
             let declaration = strip_comment(line);
             let (name, rest) = declaration.split_once(": u16 =")?;
-            if !declaration.starts_with("const ")
-                || !(name.contains("COMMAND") || name.contains("OPCODE"))
-                || declaration.contains('$')
-            {
+            let names_wire_id =
+                name.contains("COMMAND") || name.contains("OPCODE") || name.ends_with("_ID");
+            if !declaration.starts_with("const ") || !names_wire_id || declaration.contains('$') {
                 return None;
             }
             Some(parse_wire_value(rest, known))
