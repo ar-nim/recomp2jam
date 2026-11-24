@@ -5,7 +5,10 @@
 
 mod bgm;
 
-pub use bgm::{BgmSelection, CueOutcome, SceneBgm, SceneCue, BGM_SILENCE_ID};
+pub use bgm::{
+    BgmSelection, CueOutcome, SceneBgm, SceneCue, BGM_SILENCE_ID, RESULT_WORKER_BANK_BASE_SLOT,
+    RESULT_WORKER_RECORD_ORDINAL, RESULT_WORKER_SLOT,
+};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;

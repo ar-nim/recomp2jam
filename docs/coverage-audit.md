@@ -128,8 +128,8 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | Channel / planet behavior | `CStatePlanet::v4` `0x48DD10` reconstructed; connect dispatcher `0x58C6C0` read; emblem→server-family mapping static-read | **PART** — live-pinned geometry/hover/host (`channel-fill.md`); entry-face click verified; emblem→family verified live | Their static read of `0x58C6C0` (host/port tables + jitter) can guide our next live trace; BGM cue for Planet (id 9, loop) now pinned, unimplemented |
 | Room / waiting | `CStateRoom` override inventory mapped (vtable `0x647BC4`); team mapping `FUN_0048C810` matched; S→C 4007 handler `0x55F470` analyzed | **PART** — flows ✅; seats grid fixed to 4×2 (Wine); teams in `o2jam-game` ✅; no create/password UI; 4007 refresh not shell-wired | Their `0x55F470` analysis (u8 idx `<8`, stride-`0x2190` slot refresh) corroborates our handler pin; waiting BGM id 6 + room BGM id 3 pinned and implemented via `Screen::bgm_cue` (#307) |
 | Playing / judgement / score / life / pills / long notes | Judge chain matched (`0x540A80/570510/576540/570260`); playing loops analyzed; `key_up_release` `0x576719` analyzed | **PART→IMPL in crate** — all rule layers ✅ (`TimingWindows`, scorer, pills, `LifeBar`, `HoldState`); NOT shell-wired; shell clock ≠ sample clock | Jam gauge math: their `jam_threshold_table` `0x570260` is matched — strongest lead for our OPEN gauge chain (`+0x396e/+0x3970` identity, rating sink `+0xa14` codes 1/9/14). Needs our own exe verification |
-| Result | `CStateResult_v10`, builder `FUN_004C2390` matched | **PART** — art stages, rank row 0 paints; digits at fixed anchors (audit 13); grade mapping OPEN; SubmitScore fields known | Result BGM id `0x13` once + retry BGM re-cue pinned via selector (worker bank OPEN); WinLose art wiring (`Result_WinLose.ojs` `0x24b014`) ours to finish |
-| Audio (BGM / mixer / ojm) | `SceneMusic` chain reconstructed (`0x551820→0x54BC50`, one-based `BGM.ojm`); `COjmSampleReader::render` analyzed; volume cfg matched | **IMPL (scene + first UI cluster)** — vorbis decode + cpal clock ✅; mixer landed; scene selector + per-scene table ✅; UI slots `1/2/5/9/0x23` wired on handler branches ✅ (#721); `bgEffect` bank table pinned below | Scene ids and UI first cluster are guarded (below); Result's `0x13` bank, the remaining #718 interaction clusters (buy/sell, NPC voice) and per-volume SFX levels stay pinned/OPEN |
+| Result | `CStateResult_v10`, builder `FUN_004C2390` matched | **PART** — art stages, rank row 0 paints; digits at fixed anchors (audit 13); grade mapping OPEN; SubmitScore fields known | Result BGM id `0x13` once + retry BGM re-cue pinned via selector; worker bank now pinned to `BGMwinter.ojm` mode-3 ordinal 6 (`bgResult`) by static trace (#904); WinLose art wiring (`Result_WinLose.ojs` `0x24b014`) ours to finish |
+| Audio (BGM / mixer / ojm) | `SceneMusic` chain reconstructed (`0x551820→0x54BC50`, one-based `BGM.ojm`); `COjmSampleReader::render` analyzed; volume cfg matched | **IMPL (scene + first UI cluster)** — vorbis decode + cpal clock ✅; mixer landed; scene selector + per-scene table ✅; UI slots `1/2/5/9/0x23` wired on handler branches ✅ (#721); `bgEffect` bank table pinned below; Result's `bgResult` staged from `BGMwinter.ojm` (#904) | Scene ids and UI first cluster are guarded (below); the remaining #718 interaction clusters (buy/sell, NPC voice) and per-volume SFX levels stay pinned/OPEN |
 | Net protocol | Thin: 6 net rows + queue/dispatch under core; `CPacket_Str::GetPacket` analyzed; `CmdHost::send` matched | **PART** — `o2jam-net` protocol library ✅ + endpoint/opcode doc; shell fold: chat + peer-life only | Both sides thin on *handlers*; their `msg_*` matched set (12 handlers under core) is a checklist for our remaining S→C handler pins |
 | File formats | OJM walk (`m30_walk_a/b/c` analyzed); `ojn_header_validate` `0x5718B0` analyzed; asset gates | **IMPL** — OJM/OJN/OPI/OPA parsers ✅ tested (this is our strongest column) | `.oja` frames, outlier pixel codecs, OJNList trailer `;HD` semantics — open on both sides |
 | Input | `CInputManager`, `Input.cpp`, devices, clear_flags matched | **PART** — winit keymap ✅; exe binds OPEN; latency budget OPEN | Their matched `CKeyConfig::loadKeys/syncKeys` `0x543510/7F0` corroborates our option.ini key-table pin (file `0x245224-0x2452a8`); xTd paired table decode still OPEN |
@@ -155,7 +155,7 @@ layers implemented; **DOC** = documented/pinned only, no code;
 | Myroom | 5 | loop | |
 | Waiting | 6 | loop | |
 | MusicShop | 10 (decimal) | loop | exe push `0xA` at file `0xC6E51`; the earlier audit's `0x10` shorthand is refuted |
-| Result | `0x13` | once | exe push `0` at file `0xC1CAF`; the earlier audit's "loop" is refuted. No such record in the 10-track `BGM.ojm`, so the channel stays silent until the worker bank at `0x4C1B90` is identified |
+| Result | `0x13` | once | exe push `0` at file `0xC1CAF`; the earlier audit's "loop" is refuted. `0x13` is a **worker cache slot**, not a `BGM.ojm` record: slot `0xD + 6` holds `bgResult.ogg`, mode-3 entry 6 of `BGMwinter.ojm` (#904, static trace below) |
 | Song preview | 0 | — | |
 | Silence | −1 | — | |
 
@@ -181,10 +181,10 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   `0xC6E51` (MusicShop 10), and `0xC1CAF` (Result `0x13` once) arbitrate
   over the earlier audit shorthand. Guards: `avi_launch_cue_selects_the_logo_record_once`,
   `scene_bgm_cues_follow_the_pinned_table`, `music_shop_cue_loops_record_ten`,
-  `result_cue_leaves_scene_bgm_silent_until_its_bank_is_found`,
+  `result_cue_plays_bg_result_from_the_winter_worker_bank`,
   `same_record_cue_keeps_the_running_track`, `cue_switches_on_a_different_record`.
   Loading/Playing/Lanking and the side screens with no pinned caller cue
-  silence; Result's worker bank stays OPEN.
+  silence; Result's worker bank is pinned and staged (#904 below).
 - **UI-effect map — pinned (#718).** The emitter is `0x551870` (file
   `0x151870`): ids `>= 0x34` are rejected, the id indexes a cache slot,
   and an active sample is stopped before the new one starts (dossier
@@ -199,11 +199,15 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   skip reasons in that survey.
 - **Bank table — pinned and implemented.** The boot table at file
   `0x27f728` has stride `0x48` and row-`+0` bases
-  `[0, 0x28, 0x2f, 0x2f, 0x2f, 3, 3]` (dossier
+  `[0, 0x28, 0x2f, 0x2f, 0x2f, 0x33, 0x33]` (dossier
   `ev_a9fb8aefefa70e2a45105090df82976fd44527a81a7029fd83d4f64e1a2bfd3e`).
-  The fetcher `0x54eca0` writes the mode-2 fetch ordinal at buffer `+0x2c`;
-  the bank loader `0x550db0` adds the bank base to it. Thus `bgEffect.ojm`
-  (bank 0, base 0) maps slots `1/2/5/9/0x23` to entries `2/3/6/10/36`;
+  The fetcher `0x54eca0` writes the fetch ordinal at buffer `+0x2c` for
+  both mode-2 (file `0x14edfe`) and mode-3 (file `0x14eed9`) entries;
+  the bank loader `0x550db0` adds the bank's base to it. Row field `+0`
+  (file `0x27f728`) is the **mode-2** base; row field `+4` (file
+  `0x27f72c`) is the **mode-3** base. The UI-effect branch reads `+0`;
+  the worker-music branch reads `+4`. Thus `bgEffect.ojm` (bank 0, mode-2
+  base 0) maps slots `1/2/5/9/0x23` to entries `2/3/6/10/36`;
   slots `>= 0x34` and blank entries never sound. The correction to the
   old "field never read" note is committed in `docs/file-formats/ojm.md`.
   Guards: `boot_bank_table_names_all_seven_exe_archives`,
@@ -226,10 +230,64 @@ that turns an effect id into a cache slot. All pins below are for OTwo.exe
   `a_cue_without_a_staged_bank_entry_fabricates_no_sample`. The one-shot
   bus mixes over the continuous BGM (`bgm_keeps_its_sample_sequence_while_a_ui_effect_cue_plays`).
 - **OPEN, not claimed by this coverage:** buy/sell `0x14/0x13` and NPC
-  voice `0x28..0x2e` are pinned in #718 but have no wiring ticket; the
-  Result `0x13` worker bank (`0x4C1B90`), per-volume SFX levels
-  (`0x67ed60`), the emitter's second-argument semantics, and audio capture
-  by ear stay OPEN with the next evidence steps in the #718 survey.
+  voice `0x28..0x2e` are pinned in #718 but have no wiring ticket; per-volume
+  SFX levels (`0x67ed60`), the emitter's second-argument semantics, and
+  audio capture by ear stay OPEN with the next evidence steps in the #718
+  survey. The Result `0x13` worker bank is no longer OPEN (#904 below).
+
+## Fresh pin — Result worker bank (#904, static)
+
+Pinned to OTwo.exe 7.55, 5,029,888 B, SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`;
+REA 6.9.0 CLI with Ghidra 12.2. File offset = VA − `0x400000` in `.text`;
+data row offsets below come from `address-to-file-offset`.
+
+Live caller chain: state dispatch → `FUN_004c1b90` (VA `0x4C1B90`,
+file `0x1b90`; `ev_1cbc946c4f582ac36fd98fa5e0bb05ebb4e4d102cfbda1aacf0740c62a9be16f`)
+→ `FUN_00551820(0x13, 0)` (file `0x151820`; push at `0xC1CAF`;
+`ev_fa3f6f8b9b47e9c71918d9d900856410c3070ef80ef813da9626f4d186d15da3`)
+→ bank sub-object at `soundmgr + 0x340c0` (file `0x151832`, `add ecx,0x340c0`)
+→ `FUN_0054bc50` (`ev_78e65d82656b266c69966b80db8ed056ae97b06d35ba3b2b3231914113eef4a3`):
+stores the id at worker `+0x84`, sets the once/loop bit at `+0x80`, wakes
+worker event `+0x74` → worker `FUN_0054bd60`
+(`ev_b34b89d839433a81104e6ad8be18bdb6b10440e872a93697a758c4487dd3bf09`)
+reads `+0x84` and indexes the worker pointer array at `worker + id * 4`
+(file `0x10c0b2`; disassembly in scratch only).
+
+Who fills that slot: boot loader `FUN_00550db0`
+(`ev_75ba7fe104a34f019541c1ba1bb792b8b27aef67f0cc8048e7946b44e9986ba1`)
+walks all seven bank rows at `0x67f730` (stride `0x48`). For **mode-3**
+entries (fetcher flag `0x80000000` at buffer `+0x28`, set at file
+`0x14eeef`; evidence `ev_1730117d444d1e97bd846434c86c110dd135126c5306b83c377705a84ebd88e5`)
+it computes `slot = row(+4) + fetch ordinal`, rejects `slot >= 0x17`,
+decodes the body with `FUN_0054f580`, and registers it in the worker array
+through `FUN_0054b9f0` with `ecx = soundmgr + 0x340c0` (call at file
+`0x10eee8`; setter evidence
+`ev_1a6261453c321dc23c57b469e44abc211f9993f2bdf488d8d449fa8f60efe374`).
+The mode-3 base field is file `0x27f72c` (VA `0x67f72c`, stride `0x48`;
+`ev_f73477ba029f80c5d7bfcb0b5c9449dd2f5d9260ce880142338f1bfeda132518`);
+row 5 is `Music/BGMWinter.ojm` (name at file `0x27f898`,
+`ev_9bbdb57205ab0ed5a98a941fb5005c7fe526eddb7da8574b7e29a10ab21b1836`)
+with base `0x0d` (file `0x27f894`,
+`ev_884629791f26d1a5813e18d9488a3d01e6da5413a91122846ab881d470d7f4b1`).
+Fetch ordinals are written for mode-3 too (file `0x14eed9`), so
+`0x13 = 0x0d + 6`: slot 19 is `BGMwinter.ojm` mode-3 entry 6,
+`bgResult.ogg` (installed archive, 10 mode-3 records; `o2jam-dump dump-ojm`).
+The other rows fill slots `0/1/11/12` (bgEffect sample, BGM records 1..10,
+Event, Planet); no other row covers slot `0x13`. `SceneBgm` indexes the
+staged array by cue id − 1, so the loader stores slot `N` at array index
+`N − 1`; slot 0 has no cue. Guard
+`result_cue_plays_bg_result_from_the_winter_worker_bank` skips cleanly
+without game data and was red-proven: skipping the winter staging call
+made it FAIL at the staged-slot assertion; restoring the call made it PASS.
+
+Contradiction kept visible: the older bank-table bullet called row `+0`
+the base for all banks and wrote the last two rows as `3, 3`; those are
+32-bit `0x33` values in the mode-2 field. The exe's mode-3 field is `+4`;
+every scene cue, including Result, reads the mode-3 worker array. The
+stale shell guard `finished_song_enters_result_and_cues_silence_until_its_bank_is_found`
+still passes because it stages only a synthetic ten-slot bank, not the
+seven-bank worker layout; it no longer claims an OPEN exe bank.
 
 ## Contradictions found (exe arbitrates)
 

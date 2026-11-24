@@ -1788,7 +1788,9 @@ fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
 /// `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`,
 /// REA `ev_b9fd1f27433ada2023ce7cb81fa25f6f828821a93b11eb7540478c5b6a562636`
 /// (caller chain) and `ev_a9fb8aefefa70e2a45105090df82976fd44527a81a7029fd83d4f64e1a2bfd3e`
-/// (bank names).
+/// (bank names). Row `+0` (file `0x27f728`) is the mode-2 base; row `+4`
+/// (file `0x27f72c`, `ev_f73477ba029f80c5d7bfcb0b5c9449dd2f5d9260ce880142338f1bfeda132518`)
+/// is the mode-3 base used by every scene cue.
 const BOOT_BGM_BANK_FILES: [&str; 7] = [
     "bgEffect.ojm",
     "O2PlanetNPC.ojm",
@@ -1802,9 +1804,23 @@ const BOOT_BGM_BANK_FILES: [&str; 7] = [
 /// Bank index holding the scene-BGM archive in the exe's boot table.
 const SCENE_BGM_BANK_INDEX: usize = 2;
 
-/// Installed path of one exe boot bank. The scene bank and the UI
-/// effect bank are decoded here; the other archives stay installed but
-/// uncued (their runtime slots are not part of this client slice).
+/// Bank index of `Music/BGMWinter.ojm` (boot table row 5, name at file
+/// `0x27f898`; evidence `ev_9bbdb57205ab0ed5a98a941fb5005c7fe526eddb7da8574b7e29a10ab21b1836`).
+const RESULT_WORKER_BANK_INDEX: usize = 5;
+
+/// Mode-3 cache-slot base per boot bank row (file `0x27f72c`, stride
+/// `0x48`). The loader (`0x550db0`, `ev_75ba7fe104a34f019541c1ba1bb792b8b27aef67f0cc8048e7946b44e9986ba1`)
+/// adds each fetched entry's ordinal to its row base and rejects slots
+/// at or above `0x17`.
+const BOOT_MODE3_BANK_BASES: [usize; 7] = [0, 1, 1, 0xb, 0xc, 0xd, 0x17];
+
+/// Size of the exe's mode-3 cache: slots `0..0x16`, indexed by the
+/// one-based cue id minus one (`SceneBgm::resolve`).
+const SCENE_WORKER_SLOT_COUNT: usize = 0x17;
+
+/// Installed path of one exe boot bank. The scene bank and the Result
+/// worker bank are decoded into the shared cache; the UI effect bank also
+/// feeds the separate one-shot emitter.
 fn boot_bank_path(index: usize) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Music")
@@ -1879,28 +1895,66 @@ fn decode_bgm_record(
     o2jam_audio::decode_vorbis(body).ok()
 }
 
-/// Decode the third boot bank (`Music/BGM.ojm`) into one [`None`]-kept
-/// slot per record (fetch order = one-based record order) for
-/// [`o2jam_audio::SceneBgm`]. A missing or unparsable bank yields
-/// an empty one (no fallback tracks: only the shipped records
-/// ever sound), so CI stays green without game data. Shared with
-/// the online session's audio attach (`session.rs`).
+/// Decode the two banks that pinned scene cues address into the exe's
+/// shared worker cache: `BGM.ojm` fills slots `1..=10` and the `bgResult`
+/// entry of `BGMwinter.ojm` fills slot `0x13`. An entry's fetch ordinal is
+/// added to its boot row base, then converted to the one-based cue id
+/// index the mixer uses. Other boot rows stay installed but uncued; only
+/// their fetched bytes are avoided, no fallback track is invented.
+/// Missing or unparsable archives leave slots empty, so CI stays green.
+/// Shared with the online session (`session.rs`).
 pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
-    let path = boot_bank_path(SCENE_BGM_BANK_INDEX);
-    let Ok(bytes) = std::fs::read(&path) else {
-        tracing::debug!("scene BGM bank missing; BGM stays silent");
-        return Vec::new();
+    let mut slots = vec![None; SCENE_WORKER_SLOT_COUNT];
+    stage_mode3_records(&mut slots, SCENE_BGM_BANK_INDEX, None);
+    stage_mode3_records(
+        &mut slots,
+        RESULT_WORKER_BANK_INDEX,
+        Some(o2jam_audio::RESULT_WORKER_RECORD_ORDINAL),
+    );
+    slots
+}
+
+/// Stage one bank's mode-3 records at `base + ordinal`, or only `wanted`
+/// when the caller needs one pinned record. Slot `N` lands at array index
+/// `N - 1` because the cue id is one-based; slot 0 has no cue.
+fn stage_mode3_records(
+    slots: &mut [Option<o2jam_audio::PcmSamples>],
+    bank_index: usize,
+    only_ordinal: Option<usize>,
+) {
+    let base = BOOT_MODE3_BANK_BASES[bank_index];
+    let Ok(bytes) = std::fs::read(boot_bank_path(bank_index)) else {
+        tracing::debug!(
+            bank = BOOT_BGM_BANK_FILES[bank_index],
+            "boot bank missing; its slots stay silent"
+        );
+        return;
     };
     let Ok(tables) = o2jam_file::parse_new_variant_entries(&bytes) else {
-        tracing::debug!("scene BGM bank unparsable; BGM stays silent");
-        return Vec::new();
+        tracing::debug!(
+            bank = BOOT_BGM_BANK_FILES[bank_index],
+            "boot bank unparsable; its slots stay silent"
+        );
+        return;
     };
-    tables
-        .mode2
-        .iter()
-        .chain(tables.mode3.iter())
-        .map(|entry| decode_bgm_record(&bytes, entry))
-        .collect()
+    for (ordinal, entry) in tables.mode3.iter().enumerate() {
+        if only_ordinal.is_some_and(|record| record != ordinal) {
+            continue;
+        }
+        let Some(slot) = base.checked_add(ordinal) else {
+            continue;
+        };
+        // The loader rejects slots at its bound.
+        if slot >= SCENE_WORKER_SLOT_COUNT {
+            continue;
+        }
+        let Some(index) = slot.checked_sub(1) else {
+            continue;
+        };
+        if let Some(target) = slots.get_mut(index) {
+            *target = decode_bgm_record(&bytes, entry);
+        }
+    }
 }
 
 /// Decode the tutorial's own bank (`Music/Tutorial.ojm`) mode-3
@@ -2656,8 +2710,12 @@ mod scene_bgm_tests {
     use o2jam_shell::Screen;
 
     use super::{
-        boot_bank_path, load_scene_bgm_bank, load_tutorial_ojm_bank, scene_bgm_cue,
-        side_scene_bgm_cue, BOOT_BGM_BANK_FILES, SCENE_BGM_BANK_INDEX,
+        boot_bank_path, decode_bgm_record, load_scene_bgm_bank, load_tutorial_ojm_bank,
+        scene_bgm_cue, side_scene_bgm_cue, BOOT_BGM_BANK_FILES, BOOT_MODE3_BANK_BASES,
+        RESULT_WORKER_BANK_INDEX, SCENE_BGM_BANK_INDEX, SCENE_WORKER_SLOT_COUNT,
+    };
+    use o2jam_audio::{
+        RESULT_WORKER_BANK_BASE_SLOT, RESULT_WORKER_RECORD_ORDINAL, RESULT_WORKER_SLOT,
     };
 
     /// Ten-slot bank (records 1..=10) holding one synthetic track in
@@ -2766,14 +2824,49 @@ mod scene_bgm_tests {
     }
 
     #[test]
-    fn result_cue_leaves_scene_bgm_silent_until_its_bank_is_found() {
-        // OPEN: result cues no `BGM.ojm` record (id `0x13` past its
-        // 10 records), so the channel silences. Next step: identify
-        // which bank the worker holds when `0x4C1B90` cues it.
-        let bank = bank_with_track(3);
-        assert_eq!(scene_bgm_cue(Screen::Result), (0x13, false));
-        let bgm = cue_through_null_backend(Screen::Result, &bank);
-        assert!(!bgm.is_playing());
+    fn result_cue_plays_bg_result_from_the_winter_worker_bank() {
+        // Live chain: main.rs::setup_chart_audio -> load_scene_bgm_bank
+        // -> ScreenGame::stage_scene_bgm -> ScreenGame::enter_screen(Result)
+        // -> Screen::bgm_cue -> SceneBgm::play_scene_music(0x13, once)
+        // -> worker slot 0x13. Static exe chain: 0x4C1B90 -> 0x551820
+        // -> 0x54BC50 -> worker 0x54BD60; boot loader 0x550DB0 maps
+        // BGMwinter ordinal 6 onto slot 0xD + 6 (docs/coverage-audit.md).
+        // This guard decodes the installed bank and skips without data.
+        let result_id = i32::try_from(RESULT_WORKER_SLOT).expect("slot fits i32");
+        assert_eq!(scene_bgm_cue(Screen::Result), (result_id, false));
+        assert_eq!(
+            BOOT_MODE3_BANK_BASES[RESULT_WORKER_BANK_INDEX],
+            RESULT_WORKER_BANK_BASE_SLOT
+        );
+        assert_eq!(RESULT_WORKER_RECORD_ORDINAL, 6);
+        let path = boot_bank_path(RESULT_WORKER_BANK_INDEX);
+        if !path.exists() {
+            println!("skip: missing {}", path.display());
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("winter bank readable");
+        let tables = o2jam_file::parse_new_variant_entries(&bytes).expect("winter tables");
+        assert_eq!(tables.mode3.len(), 10);
+        let bg_result = decode_bgm_record(&bytes, &tables.mode3[RESULT_WORKER_RECORD_ORDINAL])
+            .expect("bgResult decodes");
+        let bank = load_scene_bgm_bank();
+        assert_eq!(
+            bank.get(RESULT_WORKER_SLOT - 1),
+            Some(&Some(bg_result.clone()))
+        );
+
+        let mut bgm = SceneBgm::new();
+        let mut backend = NullBackend::new();
+        let pcm = bgm.play_scene_music(result_id, false, &bank);
+        backend
+            .set_scene_bgm(pcm, false)
+            .expect("null backend accepts the cue");
+        assert_eq!(
+            bgm.current()
+                .map(|selection| (selection.record, selection.repeat)),
+            Some((RESULT_WORKER_SLOT, false))
+        );
+        assert!(backend.samples_played() > 0, "the result track has PCM");
     }
 
     #[test]
@@ -2789,6 +2882,12 @@ mod scene_bgm_tests {
                 "BGMwinter.ojm",
                 "DialogBGM.ojm",
             ]
+        );
+        assert_eq!(BOOT_MODE3_BANK_BASES.len(), BOOT_BGM_BANK_FILES.len());
+        assert_eq!(SCENE_WORKER_SLOT_COUNT, 0x17);
+        assert_eq!(
+            boot_bank_path(RESULT_WORKER_BANK_INDEX).file_name(),
+            Some(std::ffi::OsStr::new("BGMwinter.ojm"))
         );
     }
 
@@ -2811,15 +2910,16 @@ mod scene_bgm_tests {
             return;
         }
         let bank = load_scene_bgm_bank();
-        assert_eq!(bank.len(), 10, "BGM.ojm: 0 mode-2 + 10 mode-3 records");
-        assert!(bank[0].is_none() && bank[1].is_none() && bank[6].is_none());
+        assert_eq!(bank.len(), SCENE_WORKER_SLOT_COUNT);
+        assert!(bank[1].is_none(), "BGM.ojm blank record 2");
+        assert!(bank[6].is_none(), "BGM.ojm blank record 7");
         let mut bgm = SceneBgm::new();
         for record in [3, 4, 5, 6, 8, 9, 10] {
             let pcm = bgm.play_scene_music(record, true, &bank);
             assert!(pcm.is_some(), "record {record} decodes");
-            assert!(!pcm.unwrap().samples.is_empty());
+            assert!(!pcm.expect("record PCM").samples.is_empty());
         }
-        assert_eq!(bgm.play_scene_music(19, false, &bank), None);
+        assert_eq!(bgm.play_scene_music(0x18, false, &bank), None);
     }
 
     #[test]
