@@ -27,12 +27,14 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 pub mod chart;
+pub mod chart_replay;
 pub mod lane_effect;
 pub mod peer;
 pub mod rating_sink;
 pub use chart::{
     build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
 };
+pub use chart_replay::{ChartPress, ChartReplay};
 pub use lane_effect::{measure_index_of_tick, LaneMap, MeasureReshuffle};
 pub use peer::{
     PeerBars, QueueEvent, RankDelivery, LIFE_MAX, PEER_SLOT_COUNT, QUEUE_CATEGORY_PEER, STAT_JAM,
