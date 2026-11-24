@@ -1,32 +1,61 @@
-//! Guards the documented opcode inventory against the live dispatch maps.
+//! Guards the documented opcode inventory against the real dispatch surface.
 //!
-//! The seam is sufficient: `OnlineSession` reads the frame id at buffer
-//! offset 2 and dispatches through `Response::from_id`, `Event::from_id`,
-//! `Generic::from_id`, and `RelayCommand::from_id`. Those public maps plus
-//! the opcode table in `docs/net-protocol.md` are the complete set of
-//! dispatched ids; an undocumented new arm fails this test before it can
-//! reach a player.
+//! Live caller chain: `GatewayConnection` frames (and relay TCP frames)
+//! reach `OnlineSession::poll_wire`, which dispatches through
+//! `Response::from_id`, `Event::from_id`, `Generic::from_id`,
+//! `RelayCommand::from_id`, and the `WireMessage::COMMAND` checks used by
+//! `WireMessage::decode_frame` and the session's typed arms. Those public
+//! declarations, plus the opcode table in `docs/net-protocol.md`, are the
+//! set of dispatched ids. A new arm without an inventory row fails here.
 //!
-//! This is a documentation invariant, not a player-visible behavior, so
-//! no install data is read and CI can run it with archives absent.
+//! This is a documentation invariant, not a player-visible behavior test:
+//! it pins coverage of the live seam above. No install data is read, so CI
+//! can run it with archives absent.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const COMMAND_SOURCE: &str = "src/command.rs";
-const RELAY_SOURCE: &str = "src/relay/commands.rs";
+const SOURCE_DIR: &str = "src";
+const SESSION_SOURCE: &str = "../../crates/recomp2jam/src/session.rs";
 const PROTOCOL_DOC: &str = "../../docs/net-protocol.md";
 const INVENTORY_DOC: &str = "../../docs/dispatch-inventory.md";
+const WIRE_ENUMS: [&str; 4] = ["Request", "Response", "Event", "RelayCommand"];
 
 fn workspace_file(relative_path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path)
 }
 
-fn read_workspace_file(relative_path: &str) -> String {
-    let path = workspace_file(relative_path);
-    fs::read_to_string(&path)
+fn read_workspace_file(path: &Path) -> String {
+    fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+}
+
+fn source_files() -> Vec<(PathBuf, String)> {
+    let mut paths = Vec::new();
+    collect_rust_files(&workspace_file(SOURCE_DIR), &mut paths);
+    paths.push(workspace_file(SESSION_SOURCE));
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let source = read_workspace_file(&path);
+            (path, source)
+        })
+        .collect()
+}
+
+fn collect_rust_files(directory: &Path, paths: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("cannot list {}: {error}", directory.display()))
+    {
+        let path = entry.expect("directory entry is readable").path();
+        if path.is_dir() {
+            collect_rust_files(&path, paths);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            paths.push(path);
+        }
+    }
 }
 
 fn declaration_lines(source: &str, marker: &str) -> Vec<String> {
@@ -35,40 +64,143 @@ fn declaration_lines(source: &str, marker: &str) -> Vec<String> {
         .unwrap_or_else(|| panic!("dispatch declaration {marker} missing from source"));
     let open = source[start..]
         .find('{')
-        .expect("dispatch declaration body opens");
-    let close = source[start..]
-        .find('}')
-        .expect("dispatch declaration body closes");
-    source[start + open + 1..start + close]
-        .lines()
-        .map(str::to_owned)
-        .collect()
+        .unwrap_or_else(|| panic!("dispatch declaration {marker} has no body"));
+    let open = start + open;
+    let mut depth = 0u32;
+    let mut close = None;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close.unwrap_or_else(|| panic!("dispatch declaration {marker} is unterminated"));
+    source[open + 1..close].lines().map(str::to_owned).collect()
 }
 
-fn enum_lines(source: &str, enum_name: &str) -> Vec<String> {
-    declaration_lines(source, &format!("pub enum {enum_name}:"))
+fn strip_comment(line: &str) -> &str {
+    line.split("//").next().unwrap_or("").trim()
 }
 
-fn ids_from_enum(source: &str, enum_name: &str) -> BTreeSet<u16> {
-    enum_lines(source, enum_name)
+fn parse_wire_value(raw_value: &str, enum_values: &BTreeMap<String, u16>) -> u16 {
+    let trimmed = raw_value
+        .trim()
+        .trim_end_matches(';')
+        .trim_end_matches(',')
+        .trim();
+    let literal = trimmed
+        .strip_suffix("as u16")
+        .unwrap_or(trimmed)
+        .trim()
+        .trim_end_matches(',')
+        .trim_end_matches(';')
+        .trim();
+    if let Some(hex) = literal
+        .strip_prefix("0x")
+        .or_else(|| literal.strip_prefix("0X"))
+    {
+        return u16::from_str_radix(hex, 16)
+            .unwrap_or_else(|error| panic!("bad hex opcode `{raw_value}`: {error}"));
+    }
+    if let Ok(value) = literal.parse::<u16>() {
+        return value;
+    }
+    let variant = literal.rsplit("::").next().unwrap_or(literal);
+    enum_values
+        .get(variant)
+        .copied()
+        .unwrap_or_else(|| panic!("unparsable wire opcode value `{raw_value}`"))
+}
+
+fn enum_values(
+    source: &str,
+    enum_name: &str,
+    known: &BTreeMap<String, u16>,
+) -> BTreeMap<String, u16> {
+    let marker = format!("pub enum {enum_name}:");
+    declaration_lines(source, &marker)
         .iter()
         .filter_map(|line| {
-            let declaration = line.split("//").next()?.trim();
-            if declaration.starts_with('#') || declaration.starts_with("///") {
+            let declaration = strip_comment(line);
+            if declaration.is_empty()
+                || declaration.starts_with('#')
+                || declaration.starts_with('$')
+            {
                 return None;
             }
-            let (_, value) = declaration.rsplit_once(" = ")?;
-            value.trim_end_matches(',').trim().parse().ok()
+            let (variant, raw_value) = declaration.split_once('=')?;
+            let value = parse_wire_value(raw_value, known);
+            Some((variant.trim().to_owned(), value))
         })
         .collect()
 }
 
-fn ids_from_generic_match(source: &str) -> BTreeSet<u16> {
+fn generic_match_ids(source: &str, known: &BTreeMap<String, u16>) -> BTreeSet<u16> {
     declaration_lines(source, "impl Generic")
-        .into_iter()
+        .iter()
         .filter_map(|line| {
-            let (value, _) = line.split_once("=>")?;
-            value.trim().parse().ok()
+            let arm = strip_comment(line);
+            if arm.is_empty() || arm.starts_with('#') || arm.starts_with('_') {
+                return None;
+            }
+            let (pattern, _) = arm.split_once("=>")?;
+            Some(parse_wire_value(pattern, known))
+        })
+        .collect()
+}
+
+fn macro_commands(source: &str, known: &BTreeMap<String, u16>) -> BTreeSet<u16> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let declaration = strip_comment(line);
+            let is_empty_command = declaration.starts_with("empty_message!(")
+                || declaration.starts_with("song_empty!(");
+            if !is_empty_command || declaration.contains('$') {
+                return None;
+            }
+            let (_, arguments) = declaration.split_once('(')?;
+            let value = arguments.split(',').nth(1)?;
+            let value = value.trim().trim_end_matches(';').trim_end_matches(')');
+            Some(parse_wire_value(value, known))
+        })
+        .collect()
+}
+
+fn constant_commands(source: &str, known: &BTreeMap<String, u16>) -> BTreeSet<u16> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let declaration = strip_comment(line);
+            let (name, rest) = declaration.split_once(": u16 =")?;
+            if !declaration.starts_with("const ")
+                || !(name.contains("COMMAND") || name.contains("OPCODE"))
+                || declaration.contains('$')
+            {
+                return None;
+            }
+            Some(parse_wire_value(rest, known))
+        })
+        .collect()
+}
+
+fn wire_message_commands(source: &str, known: &BTreeMap<String, u16>) -> BTreeSet<u16> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let declaration = strip_comment(line);
+            let (_, raw_value) = declaration.split_once("const COMMAND: u16 =")?;
+            if declaration.contains('$') {
+                return None;
+            }
+            Some(parse_wire_value(raw_value, known))
         })
         .collect()
 }
@@ -100,7 +232,7 @@ fn decimal_tokens(line: &str) -> Vec<u16> {
 }
 
 fn protocol_dispatched_ids() -> BTreeSet<u16> {
-    let protocol = read_workspace_file(PROTOCOL_DOC);
+    let protocol = read_workspace_file(&workspace_file(PROTOCOL_DOC));
     let families = protocol
         .split("## 4. Packet families")
         .nth(1)
@@ -127,19 +259,34 @@ fn protocol_dispatched_ids() -> BTreeSet<u16> {
 }
 
 fn source_dispatched_ids() -> BTreeSet<u16> {
-    let commands = read_workspace_file(COMMAND_SOURCE);
-    let relay = read_workspace_file(RELAY_SOURCE);
-    let mut ids = BTreeSet::new();
-    for enum_name in ["Request", "Response", "Event"] {
-        ids.extend(ids_from_enum(&commands, enum_name));
+    let sources = source_files();
+    let mut known = BTreeMap::new();
+    for (_, source) in &sources {
+        for enum_name in WIRE_ENUMS {
+            if source.contains(&format!("pub enum {enum_name}:")) {
+                known.extend(enum_values(source, enum_name, &known));
+            }
+        }
     }
-    ids.extend(ids_from_generic_match(&commands));
-    ids.extend(ids_from_enum(&relay, "RelayCommand"));
+    let mut ids = BTreeSet::new();
+    for (_, source) in &sources {
+        for enum_name in WIRE_ENUMS {
+            if source.contains(&format!("pub enum {enum_name}:")) {
+                ids.extend(enum_values(source, enum_name, &known).into_values());
+            }
+        }
+        if source.contains("impl Generic") {
+            ids.extend(generic_match_ids(source, &known));
+        }
+        ids.extend(wire_message_commands(source, &known));
+        ids.extend(macro_commands(source, &known));
+        ids.extend(constant_commands(source, &known));
+    }
     ids
 }
 
 fn inventory_rows() -> Vec<(u16, String, String)> {
-    read_workspace_file(INVENTORY_DOC)
+    read_workspace_file(&workspace_file(INVENTORY_DOC))
         .lines()
         .filter(|line| line.starts_with('|'))
         .filter_map(|line| {

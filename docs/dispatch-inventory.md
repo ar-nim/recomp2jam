@@ -5,11 +5,13 @@ Version pin: O2Jam 7.55 `AngelO2Jam.exe`, 5,029,888 B, SHA-256
 
 This is the completeness companion to `docs/net-protocol.md` §4 (that file is
 owned by another lane and is not edited here). The id set is the union of
-§4a/§4b/§4d opcode lists and the live dispatch maps in
-`crates/o2jam-net/src/command.rs` and `crates/o2jam-net/src/relay/commands.rs`.
-`crates/o2jam-net/tests/dispatch_inventory.rs` fails when a dispatched id is
-missing from this table, when a row maps to neither a codec nor an OPEN
-label, or when evidence is absent. No install data is needed to run it.
+§4a/§4b/§4d opcode lists and the live dispatch surface: the wire enums in
+`command.rs` and `relay/commands.rs`, `Generic`, every `WireMessage::COMMAND`
+constant and empty-message macro across `crates/o2jam-net/src`, and the
+session's named command constants. `crates/o2jam-net/tests/dispatch_inventory.rs`
+fails when a dispatched id is missing from this table, when a row maps to
+neither a codec nor an OPEN label, or when evidence is absent. No install
+data is needed to run it.
 
 A codec cell names the `o2jam-net` type whose `WireMessage::COMMAND` or
 `EmptyMessage::COMMAND` equals the id. An `OPEN` cell states what is unknown
@@ -63,7 +65,7 @@ wire evidence.
 | 2021 | game TCP | C→S | ChannelLogout | OPEN: result decoder for the session drain; next: rewrite 2022 body on the local gateway | `docs/net-protocol.md` §4a; `o2jam-net::command::Request::ChannelLogout` |
 | 2022 | game TCP | S→C | ChannelLogout | OPEN: result decoder for the session drain; next: rewrite 2022 body on the local gateway | `docs/net-protocol.md` §4b; `o2jam-net::command::Response::ChannelLogout` |
 | 2023 | game TCP | S→C | RoomParameterChanged | OPEN: body layout of RoomParameterChanged; next: capture or rewrite one gateway frame | `docs/net-protocol.md` §4b opcode list |
-| 2024 | game TCP | C→S | SendMusicList | OPEN: wire body; next: capture or rewrite a frame on the local gateway | `docs/net-protocol.md` §4a; `o2jam-net::command::Request::SendMusicList` |
+| 2024 | game TCP | C→S | SendMusicList | `o2jam-net::SendMusicList` | `docs/net-protocol.md` §4a; codec at `crates/o2jam-net/src/message.rs:132` |
 | 2025 | game TCP | S→C | RoomSkillChanged | OPEN: body layout of RoomSkillChanged; next: capture or rewrite one gateway frame | `docs/net-protocol.md` §4b opcode list |
 | 2026 | game TCP | S→C | MusicPremiumTimeList | OPEN: body layout of MusicPremiumTimeList; next: capture or rewrite one gateway frame | `docs/net-protocol.md` §4b opcode list |
 | 2027 | game TCP | C→S | GetMusicPlayRanking | `o2jam-net::GetMusicPlayRanking` | `docs/net-protocol.md` §4a; `o2jam-net::command::Request::GetMusicPlayRanking` |
@@ -128,9 +130,9 @@ wire evidence.
 | 4039 | game TCP | S→C | DownloadProgressChanged | `o2jam-net::DownloadProgressChanged` | `docs/net-protocol.md` §4b; `o2jam-net::command::Event::DownloadProgressChanged` |
 | 4040 | game TCP | S→C | GameRankUpdate | `o2jam-net::GameRankUpdate` | `docs/net-protocol.md` §4b; `o2jam-net::command::Event::GameRankUpdate` |
 | 4041 | game TCP | C→S | FinalizeRank | OPEN: rank-finalize body; next: tap the 4041 send at Result entry | `docs/net-protocol.md` §4a; `o2jam-net::command::Request::FinalizeRank` |
-| 4042 | game TCP | C→S | GetLiveState | OPEN: live-state request; next: rewrite the 4043 answer on a scripted gateway | `docs/net-protocol.md` §4a |
+| 4042 | game TCP | C→S | GetLiveState | `o2jam-net::GetLiveState` | byte-verified empty send at `crates/o2jam-net/src/relay/commands.rs:801`; moment PINNED in `docs/send-moments.md` §5 |
 | 4043 | relay TCP | S→C | LiveStateResponse | `o2jam-net::LiveStateResponse` | `docs/net-protocol.md` §4b; `o2jam-net` codec `LiveStateResponse` |
-| 4044 | game TCP | C→S | GetP2PList | OPEN: peer-list request; next: rewrite the 4045 answer on a scripted gateway | `docs/net-protocol.md` §4a |
+| 4044 | game TCP | C→S | GetP2PList | `o2jam-net::GetP2PList` | byte-verified empty send at `crates/o2jam-net/src/relay/commands.rs:820`; moment PINNED in `docs/send-moments.md` §5 |
 | 4045 | relay TCP | S→C | P2PListResponse | `o2jam-net::P2PListResponse` | `docs/net-protocol.md` §4b; `o2jam-net` codec `P2PListResponse` |
 | 4046 | game TCP | C→S | ReportUdpPunchHole | `o2jam-net::ReportUdpPunchHole` | `docs/net-protocol.md` §4a |
 | 4047 | relay TCP | S→C | ReportUdpPunchHoleAnswer | `o2jam-net::ReportUdpPunchHoleAnswer` | `docs/net-protocol.md` §4b; `o2jam-net` codec `ReportUdpPunchHoleAnswer` |
@@ -191,3 +193,4 @@ wire evidence.
 - Requests found only in the enum (for example 4040-adjacent events) inherit the §4b family evidence.
 - Relay ids 1–11 use the same framing but a different opcode space; ids 4042–4056 are game-gateway ids with relay semantics.
 - OPEN rows are not implemented codecs. Their next step is the evidence action that can close the row.
+- Correction record (formerly OPEN, now codec): 2024 has a body codec at `message.rs:132`; 4042/4044 are byte-verified empty sends at `relay/commands.rs:801/820` and their moments are pinned in `docs/send-moments.md` §5. The earlier OPEN labels were inventory errors, not source contradictions; they are recorded here so the correction stays visible.
