@@ -154,6 +154,22 @@ pub struct AvatarItemRow {
     pub sprites: Vec<(u8, String)>,
 }
 
+impl AvatarItemRow {
+    /// Costume bonuses inked by the 7.55 set-item card renderer.
+    ///
+    /// `FUN_00529230` prints record words `+0x24` and `+0x28` as the
+    /// experience and jam-money percentages (REA `ev_ee6fcc7…fb`, file
+    /// offsets `0x5294a0`/`0x5294ff`). The parser stores file bytes
+    /// `+22` and `+26` inside the legacy `params`/`flags` fields, so
+    /// rebuild those two words from the preserved prefix bytes.
+    #[must_use]
+    pub fn costume_bonus_percent(&self) -> (u32, u32) {
+        let experience = (self.params[2] >> 8) | ((self.params[3] & 0xff) << 24);
+        let jam_money = (self.params[3] >> 8) | (u32::from(self.flags.1) << 24);
+        (experience, jam_money)
+    }
+}
+
 /// A parsed `Itemdata_Korea.dat` table: item rows in file order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvatarItemTable {
@@ -254,4 +270,61 @@ pub fn parse_jam_thresholds(bytes: &[u8]) -> Result<Vec<u16>, FileError> {
         .iter()
         .map(|w| u16::from_le_bytes(*w))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row_with_prefix_bytes(prefix: [u8; 30]) -> AvatarItemRow {
+        AvatarItemRow {
+            item_id: 1,
+            item_type: 0,
+            price: 0,
+            params: [
+                read_u32le(&prefix, 8).unwrap(),
+                read_u32le(&prefix, 17).unwrap(),
+                read_u32le(&prefix, 21).unwrap(),
+                read_u32le(&prefix, 25).unwrap(),
+            ],
+            flags: (prefix[12], prefix[29]),
+            name: String::new(),
+            description: String::new(),
+            sprites: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn installed_new_arrival_rows_carry_the_exe_card_percentages() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+        let archive_path = root.join("O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            println!("skip: missing install-root avatar archive");
+            return;
+        };
+        let entries = crate::parse_opi(&archive).expect("installed avatar archive parses");
+        let table_entry = crate::find_opi_entry(&entries, "Itemdata_Korea.dat")
+            .expect("installed avatar archive carries the item table");
+        let body = crate::opi_entry_body(&archive, table_entry).expect("item table in bounds");
+        let table = parse_avatar_item_table(body).expect("item table parses");
+        for item_id in [1535, 1536, 1537, 1539, 1540, 1541] {
+            let row = table
+                .rows
+                .iter()
+                .find(|row| row.item_id == item_id)
+                .expect("new-arrival row");
+            assert_eq!(row.costume_bonus_percent(), (10, 10), "item {item_id}");
+        }
+    }
+
+    #[test]
+    fn costume_bonus_words_read_the_exe_pinned_prefix_offsets() {
+        // The exe card renderer reads record `+0x24`/`+0x28`, which are
+        // file bytes `+22`/`+26` of the 30-byte item prefix.
+        let mut prefix = [0u8; 30];
+        prefix[22] = 10; // experience percent
+        prefix[26] = 20; // jam-money percent
+        let row = row_with_prefix_bytes(prefix);
+        assert_eq!(row.costume_bonus_percent(), (10, 20));
+    }
 }

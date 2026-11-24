@@ -193,6 +193,30 @@ impl AvatarFigure {
         Self::from_layers(layers)
     }
 
+    /// Decode one animation frame of a sprite-55 body as a single
+    /// layer. Set-item cards hold a fixed pose frame, not the whole
+    /// breathing run that [`Self::from_sprite55`] stacks.
+    #[must_use]
+    pub fn from_sprite55_frame(sprite: &Sprite55<'_>, frame: usize) -> Self {
+        let Some(image) = sprite.images.get(frame) else {
+            return Self::default();
+        };
+        if !sprite.is_raw_rgb555(image) {
+            return Self::default();
+        }
+        let Some(decoded) =
+            Rgb555Image::decode(sprite.pixel_data(image), image.w as usize, image.h as usize)
+        else {
+            return Self::default();
+        };
+        Self::from_layers(vec![FigureLayer {
+            image: decoded,
+            dx: i32::from(image.x),
+            dy: i32::from(image.y),
+            colorkey: sprite.colorkey,
+        }])
+    }
+
     /// Stack decoded layers as one body run: single-frame bodies stay
     /// one entry, 12-frame breathing bodies stay twelve. Empty bodies
     /// stage nothing, never an empty run.
@@ -2250,6 +2274,42 @@ const ITEM_ICON_SLOTS: usize = 2;
 /// 73x57 rects; the installed table's slot 0 holds the 109x81-size family,
 /// so slot 0 is the goods-card source (#363). Slot 1 stays the bag source.
 const SHOP_PORTRAIT_SLOT: usize = 0;
+/// Full-body sprite slot of an item row. The card figures in the v3
+/// 7.55 entry frame match this family, not the slot-0 thumbnails.
+const SHOP_FEATURED_FIGURE_SLOT: usize = 2;
+/// Pose frame the exe's set-item cards hold at rest. Pixel-matched to
+/// the v3 entry frame (`060ab2af…de680`) on all four full bodies.
+pub const SHOP_FEATURED_FIGURE_FRAME: usize = 21;
+
+/// Full-body sprite name of one item row (slot 2 of its sprite table).
+#[must_use]
+pub fn shop_featured_figure_name(row: &o2jam_file::AvatarItemRow) -> Option<&str> {
+    let (_, name) = row.sprites.get(SHOP_FEATURED_FIGURE_SLOT)?;
+    (!name.is_empty()).then_some(name.as_str())
+}
+
+/// Full-body card figures for every catalog row that resolves, keyed
+/// by item id. Only the exe's fixed pose frame is decoded per body.
+#[must_use]
+pub fn load_shop_featured_figures(
+    archive: &[u8],
+    table: &AvatarItemTable,
+) -> HashMap<u32, AvatarFigure> {
+    let Ok(entries) = o2jam_file::parse_opi(archive) else {
+        return HashMap::new();
+    };
+    table
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let filename = shop_featured_figure_name(row)?;
+            let entry = find_opi_entry(&entries, &archive_name(filename))?;
+            let sprite = o2jam_file::parse_sprite55(opi_entry_body(archive, entry).ok()?).ok()?;
+            let figure = AvatarFigure::from_sprite55_frame(&sprite, SHOP_FEATURED_FIGURE_FRAME);
+            (!figure.is_empty()).then_some((row.item_id, figure))
+        })
+        .collect()
+}
 /// Five pose variants per part block, each declaring one male and one
 /// female slot.
 const PART_VARIANT_SLOTS: usize = 5;
@@ -2399,6 +2459,37 @@ mod avatar_figure_tests {
     use super::*;
     use o2jam_file::parse_sprite55;
     use std::path::Path;
+
+    #[test]
+    fn featured_card_figure_uses_the_full_body_sprite_at_the_exe_pose() {
+        // Live caller chain: `stage_online_identity` -> `set_avatar_source`
+        // -> `paint_shop_featured_icons` -> this loader. The v3 exe entry
+        // frame (sha256 `060ab2af…de680`) matches slot 2 frame 21 of
+        // `SA0501.ojs` pixel-for-pixel, not the stretched slot-0 thumbnail.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+        let Some(source) = super::super::avatar_source::read_installed_avatar(&root) else {
+            println!("skip: missing install-root avatar archive");
+            return;
+        };
+        let row = source
+            .table()
+            .rows
+            .iter()
+            .find(|row| row.item_id == 1541)
+            .expect("installed table carries the new-arrival row");
+        let name = shop_featured_figure_name(row).expect("row declares a full body sprite");
+        assert_eq!(name, "SA0501.ojs");
+        let entries = o2jam_file::parse_opi(source.archive()).expect("archive directory");
+        let entry = o2jam_file::find_opi_entry(&entries, &archive_name(name))
+            .expect("full body sprite in archive");
+        let body = o2jam_file::opi_entry_body(source.archive(), entry).expect("sprite in bounds");
+        let sprite = parse_sprite55(body).expect("sprite parses");
+        let figure = AvatarFigure::from_sprite55_frame(&sprite, SHOP_FEATURED_FIGURE_FRAME);
+        let layer = figure.layer(0).expect("one pose layer");
+        assert_eq!((layer.image.w, layer.image.h), (127, 168));
+        assert_eq!((layer.dx, layer.dy), (81, 40));
+        assert_eq!(layer.colorkey, 0x7d5f);
+    }
 
     /// Minimal container: header + one record + blob (mirrors the
     /// `o2jam-file` synthetic builders).
