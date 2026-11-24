@@ -9,7 +9,7 @@ Version pinned to 7.55 client files (sizes + SHA-256):
 |---|---|---|
 | `Interface1.opi` | 75,100,702 | `d6654119…bdd50584` |
 | `Playing1.opi` | 221,737,026 | `8c1c7566…aed9eed40` |
-| `avatar.opa` | 144,761,749 | `ced3ed1e…2953b16` |
+| `avatar.opa` | 144,761,749 | `ced3ed1e82aa…75c2959534b29c16` |
 
 (Analysis method: static structure walk over the installed files
 with Python 3.14 — offsets and counts below, no disassembly.)
