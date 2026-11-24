@@ -220,9 +220,11 @@ There is no fixed global chat-string buffer. The feed is the staged
   cell+`0x8` (`FUN_004089f0`, REA
   `ev_dd647c96eb7ac803ee58fc3143552e808b797b36d67bf88a74b7e626ef3d418e`,
   string setter `ev_9e56ebd10ddb22c95ae838ae6f30967452d1712a6d47a18e3b39c34a6e21a3e8`).
-  A generic list text reader uses the same cell expression at file `0x1119c9`
-  (VA `0x5119c9`, REA
-  `ev_9e0ff6e4480c2d173339799b8c13edf08973e92711dd9af211968663180a1a6d`).
+  A generic list text reader uses the same cell expression in its procedure
+  (VA `0x511750`, file `0x111750`; REA
+  `ev_7467dc34d021ffe3005174829db81bb334ecc4cb2803e9ec14ecc454c15b0597`).
+  The single CALL at file `0x1119c9` is separately pinned as
+  `ev_9e0ff6e4480c2d173339799b8c13edf08973e92711dd9af211968663180a1a6d`.
 - `TEXT_SWAIT_CHAT 0x1640003C` has no immediate code reference because the
   generic list consumes these staged cells; the row template is not a second
   text buffer. This corrects the stale "exact row-feed call stays OPEN" wording
@@ -246,13 +248,20 @@ There is no fixed global chat-string buffer. The feed is the staged
 
 ### 6.4 Same-claim sentences for the two open rows
 
-- When a seated player sends `3011` chat, the exe's `CStateWaiting` tick takes
-  the `3012`/`3013` line from the parent queue and paints it in the
-  `LIST_SWAIT_CHAT` row ring with color `0xdedede`/`0x71e6`, capped to the
-  newest five rows (wire `C2S:3011` → `S2C:3012`; static pin above).
-- When master and peer both sit in Waiting, each runs the same tick and row
-  writer, so the chat half of the social chrome uses one reader on both sides;
-  the emblem half stays on its own #303 pin.
+- When a seated player sends `3011` chat in Waiting, each seated observer's
+  painted `LIST_SWAIT_CHAT` rows are the `[%12s] <content>` line in
+  color `0xdedede` (admin `0xbc5` uses `0x71e6`), capped to the newest five
+  rows (pack none — static 7.55 pin, wire `C2S:3011`/`S2C:3012`, dossier
+  `ev_4e099aecca24b2d856a9c8ab031cbb9f68df19801c2e3a9bf442b35090c9582f`,
+  `ev_ce0e4f58e5afa40b1ba365695d544423343b9e320b9ae52cfa98dcf251499f68`,
+  `ev_a3beddb9a288d8fbd4d1cd6f671bd0826e385bb120afa512912fe8e58b2668eb`,
+  `ev_116b99d2bab78fc4987bc0f0c1650a79f2a1e21e95e0ca143b0cdb11d1c028a2`).
+- When master and peer are both seated in Waiting, the master's and the peer's
+  chat half of the social chrome is the same `CStateWaiting` tick and row
+  writer with no role branch; the emblem half stays on its #303 pin (pack
+  none — static 7.55 pin, wire `C2S:3011`/`S2C:3012`, dossier
+  `ev_ce0e4f58e5afa40b1ba365695d544423343b9e320b9ae52cfa98dcf251499f68`,
+  `ev_c71f32d0b5daf712901562564488fd1873362ff63e4aad7a2255f3ede4c5183a`).
 
 ### 6.5 Still OPEN (not needed for the two same-claim checks)
 
