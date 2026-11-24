@@ -4,9 +4,10 @@ Version pinned to `AngelO2Jam.exe` 5,029,888 B,
 SHA-256 `83a04541…72c823b` (file offset = VA − `0x400000`;
 `.text` VMA `0x401000`, file off `0x1000`).
 Claim style: static `objdump -d` analysis in our own words, no
-disassembly reproduced. No REA dossier covers these sites (the
-shared snapshot holds 55 loading/song-path records only), so file
-offsets below are the evidence; no `ev_…` id is cited.
+disassembly reproduced. The older sites below carry file offsets only
+(the shared REA dossier holds 55 loading/song-path records). The
+draw-order pin added in #908 uses the REA 6.9.0 CLI with Ghidra 12.2
+and cites its `ev_…` evidence IDs.
 
 ## Wire: `EquipItem` 5004 → 5005
 
@@ -265,16 +266,78 @@ Our painter implements this (`AVATAR_BREATHING_TICK_MS = 66`,
 `AvatarPose`, `worn_pose`), and the bare-board idle pulse runs at
 one step (66 ms) so every step reaches the screen.
 
+### Draw-order table (#908, 2026-11-20)
+
+Oracle: `OTwo.exe` = `AngelO2Jam.exe`, 5,029,888 B, SHA-256
+`83a04541b8219ba340681766b33de2bfbb5ff51b813ef4d2e9dd1def72c823b`.
+REA 6.9.0 CLI (`rea decompile OTwo.exe <addr>`, provider Ghidra 12.2),
+behavior described in our own words; no disassembly is reproduced here.
+File offset = VA − `0x400000`.
+
+- Paint VA `0x52b9b0` (file `0x12b9b0`), evidence
+  `ev_5a3c251720bd6841558684b970b2b6f7c45bc70f7c26a8126d7569435ff260da`:
+  one of five rows is selected by the kit's instrument type (idle 0,
+  guitar 1, bass 2, keyboard 3, drum 4 — matching the restage switch
+  pinned above). The paint then walks exactly `0x24` = 36 bytes of
+  that row. A byte below `0x25` indexes a dword in the 36-slot surface
+  array at `this + 0x150`; a nonzero dword gets its frame set and a
+  blit at the stored `(+0x1e4, +0x1e8)` origin. `0xff` ends the row.
+- Restage VA `0x52b480` (file `0x12b480`), evidence
+  `ev_25a328cdd807fb4b48bb126dcb375bcc489d58251a33fb1cce51cfc10fcb85fc`:
+  clears `0x90` bytes at `+0x150` (36 dwords) and fills 29 part slots
+  from 29 item pairs at `+0x68`; item index 6 also fills `+0x1c8`
+  (array slot `0x1e`) and indices 15..18 fill `+0x1cc..+0x1d8`
+  (slots `0x1f..0x22`) with secondary bodies.
+- Sprite-slot selector VA `0x52e730` (file `0x12e730`), evidence
+  `ev_407fcd2991e5ff7c2d30e1b024f09eb661a6a5a9c044219c136bf8790c521fab`:
+  the pose bits choose sprite slots 2/4/6/8/10 per part block plus
+  `+0/+10/+20/+30` block offsets, confirming the table selects a
+  pose row, not an equipment order.
+- Constructor VA `0x52b180` (file `0x12b180`), evidence
+  `ev_86e850ea16d8c795a5475d1c78ad8550f28cd50a7c1a69b0a646c8ca43cd9b19`:
+  zero-initialises the 29 item pairs and the 36 surface dwords.
+
+Table bytes: VA `0x64c770..0x64c823`, file `0x24c770..0x24c823`,
+5 rows × 36 B, row stride `0x24`. SHA-256 of the 180 bytes:
+`e2274af39ef4558ee176d2a9a5974566c8800958d4a1b3cdf710151e72cb301a`.
+
+| Row (pose) | VA | Bytes up to the first `0xff` (entry count) |
+|---|---|---|
+| 0 idle | `0x64c770` | `23 0b 1e 14 22 00 0e 0d 0a 01 03 02 13 20 21 09 0c 05 08 07 06 1c 15 16 17 1f` (26) |
+| 1 guitar | `0x64c794` | `23 0b 1e 14 22 00 0e 0d 0a 01 20 13 10 1f 03 02 21 09 0c 05 08 07 06 1c 15 16 17` (27) |
+| 2 bass | `0x64c7b8` | `23 0b 1e 14 22 00 0e 0d 0a 01 20 13 12 1f 03 02 21 09 0c 05 08 07 06 1c 15 16 17` (27) |
+| 3 keyboard | `0x64c7dc` | `23 0b 1e 14 22 00 0e 0d 0a 01 03 02 13 20 21 09 0c 05 08 07 06 04 1c 15 11 1f 16 17` (28) |
+| 4 drum | `0x64c800` | `23 0b 1e 14 22 00 0e 0d 0a 13 0f 1f 01 03 02 20 21 09 0c 05 08 07 06 1c 15 16 17` (27) |
+
+Comparison with our painter: `load_worn_figure` walks the 17 equipment
+cells in array order and, per item row, the part blocks in ascending
+order from `pick_wear_sprites`; `AvatarFigure` blits one frame per run
+in that order. The exe's walk is not that order. Its idle row starts
+slots `0x23, 0x0b, 0x1e, 0x14, 0x22`, then `0x00, 0x0e, 0x0d, …`;
+guitar and bass insert `0x20, 0x13, 0x10/0x12, 0x1f` before `0x03`;
+keyboard inserts `0x04, 0x11`; drum starts `0x13, 0x0f, 0x1f`. An
+equipment-order walk would start `0x00, 0x01, 0x02, …`. The orders
+therefore differ from the first drawn body.
+
+Decision: ADR-0015 keeps equipment-slot paint order and records this
+as an OPEN divergence. The table is pinned evidence, not consumed:
+the mapping from our equipment cells and part blocks to the exe's 29
+part slots and secondary surfaces is not established, so consuming it
+now would invent an ordering. Next evidence step: trace the restage
+caller back to the 7.55 equipment table, read the 29 pairs in a stopped
+Wine session, then compare one overlapping-part capture against the
+table order.
+
 Documented divergences, none silent:
 
 1. **Empty pose slot**: the exe returns null and draws no part;
    `pick_wear_sprites` falls back to the block's other parity and
    then to its first non-empty wearer-parity slot, so a garment never
-   vanishes. Revisit if a real kit shows the difference.
-2. **Draw order**: the exe paints parts in a fixed 5×36 order table
-   (VA `0x64c770`, row per pose, `0xff` terminated) — pinned data,
-   not yet consumed: our painter keeps equipment-slot order. OPEN:
-   z-order parity.
+   vanishes. ADR-0016 (#909) records this as an OPEN divergence: the
+   parity patch red-proved three guards but broke five out-of-lane
+   `connect.rs` fixtures, so no code change landed.
+2. **Draw order**: extracted and compared above; ADR-0015 keeps slot
+   order and pins the mismatch. OPEN: z-order parity.
 3. **Odd-length bodies** (11/13 frames) are rare; the rule above is
    implemented as pinned (frame 0 instead of the exe's rejected
    frame 1, same visible result).
@@ -303,9 +366,11 @@ pose, wearer parity first (ticket #222: the five variants of a block
 are five *poses of the same part*, so wearing all five printed ghost
 hands at one anchor — item 376 stages torso / left arm / right arm in
 blocks 0–2, five poses each, and the unisex items repeat one file
-across their five slots). The live tester2 kit therefore stages 8
-bodies (hair, body, torso, left arm, right arm, bottom, shoes, face)
-and 63 layers: run lengths `[12, 12, 1, 1, 1, 12, 12, 12]`.
+across their five slots). An exact empty slot still falls back; ADR-0016
+records the exe's draw-nothing divergence. The live tester2 kit
+therefore stages 8 bodies (hair, body, torso, left arm, right arm,
+bottom, shoes, face) and 63 layers: run lengths
+`[12, 12, 1, 1, 1, 12, 12, 12]`.
 
 ## Verdict
 
@@ -348,3 +413,4 @@ file for the record. Implementation lives in
 `tt222d_instrument_pose_animates_the_sleeves`,
 `wear_follows_the_kit_pose_in_every_block`,
 `worn_pose_reads_the_instrument_row_type`.
+
