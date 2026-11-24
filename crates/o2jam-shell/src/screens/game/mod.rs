@@ -31297,8 +31297,9 @@ mod game_tests {
         // Null backend only (containment): playing track 3 cues
         // while playing; result's `0x13` names no `BGM.ojm` record
         // (10 records), so the song-end entry silences the channel.
-        // OPEN: identify which bank the worker holds when `0x4C1B90`
-        // cues it (`BGMwinter.ojm` candidate) — never invent a track.
+        // The worker bank is pinned (#904): `BGMwinter.ojm` mode-3
+        // entry 6 (`bgResult.ogg`); this test stages a synthetic
+        // 10-slot bank and pins the silence fallback for it.
         use o2jam_audio::{NullBackend, PcmSamples};
         let mut bank = vec![None; 10];
         bank[2] = Some(PcmSamples {
