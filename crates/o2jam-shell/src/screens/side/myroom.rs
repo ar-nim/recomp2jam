@@ -69,6 +69,14 @@ pub const MYROOM_GIFT_RIGHT_CODE: u32 = 0x1520_0049;
 /// `FUN_004a8ba0` (file `0xa8ba0`, EV `ev_c1d8c405…`). Its extra frame
 /// call is not decoded by that evidence; only its tab ownership is used.
 pub const MYROOM_GIFT_BACK_CODE: u32 = 0x1550_0047;
+/// Gift-row type-image clones (`Myroom_Gift_TypeImage.ojs`, `0x15500050`).
+/// The exe clears them to frame 0 for missing gifts (`FUN_0051ee60`,
+/// file `0x51ee60`) and hides the gift family on the MY BAG tab.
+pub const MYROOM_GIFT_TYPE_IMAGE_CODE: u32 = 0x1550_0050;
+/// Gift-row move-button clones (`Myroom_Btn_GiftMove.ojs`, `0x15500053`).
+/// Same tab family as the type images; its baked `이동` ink must not
+/// land on the empty MY BAG face (v4 paired frame).
+pub const MYROOM_GIFT_MOVE_CODE: u32 = 0x1550_0053;
 /// First gift page-number digit (`Myroom_GiftPageNum.ojs`): the exe's
 /// tab painter stages frame 1 for MY BAG and frame 2 for PRESENT BOX.
 pub const MYROOM_GIFT_PAGE_FIRST_CODE: u32 = 0x1550_0054;
@@ -335,6 +343,8 @@ pub const fn myroom_control_tab(code: u32) -> Option<MyRoomLowerTab> {
         || code == MYROOM_GIFT_LEFT_CODE
         || code == MYROOM_GIFT_RIGHT_CODE
         || code == MYROOM_GIFT_BACK_CODE
+        || code == MYROOM_GIFT_TYPE_IMAGE_CODE
+        || code == MYROOM_GIFT_MOVE_CODE
     {
         Some(MyRoomLowerTab::Gifts)
     } else {
@@ -991,4 +1001,44 @@ pub fn myroom_gift_captions(
             picked.map_or_else(String::new, |view| view.sender.clone()),
         ),
     ]
+}
+
+#[cfg(test)]
+mod myroom_tab_guards {
+    use super::*;
+    use crate::avatar::PlacementRole;
+    use o2jam_render::Rect;
+
+    fn staged(code: u32) -> ScenePlacement {
+        ScenePlacement {
+            role: PlacementRole::Clone,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 20,
+                h: 20,
+            },
+        }
+    }
+
+    #[test]
+    fn gift_row_art_stays_hidden_on_the_my_bag_face() {
+        // Live caller chain: `visit_side(MyRoom)` stages the bound art
+        // -> `ScreenGame::paint_side` -> `paint_scene_figures_selected`
+        // -> `myroom_tab_kept`. Oracle: v4 myroom pair
+        // (`~/scratch/paired-shots-v4/states/myroom`) has no potion
+        // icons or gift `이동` buttons on the empty MY BAG face; the
+        // exe's tab painter (`FUN_004a8ba0`, file 0xa8ba0) shows the
+        // gift row family only on the PRESENT BOX tab.
+        for code in [MYROOM_GIFT_TYPE_IMAGE_CODE, MYROOM_GIFT_MOVE_CODE] {
+            assert!(
+                !myroom_tab_kept(&staged(code), MyRoomLowerTab::Bag),
+                "gift row art {code:#x} must not ink on MY BAG"
+            );
+            assert!(myroom_tab_kept(&staged(code), MyRoomLowerTab::Gifts));
+        }
+    }
 }

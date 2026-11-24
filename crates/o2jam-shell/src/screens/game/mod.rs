@@ -69,21 +69,22 @@ use super::paint::{
     paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
-    paint_music_shop_genre_frames, paint_music_shop_notice, paint_music_shop_owned_rows,
-    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
-    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_hover, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
-    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict,
-    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    paint_music_shop_genre_frames, paint_music_shop_lightboard_entry_notice,
+    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
+    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
+    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
+    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
+    paint_shop_item_icons, paint_shop_notice_text, paint_shop_preview, paint_shop_scene,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, waiting_map_cycle, BattleVerdict, CashChargeArt,
+    ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
     WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
     WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
@@ -8826,6 +8827,14 @@ impl ScreenGame {
                 frame,
                 &self.side_placements,
                 self.music_shop.selected_row(),
+            );
+            let lightboard_hovered = self
+                .pointer
+                .is_some_and(|(x, y)| music_shop_tooltip_hovered(&self.side_placements, x, y));
+            paint_music_shop_lightboard_entry_notice(
+                frame,
+                &self.side_placements,
+                lightboard_hovered,
             );
             paint_music_shop_tooltip(
                 frame,
@@ -28981,10 +28990,13 @@ mod game_tests {
     }
 
     #[test]
-    fn music_shop_lightboard_tooltip_shows_the_fallback_banner_only_on_hover() {
+    fn music_shop_lightboard_entry_notice_yields_to_the_hover_tooltip() {
         // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
         // (pointer) -> ScreenGame::paint_side ->
-        // paint_music_shop_tooltip -> staged lightboard rect.
+        // paint_music_shop_lightboard_notice / paint_music_shop_tooltip
+        // -> staged lightboard rect. Oracle: the v4 quiesced pair has
+        // the magenta `바뀐 음악점수 확인` notice at rest (bbox 709,21
+        // to 772,30) and the pinned fallback string on hover.
         let mut game = open_music_shop_tooltip_board();
         let paint = |game: &mut ScreenGame| {
             let mut buf = vec![0_u32; 800 * 600];
@@ -29002,12 +29014,13 @@ mod game_tests {
         let inked = |buf: &[u32]| -> bool {
             (25..75).any(|row| (515..650).any(|col| buf[row * 800 + col] != 0))
         };
-        assert!(!inked(&idle), "no banner before hover");
+        assert!(inked(&idle), "the v4 entry notice inks at rest");
         let mut pointer = InputSnapshot::new();
         pointer.set_pointer(Some((560, 50)));
         game.ingest_snapshot(&pointer);
         let hovered = paint(&mut game);
         assert!(inked(&hovered), "the pinned fallback banner inks on hover");
+        assert_ne!(idle, hovered, "hover replaces the entry notice");
     }
 
     #[test]
