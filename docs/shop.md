@@ -799,6 +799,17 @@ structural 0.8455 / raw 0.8206 (modern text) to structural
 outside the glyph raster; per-cell provenance of the gem word stays
 OPEN as above.
 
+Guard: `live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs`
+— live chain: `main.rs::run_play` →
+`session::OnlineSession::stage_live_art` → `stage_live_scenes` →
+`stage_interface_scenes` → `stage_state(State::Shop)` →
+`stage_shop_price_fonts` → `staged_shop_price_fonts` →
+`ScreenGame::visit_side` → `ScreenGame::paint_at` → `paint_shop_board`
+→ `paint_shop_card_price_row` → `paint_shop_price_sprite_row`. It
+data-gates with `pack_skip_report` and asserts the sprite core pixels;
+breaking the staging publish makes it fail (mutation log
+`~/scratch/review-glyph-gate/live-guard-mutation-red.log`).
+
 ## #877 — bottom-right preview-figure statics pin (close-out lane, 2026-11-26)
 
 Naming correction (`#877` triage said "preview"): the bottom-right

@@ -356,13 +356,14 @@ pub fn restage_live_playing(game: &mut ScreenGame) {
 
 #[cfg(test)]
 mod live_art_tests {
+    use o2jam_file::data_root::{pack_skip_report, root_has_game_data};
     use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry};
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
     use super::{install_root, restage_live_playing, stage_live_scenes, stage_planet_dialogs};
     use o2jam_shell::screens::game::PlanetModal;
-    use o2jam_shell::screens::side::PlanetOptionTab;
+    use o2jam_shell::screens::side::{PlanetOptionTab, SideScreen};
     use o2jam_shell::staging::{
         read_install_archives, stage_room_hover_overlay, stage_state, StageContext, StagedArt,
         State,
@@ -507,6 +508,14 @@ mod live_art_tests {
             }
         }
         game.menu_key(MenuKey::Confirm, true);
+    }
+
+    /// Count one exact framebuffer color inside a pinned prefix box.
+    fn core_pixels(pixels: &[u32], width: usize, left: usize, width_px: usize, core: u32) -> usize {
+        (238..250)
+            .flat_map(|row| (left..left + width_px).map(move |col| pixels[row * width + col]))
+            .filter(|pixel| *pixel == core)
+            .count()
     }
 
     /// Native-canvas pixels of one explicit-clock paint.
@@ -1722,5 +1731,70 @@ mod live_art_tests {
         }
         let (bare, staged) = paint_pair(Screen::Playing, 0);
         assert_ne!(bare, staged);
+    }
+
+    #[test]
+    fn live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs() {
+        // Live caller chain (ticket #877): main.rs::run_play ->
+        // session::OnlineSession::stage_live_art -> stage_live_scenes
+        // -> stage_interface_scenes -> stage_state(State::Shop) ->
+        // stage_shop_price_fonts -> staged_shop_price_fonts ->
+        // ScreenGame::visit_side -> ScreenGame::mount_staged_side_art
+        // -> ScreenGame::paint_at -> ScreenGame::paint_shop ->
+        // paint_shop_board -> paint_shop_featured_captions ->
+        // paint_shop_card_price_row -> paint_shop_price_sprite_row.
+        // The revision this guard protects replaced modern-font ink
+        // with staged sprite frames; a seam-only guard could not see
+        // a break in the live staging arm above.
+        let root = install_root();
+        if !root_has_game_data(&root) {
+            println!(
+                "{}",
+                pack_skip_report(&root, "live_stage_inks_shop_price_row_with_sprite_glyphs")
+            );
+            return;
+        }
+        let Some(source) = o2jam_shell::read_installed_avatar(&root) else {
+            println!(
+                "{}",
+                pack_skip_report(&root, "live_stage_inks_shop_price_row_with_sprite_glyphs")
+            );
+            return;
+        };
+        let mut game = live_game();
+        game.set_decoded_avatar_source(&source);
+        game.stage_exe_item_shop_catalog(source.table());
+        stage_live_scenes(&mut game);
+        walk_to(&mut game, Screen::Room);
+        assert!(game.visit_side(SideScreen::Shop), "live Shop visit opens");
+        assert!(
+            game.shop_entry_catalog(),
+            "featured cards stage from the catalog"
+        );
+        assert!(
+            o2jam_shell::staging::staged_shop_price_fonts().is_some(),
+            "the live Shop stage must publish both runtime font bodies"
+        );
+
+        let rendered_core = |word: u16| {
+            let (red, green, blue) = o2jam_file::rgb555_to_rgb888(word);
+            o2jam_render::pack_xrgb(red, green, blue)
+        };
+        let pixels = painted_pixels(&mut game, 0);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        // The archive frames carry 11 pixels of green core `0x3706`
+        // in frame 11 and 4 of gold core `0x7F20` in frame 10. The
+        // no-data text fallback inks different colors (106,197,49)
+        // and (255,205,0), so these counts name the sprite raster.
+        assert_eq!(
+            core_pixels(&pixels, width, 225, 13, rendered_core(0x3706)),
+            11,
+            "won prefix paints the staged green sprite core"
+        );
+        assert_eq!(
+            core_pixels(&pixels, width, 317, 9, rendered_core(0x7F20)),
+            4,
+            "gem prefix paints the staged gold sprite core"
+        );
     }
 }

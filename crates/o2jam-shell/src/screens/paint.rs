@@ -1440,6 +1440,14 @@ fn shop_price_places(price: u32) -> (i32, u32) {
     (count, divisor)
 }
 
+/// Left edge of a currency prefix: the exe backs off one digit pitch
+/// per price digit, then the glyph's own inset from the anchor.
+fn shop_price_prefix_left(anchor_x: i32, digit_count: i32, glyph_backoff: i32) -> i32 {
+    anchor_x
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(digit_count))
+        .saturating_sub(glyph_backoff)
+}
+
 /// One sprite frame from a staged runtime font, pasted at its exe
 /// anchor: the font bodies carry `(0,0)` anchors, so `left`/`top`
 /// land the glyph directly on the cloned `SET_PRICE` cell.
@@ -1488,9 +1496,7 @@ fn paint_shop_price_sprite_row(
     fonts: &ShopPriceFonts,
 ) {
     let (won_count, _) = shop_price_places(good.price);
-    let won_glyph_left = won_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
-        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
+    let won_glyph_left = shop_price_prefix_left(won_anchor, won_count, SHOP_WON_GLYPH_BACKOFF);
     if let Some(prefix) = fonts.won_frame(SHOP_WON_PREFIX_FRAME) {
         paint_shop_price_sprite_glyph(frame, won_glyph_left, top, prefix);
     }
@@ -1500,9 +1506,7 @@ fn paint_shop_price_sprite_row(
 
     let gem_price = good.gem_price.unwrap_or(0);
     let (gem_count, _) = shop_price_places(gem_price);
-    let gem_glyph_left = gem_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
-        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
+    let gem_glyph_left = shop_price_prefix_left(gem_anchor, gem_count, SHOP_GEM_GLYPH_BACKOFF);
     if let Some(prefix) = fonts.won_frame(SHOP_GEM_PREFIX_FRAME) {
         paint_shop_price_sprite_glyph(frame, gem_glyph_left, top, prefix);
     }
@@ -1523,9 +1527,7 @@ fn paint_shop_price_text_row(
 ) {
     let won = good.price.to_string();
     let won_count = shop_price_word_digit_count(&won);
-    let won_glyph_left = won_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
-        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
+    let won_glyph_left = shop_price_prefix_left(won_anchor, won_count, SHOP_WON_GLYPH_BACKOFF);
     paint_text_left_in_cell(
         frame,
         Rect {
@@ -1545,9 +1547,7 @@ fn paint_shop_price_text_row(
         |price| price.to_string(),
     );
     let gem_count = shop_price_word_digit_count(&gem);
-    let gem_glyph_left = gem_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
-        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
+    let gem_glyph_left = shop_price_prefix_left(gem_anchor, gem_count, SHOP_GEM_GLYPH_BACKOFF);
     paint_text_left_in_cell(
         frame,
         Rect {
