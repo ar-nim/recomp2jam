@@ -783,6 +783,8 @@ Implementation note: the shell's modern-font seam (owner decision
 `e8d01`) paints the two prefix glyphs as text at the pinned colors
 and geometry, because these runtime font bodies are not named in
 `ControlList_Interface.txt` and staging them would need changes
-outside this lane's owned paths. Pixel fidelity of the glyph shape
-stays OPEN; next evidence step is a staged-font seam plus a paired
-v7 re-pair of region x 214–760, y 240–272.
+outside this lane's owned paths. The reviewer's post-fix paired
+re-pair (`~/scratch/review-shop-price-row/score-price-row.log`) moves
+region x 214–760, y 240–272 from structural 0.7943 to **0.8455**
+(raw 0.8206). Pixel fidelity of the glyph shape stays OPEN; next
+evidence step is a staged-font seam for an exact sprite match.

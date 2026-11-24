@@ -1416,10 +1416,11 @@ const SHOP_PRICE_DIGIT_INK: [u8; 4] = [0x62, 0x62, 0x62, 0xFF];
 const SHOP_WON_GLYPH_INK: [u8; 4] = [0x6A, 0xC5, 0x31, 0xFF];
 const SHOP_GEM_GLYPH_INK: [u8; 4] = [0xFF, 0xCD, 0x00, 0xFF];
 
-/// Digit count of an ASCII price word, saturating instead of
-/// wrapping on an unexpectedly long value.
+/// Digit count of a decimal price word. Counting characters, not
+/// bytes, keeps the name true; saturate on an unexpectedly long word
+/// instead of wrapping.
 fn shop_price_digit_count(word: &str) -> i32 {
-    i32::try_from(word.len()).unwrap_or(i32::MAX)
+    i32::try_from(word.chars().count()).unwrap_or(i32::MAX)
 }
 
 /// One runtime font glyph: left/top anchored, modern-font raster
@@ -4987,117 +4988,66 @@ mod paint_tests {
         // paint_shop_board -> paint_shop_featured_captions -> this row.
         // A seam fixture suffices for the glyph colors: it stages the
         // BND-derived SET_PRICE clone and needs no install-root art.
-        // The paired live re-pair stays controller-owned.
         if o2jam_text::system_font().is_none() {
             return;
         }
-        let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
-        let placements = [ScenePlacement {
-            role: PlacementRole::Clone,
-            id: parent,
-            code: 0x1440_0094,
-            sprite: None,
-            rect: Rect {
-                x: 219,
-                y: 238,
-                w: 126,
-                h: 12,
-            },
-        }];
-        let goods = [ShopGood {
-            item_id: 1541,
-            name: "블루".to_owned(),
-            price: 4500,
-            gem_price: None,
-            experience_bonus_percent: 0,
-            jam_money_bonus_percent: 0,
-        }];
-        let mut buf = vec![0_u32; 800 * 600];
-        paint_shop_featured_captions(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &placements,
-            &goods,
-        );
-        let channels = |pixel: u32| -> (u32, u32, u32) {
-            let rgb = pixel & 0xFF_FFFF;
-            ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
-        };
+        let buf = featured_price_fixture();
         let has_glyph =
-            |x: i32, y: i32, w: i32, h: i32, matches: fn(u32, u32, u32) -> bool| -> bool {
+            |x: i32, y: i32, w: i32, h: i32, matches: fn((u32, u32, u32)) -> bool| -> bool {
                 (y..y + h).any(|row| {
-                    (x..x + w).any(|col| {
-                        let (red, green, blue) = channels(buf[row as usize * 800 + col as usize]);
-                        matches(red, green, blue)
-                    })
+                    (x..x + w)
+                        .any(|col| matches(rgb_channels(buf[row as usize * 800 + col as usize])))
                 })
             };
-        let is_green = |red: u32, green: u32, blue: u32| green > red + 20 && green > blue + 20;
-        let is_gold =
-            |red: u32, green: u32, blue: u32| red > blue + 40 && green > blue + 40 && red > 100;
         assert!(
-            has_glyph(225, 238, 13, 12, is_green),
+            has_glyph(225, 238, 13, 12, is_green_ink),
             "won prefix inks the pinned green glyph"
         );
         assert!(
-            has_glyph(317, 238, 9, 12, is_gold),
+            has_glyph(317, 238, 9, 12, is_gold_ink),
             "gem prefix inks the pinned gold glyph"
         );
     }
 
     #[test]
-    fn featured_price_digits_stay_gray_at_the_pinned_digit_origins() {
+    fn featured_price_digits_stay_bright_neutral_inside_both_digit_boxes() {
         // Same live chain as the glyph guard. The exe's number-font
         // digit frames use RGB555 core `0x318c`; only the prefix
-        // glyphs are colored. A seam fixture pins that split.
+        // glyphs are colored. A near-black antialias pixel is not
+        // enough: the guard needs a bright neutral and no currency
+        // ink inside either digit box (review mutation red proof).
         if o2jam_text::system_font().is_none() {
             return;
         }
-        let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
-        let placements = [ScenePlacement {
-            role: PlacementRole::Clone,
-            id: parent,
-            code: 0x1440_0094,
-            sprite: None,
-            rect: Rect {
-                x: 219,
-                y: 238,
-                w: 126,
-                h: 12,
-            },
-        }];
-        let goods = [ShopGood {
-            item_id: 1541,
-            name: "블루".to_owned(),
-            price: 4500,
-            gem_price: None,
-            experience_bonus_percent: 0,
-            jam_money_bonus_percent: 0,
-        }];
-        let mut buf = vec![0_u32; 800 * 600];
-        paint_shop_featured_captions(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &placements,
-            &goods,
-        );
-        let has_gray = |x: i32, w: i32| -> bool {
+        let buf = featured_price_fixture();
+        let has_bright_neutral = |x: i32, w: i32| -> bool {
             (238..250).any(|row| {
                 (x..x + w).any(|col| {
-                    let rgb = buf[(row * 800 + col) as usize] & 0xFF_FFFF;
-                    let (red, green, blue) = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
-                    red != 0 && red.abs_diff(green) <= 6 && green.abs_diff(blue) <= 6 && red < 200
+                    let (red, green, blue) = rgb_channels(buf[(row * 800 + col) as usize]);
+                    red.min(green).min(blue) >= 0x40
+                        && red.abs_diff(green) <= 6
+                        && green.abs_diff(blue) <= 6
                 })
             })
         };
-        assert!(has_gray(240, 32), "won digits ink gray at their origins");
-        assert!(has_gray(329, 7), "gem zero inks gray at its origin");
+        let has_currency_ink = |x: i32, w: i32| -> bool {
+            (238..250).any(|row| {
+                (x..x + w).any(|col| {
+                    let rgb = rgb_channels(buf[(row * 800 + col) as usize]);
+                    is_green_ink(rgb) || is_gold_ink(rgb)
+                })
+            })
+        };
+        for (part, x, w) in [("won", 240, 32), ("gem", 329, 7)] {
+            assert!(
+                !has_currency_ink(x, w),
+                "{part} digit box carries no green or gold ink"
+            );
+            assert!(
+                has_bright_neutral(x, w),
+                "{part} digits ink a bright neutral"
+            );
+        }
     }
 
     #[test]
@@ -5991,6 +5941,59 @@ mod paint_tests {
             sprite: None,
             rect: Rect { x, y, w, h },
         }
+    }
+
+    /// Painted price row of one featured card, staged from the
+    /// BND-derived `SET_PRICE` clone. Shared by both color guards so
+    /// they differ only in the behavior they assert.
+    fn featured_price_fixture() -> Vec<u32> {
+        let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
+        let placements = [ScenePlacement {
+            role: PlacementRole::Clone,
+            id: parent,
+            code: 0x1440_0094,
+            sprite: None,
+            rect: Rect {
+                x: 219,
+                y: 238,
+                w: 126,
+                h: 12,
+            },
+        }];
+        let goods = [ShopGood {
+            item_id: 1541,
+            name: "블루".to_owned(),
+            price: 4500,
+            gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
+        }];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_shop_featured_captions(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+        );
+        buf
+    }
+
+    fn rgb_channels(pixel: u32) -> (u32, u32, u32) {
+        let rgb = pixel & 0xFF_FFFF;
+        ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+    }
+
+    fn is_green_ink(rgb: (u32, u32, u32)) -> bool {
+        let (red, green, blue) = rgb;
+        green > red + 20 && green > blue + 20
+    }
+
+    fn is_gold_ink(rgb: (u32, u32, u32)) -> bool {
+        let (red, green, blue) = rgb;
+        red > blue + 40 && green > blue + 40 && red > 100
     }
 
     /// The paired 2026-11-23 cart frame puts the pinned O2CASH shortfall
