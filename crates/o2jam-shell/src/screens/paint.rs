@@ -1396,9 +1396,140 @@ fn shop_card_attribute_lines(
     ]
 }
 
+/// Card price-row geometry and ink, pinned to the 7.55 card-price
+/// writer (REA `ev_8c9dfd4d…7011`, `ev_1c918ec2…ada7b`,
+/// `ev_085d45d0…b50b8e6e`; `docs/shop.md`). The digit bodies in
+/// `Shop_Font_ItemWon.ojs` are gray; only the prefix glyphs carry
+/// green and gold. Glyph shapes use the modern-font seam (owner
+/// decision `e8d01`); colors, pitch, and origins are exe-pinned.
+const SHOP_SET_PRICE_CODE: u32 = 0x1440_0094;
+const SHOP_PRICE_CELL_SHIFT_X: i32 = 0x28;
+const SHOP_WON_PRICE_ANCHOR_X: i32 = 5;
+const SHOP_GEM_PRICE_ANCHOR_X: i32 = 0x46;
+const SHOP_PRICE_DIGIT_PITCH: i32 = 8;
+const SHOP_PRICE_GLYPH_HEIGHT: u32 = 12;
+const SHOP_WON_GLYPH_WIDTH: u32 = 13;
+const SHOP_GEM_GLYPH_WIDTH: u32 = 9;
+const SHOP_WON_GLYPH_BACKOFF: i32 = 7;
+const SHOP_GEM_GLYPH_BACKOFF: i32 = 4;
+const SHOP_PRICE_DIGIT_INK: [u8; 4] = [0x62, 0x62, 0x62, 0xFF];
+const SHOP_WON_GLYPH_INK: [u8; 4] = [0x6A, 0xC5, 0x31, 0xFF];
+const SHOP_GEM_GLYPH_INK: [u8; 4] = [0xFF, 0xCD, 0x00, 0xFF];
+
+/// Digit count of an ASCII price word, saturating instead of
+/// wrapping on an unexpectedly long value.
+fn shop_price_digit_count(word: &str) -> i32 {
+    i32::try_from(word.len()).unwrap_or(i32::MAX)
+}
+
+/// One runtime font glyph: left/top anchored, modern-font raster
+/// (presentation) at the exe's pinned sprite frame box.
+fn paint_shop_price_glyph(
+    frame: &mut Frame<'_>,
+    left: i32,
+    top: i32,
+    width: u32,
+    glyph: &str,
+    ink: [u8; 4],
+) {
+    paint_text_left_in_cell(
+        frame,
+        Rect {
+            x: left,
+            y: top,
+            w: width,
+            h: SHOP_PRICE_GLYPH_HEIGHT,
+        },
+        glyph,
+        ink,
+        0,
+    );
+}
+
+/// Decimal digits at the exe's right-anchored 8-px pitch. The most
+/// significant digit lands `pitch × (count − 1)` left of the anchor.
+fn paint_shop_price_digits(
+    frame: &mut Frame<'_>,
+    anchor_x: i32,
+    top: i32,
+    word: &str,
+    ink: [u8; 4],
+) {
+    let count = shop_price_digit_count(word);
+    let span = SHOP_PRICE_DIGIT_PITCH.saturating_mul(count);
+    let left =
+        anchor_x.saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(count.saturating_sub(1)));
+    paint_text_left_in_cell(
+        frame,
+        Rect {
+            x: left,
+            y: top,
+            w: u32::try_from(span).unwrap_or(u32::MAX),
+            h: SHOP_PRICE_GLYPH_HEIGHT,
+        },
+        word,
+        ink,
+        0,
+    );
+}
+
+/// Card price row from the cloned `SET_PRICE` cell. The exe shifts
+/// that cell by `0x28`, anchors won digits at `+5` and gem digits at
+/// `+0x46`, then backs each glyph off one pitch per digit.
+fn paint_shop_card_price_row(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    parent: &str,
+    good: &ShopGood,
+) {
+    let Some(cell) = placements
+        .iter()
+        .find(|placed| placed.code == SHOP_SET_PRICE_CODE && placed.id == parent)
+        .map(|placed| placed.rect)
+    else {
+        return;
+    };
+    let origin_x = cell.x.saturating_add(SHOP_PRICE_CELL_SHIFT_X);
+    let won = good.price.to_string();
+    let won_anchor = origin_x.saturating_add(SHOP_WON_PRICE_ANCHOR_X);
+    let won_count = shop_price_digit_count(&won);
+    let won_glyph_left = won_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
+        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
+    paint_shop_price_glyph(
+        frame,
+        won_glyph_left,
+        cell.y,
+        SHOP_WON_GLYPH_WIDTH,
+        "₩",
+        SHOP_WON_GLYPH_INK,
+    );
+    paint_shop_price_digits(frame, won_anchor, cell.y, &won, SHOP_PRICE_DIGIT_INK);
+
+    let gem = good.gem_price.map_or_else(
+        || SHOP_GEM_UNPRICED_WORD.to_owned(),
+        |price| price.to_string(),
+    );
+    let gem_anchor = origin_x.saturating_add(SHOP_GEM_PRICE_ANCHOR_X);
+    let gem_count = shop_price_digit_count(&gem);
+    let gem_glyph_left = gem_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
+        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
+    paint_shop_price_glyph(
+        frame,
+        gem_glyph_left,
+        cell.y,
+        SHOP_GEM_GLYPH_WIDTH,
+        "G",
+        SHOP_GEM_GLYPH_INK,
+    );
+    paint_shop_price_digits(frame, gem_anchor, cell.y, &gem, SHOP_PRICE_DIGIT_INK);
+}
+
 /// Featured card captions: the state-3 entry's four goods ink their
-/// own staged `SET_TITLE`/`SET_PRICE` cells. Each cell is a clone under
-/// one `SETITEM_EX` parent; text stays centered in that cloned rect.
+/// own staged `SET_TITLE` cell and the cloned `SET_PRICE` row. Each
+/// child is a clone under one `SETITEM_EX` parent; text stays left
+/// anchored in that cloned rect.
 fn paint_shop_featured_captions(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -1408,7 +1539,6 @@ fn paint_shop_featured_captions(
         let Some(parent) = super::side::SHOP_SET_CARD_PARENT_IDS.get(slot) else {
             return;
         };
-        let price = good.price.to_string();
         // Each card inks the bonuses of its own selected good into the
         // cloned `SET_TYPE1..3` cells; a zero bonus leaves its cell dark.
         let attribute_lines =
@@ -1427,26 +1557,14 @@ fn paint_shop_featured_captions(
             };
             paint_text_left_in_cell(frame, rect, line, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
         }
-        let cell_slot = u32::try_from(slot * 2).unwrap_or(u32::MAX);
-        let cells = [
-            (0x1440_008E_u32, good.name.as_str(), true),
-            (SHOP_ITEMWON_FIRST_CODE + cell_slot, price.as_str(), false),
-            (
-                SHOP_ITEMGEM_FIRST_CODE + cell_slot,
-                SHOP_GEM_UNPRICED_WORD,
-                false,
-            ),
-        ];
-        for (code, text, parent_owned) in cells {
-            let Some(rect) = placements
-                .iter()
-                .find(|placed| placed.code == code && (!parent_owned || placed.id == *parent))
-                .map(|placed| placed.rect)
-            else {
-                continue;
-            };
-            paint_text_left_in_cell(frame, rect, text, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
+        if let Some(rect) = placements
+            .iter()
+            .find(|placed| placed.code == 0x1440_008E && placed.id == *parent)
+            .map(|placed| placed.rect)
+        {
+            paint_text_left_in_cell(frame, rect, &good.name, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
         }
+        paint_shop_card_price_row(frame, placements, parent, good);
     }
 }
 
@@ -4860,6 +4978,126 @@ mod paint_tests {
                 Some("- 잼머니 : 10% 증가".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn featured_price_row_inks_a_green_won_glyph_and_a_gold_gem_glyph() {
+        // Live caller chain: boot -> stage_live_scenes ->
+        // ScreenGame::stage_exe_item_shop_catalog -> paint_side ->
+        // paint_shop_board -> paint_shop_featured_captions -> this row.
+        // A seam fixture suffices for the glyph colors: it stages the
+        // BND-derived SET_PRICE clone and needs no install-root art.
+        // The paired live re-pair stays controller-owned.
+        if o2jam_text::system_font().is_none() {
+            return;
+        }
+        let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
+        let placements = [ScenePlacement {
+            role: PlacementRole::Clone,
+            id: parent,
+            code: 0x1440_0094,
+            sprite: None,
+            rect: Rect {
+                x: 219,
+                y: 238,
+                w: 126,
+                h: 12,
+            },
+        }];
+        let goods = [ShopGood {
+            item_id: 1541,
+            name: "블루".to_owned(),
+            price: 4500,
+            gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
+        }];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_shop_featured_captions(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+        );
+        let channels = |pixel: u32| -> (u32, u32, u32) {
+            let rgb = pixel & 0xFF_FFFF;
+            ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+        };
+        let has_glyph =
+            |x: i32, y: i32, w: i32, h: i32, matches: fn(u32, u32, u32) -> bool| -> bool {
+                (y..y + h).any(|row| {
+                    (x..x + w).any(|col| {
+                        let (red, green, blue) = channels(buf[row as usize * 800 + col as usize]);
+                        matches(red, green, blue)
+                    })
+                })
+            };
+        let is_green = |red: u32, green: u32, blue: u32| green > red + 20 && green > blue + 20;
+        let is_gold =
+            |red: u32, green: u32, blue: u32| red > blue + 40 && green > blue + 40 && red > 100;
+        assert!(
+            has_glyph(225, 238, 13, 12, is_green),
+            "won prefix inks the pinned green glyph"
+        );
+        assert!(
+            has_glyph(317, 238, 9, 12, is_gold),
+            "gem prefix inks the pinned gold glyph"
+        );
+    }
+
+    #[test]
+    fn featured_price_digits_stay_gray_at_the_pinned_digit_origins() {
+        // Same live chain as the glyph guard. The exe's number-font
+        // digit frames use RGB555 core `0x318c`; only the prefix
+        // glyphs are colored. A seam fixture pins that split.
+        if o2jam_text::system_font().is_none() {
+            return;
+        }
+        let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
+        let placements = [ScenePlacement {
+            role: PlacementRole::Clone,
+            id: parent,
+            code: 0x1440_0094,
+            sprite: None,
+            rect: Rect {
+                x: 219,
+                y: 238,
+                w: 126,
+                h: 12,
+            },
+        }];
+        let goods = [ShopGood {
+            item_id: 1541,
+            name: "블루".to_owned(),
+            price: 4500,
+            gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
+        }];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_shop_featured_captions(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+        );
+        let has_gray = |x: i32, w: i32| -> bool {
+            (238..250).any(|row| {
+                (x..x + w).any(|col| {
+                    let rgb = buf[(row * 800 + col) as usize] & 0xFF_FFFF;
+                    let (red, green, blue) = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+                    red != 0 && red.abs_diff(green) <= 6 && green.abs_diff(blue) <= 6 && red < 200
+                })
+            })
+        };
+        assert!(has_gray(240, 32), "won digits ink gray at their origins");
+        assert!(has_gray(329, 7), "gem zero inks gray at its origin");
     }
 
     #[test]
