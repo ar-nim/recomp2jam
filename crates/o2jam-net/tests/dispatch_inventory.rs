@@ -237,7 +237,15 @@ fn protocol_dispatched_ids() -> BTreeSet<u16> {
     let families = protocol
         .split("## 4. Packet families")
         .nth(1)
-        .expect("protocol section 4 exists")
+        .expect("protocol section 4 exists");
+    // The token scrape below treats every decimal in the opcode tables as a
+    // dispatched id. The annotated decoder/gateway lists (### 4e/### 4f)
+    // carry byte counts and line refs in prose cells, so they are excluded:
+    // their ids come from the code scrape (WireMessage::COMMAND consts).
+    let families = families
+        .split("## 4e")
+        .next()
+        .expect("protocol section 4 has an end")
         .split("## 5.")
         .next()
         .expect("protocol section 4 has an end");
