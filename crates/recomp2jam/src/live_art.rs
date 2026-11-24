@@ -1349,7 +1349,10 @@ mod live_art_tests {
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
         let mut picked = staged_waiting_pick_game(0, Some(ex_pick(song_id)));
-        let mut room_named = staged_waiting_pick_game(song_id, None);
+        // Stage the explicit pick on both legs: an unclicked Waiting
+        // entry keeps the exe's random default (#883), which would ink
+        // a yellow caption instead of the room title.
+        let mut room_named = staged_waiting_pick_game(song_id, Some(ex_pick(song_id)));
         let rect = staged_musicname_rect(&picked);
         let picked_frame = painted_pixels(&mut picked, 0);
         let named_frame = painted_pixels(&mut room_named, 0);

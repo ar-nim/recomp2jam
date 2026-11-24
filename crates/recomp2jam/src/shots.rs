@@ -4821,6 +4821,27 @@ mod tests {
             && py < rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(0))
     }
 
+    /// First differing pixel outside every allowed staged rect.
+    fn first_change_outside_rects(
+        before: &[u32],
+        after: &[u32],
+        w: usize,
+        allowed: &[o2jam_render::Rect],
+    ) -> Option<(usize, usize)> {
+        let width = w.max(1);
+        for y in 0..before.len().min(after.len()) / width {
+            for x in 0..width {
+                if allowed.iter().any(|rect| rect_contains_pixel(*rect, x, y)) {
+                    continue;
+                }
+                if before[y * width + x] != after[y * width + x] {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
+    }
+
     #[test]
     fn guest_view_hides_staged_select_but_keeps_shared_captions() {
         // The gate hides dialog art, structure, and panel even when
@@ -4828,9 +4849,10 @@ mod tests {
         // staging the host flow on the guest paints no select pixels,
         // while the catalog BPM source for the shared song stays present.
         // The shared top-bar captions stay shared (tickets #274/#275):
-        // the staged pick re-inks the `LEVEL` badge only - the
-        // `MUSICNAME` title names the same song from the room echo, and
-        // the badge follows the same pick-or-room source as the title.
+        // the staged pick re-inks the `LEVEL` badge and `MUSICNAME`.
+        // #883: Waiting entry starts on the exe's random local
+        // selection, so the pick also replaces the random caption; both
+        // are shared caption sources, not dialog pixels.
         // A guest never stages a pick live (the `MUSELECT` click handler
         // drops non-master clicks, file `0xb2622`); this test stages one
         // on purpose.
@@ -4864,18 +4886,55 @@ mod tests {
             .find(|placed| placed.id == "IDC_IMAGE_SWAIT_SPEED_NUM")
             .map(|placed| placed.rect)
             .expect("SPEED_NUM placement missing from staged Waiting art");
-        let changed = o2jam_render::first_change_outside(&before, &after, width, badge);
-        // #535: the pick-or-room speed caption is shared with every
-        // role, so its rect may ink alongside the LEVEL badge.
-        if let Some((x, y)) = changed {
-            assert!(
-                rect_contains_pixel(speed, x, y),
-                "guest staged no select pixels outside the shared captions: {changed:?}"
+        let placements = guest.scene_placements(Screen::Waiting);
+        let musicname = placements
+            .iter()
+            .find(|placed| placed.id == "IDC_TEXT_SWAIT_MUSICNAME")
+            .map(|placed| placed.rect)
+            .expect("MUSICNAME placement missing from staged Waiting art");
+        let effect_rects = [
+            ("IDC_IMAGE_SWAIT_EFFECT_1", 0x1650_0045u32),
+            ("IDC_IMAGE_SWAIT_EFFECT_2", 0x1650_0046u32),
+        ]
+        .map(|(id, code)| {
+            let placed = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .unwrap_or_else(|| panic!("{id} placement missing from staged Waiting art"));
+            assert_eq!(
+                placed.code, code,
+                "the pinned mini-card control code must match the staged rect"
             );
+            placed.rect
+        });
+        let changed = first_change_outside_rects(
+            &before,
+            &after,
+            width,
+            &[badge, speed, musicname, effect_rects[0], effect_rects[1]],
+        );
+        // #535/#883: the pick-or-room speed and title captions are
+        // shared with every role, so their rects may ink alongside the
+        // LEVEL badge. Any other pixel means dialog art leaked.
+        assert_eq!(
+            changed, None,
+            "guest staged no select pixels outside the shared captions: {changed:?}"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&before, width, musicname),
+            o2jam_render::pixels_in_rect(&after, width, musicname),
+            "the shared title replaces the random default caption"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&before, width, speed),
+            o2jam_render::pixels_in_rect(&after, width, speed),
+            "the shared SPEED_NUM caption follows the staged pick"
+        );
+        for rect in effect_rects {
             assert_ne!(
-                o2jam_render::pixels_in_rect(&before, width, speed),
-                o2jam_render::pixels_in_rect(&after, width, speed),
-                "the shared SPEED_NUM caption follows the staged pick"
+                o2jam_render::pixels_in_rect(&before, width, rect),
+                o2jam_render::pixels_in_rect(&after, width, rect),
+                "the staged pick clears the default ? mini card"
             );
         }
         assert_ne!(

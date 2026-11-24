@@ -836,12 +836,12 @@ pub struct ScreenGame {
     /// of its 32-bit id; our wire id is a `u16`, so the same nibble is
     /// bits 12..15 here.
     room_song_variant_nibble: u8,
-    /// Local song-selection state on Waiting entry. `FUN_004aac80`
-    /// (file `0xaac80`) seeds `DAT_007789dc` from `FUN_004bb2c0` when
-    /// no song stands, and that helper always sets bit 31 (falling
-    /// back to `0x80000001`). So the exe enters Waiting with a
-    /// random-flagged local selection and mounts the `?` mini cards.
-    /// Cleared only when an explicit 4001 room song is staged.
+    /// Local effect selection on Waiting entry. `FUN_004aac80` (file
+    /// `0xaac80`) seeds `DAT_007789dc` from `FUN_004bb2c0` whenever
+    /// that local word is zero; the helper always sets bit 31 (falling
+    /// back to `0x80000001`). A room song id such as 757 cannot clear
+    /// it: `FUN_004ad350` rejects low words >= `0x25`. Cleared only by
+    /// an explicit staged local pick.
     waiting_local_selection_random: bool,
     /// Level ceiling the auto-pick arm applies to catalog rows (`
     /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
@@ -2620,13 +2620,13 @@ impl ScreenGame {
         if let Some(stage) = arena_stage_word(room.arena) {
             self.arena_stage = stage;
         }
-        // The exe seeds the random default only while its song word
-        // is zero (`FUN_004aac80`); a room that already names a song
-        // enters on that explicit selection.
-        let enters_without_song = room.music_id == 0;
+        // `FUN_004aac80` seeds the LOCAL selection word, not the room
+        // song: every Waiting entry defaults to the random-flagged
+        // value from `FUN_004bb2c0`. A named room song cannot clear it
+        // because `FUN_004ad350` rejects low words >= `0x25` (757 fails).
         self.waiting = Some(room);
         self.stage_venue_theme();
-        self.waiting_local_selection_random = enters_without_song;
+        self.waiting_local_selection_random = true;
         self.announced_room_master_id = None;
         self.local_download_badge_armed = false;
         self.chat.clear_waiting();
@@ -3864,7 +3864,9 @@ impl ScreenGame {
         // painters read that flag for the random caption and AX badge.
         self.room_song_variant_nibble =
             u8::try_from((u32::from(music_id) >> 12) & 0xF).unwrap_or(0);
-        self.waiting_local_selection_random = false;
+        // A 4001 room song does not write the local effect selection
+        // for a song id above the applier's `0x25` range; keep the
+        // entry default until an explicit local pick is staged.
         if let Some(room) = self.waiting.as_mut() {
             room.music_id = music_id;
             room.difficulty = difficulty;
@@ -11987,15 +11989,19 @@ mod game_tests {
 
     #[test]
     fn default_waiting_entry_inks_the_mini_question_cards() {
-        // REA pin: `FUN_004aac80` (Waiting entry, file `0xaac80`) seeds
-        // `DAT_007789dc` with `FUN_004bb2c0` when no room song stands;
-        // that helper always ORs `0x80000000`, falling back to
-        // `0x80000001`. `FUN_004ad350` therefore takes its random arm on
-        // entry and mounts the `?` mini cards. Live chain:
+        // REA pin: `FUN_004aac80` (Waiting entry, file `0xaac80`, EV
+        // `ev_c5761f68c58d3061d3b7fb30998b533336200f6d93b4f66452008c529664eb11`)
+        // seeds `DAT_007789dc` from `FUN_004bb2c0` whenever that LOCAL
+        // selection word is zero; the helper always ORs `0x80000000`.
+        // A room song is a different word: `FUN_004ad350` rejects a low
+        // word >= `0x25`, so 757 cannot move the effect cards off the
+        // random default (`ev_b3755aabd025cdf0f695783ed706bffc07583d1d9a89dc36ce38a9021d0ee096`).
+        // Both entry shapes therefore ink `?` in the v3 exe leg with
+        // normal 757/2/1 and zero clicks. Live chain:
         // `ScreenGame::set_joined_room` -> `paint_at` -> `paint_waiting`
         // -> `paint_waiting_scene_with_confirm` -> `paint_waiting_staged`
         // -> `paint_waiting_random_effect_cards`. Red on the old code:
-        // the two rects stayed empty because `captions.random` was false.
+        // the named-song entry left both rects empty.
         use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
         use o2jam_render::{Frame, Rgb555Image};
         let mut body = AvatarFigure::default();
@@ -12019,45 +12025,51 @@ mod game_tests {
                     h: u32::try_from(h).unwrap_or(0),
                 },
             };
-        let mut game = ScreenGame::new();
-        game.set_joined_room(waiting_room());
-        walk_to_waiting(&mut game);
-        game.load_scene(
-            Screen::Waiting,
-            vec![
-                placement("IDC_IMAGE_SWAIT_COVERAVATAR1", None, 28, 53, 141, 175),
-                placement(
-                    "IDC_IMAGE_SWAIT_RANDMAP",
-                    Some("Card.ojs"),
-                    619,
-                    468,
-                    89,
-                    65,
-                ),
-                placement("IDC_IMAGE_SWAIT_EFFECT_1", None, 719, 450, 60, 48),
-                placement("IDC_IMAGE_SWAIT_EFFECT_2", None, 719, 507, 60, 48),
-            ],
-            HashMap::from([("Card.ojs".to_owned(), body)]),
-        );
-        let mut buf = vec![0u32; 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert_eq!(
-            buf[460 * 800 + 740],
-            pack_xrgb(255, 0, 0),
-            "entry state inks the first ? mini card"
-        );
-        assert_eq!(
-            buf[520 * 800 + 740],
-            pack_xrgb(255, 0, 0),
-            "entry state inks the second ? mini card"
-        );
+        let placements = vec![
+            placement("IDC_IMAGE_SWAIT_COVERAVATAR1", None, 28, 53, 141, 175),
+            placement(
+                "IDC_IMAGE_SWAIT_RANDMAP",
+                Some("Card.ojs"),
+                619,
+                468,
+                89,
+                65,
+            ),
+            placement("IDC_IMAGE_SWAIT_EFFECT_1", None, 719, 450, 60, 48),
+            placement("IDC_IMAGE_SWAIT_EFFECT_2", None, 719, 507, 60, 48),
+        ];
+        let figures = HashMap::from([("Card.ojs".to_owned(), body)]);
+        let paint_entry = |room_music_id: u16| {
+            let mut game = ScreenGame::new();
+            let mut room = waiting_room();
+            room.music_id = room_music_id;
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            game.load_scene(Screen::Waiting, placements.clone(), figures.clone());
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        for (music_id, case) in [(0, "no room song"), (757, "named 757 room song")] {
+            let buf = paint_entry(music_id);
+            assert_eq!(
+                buf[460 * 800 + 740],
+                pack_xrgb(255, 0, 0),
+                "{case}: the first ? mini card inks"
+            );
+            assert_eq!(
+                buf[520 * 800 + 740],
+                pack_xrgb(255, 0, 0),
+                "{case}: the second ? mini card inks"
+            );
+        }
     }
 
     #[test]
@@ -15456,7 +15468,11 @@ mod game_tests {
         let blob = waiting_song_catalog_blob();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         game.set_song_catalog(&entries);
-        if let Some(music_id) = pick {
+        // The caption tests are about an explicit selection. Stage one
+        // for the room-named leg too, so the exe's default random
+        // effect selection does not stand in these fixtures (#883).
+        let pick_id = pick.or((room_music_id != 0).then_some(room_music_id));
+        if let Some(music_id) = pick_id {
             game.set_selected_music(o2jam_net::play::SetRoomMusic {
                 music_id,
                 difficulty: 2,
@@ -16134,6 +16150,9 @@ mod game_tests {
         room.music_id = 757;
         game.set_joined_room(room);
         walk_to_waiting(&mut game);
+        // Clear the exe's random entry default with an explicit local
+        // pick; this guard is about catalog title resolution (#883).
+        game.set_selected_music(waiting_song_selection());
         if with_catalog {
             let blob = waiting_song_catalog_blob();
             let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
