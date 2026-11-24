@@ -333,7 +333,9 @@ Documented divergences, none silent:
 1. **Empty pose slot**: the exe returns null and draws no part;
    `pick_wear_sprites` falls back to the block's other parity and
    then to its first non-empty wearer-parity slot, so a garment never
-   vanishes. Revisit if a real kit shows the difference.
+   vanishes. ADR-0016 (#909) records this as an OPEN divergence: the
+   parity patch red-proved three guards but broke five out-of-lane
+   `connect.rs` fixtures, so no code change landed.
 2. **Draw order**: extracted and compared above; ADR-0015 keeps slot
    order and pins the mismatch. OPEN: z-order parity.
 3. **Odd-length bodies** (11/13 frames) are rare; the rule above is
@@ -364,9 +366,11 @@ pose, wearer parity first (ticket #222: the five variants of a block
 are five *poses of the same part*, so wearing all five printed ghost
 hands at one anchor — item 376 stages torso / left arm / right arm in
 blocks 0–2, five poses each, and the unisex items repeat one file
-across their five slots). The live tester2 kit therefore stages 8
-bodies (hair, body, torso, left arm, right arm, bottom, shoes, face)
-and 63 layers: run lengths `[12, 12, 1, 1, 1, 12, 12, 12]`.
+across their five slots). An exact empty slot still falls back; ADR-0016
+records the exe's draw-nothing divergence. The live tester2 kit
+therefore stages 8 bodies (hair, body, torso, left arm, right arm,
+bottom, shoes, face) and 63 layers: run lengths
+`[12, 12, 1, 1, 1, 12, 12, 12]`.
 
 ## Verdict
 
@@ -409,3 +413,4 @@ file for the record. Implementation lives in
 `tt222d_instrument_pose_animates_the_sleeves`,
 `wear_follows_the_kit_pose_in_every_block`,
 `worn_pose_reads_the_instrument_row_type`.
+
