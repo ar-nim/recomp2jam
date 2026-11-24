@@ -711,3 +711,80 @@ pinned by pixel alignment on a 7.55 frame. Next evidence step: one
 winedbg stopped-state read of the four image-control rects. Cart-frame
 figure ink (`c2e056b8…ed03e45`) still differs by 1–7 px (pose/overlay
 timing), so a live paired re-pair is still required.
+
+## #877 — card price-row pin (close-out lane, 2026-11-25)
+
+Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a04541…72c823b`; Ghidra 12.2 / REA 6.10.1. Offsets below are file
+offsets = VA − `0x400000`. All claims are static bytes; no new live
+capture is claimed here.
+
+**Source is sprite glyphs, not colored text.** State open
+`FUN_004984d0` (file `0x984d0`; instruction walk
+`ev_7bd1198a…89fe3c1c`) loads four runtime font bodies beside the
+archive slot bracket: state word `+0x2328` ← literal
+`Shop_Font_ItemWon.ojs` at instruction `0x4986d8` / file `0x986d8`,
+`+0x232c` ← `Shop_Font_ItemGem.ojs` at `0x4986f8`, `+0x2324` ←
+`Shop_GemFont.ojs` at `0x498719`, and `+0x2330` ← `NewMark.ojs` at
+`0x49873a`. The literal bytes are read at VA `0x64861c`–`0x64866f`,
+file `0x24861c`–`0x24866f` (REA `ev_4bfd1499…875f0108b`), and each
+load call uses `FUN_0040ced0` (REA `ev_1dcf6b61…5c22c93`).
+
+The card face is reached from `FUN_0049e8d0` (file `0x49e8d0`, REA
+`ev_5a9fbbfe…30c5`): it calls `FUN_00529230` for each staged
+`SETITEM_EX` parent, and the state-3 price writer `FUN_004a21a0`
+(file `0xa21a0`, REA `ev_8c9dfd4d…7011`, byte scan of code
+`0x14400054` at file `0xa27bb`/`0xa2812`/`0xa28a2`, REA
+`ev_058bdefd…82fc67`) then forks. On the **grid face** it inks raw
+`%d` words into the global `ITEMGEM`/`ITEMWON` cells with
+`FUN_0050f6f0(0,3,4)` (black), reading the row words at `+0x10`
+(gem) and `+0x14` (won). On the **card face** it calls
+`FUN_004a1eb0` (file `0xa1eb0`, REA pseudocode
+`ev_1c918ec2…ada7b`, instruction walk `ev_46aade7c…777334ac`) with
+the won word and `FUN_004a2010` (file `0xa2010`, REA
+`ev_085d45d0…b50b8e6e`) with the gem word. Both split the value
+into decimal digits, select a sprite frame with `FUN_0041e0f0`
+(frame setter, REA `ev_78dc963e…7bdb14cc`) and blit it with
+`FUN_0041df80` (anchor draw, `docs/ui-draw.md`, REA
+`ev_7418d033…`). The won writer uses state `+0x2328` for digits
+`0..9` and appends frame **11** (the green `₩`) from the same atlas.
+The gem writer uses `+0x232c` for digits `0..9` and appends frame
+**10** from `+0x2328` — the gold `G` glyph comes from the *won*
+atlas frame, not the gem atlas. At file `0xa1fc1` the won-glyph
+index is the literal `0xb`; at `0xa211b` the gem-glyph index is
+`0xa` (same instruction walks).
+
+Geometry is the card's cloned `SET_PRICE` cell, code `0x14400094`
+under each `SETITEM_EX` parent, obtained by `FUN_00529680` (file
+`0x529680`, REA `ev_a2dc3835…180fe8edb9`). The caller shifts its
+origin by `+0x28` in x, then anchors won digits at `+5` and gem
+digits at `+0x46`, at the cell's y. Glyphs back off one 8-px digit
+pitch per digit: won glyph left = `anchor − 8·digits − 7` (13 px
+wide), gem glyph left = `anchor − 8·digits − 4` (9 px wide). Font
+anchors are `(0,0)`, so both ink at the cell y (REA walks above).
+`State_ItemShop.bnd` (slot 1463, data offset `65475546`, 186 rects)
+pairs that clone to `(219,238)-(345,250)` for parent `0x1401d088`;
+the four parents step 141 px. The global `ITEMWON`/`ITEMGEM` cells
+are the grid face, not the card price row.
+
+Sprite pixels from 7.55 `Interface1.opi` (75,100,702 B, SHA-256
+`d6654119…d50584`; local archive offsets, no REA evidence id):
+`Shop_Font_ItemWon.ojs` is slot 640 at data offset `31401138`,
+size `2384`, colorkey `0x7D5F`, 12 RGB555 frames. `Shop_Font_ItemGem.ojs`
+is slot 639 at `31398754`, size `2384`, same bodies. Frames `0..9`
+are 7×12 gray digits (core `0x318c` = `(98,98,98)`); frame 10 is
+9×12 gold (core `0x7f20` = `(255,205,0)`); frame 11 is 13×12 green
+(core `0x3706` = `(106,197,49)`). **CONTRADICTION recorded:** the
+owner's v6 visual note called both digit runs green/gold; the
+exe's own sprite bytes make only the prefix glyphs green/gold and
+the digits gray. The exe is the oracle; the note stays as history.
+
+Implementation note: the shell's modern-font seam (owner decision
+`e8d01`) paints the two prefix glyphs as text at the pinned colors
+and geometry, because these runtime font bodies are not named in
+`ControlList_Interface.txt` and staging them would need changes
+outside this lane's owned paths. The reviewer's post-fix paired
+re-pair (`~/scratch/review-shop-price-row/score-price-row.log`) moves
+region x 214–760, y 240–272 from structural 0.7943 to **0.8455**
+(raw 0.8206). Pixel fidelity of the glyph shape stays OPEN; next
+evidence step is a staged-font seam for an exact sprite match.
