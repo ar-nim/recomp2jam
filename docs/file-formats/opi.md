@@ -383,12 +383,12 @@ again before commit). Commands were run in the linked agent worktree.
   `stride_end > bytes.len()` bound in `read_opi_slot` made
   `cargo test -p o2jam-file --lib tests::opi_slots_reject_stride_running_past_file -- --exact`
   fail with `assertion failed: matches!(parse_opi_slots(&blob),
-  Err(FileError::Truncated { .. }))` (`src/lib.rs:1025`).
+  Err(FileError::Truncated { .. }))` (`src/lib.rs:1057`).
 - `resolve::tests::body_slices_size_not_reserved_size`: slicing the body
   by `reserved_size` instead of `size` in `opi_entry_body` made
   `cargo test -p o2jam-file --lib resolve::tests::body_slices_size_not_reserved_size -- --exact`
   fail with `left: [99, 100, 101, 102, 103, 104, 105, 106]`,
-  `right: [99, 100, 101]` (`src/resolve.rs:653`).
+  `right: [99, 100, 101]` (`src/resolve.rs:656`).
 
 ## Open questions
 
