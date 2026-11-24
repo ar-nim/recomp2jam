@@ -70,6 +70,7 @@ use super::side::{
     SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
+use crate::staging::ShopPriceFonts;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
@@ -1320,7 +1321,8 @@ pub fn paint_shop_board(
     board: ShopBoard<'_>,
 ) {
     if board.featured_cards {
-        paint_shop_featured_captions(frame, placements, board.goods);
+        let fonts = crate::staging::staged_shop_price_fonts();
+        paint_shop_featured_captions(frame, placements, board.goods, fonts.as_deref());
     } else {
         paint_shop_rows(frame, placements, board.goods);
     }
@@ -1398,10 +1400,11 @@ fn shop_card_attribute_lines(
 
 /// Card price-row geometry and ink, pinned to the 7.55 card-price
 /// writer (REA `ev_8c9dfd4d…7011`, `ev_1c918ec2…ada7b`,
-/// `ev_085d45d0…b50b8e6e`; `docs/shop.md`). The digit bodies in
-/// `Shop_Font_ItemWon.ojs` are gray; only the prefix glyphs carry
-/// green and gold. Glyph shapes use the modern-font seam (owner
-/// decision `e8d01`); colors, pitch, and origins are exe-pinned.
+/// `ev_085d45d0…b50b8e6e`; `docs/shop.md`). The exe inks this row from
+/// `Shop_Font_ItemWon.ojs`/`Shop_Font_ItemGem.ojs` sprite frames: digits
+/// `0..9`, won prefix `11`, gold `G` prefix `10` from the won atlas.
+/// The modern-font ink below stays only as the no-archive fallback
+/// (owner decision `e8d01`); with staged art the raster is the exe's.
 const SHOP_SET_PRICE_CODE: u32 = 0x1440_0094;
 const SHOP_PRICE_CELL_SHIFT_X: i32 = 0x28;
 const SHOP_WON_PRICE_ANCHOR_X: i32 = 5;
@@ -1412,6 +1415,8 @@ const SHOP_WON_GLYPH_WIDTH: u32 = 13;
 const SHOP_GEM_GLYPH_WIDTH: u32 = 9;
 const SHOP_WON_GLYPH_BACKOFF: i32 = 7;
 const SHOP_GEM_GLYPH_BACKOFF: i32 = 4;
+const SHOP_WON_PREFIX_FRAME: usize = 11;
+const SHOP_GEM_PREFIX_FRAME: usize = 10;
 const SHOP_PRICE_DIGIT_INK: [u8; 4] = [0x62, 0x62, 0x62, 0xFF];
 const SHOP_WON_GLYPH_INK: [u8; 4] = [0x6A, 0xC5, 0x31, 0xFF];
 const SHOP_GEM_GLYPH_INK: [u8; 4] = [0xFF, 0xCD, 0x00, 0xFF];
@@ -1419,44 +1424,148 @@ const SHOP_GEM_GLYPH_INK: [u8; 4] = [0xFF, 0xCD, 0x00, 0xFF];
 /// Digit count of a decimal price word. Counting characters, not
 /// bytes, keeps the name true; saturate on an unexpectedly long word
 /// instead of wrapping.
-fn shop_price_digit_count(word: &str) -> i32 {
+fn shop_price_word_digit_count(word: &str) -> i32 {
     i32::try_from(word.chars().count()).unwrap_or(i32::MAX)
 }
 
-/// One runtime font glyph: left/top anchored, modern-font raster
-/// (presentation) at the exe's pinned sprite frame box.
-fn paint_shop_price_glyph(
-    frame: &mut Frame<'_>,
-    left: i32,
-    top: i32,
-    width: u32,
-    glyph: &str,
-    ink: [u8; 4],
-) {
-    paint_text_left_in_cell(
+/// Digit count and leading place value of one staged price word
+/// (a zero word has one digit and place value one).
+fn shop_price_places(price: u32) -> (i32, u32) {
+    let mut divisor = 1;
+    let mut count = 1;
+    while price / divisor >= 10 {
+        divisor = divisor.saturating_mul(10);
+        count += 1;
+    }
+    (count, divisor)
+}
+
+/// One sprite frame from a staged runtime font, pasted at its exe
+/// anchor: the font bodies carry `(0,0)` anchors, so `left`/`top`
+/// land the glyph directly on the cloned `SET_PRICE` cell.
+fn paint_shop_price_sprite_glyph(frame: &mut Frame<'_>, left: i32, top: i32, layer: &FigureLayer) {
+    let (x, y) = anchor_in_frame(left, top, frame.w, frame.h);
+    blit_rgb555(
         frame,
-        Rect {
-            x: left,
-            y: top,
-            w: width,
-            h: SHOP_PRICE_GLYPH_HEIGHT,
-        },
-        glyph,
-        ink,
-        0,
+        &layer.image.view(),
+        x.saturating_add(layer.dx),
+        y.saturating_add(layer.dy),
+        Some(layer.colorkey),
     );
 }
 
-/// Decimal digits at the exe's right-anchored 8-px pitch. The most
-/// significant digit lands `pitch × (count − 1)` left of the anchor.
-fn paint_shop_price_digits(
+/// Decimal digits at the exe's right-anchored 8-px pitch: the most
+/// significant digit starts `pitch × (count − 1)` left of the anchor,
+/// and every digit selects its own font frame.
+fn paint_shop_price_sprite_digits<'a>(
     frame: &mut Frame<'_>,
     anchor_x: i32,
     top: i32,
-    word: &str,
-    ink: [u8; 4],
+    price: u32,
+    glyph: impl Fn(u8) -> Option<&'a FigureLayer>,
 ) {
-    let count = shop_price_digit_count(word);
+    let (count, mut divisor) = shop_price_places(price);
+    let mut left = anchor_x.saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(count - 1));
+    while divisor > 0 {
+        let digit = u8::try_from((price / divisor) % 10).unwrap_or(0);
+        if let Some(layer) = glyph(digit) {
+            paint_shop_price_sprite_glyph(frame, left, top, layer);
+        }
+        left = left.saturating_add(SHOP_PRICE_DIGIT_PITCH);
+        divisor /= 10;
+    }
+}
+
+/// Featured-card price from the staged sprite atlases. The gem
+/// prefix comes from the won atlas frame `10`; gem digits come from
+/// the gem atlas. An unpriced gem reads `0`, the pinned entry word.
+fn paint_shop_price_sprite_row(
+    frame: &mut Frame<'_>,
+    top: i32,
+    won_anchor: i32,
+    gem_anchor: i32,
+    good: &ShopGood,
+    fonts: &ShopPriceFonts,
+) {
+    let (won_count, _) = shop_price_places(good.price);
+    let won_glyph_left = won_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
+        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
+    if let Some(prefix) = fonts.won_frame(SHOP_WON_PREFIX_FRAME) {
+        paint_shop_price_sprite_glyph(frame, won_glyph_left, top, prefix);
+    }
+    paint_shop_price_sprite_digits(frame, won_anchor, top, good.price, |digit| {
+        fonts.won_frame(usize::from(digit))
+    });
+
+    let gem_price = good.gem_price.unwrap_or(0);
+    let (gem_count, _) = shop_price_places(gem_price);
+    let gem_glyph_left = gem_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
+        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
+    if let Some(prefix) = fonts.won_frame(SHOP_GEM_PREFIX_FRAME) {
+        paint_shop_price_sprite_glyph(frame, gem_glyph_left, top, prefix);
+    }
+    paint_shop_price_sprite_digits(frame, gem_anchor, top, gem_price, |digit| {
+        fonts.gem_frame(usize::from(digit))
+    });
+}
+
+/// No-archive fallback: the same exe origins, pitch, and colors in
+/// modern-font text (owner decision `e8d01`). Kept for clients with
+/// no game data; the sprite row replaces it whenever art staged.
+fn paint_shop_price_text_row(
+    frame: &mut Frame<'_>,
+    top: i32,
+    won_anchor: i32,
+    gem_anchor: i32,
+    good: &ShopGood,
+) {
+    let won = good.price.to_string();
+    let won_count = shop_price_word_digit_count(&won);
+    let won_glyph_left = won_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
+        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
+    paint_text_left_in_cell(
+        frame,
+        Rect {
+            x: won_glyph_left,
+            y: top,
+            w: SHOP_WON_GLYPH_WIDTH,
+            h: SHOP_PRICE_GLYPH_HEIGHT,
+        },
+        "₩",
+        SHOP_WON_GLYPH_INK,
+        0,
+    );
+    paint_shop_price_text_digits(frame, won_anchor, top, &won);
+
+    let gem = good.gem_price.map_or_else(
+        || SHOP_GEM_UNPRICED_WORD.to_owned(),
+        |price| price.to_string(),
+    );
+    let gem_count = shop_price_word_digit_count(&gem);
+    let gem_glyph_left = gem_anchor
+        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
+        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
+    paint_text_left_in_cell(
+        frame,
+        Rect {
+            x: gem_glyph_left,
+            y: top,
+            w: SHOP_GEM_GLYPH_WIDTH,
+            h: SHOP_PRICE_GLYPH_HEIGHT,
+        },
+        "G",
+        SHOP_GEM_GLYPH_INK,
+        0,
+    );
+    paint_shop_price_text_digits(frame, gem_anchor, top, &gem);
+}
+
+/// Text fallback digits in one rect, right-anchored on the exe pitch.
+fn paint_shop_price_text_digits(frame: &mut Frame<'_>, anchor_x: i32, top: i32, word: &str) {
+    let count = shop_price_word_digit_count(word);
     let span = SHOP_PRICE_DIGIT_PITCH.saturating_mul(count);
     let left =
         anchor_x.saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(count.saturating_sub(1)));
@@ -1469,7 +1578,7 @@ fn paint_shop_price_digits(
             h: SHOP_PRICE_GLYPH_HEIGHT,
         },
         word,
-        ink,
+        SHOP_PRICE_DIGIT_INK,
         0,
     );
 }
@@ -1482,6 +1591,7 @@ fn paint_shop_card_price_row(
     placements: &[ScenePlacement],
     parent: &str,
     good: &ShopGood,
+    fonts: Option<&ShopPriceFonts>,
 ) {
     let Some(cell) = placements
         .iter()
@@ -1491,40 +1601,13 @@ fn paint_shop_card_price_row(
         return;
     };
     let origin_x = cell.x.saturating_add(SHOP_PRICE_CELL_SHIFT_X);
-    let won = good.price.to_string();
     let won_anchor = origin_x.saturating_add(SHOP_WON_PRICE_ANCHOR_X);
-    let won_count = shop_price_digit_count(&won);
-    let won_glyph_left = won_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(won_count))
-        .saturating_sub(SHOP_WON_GLYPH_BACKOFF);
-    paint_shop_price_glyph(
-        frame,
-        won_glyph_left,
-        cell.y,
-        SHOP_WON_GLYPH_WIDTH,
-        "₩",
-        SHOP_WON_GLYPH_INK,
-    );
-    paint_shop_price_digits(frame, won_anchor, cell.y, &won, SHOP_PRICE_DIGIT_INK);
-
-    let gem = good.gem_price.map_or_else(
-        || SHOP_GEM_UNPRICED_WORD.to_owned(),
-        |price| price.to_string(),
-    );
     let gem_anchor = origin_x.saturating_add(SHOP_GEM_PRICE_ANCHOR_X);
-    let gem_count = shop_price_digit_count(&gem);
-    let gem_glyph_left = gem_anchor
-        .saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(gem_count))
-        .saturating_sub(SHOP_GEM_GLYPH_BACKOFF);
-    paint_shop_price_glyph(
-        frame,
-        gem_glyph_left,
-        cell.y,
-        SHOP_GEM_GLYPH_WIDTH,
-        "G",
-        SHOP_GEM_GLYPH_INK,
-    );
-    paint_shop_price_digits(frame, gem_anchor, cell.y, &gem, SHOP_PRICE_DIGIT_INK);
+    if let Some(fonts) = fonts {
+        paint_shop_price_sprite_row(frame, cell.y, won_anchor, gem_anchor, good, fonts);
+    } else {
+        paint_shop_price_text_row(frame, cell.y, won_anchor, gem_anchor, good);
+    }
 }
 
 /// Featured card captions: the state-3 entry's four goods ink their
@@ -1535,6 +1618,7 @@ fn paint_shop_featured_captions(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     goods: &[ShopGood],
+    fonts: Option<&ShopPriceFonts>,
 ) {
     for (slot, good) in goods.iter().enumerate().take(4) {
         let Some(parent) = super::side::SHOP_SET_CARD_PARENT_IDS.get(slot) else {
@@ -1565,7 +1649,7 @@ fn paint_shop_featured_captions(
         {
             paint_text_left_in_cell(frame, rect, &good.name, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
         }
-        paint_shop_card_price_row(frame, placements, parent, good);
+        paint_shop_card_price_row(frame, placements, parent, good, fonts);
     }
 }
 
@@ -5053,6 +5137,126 @@ mod paint_tests {
     }
 
     #[test]
+    fn featured_price_row_blits_one_sprite_frame_per_glyph_at_the_pinned_pitch() {
+        // Live caller chain: boot -> stage_live_scenes ->
+        // ScreenGame::stage_exe_item_shop_catalog -> paint_side ->
+        // paint_shop_board -> paint_shop_featured_captions -> this row.
+        // The seam injects 12 synthetic sprite frames per atlas so the
+        // glyph source and the 8-px frame pitch stay observable without
+        // install-root art: one solid frame per glyph, each in its own
+        // color. Modern-font text cannot produce these exact pixels.
+        let fonts = synthetic_price_fonts();
+        let buf = featured_price_fixture_with_fonts(Some(&fonts));
+        let pixel = |x: usize, y: usize| buf[y * 800 + x];
+        let ink = |word: u16| {
+            let (red, green, blue) = o2jam_file::rgb555_to_rgb888(word);
+            pack_xrgb(red, green, blue)
+        };
+
+        // Won prefix: frame 11 at anchor - 8*digits - 7 = 225.
+        assert_eq!(
+            pixel(225, 238),
+            ink(0x3706),
+            "won prefix is sprite frame 11"
+        );
+        // Four won digits (4500) at 240/248/256/264, one 8-px pitch
+        // apart. Each slot selects its own atlas frame, not the slot
+        // index: the tens and ones zeros must both be frame 0.
+        for (x, digit) in [(240, 4), (248, 5), (256, 0), (264, 0)] {
+            assert_eq!(
+                pixel(x, 238),
+                ink(digit_word(0, digit)),
+                "won digit {digit} at x={x}"
+            );
+        }
+        // Gem prefix: frame 10 from the won atlas at 329 - 8 - 4 = 317.
+        assert_eq!(
+            pixel(317, 238),
+            ink(0x7F20),
+            "gem prefix is sprite frame 10"
+        );
+        assert_eq!(
+            pixel(329, 238),
+            ink(digit_word(1, 0)),
+            "gem digit is a sprite frame at its anchor"
+        );
+    }
+
+    #[test]
+    fn staged_shop_price_fonts_come_from_the_exe_archive_atlas() {
+        // Live caller chain: boot -> stage_live_art ->
+        // live_art::stage_interface_scenes -> stage_state(State::Shop)
+        // -> stage_shop_price_fonts. The install-root arm is the only
+        // place the literal sprite names and their frame shapes can
+        // be checked against the pin; skip cleanly without game data.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).expect("Interface directory parses");
+        for (name, offset) in [
+            (SHOP_WON_PRICE_FONT_SPRITE, 31_401_138usize),
+            (SHOP_GEM_PRICE_FONT_SPRITE, 31_398_754usize),
+        ] {
+            let entry = o2jam_file::find_opi_entry(&entries, name).expect("font entry staged");
+            assert_eq!(entry.data_offset, offset, "{name} sits at the pinned slot");
+            assert_eq!(entry.size, 2384, "{name} has the pinned body size");
+        }
+        let fonts = stage_shop_price_fonts(&archive, StageContext::default())
+            .expect("both runtime fonts decode");
+        let frame_shape = |layer: &FigureLayer| {
+            let ink = layer
+                .image
+                .words
+                .iter()
+                .filter(|word| **word != layer.colorkey)
+                .count();
+            (layer.image.w, layer.image.h, ink)
+        };
+        assert_eq!(
+            fonts.won_frame(11).map(frame_shape),
+            Some((13, 12, 111)),
+            "green won glyph is won-atlas frame 11"
+        );
+        assert_eq!(
+            fonts.won_frame(10).map(frame_shape),
+            Some((9, 12, 95)),
+            "gold G glyph is won-atlas frame 10"
+        );
+        assert_eq!(
+            fonts.gem_frame(0).map(frame_shape),
+            Some((7, 12, 74)),
+            "digit 0 is a seven-pixel gray frame"
+        );
+    }
+
+    #[test]
+    fn featured_price_row_inks_the_real_archive_glyph_raster() {
+        // Same live chain as the color guards, with real archive
+        // frames: the sprite raster, not just its pinned position,
+        // must reach the canvas. Skips without install-root.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let fonts = stage_shop_price_fonts(&archive, StageContext::default())
+            .expect("both runtime fonts decode");
+        let buf = featured_price_fixture_with_fonts(Some(&fonts));
+        let buf = &buf;
+        let nonzero_pixels = |x: i32, w: i32| {
+            (238..250)
+                .flat_map(|row| (x..x + w).map(move |col| buf[row as usize * 800 + col as usize]))
+                .filter(|word| *word != 0)
+                .count()
+        };
+        assert_eq!(nonzero_pixels(225, 13), 111, "won prefix raster is intact");
+        assert_eq!(nonzero_pixels(317, 9), 95, "gem prefix raster is intact");
+        assert_eq!(
+            nonzero_pixels(240, 32),
+            60 + 75 + 74 + 74,
+            "four digit frames paint in sequence"
+        );
+    }
+
+    #[test]
     fn caption_cell_ink_lands_two_pixels_below_the_exe_cell_top() {
         // Live caller chain: `paint_side` -> `paint_myroom_overlay` /
         // `paint_music_shop_owned_rows` -> this cell painter. Oracle:
@@ -5106,7 +5310,10 @@ mod paint_tests {
     use crate::avatar::load_worn_figure;
     use crate::avatar::FigureLayer;
     use crate::screen::Screen;
-    use crate::staging::{stage_state, StageContext, State};
+    use crate::staging::{
+        stage_shop_price_fonts, stage_state, ShopPriceFonts, StageContext, State,
+        SHOP_GEM_PRICE_FONT_SPRITE, SHOP_WON_PRICE_FONT_SPRITE,
+    };
     use o2jam_net::{JoinedRoom, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame, Rgb555Image};
@@ -5945,10 +6152,58 @@ mod paint_tests {
         }
     }
 
+    /// One solid sprite-55 frame, in the archive's raw RGB555 layout.
+    fn solid_glyph_layer(width: u32, word: u16) -> FigureLayer {
+        let words = word
+            .to_le_bytes()
+            .repeat(usize::try_from(width * 12).unwrap_or(0));
+        FigureLayer {
+            image: Rgb555Image::decode(&words, width as usize, 12)
+                .expect("synthetic glyph decodes"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        }
+    }
+
+    /// Neutral gray for glyph `index` inside atlas `atlas`, packed as
+    /// RGB555 so the assertion can name the exact frame it expects.
+    fn digit_word(atlas: u16, index: u16) -> u16 {
+        let level = 4 + atlas + index;
+        (level << 10) | (level << 5) | level
+    }
+
+    /// Twelve frames per atlas in stored order: `0..9` digits, `10`
+    /// gold, `11` green — the 7.55 font-body frame map (`docs/shop.md`).
+    fn synthetic_price_fonts() -> ShopPriceFonts {
+        let atlas = |atlas: u16| {
+            let mut figure = AvatarFigure::default();
+            for index in 0..12 {
+                let (width, word) = match index {
+                    10 => (9, 0x7F20),
+                    11 => (13, 0x3706),
+                    _ => (7, digit_word(atlas, index)),
+                };
+                figure.push_layer(solid_glyph_layer(width, word));
+            }
+            figure
+        };
+        ShopPriceFonts {
+            won: atlas(0),
+            gem: atlas(1),
+        }
+    }
+
     /// Painted price row of one featured card, staged from the
-    /// BND-derived `SET_PRICE` clone. Shared by both color guards so
-    /// they differ only in the behavior they assert.
+    /// BND-derived `SET_PRICE` clone. Shared by the guards so they
+    /// differ only in the behavior they assert.
     fn featured_price_fixture() -> Vec<u32> {
+        featured_price_fixture_with_fonts(None)
+    }
+
+    /// The same fixture with an injected font atlas, for the sprite
+    /// raster guard; `None` keeps the no-data text fallback.
+    fn featured_price_fixture_with_fonts(fonts: Option<&ShopPriceFonts>) -> Vec<u32> {
         let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
         let placements = [ScenePlacement {
             role: PlacementRole::Clone,
@@ -5979,6 +6234,7 @@ mod paint_tests {
             },
             &placements,
             &goods,
+            fonts,
         );
         buf
     }

@@ -739,6 +739,9 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
     let Some(row) = STAGE_TABLE.iter().find(|row| row.state == state) else {
         return StageReport::default();
     };
+    if state == State::Shop {
+        publish_shop_price_fonts(stage_shop_price_fonts(archive, ctx));
+    }
     match row.arm {
         PlacementArm::Bound => stage_bound_row(archive, row, ctx),
         PlacementArm::FullCanvas => stage_full_canvas_row(archive, row, ctx),
@@ -881,6 +884,74 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
         ctx,
         dialog.hidden_sprites(),
     )
+}
+
+/// Runtime number-font bodies the 7.55 card-price writer opens beside
+/// the archive slot bracket (`FUN_004984d0`, file `0x4984d0`): state
+/// `+0x2328` loads the won atlas, `+0x232c` the gem atlas
+/// (`docs/shop.md`, #877). Neither name appears in `ControlList`, so
+/// the Shop row stages them by literal name, like the shop mascot.
+pub const SHOP_WON_PRICE_FONT_SPRITE: &str = "Shop_Font_ItemWon.ojs";
+pub const SHOP_GEM_PRICE_FONT_SPRITE: &str = "Shop_Font_ItemGem.ojs";
+
+/// The two sprite atlases the card price row inks. Frames `0..9` are
+/// the gray digits, frame `10` the gold `G`, frame `11` the green `₩`
+/// (the exe takes the gold frame from the won atlas). Each figure is
+/// one decoded sprite-55 body; `layer(frame)` selects one glyph.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShopPriceFonts {
+    /// Won digits `0..9` and the green/gold prefix frames.
+    pub won: AvatarFigure,
+    /// Gem digits `0..9`.
+    pub gem: AvatarFigure,
+}
+
+impl ShopPriceFonts {
+    /// One won-atlas glyph frame, if the archive decoded it.
+    #[must_use]
+    pub fn won_frame(&self, frame: usize) -> Option<&crate::avatar::FigureLayer> {
+        self.won.layer(frame)
+    }
+
+    /// One gem-atlas glyph frame, if the archive decoded it.
+    #[must_use]
+    pub fn gem_frame(&self, frame: usize) -> Option<&crate::avatar::FigureLayer> {
+        self.gem.layer(frame)
+    }
+}
+
+/// Both card-price atlases decoded for the painter. The painter
+/// receives no scene figures (`paint_shop_board` takes placements
+/// only), so the Shop staging arm publishes them here. A missing or
+/// undecodable body clears the slot: no invented glyph shape.
+static SHOP_PRICE_FONTS: OnceLock<Mutex<Option<Arc<ShopPriceFonts>>>> = OnceLock::new();
+
+/// Decode the two runtime font bodies from the staged Interface
+/// archive. `None` when either literal entry is absent or unreadable.
+#[must_use]
+pub fn stage_shop_price_fonts(archive: &[u8], ctx: StageContext) -> Option<ShopPriceFonts> {
+    let won = load_staged_figure(archive, SHOP_WON_PRICE_FONT_SPRITE, ctx.arena_stage)?;
+    let gem = load_staged_figure(archive, SHOP_GEM_PRICE_FONT_SPRITE, ctx.arena_stage)?;
+    (won.len() > 11 && gem.len() > 9).then_some(ShopPriceFonts { won, gem })
+}
+
+/// Publish the Shop arm's font bodies for the paint pass. Staging a
+/// Shop scene with no archive clears a previous decode, so no stale
+/// body can ink a later paint.
+fn publish_shop_price_fonts(fonts: Option<ShopPriceFonts>) {
+    let slot = SHOP_PRICE_FONTS.get_or_init(|| Mutex::new(None));
+    let mut slot = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = fonts.map(Arc::new);
+}
+
+/// The font bodies the current Shop stage decoded, if any.
+#[must_use]
+pub fn staged_shop_price_fonts() -> Option<Arc<ShopPriceFonts>> {
+    SHOP_PRICE_FONTS
+        .get()?
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// Code-mount body the 7.55 shop entry paints in the bottom-right
