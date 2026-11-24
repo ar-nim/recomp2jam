@@ -1689,6 +1689,20 @@ pub struct MusicScoreRow {
     pub difficulty_ranks: [u8; 4],
 }
 
+impl MusicScoreRow {
+    /// Rank byte for one chart difficulty.
+    ///
+    /// Claim D22 (`docs/claims/50-net.md:26`) pins the row scan at files
+    /// `0x40d5b`–`0x40f4f`: the chooser reads `row[2 + d]` with `d`
+    /// from the select entry's difficulty word (`0` Easy, `1` Normal,
+    /// `2` Hard), then caches the byte at `0x7797c4` for the
+    /// `Result_Imgs_Rank` frame. The fourth byte is Memoryer RX.
+    #[must_use]
+    pub fn rank_for(self, difficulty: Difficulty) -> u8 {
+        self.difficulty_ranks[difficulty as usize]
+    }
+}
+
 /// Wire size of one [`MusicScoreRow`]: `u16` id + four rank bytes.
 const MUSIC_SCORE_ROW_LEN: usize = 6;
 
@@ -3268,6 +3282,37 @@ mod notice_tests {
         let frame = decode_frame(&answer.encode()).unwrap();
         assert_eq!(frame.id, 2031);
         assert_eq!(MusicScoreListAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn score_list_answer_pins_easy_normal_hard_byte_order() {
+        // seam: pure codec. Claim D22 (`docs/claims/50-net.md:26`):
+        // scan files `0x40d5b`–`0x40f4f`, chooser cache `0x7797c4`.
+        // Byte 2 Easy, 3 Normal, 4 Hard; byte 5 is RX (no exe reader).
+        // Decode a row whose four rank bytes are all distinct, then
+        // read them back through the difficulty-ordered accessor.
+        let body = [
+            0x00, 0x00, 0x00, 0x00, // result 0
+            0x01, 0x00, // one row
+            0xF5, 0x02, // music id 757
+            0x07, 0x05, 0x03, 0x01, // Easy, Normal, Hard, RX ranks
+        ];
+        let answer = MusicScoreListAnswer::decode_body(&body).unwrap();
+        let row = answer.rows[0];
+        assert_eq!(row.music_id, 757);
+        assert_eq!(row.difficulty_ranks, [7, 5, 3, 1]);
+        assert_eq!(row.rank_for(Difficulty::Ex), 7);
+        assert_eq!(row.rank_for(Difficulty::Nx), 5);
+        assert_eq!(row.rank_for(Difficulty::Hx), 3);
+        assert_eq!(row.rank_for(Difficulty::Rx), 1);
+
+        // A changed Easy byte leaves Normal and Hard unchanged.
+        let mut changed = body;
+        changed[8] = 6;
+        let changed_row = MusicScoreListAnswer::decode_body(&changed).unwrap().rows[0];
+        assert_eq!(changed_row.rank_for(Difficulty::Ex), 6);
+        assert_eq!(changed_row.rank_for(Difficulty::Nx), 5);
+        assert_eq!(changed_row.rank_for(Difficulty::Hx), 3);
     }
 
     #[test]
