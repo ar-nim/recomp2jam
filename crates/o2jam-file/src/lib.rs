@@ -880,6 +880,34 @@ mod tests {
     }
 
     #[test]
+    fn decoded_odd_stripes_stay_unswapped() {
+        // Doc pin: docs/file-formats/ojm.md "Odd-stripe byte-swap
+        // anomaly" — sample dispatch 0x54f580 (ev_fdb31596…), loader
+        // 0x54ef60 (ev_f96b0fe5…) and read chain 0x412620
+        // (ev_55fd256a…) show no pairwise swap. Negative pin: the
+        // 17-way descriptor returns stored byte order, odd stripes
+        // included; a future swap "fix" must fail this guard.
+        const LANES: usize = 17;
+        const STRIPE_BYTES: usize = 16;
+        let plain: Vec<u8> = (0..LANES * STRIPE_BYTES)
+            .map(|index| {
+                let stripe = index / STRIPE_BYTES;
+                let within_stripe = index % STRIPE_BYTES;
+                // Asymmetric byte pairs make any swap visible.
+                (((stripe + 1) as u8) << 4) | ((within_stripe % 8) as u8 + 1)
+            })
+            .collect();
+        let encoded = encrypted_body(&plain, LANES);
+        let descriptor = ojm_descriptor_for_version(2.9);
+        let samples = decode_new_variant_pcm(&encoded, descriptor).expect("decode");
+        let decoded: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        assert_eq!(decoded, plain, "odd stripes keep their byte order");
+    }
+
+    #[test]
     fn recover_new_variant_sample_passes_raw_and_rejects_garbage() {
         // Mode-3 bodies ship raw: a checksum-valid page passes through.
         let plain = ogg_page_fixture(&[8]);
