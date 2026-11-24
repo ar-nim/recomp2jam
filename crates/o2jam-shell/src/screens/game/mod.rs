@@ -577,11 +577,12 @@ const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 const SPLASH_HOLD_POLL_MS: u64 = 100;
 /// Planet promo heartbeat while windowed (ticket #167): the banner
 /// rotates on the exe's 3000 ms cadence (`PLANET_PROMO_TICK_MS`,
-/// pinned `0xBB8` push) while the rotation flag holds, so the bare
+/// pinned `0xBB8` push) while the rotation flag holds, so a mounted
 /// board owes the loop one modest wakeup per second — the advance
-/// lands within one pulse of the tick. Stopped, covered, or
-/// frameless boards paint nothing new and stay fully idle (the
-/// #138 parked-loop result holds).
+/// lands within one pulse of the tick. Planet-hosted dialogs keep
+/// the board mounted, so they keep the pulse as well (`#845` v5).
+/// Stopped boards, side lobbies, and frameless boards paint nothing
+/// new and stay fully idle (the #138 parked-loop result holds).
 const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
@@ -10065,13 +10066,14 @@ impl GameLoop for ScreenGame {
             }
             Screen::Avi => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
             // The promo carousel rotates on its 3000 ms cadence while
-            // the rotation flag holds (#167), so the bare board owes
-            // the loop one modest pulse per second — the advance lands
-            // within one pulse of the tick. Stopped, covered, or
-            // frameless boards paint nothing new, so they stay fully
-            // idle (the #138 parked-loop result holds).
-            Screen::Planet
-                if self.bare_planet_board()
+            // the rotation flag holds (#167), so a mounted planet
+            // board owes the loop one modest pulse per second — the
+            // advance lands within one pulse of the tick. Dialogs
+            // hosted by that state stay mounted (#845 v5); side
+            // lobbies, stopped boards, and frameless boards paint
+            // nothing new and stay fully idle (#138).
+            Screen::Planet | Screen::Channel
+                if self.planet_board_mounted()
                     && self.planet_promo_spinning()
                     && self.promo_frame_count() > 0 =>
             {
@@ -20905,6 +20907,32 @@ mod game_tests {
     }
 
     #[test]
+    fn promo_heartbeat_pulses_behind_a_planet_options_modal() {
+        // #845 v5: the Options sheet is hosted by CStatePlanet, whose
+        // per-frame update keeps the carousel paging (VA `0x48e3b0`;
+        // `docs/wine-boot.md` pins auto-paging behind its Channel
+        // dialog). Without an idle pulse the accumulator advances only
+        // on input, so an untouched modal freezes the banner at the
+        // phase it opened with — exactly the v5 capture artifact.
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::about_to_wait
+        //   -> GameLoop::idle_repaint_interval (this pulse)
+        //   -> GameLoop::paint -> ScreenGame::paint_at
+        //   -> tick_planet_promo_at -> planet_board_mounted
+        // Archives absent -> N/A (synthetic promo frames).
+        let mut game = promo_carousel_game();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        assert!(game.planet_promo_spinning());
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS)),
+            "the modal must not starve the carousel's repaint pulse"
+        );
+    }
+
+    #[test]
     fn promo_heartbeat_parks_while_stopped() {
         // Ticket #167: STOP clears the rotation flag, so the board
         // owes the loop nothing — stopped stays fully idle (the #138
@@ -20917,18 +20945,23 @@ mod game_tests {
     }
 
     #[test]
-    fn promo_heartbeat_parks_while_the_quit_modal_covers_the_board() {
-        // Ticket #167: the heartbeat mirrors the bare-board gate —
-        // the quit-confirm modal owns the board, so no pulse even
-        // while the flag spins. (Sides mount only over the
-        // Channel/Room/Waiting lobbies through the public seam, so
-        // the modal arm carries the covered-board case here.)
+    fn promo_heartbeat_pulses_while_the_quit_modal_covers_the_board() {
+        // #845: the quit sheet is mounted by the same CStatePlanet
+        // update that pages the banner behind the Channel dialog.
+        // c92672f already lets the promo clock advance behind every
+        // planet-hosted modal; a parked pulse there would accumulate
+        // hidden frames and jump on the next input. This pins the
+        // shared-state inference, not a quit-specific pixel match
+        // (no qualified quit-confirm A/B pack exists yet).
         let mut game = promo_carousel_game();
         game.menu_key(MenuKey::Back, true);
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         assert!(game.planet_promo_spinning());
-        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS))
+        );
     }
 
     /// Twelve-frame breathing figure: one 1x1 layer per frame with a
