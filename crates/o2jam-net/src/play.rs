@@ -1769,7 +1769,12 @@ mod song_sync_tests {
     #[test]
     fn score_completed_decodes_more_than_eight_rows() {
         // The exe caps nothing: nine funded rows decode (Memoryer's
-        // `maxCount: 8` was never exe behavior).
+        // `maxCount: 8` was never exe behavior). Same pin as the
+        // unfunded-count guard: `docs/net-protocol.md` §4c `4018`
+        // (ticket #900 cites line 132), handler file `0x15fbe0`:
+        // `push 8` at `0x15fc17` is the flag memset, the only `8`
+        // compare is the member guard at `0x15fd54`, and the loop
+        // exits at `0x15fc80`/`0x15fce2`/`0x15fd28` test the count.
         let entry = live_score_entry();
         let completed = ScoreCompleted {
             room_master: 0,
@@ -1786,6 +1791,14 @@ mod song_sync_tests {
     fn score_completed_reports_unfunded_count_without_capping() {
         // A huge count is a truncation report, not a range error, and
         // the need is computed before any row allocation.
+        // Evidence: `docs/net-protocol.md` §4c `4018 ScoreCompleted`
+        // (ticket #900 cites line 132; the section has moved since).
+        // Handler file `0x15fbe0`: the only `push 8` is the flag-array
+        // memset length at `0x15fc17`, the only compare against 8 is
+        // the per-row member guard at `0x15fd54`, and all three loop
+        // exits test the count word at `0x15fc80`/`0x15fce2`/`0x15fd28`
+        // (signed `jge`). No count clamp exists: a negative count
+        // yields zero rows, any funded count decodes.
         let count: i32 = 100_000;
         let mut body = Vec::from(count.to_le_bytes());
         body.push(0x00);
