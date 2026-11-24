@@ -651,3 +651,63 @@ The seam raw-catalog face (`set_catalog`) is unchanged. Guards:
 `stretch_blit_rgb555_skips_the_staged_portrait_backdrop_key`.
 Live pair numbers and remaining OPENs are in
 `~/scratch/fix-chrome-b-findings.md`.
+
+## #877 — card-figure blit pin (close-out lane, 2026-11-25)
+
+Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a04541…72c823b`; Ghidra 12.2 / REA 6.10.1. All offsets below are
+file offsets = VA − `0x400000`. The oracle frame is the v6 entry capture
+`060ab2af…de680` (the same v3 exe frame; only the Rust leg changed).
+
+Statics walk: state-3 switch `FUN_00498bc0` (file `0x98bc0`, REA
+`ev_d0c41e44…463f4`) calls `FUN_0049e8d0` (file `0x49e8d0`, REA
+`ev_f5a5731f…43a903a`), which resolves each selected good and calls
+`FUN_00529230` (file `0x529230`, 1033 B, REA `ev_81002554…de616b`,
+pseudocode `ev_dfbca1e7…cae2cf`) at computed code `0x1401d088 + slot`.
+`FUN_00529230` writes the two bonus strings and, at file `0x1293d0`
+(address-to-offset REA `ev_cf53240b…c84d1569`; instruction walk
+`ev_734d377c…78`),
+`SetRect(0x59,0x3C,0xD5,0xD2)` = 124×150 into control `+0x1fc`, plus
+control `+0x1e4`/`+0x1e8` from the read rect minus `0x5A`/`0x3C`.
+CONTRADICTION (recorded, not silently resolved): that box is the
+Playing number-engine glyph layout box (`docs/playing-digits.md` §3,
+claim A45, ev `03aa0c52…`/`6d253f51…`), not the card-figure
+destination. `FUN_00529230` writes **no scale factor** for the figure;
+the brief's "fit/scale" premise is not supported by the exe.
+
+Pixel pin: against `060ab2af…de680`, slot-2 pose frame 21 matches
+1:1 (no stretch) at native sizes. Sprite last-ink rows are
+233/233/233/234; exclusive bottoms are 234/234/234/235. Parent
+origins come from `State_ItemShop.bnd` code-ordinal rects; offsets are
+parent → image top-left:
+
+| Card | Parent | Sprite / native size | Image origin | Offset | Old → new colour loss |
+|---|---|---|---|---|---|
+| 1 | (213,62) | `SA0501.ojs` 127×168 | (212,66) | (−1,4) | 8730 → 1.5 |
+| 2 | (354,62) | `SA0601.ojs` 86×168 | (380,66) | (26,4) | 9732 → 1.5 |
+| 3 | (495,62) | `SA0401.ojs` 81×147 | (522,87) | (27,25) | 3580 → 1.2 |
+| 4 | (636,62) | `SA0302.ojs` 72×141 | (669,94) | (33,32) | 4599 → 0.8 |
+
+Loss is mean squared 5-bit RGB distance over non-key source pixels
+with round-to-8-bit expansion (scratch `fit_cards.py`). The earlier
+impl-877 offsets `(9,2),(40,1),(29,19),(53,25)` were pixel-mismatched;
+the card-2 region regressions (0.70 → 0.38) come from that displacement,
+not from a missing stretch. The old "stretched `SET_AVATAR` cell" line
+above records the v5 wrong-slot leg and is superseded for slot-2 bodies.
+
+Fix: `SHOP_FEATURED_FIGURE_BLIT_OFFSETS` now carries the table above;
+no new scale is invented. Guards: the synthetic
+`featured_card_figures_land_on_the_pinned_exe_baseline_for_each_parent`
+(install-root-free; red before the fix) plus the archive-backed
+`featured_card_blits_the_full_body_sprite_at_the_exe_native_box`.
+Interim post-fix evidence (reviewer):
+`~/scratch/review-shop-figure/postfix-featured.png` paints the four
+figures at the claimed origins with mean squared 5-bit RGB loss
+0.37/0.35/0.42/0.37 (~0.4 each). That is not the live proof. The
+post-fix v6 quiesced re-pair rerun, owned by the controller after
+merge, is the live proof; this lane does not claim it.
+OPEN: no literal per-card offset exists in the exe; the baseline is
+pinned by pixel alignment on a 7.55 frame. Next evidence step: one
+winedbg stopped-state read of the four image-control rects. Cart-frame
+figure ink (`c2e056b8…ed03e45`) still differs by 1–7 px (pose/overlay
+timing), so a live paired re-pair is still required.
