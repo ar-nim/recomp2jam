@@ -1678,11 +1678,13 @@ pub fn paint_shop_item_icons(
 }
 
 /// Native blit offsets from each `SETITEM_EX` parent origin to the
-/// pose frame's image top-left. Measured against the v3 7.55 entry
-/// frame (sha256 `060ab2af…de680`) for the four full-body sprites;
-/// geometry still starts from staged parent rects, never literals in
-/// the painter (owner pin f38f3).
-const SHOP_FEATURED_FIGURE_BLIT_OFFSETS: [(i32, i32); 4] = [(9, 2), (40, 1), (29, 19), (53, 25)];
+/// pose frame's image top-left. Pinned against the v6 7.55 entry
+/// frame: the four slot-2 bodies draw 1:1 with their bottoms on
+/// y=234 — image origins (212,66), (380,66), (522,87), (669,94) —
+/// not stretched into the card's `SET_AVATAR` cell. Geometry still
+/// starts from staged parent rects, never literals in the painter
+/// (owner pin f38f3).
+const SHOP_FEATURED_FIGURE_BLIT_OFFSETS: [(i32, i32); 4] = [(-1, 4), (26, 4), (27, 25), (33, 32)];
 
 /// Four featured card figures: the exe paints slot-2 full-body sprites
 /// at a fixed pose frame, native size, under their own archive color
@@ -4700,6 +4702,81 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 
 #[cfg(test)]
 mod paint_tests {
+    /// One solid probe figure at a known sprite anchor. Its ink lands
+    /// where the blit puts the image origin, so the test needs no game
+    /// data and can name the pinned pixel coordinates directly.
+    fn featured_figure_probe() -> AvatarFigure {
+        let pixels = [0x00_u8, 0x7C, 0x00, 0x7C, 0x00, 0x7C, 0x00, 0x7C];
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&0_u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1_u16.to_le_bytes());
+        blob.extend_from_slice(&0x7D5F_u16.to_le_bytes());
+        for word in [1_u16, 1, 2, 2] {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob.extend_from_slice(&0_u32.to_le_bytes());
+        blob.extend_from_slice(
+            &u32::try_from(pixels.len())
+                .expect("probe blob size fits")
+                .to_le_bytes(),
+        );
+        blob.extend_from_slice(&0_u32.to_le_bytes());
+        blob.extend_from_slice(&pixels);
+        let sprite = o2jam_file::parse_sprite55(&blob).expect("synthetic pose frame");
+        AvatarFigure::from_sprite55_frame(&sprite, 0)
+    }
+
+    #[test]
+    fn featured_card_figures_land_on_the_pinned_exe_baseline_for_each_parent() {
+        // Live caller chain: `paint_side` -> `paint_shop_featured_icons`
+        // -> this blit. Oracle: the 7.55 entry frame
+        // `060ab2af…de680` matches each full-body sprite
+        // at native size with image bottoms on y=234. The four image
+        // origins are (212,66), (380,66), (522,87), (669,94).
+        let figure = featured_figure_probe();
+        let figures: std::collections::HashMap<u32, AvatarFigure> =
+            (1..=4).map(|id| (id, figure.clone())).collect();
+        let goods: Vec<ShopGood> = (1..=4)
+            .map(|item_id| ShopGood {
+                item_id,
+                name: String::new(),
+                price: 0,
+                gem_price: None,
+                experience_bonus_percent: 0,
+                jam_money_bonus_percent: 0,
+            })
+            .collect();
+        let placements = [
+            shop_placement(0x1401_D088, 213, 62, 138, 301),
+            shop_placement(0x1401_D089, 354, 62, 138, 301),
+            shop_placement(0x1401_D08A, 495, 62, 138, 301),
+            shop_placement(0x1401_D08B, 636, 62, 138, 301),
+        ];
+        let mut buf = vec![0_u32; 800 * 600];
+        paint_shop_featured_icons(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+            &figures,
+        );
+        for (slot, (left, top)) in [(212, 66), (380, 66), (522, 87), (669, 94)]
+            .into_iter()
+            .enumerate()
+        {
+            let x = usize::try_from(left).expect("card origin");
+            let y = usize::try_from(top).expect("card origin");
+            let at = |x: usize, y: usize| buf[y * 800 + x];
+            assert_ne!(at(x, y), 0, "card {slot} figure");
+            assert_eq!(at(x - 1, y), 0, "card {slot} left edge");
+            assert_eq!(at(x, y - 1), 0, "card {slot} top edge");
+        }
+    }
+
     #[test]
     fn featured_card_blits_the_full_body_sprite_at_the_exe_native_box() {
         // Live caller chain: `paint_side` -> `paint_shop_featured_icons`
@@ -4733,7 +4810,7 @@ mod paint_tests {
             &goods,
             &figures,
         );
-        let (left, top) = (213 + 9, 62 + 2);
+        let (left, top) = (213 - 1, 62 + 4);
         let changed = |x: usize, y: usize| buf[y * 800 + x] != 0;
         assert!(changed(left + 60, top + 80), "figure body inks its box");
         assert!(!changed(left - 1, top + 80), "left edge is pinned");
