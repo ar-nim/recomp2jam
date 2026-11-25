@@ -4,10 +4,11 @@
 # arms (issue #741). All commands live here; no caller repeats a cargo
 # command list. Arms run with one exit code and no pipes to `tail`:
 #
-#   --arm quick : fmt, clippy, the cheap workspace suite, build (CI)
+#   --arm quick : fmt, clippy, guard-evidence audit, the cheap workspace
+#                 suite, build (CI)
 #   --arm hidden: the hidden install-root suite with a data probe (CI)
-#   --arm full  : quick checks, sample, stale sweep, hidden suite, build,
-#                 push + verify (senior merge gate)
+#   --arm full  : quick checks, sample, stale sweep, hidden suite,
+#                 guard-evidence audit, build, push + verify (senior gate)
 #
 # Per-ticket legs use `--arm quick [-- <crate...>]` (or the legacy
 # `--quick [-- <crate...>]`): fmt, clippy and only the named crates'
@@ -97,6 +98,11 @@ run_fmt_clippy() {
 
     step "cargo clippy --workspace --all-targets -- -D warnings"
     cargo clippy --workspace --all-targets -- -D warnings
+}
+
+run_guard_evidence() {
+    step "guard evidence audit"
+    bash "$REPO_ROOT/scripts/check-guard-evidence.sh"
 }
 
 # Skip-budget canaries (retro #870 companion, 2026-11-22): archive-gated
@@ -212,6 +218,7 @@ run_push_verify() {
 case "$arm" in
     quick)
         run_fmt_clippy
+        run_guard_evidence
         if [ "$per_ticket" -eq 1 ]; then
             run_per_ticket_tests
             exit 0
@@ -229,6 +236,7 @@ case "$arm" in
         verify_sweep_sample "$PRESENT_ROOT" "$SWEEP_SAMPLE"
         run_full_pack_sweep_if_stale
         run_hidden_suite
+        run_guard_evidence
         run_build
         run_push_verify
         ;;

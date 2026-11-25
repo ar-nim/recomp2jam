@@ -27,8 +27,15 @@ class GateCiArmTest(unittest.TestCase):
         (self.repo / "scripts" / "lib").mkdir(parents=True)
         (self.repo / "fixtures").mkdir()
         shutil.copy(GATE_SCRIPT, self.repo / "scripts" / "gate-check.sh")
+        shutil.copy(
+            SCRIPTS_DIR / "check-guard-evidence.sh",
+            self.repo / "scripts" / "check-guard-evidence.sh",
+        )
         for lib in (SCRIPTS_DIR / "lib").glob("*.sh"):
             shutil.copy(lib, self.repo / "scripts" / "lib" / lib.name)
+        guards = self.repo / "crates" / "fixture" / "guards.rs"
+        guards.parent.mkdir(parents=True)
+        guards.write_text("#[test]\nfn computes_expected_score() {}\n", encoding="utf-8")
         (self.repo / "fixtures" / "full-pack-sample.sha256").write_text("", encoding="utf-8")
 
         self.bin = self.repo / "bin"
@@ -63,6 +70,7 @@ class GateCiArmTest(unittest.TestCase):
         self.assertIn("clippy --workspace --all-targets", calls)
         self.assertIn("test --workspace", calls)
         self.assertIn("build --workspace", calls)
+        self.assertIn("guard evidence audit", result.stdout)
         self.assertNotIn("push", result.stdout)
 
     def test_hidden_arm_runs_the_data_probe_and_the_hidden_suite(self) -> None:
@@ -93,6 +101,7 @@ class GateCiArmTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls().count("test --workspace"), 2)
         self.assertIn("build --workspace", self.calls())
+        self.assertIn("guard evidence audit", result.stdout)
 
     def test_ci_is_a_thin_caller_of_the_two_arms(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
