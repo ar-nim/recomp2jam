@@ -63,11 +63,12 @@ use super::side::{
     MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
     MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
     PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949,
-    SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
+    SHOP_BAGSORT_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE,
+    SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE,
+    SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE,
+    SHOP_O2CASH_SHORTFALL_CP949, SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS,
+    SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use crate::staging::ShopPriceFonts;
@@ -1305,6 +1306,16 @@ pub struct ShopBoard<'a> {
     pub cart_page: usize,
     /// Cart page count (at least one).
     pub cart_pages: usize,
+}
+
+/// Whether the item-sort plate paints. `FUN_004a1010` writes the
+/// control's `+0x24` enable word from `cart_count == 0`: the code push
+/// at `0x4a106d`, `SETZ` at `0x4a1088`, and store through
+/// `FUN_00409bf0` (REA 7.55 `ev_7baf8f3c…`, `ev_694dfc15…`). A
+/// checked cart hides the control; its `.bnd` rect stays as geometry.
+#[must_use]
+pub const fn shop_bagsort_kept(code: u32, cart_count: usize) -> bool {
+    code != SHOP_BAGSORT_CODE || cart_count == 0
 }
 
 /// Item-shop board overlay over the staged side art: the visible
