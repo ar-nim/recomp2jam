@@ -273,6 +273,28 @@ pub fn route_key_event(
             edges: Vec::new(),
         };
     }
+    // 7.55 WndProc key-down (`0x100`) -> F8 gate `0x5a50d0` -> cursor
+    // option `0x5a49d0`. The exe asks for `Mouse_Cursor` 1 only in its
+    // allowed scenes; scene ids and the event-class table are in
+    // `options`. This client has no Win32 event word, so class 0 is
+    // passed (the guard still refuses the pinned 5/6/0xf classes).
+    // A captured F8 never reaches a lane edge, chat text, or rebind.
+    if down && code == KeyCode::F8 {
+        let allowed = options::f8_scene_id_of(game.screen_name()).is_some_and(|scene| {
+            options::f8_cursor_request_allowed(scene, 0, options::F8_VIRTUAL_KEY)
+        });
+        if allowed {
+            if options::switch_cursor_in_install_root().is_none() {
+                tracing::warn!("F8 cursor switch could not write option.ini");
+            }
+            return KeyRoute {
+                captured: true,
+                text: None,
+                erase: false,
+                edges: Vec::new(),
+            };
+        }
+    }
     let clean_text = down
         .then(|| {
             text.unwrap_or_default()
