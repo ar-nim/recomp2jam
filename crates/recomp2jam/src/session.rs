@@ -184,6 +184,7 @@ use crate::connect::net_context;
 mod attempt;
 #[cfg(test)]
 mod payment_tests;
+mod playing_wire_tests;
 mod press;
 #[cfg(test)]
 mod room_wire_tests;
