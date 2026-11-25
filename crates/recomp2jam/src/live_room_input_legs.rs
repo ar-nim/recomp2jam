@@ -13,12 +13,22 @@ mod tests {
     // write/restore of `option.ini` (CONCURRENCY-02).
     static OPTION_INI_LOCK: Mutex<()> = Mutex::new(());
 
+    use o2jam_file::data_root::install_root as profile_root;
     use o2jam_shell::options::{self, MouseCursorMode};
     use o2jam_shell::screens::game::ScreenGame;
     use o2jam_shell::{route_key_event, GameLoop, InputSnapshot, Keymap, Screen};
     use winit::keyboard::KeyCode;
 
     use crate::live_leg_support::*;
+
+    /// Runtime root used by the F8 write arm. It honors
+    /// `O2JAM_INSTALL_ROOT`, the same override `gate-check.sh` exports
+    /// for its hidden-data arm; the compile-time root in
+    /// `crate::install_root()` does not. Tests that touch `option.ini`
+    /// skip cleanly when this path is unreachable (#0a3ba).
+    fn profile_root_available() -> bool {
+        profile_root().is_dir()
+    }
 
     /// Save and restore `option.ini` around a test that drives the real
     /// input route. The F8 arm writes the client's one persisted option
@@ -30,7 +40,7 @@ mod tests {
 
     impl OptionIniBackup {
         fn capture() -> Self {
-            let path = crate::install_root().join("option.ini");
+            let path = profile_root().join("option.ini");
             Self {
                 original: std::fs::read(&path).ok(),
                 path,
@@ -54,7 +64,7 @@ mod tests {
     }
 
     fn persisted_cursor_mode() -> MouseCursorMode {
-        options::OptionsSettings::load_from_dir(&crate::install_root()).mouse_cursor()
+        options::OptionsSettings::load_from_dir(&profile_root()).mouse_cursor()
     }
 
     /// A scene-labelled game loop for the window-input seam. The arm reads
@@ -77,6 +87,10 @@ mod tests {
     // -> `OptionsSettings::switch_mouse_cursor` -> option.ini. The arm
     // captures the raw key, so no lane, menu edge, or chat text leaks.
     fn f8_key_arm_persists_the_cursor_value_in_the_room_scene() {
+        if !profile_root_available() {
+            println!("skip: install root unreachable");
+            return;
+        }
         let _lock = OPTION_INI_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -98,6 +112,10 @@ mod tests {
     // `route_key_event` F8 arm -> `options::f8_cursor_request_allowed` with
     // the exe's scene-id table. The song scene never reaches the write arm.
     fn f8_key_arm_is_silent_during_a_song() {
+        if !profile_root_available() {
+            println!("skip: install root unreachable");
+            return;
+        }
         let _backup = OptionIniBackup::capture();
         let before = persisted_cursor_mode();
         let mut game = SceneProbe("playing");
@@ -114,7 +132,8 @@ mod tests {
     // `options::switch_cursor_in_install_root` -> option.ini `Mouse_Cursor`.
     // Archives absent -> skip cleanly (CI has no game data).
     fn f8_from_boot_room_flips_the_persisted_mouse_cursor() {
-        if !archives_present() {
+        if !profile_root_available() || !archives_present() {
+            println!("skip: install root unreachable");
             return;
         }
         let _lock = OPTION_INI_LOCK
