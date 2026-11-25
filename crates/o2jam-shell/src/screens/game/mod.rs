@@ -238,7 +238,8 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
 
 use RoomControlAction::{
-    Back, Create, EnterShopSide, MessengerLiveness, Options, RoomFilter, Side, TutorialEntry,
+    Back, Create, EnterShopSide, MessengerLiveness, Options, QuickJoin, RoomFilter, Side,
+    TutorialEntry,
 };
 
 /// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
@@ -263,6 +264,10 @@ enum RoomControlAction {
     /// MESSENGER press: mount the wave-2 one-OK liveness sheet over
     /// the Room board. No Messenger opcode is evidenced (#859).
     MessengerLiveness,
+    /// Join an eligible staged row through the exe's QUICKJOIN arm:
+    /// one `JoinWaiting` 3002 queued for the session bridge (census
+    /// Room ord 5, ticket #916).
+    QuickJoin,
     /// Select one of the staged mode-filter tabs; the row list changes
     /// locally while the exe's 2002 parameter stays unpinned (#416).
     RoomFilter(RoomListFilter),
@@ -353,6 +358,21 @@ const CHAT_TAB_STEP: &str =
 /// paint, so the click records a noop and the lobby stays usable.
 const DIALOG_STAGE_STEP: &str =
     "stage Dialog_CreateRoom plus Dialog_Password art in the live boot path (live_art.rs stage_room_dialogs); without the sheet the modal stays shut";
+/// QUICKJOIN with no eligible row: the exe plays a sound and calls a
+/// local notice helper with codes `0x1cb`/`0x1ad` (files `0x94a22`-`0x94a58`),
+/// then returns without a send. Only the call sites are pinned; the
+/// caption needs a staged-text capture before we can paint one.
+const QUICKJOIN_NO_ROOM_STEP: &str = concat!(
+    "7.55 QUICKJOIN with no eligible room: no send, exe sound + local notice ",
+    "codes 0x1cb/0x1ad at files 0x94a22-0x94a58; next step is a staged-text ",
+    "capture of the notice, never an invented caption"
+);
+/// Wire-row type byte treated as the exe's preferred subset flag. The
+/// exe copies rows whose `0x76fca0` byte equals 1 into a preferred
+/// vector (files `0x94aaf`-`0x94b79`); the exact mapping from that
+/// byte to our staged `room_type` stays OPEN, so this equivalence is
+/// ours-by-design and named here rather than hidden in the picker.
+const PREFERRED_ROOM_TYPE: u8 = 1;
 
 /// Every staged `IDC_BUTTON_SROOM_*` control of `STATE_ROOM`, in the
 /// order the router tests them, with the behaviour this tree evidences
@@ -408,8 +428,15 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     // this route out of dispatch — it documents where the press would
     // go, never a live edge.
     routed(0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", Side(SideScreen::Lanking)),
+    // QUICKJOIN: the exe arm at files `0x902ab`-`0x902b1` calls
+    // `FUN_004944c0`, whose eligible-row pick posts 3002 with the
+    // chosen room number (files `0x94b7e`-`0x94ff5`).
+    routed(
+        0x1320_0006,
+        "IDC_BUTTON_SROOM_QUICKJOIN",
+        QuickJoin,
+    ),
     // No evidenced target yet: the press is recorded with its next step.
-    unwired(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN", HANDLER_STEP),
     unwired(0x1320_000A, "IDC_BUTTON_SROOM_COUPON", HANDLER_STEP),
     unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
     unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
@@ -2555,6 +2582,64 @@ impl ScreenGame {
         &self.rooms
     }
 
+    /// Player level from the 2001 identity record the live boot stages.
+    /// This is the shell's counterpart of the exe byte at `0x77cd20`
+    /// compared against the row level window in `FUN_004944c0`.
+    fn quickjoin_player_level(&self) -> Option<i32> {
+        self.myroom_character().map(|hero| hero.level)
+    }
+
+    /// Whether one staged row passes the QUICKJOIN gates the exe
+    /// applies after the tab family filter (files `0x9467e`-`0x94743`):
+    /// no password, a non-full room, and a level window that contains
+    /// the player when the row carries one.
+    fn quickjoin_accepts(room: &RoomListEntry, player_level: Option<i32>) -> bool {
+        if room.has_password || room.user_count >= room.capacity {
+            return false;
+        }
+        let level_windowed = room.min_level != 0 || room.max_level != 0;
+        if !level_windowed {
+            return true;
+        }
+        player_level.is_some_and(|level| {
+            i32::from(room.min_level) <= level && level <= i32::from(room.max_level)
+        })
+    }
+
+    /// Queue one QUICKJOIN 3002 from the active tab's eligible rows.
+    /// Ours-by-design: the exe picks `rand() % count` from the preferred
+    /// vector when it is non-empty, else from all eligible rows
+    /// (files `0x494b7e`-`0x494c98`). We take the first preferred row,
+    /// or the first eligible row, so replays stay deterministic; the
+    /// exe's RNG seed and order remain OPEN. With no eligible row we
+    /// queue no frame and name the unpinned notice instead of painting
+    /// a caption nobody evidenced.
+    fn queue_quickjoin(&mut self) {
+        let player_level = self.quickjoin_player_level();
+        let eligible: Vec<&RoomListEntry> = self
+            .rooms
+            .iter()
+            .filter(|room| Self::quickjoin_accepts(room, player_level))
+            .collect();
+        let preferred = eligible
+            .iter()
+            .copied()
+            .find(|room| room.room_type == PREFERRED_ROOM_TYPE);
+        let Some(chosen) = preferred.or_else(|| eligible.first().copied()) else {
+            self.last_room_control_noop = Some(RoomControlNoop {
+                id: "IDC_BUTTON_SROOM_QUICKJOIN",
+                next_step: QUICKJOIN_NO_ROOM_STEP,
+            });
+            return;
+        };
+        self.last_room_control_noop = None;
+        self.outbox.pending_join = Some(JoinRoom {
+            number: chosen.number,
+            music_state: 0,
+            password: String::new(),
+        });
+    }
+
     /// Stage one live room row into its numbered slot: replace the
     /// 2003 snapshot of that slot, or insert it in number order. A
     /// 2005 create broadcast fills a slot the snapshot left empty.
@@ -4435,6 +4520,10 @@ impl ScreenGame {
             // `0x4902bb` → `0x495110` → `ChangeState(0xb)`: set the
             // pinned tutorial globals before entering the side state,
             // never on a rejected visit. Geometry is the staged rect.
+            // QUICKJOIN queues the one 3002 for the session bridge.
+            // The 3003 answer, not this click, moves the screen to
+            // Waiting (`OnlineSession::flush_join`).
+            RoomControlAction::QuickJoin => self.queue_quickjoin(),
             RoomControlAction::RoomFilter(filter) => {
                 self.room_filter = filter;
                 self.refresh_visible_rooms();
@@ -36475,11 +36564,11 @@ mod game_tests {
 
     #[test]
     fn staged_room_control_without_a_target_records_a_labelled_noop() {
-        // Ticket #34: `QUICKJOIN` stands in for the staged controls
-        // with no evidenced target yet (`FIRSTSTEP` now enters the
-        // pinned tutorial state) — the click must be recorded, never
-        // silently dropped.
-        let mut game = room_lobby_with_control(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN");
+        // Ticket #34: `COUPON` stands in for the staged controls with
+        // no evidenced target yet (`FIRSTSTEP` enters the pinned
+        // tutorial state and `QUICKJOIN` now posts the pinned 3002) —
+        // the click must be recorded, never silently dropped.
+        let mut game = room_lobby_with_control(0x1320_000A, "IDC_BUTTON_SROOM_COUPON");
         game.ingest_snapshot(&InputSnapshot::click_at(
             ROOM_CONTROL_TEST_CLICK.0,
             ROOM_CONTROL_TEST_CLICK.1,
@@ -36488,7 +36577,7 @@ mod game_tests {
         assert_eq!(game.side(), None);
         assert_eq!(game.room_dialog(), None);
         let noop = game.room_control_noop().expect("recorded press");
-        assert_eq!(noop.id, "IDC_BUTTON_SROOM_QUICKJOIN");
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_COUPON");
         // The press names the exe `CStateRoom` click dispatch rig step
         // — never a bare "unwired".
         assert!(
@@ -36496,6 +36585,135 @@ mod game_tests {
             "next step names the dispatch rig step: {}",
             noop.next_step
         );
+    }
+
+    /// Room QUICKJOIN (`0x13200006`, census ord 5). Live chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> stage_online_identity -> assemble_online_session -> GameLoop::ingest_snapshot
+    ///   -> ScreenGame::click_room_row -> ScreenGame::click_room_control
+    ///   -> RoomControlAction::QuickJoin -> ScreenGame::queue_quickjoin
+    ///   -> GameOutbox.pending_join -> OnlineSession::flush_join -> C2S 3002.
+    /// Exe pin (7.55): dispatcher arm VA `0x4902ab` calls `FUN_004944c0`
+    /// at VA `0x4902b1`; the helper's filter walk is files `0x49456d`-`0x4949eb`,
+    /// preferred copy `0x494aaf`-`0x494b79`, pick `0x494b7e`-`0x494c98`,
+    /// 3002 send `0x494fd9`-`0x494ff5`. Evidence:
+    /// `ev_f4007ac42a2d6ba7d02eb3f8a21506de3be11125fa11aa2e5aa27aecd50b51fe`,
+    /// `ev_cf0fd10de4d3a9d11616eb153f6edb5d7480199d92feeb552f0f4f59f47e5aa2`,
+    /// `ev_b3856b0e94e0fd1d4dbe54f491dd621e510deec8cc6020bd459023f6b50a9428`.
+    #[test]
+    fn room_quickjoin_queues_one_3002_for_an_eligible_row_and_nothing_for_none() {
+        fn open_row(number: i32) -> RoomListEntry {
+            RoomListEntry {
+                number,
+                state_code: 1,
+                title: format!("Room {number}"),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 0,
+                max_level: 0,
+                skills: Vec::new(),
+                premium: false,
+                room_type: 0,
+            }
+        }
+
+        fn player() -> CharacterInfo {
+            CharacterInfo {
+                nickname: "Tester".to_owned(),
+                level: 10,
+                ..CharacterInfo::default()
+            }
+        }
+
+        // The tab filter is the exe's mode-word gate: stage [A] beside
+        // QUICKJOIN so the Live-family row never reaches the pick.
+        let mut game = room_lobby_with_placements(vec![
+            (
+                0x1320_0006,
+                "IDC_BUTTON_SROOM_QUICKJOIN",
+                ROOM_CONTROL_TEST_RECT,
+            ),
+            (
+                0x1320_1004,
+                "IDC_BUTTON_SROOM_SHOW_NORMALMODE",
+                Rect {
+                    x: 600,
+                    y: 380,
+                    w: 40,
+                    h: 20,
+                },
+            ),
+        ]);
+        game.set_myroom_character(player());
+        let mut preferred = open_row(12);
+        preferred.room_type = 1;
+        let mut password_row = open_row(13);
+        password_row.has_password = true;
+        let mut full_row = open_row(14);
+        full_row.user_count = full_row.capacity;
+        let mut level_row = open_row(15);
+        level_row.min_level = 20;
+        let mut other_family = open_row(16);
+        other_family.game_mode = 1;
+        game.set_rooms(vec![
+            open_row(11),
+            preferred,
+            password_row,
+            full_row,
+            level_row,
+            other_family,
+        ]);
+        game.ingest_snapshot(&InputSnapshot::click_at(610, 385));
+        assert_eq!(game.room_filter(), RoomListFilter::Normal);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        // The exe picks randomly from the preferred vector; our first
+        // preferred row is the labelled deterministic substitute.
+        assert_eq!(
+            game.take_join(),
+            Some(JoinRoom {
+                number: 12,
+                music_state: 0,
+                password: String::new(),
+            })
+        );
+        assert_eq!(game.take_join(), None, "one press queues one frame");
+        assert_eq!(game.room_control_noop(), None);
+        assert_eq!(game.screen(), Screen::Room, "the answer owns the move");
+
+        // Zero eligible rows: the exe plays a sound and shows a local
+        // notice but sends nothing. We queue no frame and name the
+        // unpinned caption instead of inventing one.
+        let mut none = room_lobby_with_control(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN");
+        none.set_myroom_character(player());
+        let mut password_row = open_row(21);
+        password_row.has_password = true;
+        let mut full_row = open_row(22);
+        full_row.user_count = full_row.capacity;
+        let mut level_row = open_row(23);
+        level_row.min_level = 20;
+        none.set_rooms(vec![password_row, full_row, level_row]);
+        none.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(none.take_join(), None, "no eligible row sends nothing");
+        let noop = none.room_control_noop().expect("labelled no-room press");
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_QUICKJOIN");
+        assert!(
+            noop.next_step.contains("no eligible room"),
+            "next step names the unpinned notice: {}",
+            noop.next_step
+        );
+        assert_eq!(none.screen(), Screen::Room);
     }
 
     #[test]
