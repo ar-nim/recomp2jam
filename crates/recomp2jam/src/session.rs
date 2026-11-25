@@ -177,7 +177,11 @@ use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGam
 
 use crate::connect::net_context;
 mod attempt;
+#[cfg(test)]
+mod payment_tests;
 mod press;
+#[cfg(test)]
+mod room_wire_tests;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{

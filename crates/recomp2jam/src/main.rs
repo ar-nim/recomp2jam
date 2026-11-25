@@ -18,6 +18,12 @@ mod live_boot_gate;
 mod live_guard;
 #[cfg(test)]
 mod live_input_legs;
+#[cfg(test)]
+mod live_leg_support;
+mod live_room_chat_legs;
+mod live_room_input_legs;
+mod live_room_seat_legs;
+mod live_room_wire_legs;
 mod live_stats;
 mod loading;
 mod menu_trace_replay;
