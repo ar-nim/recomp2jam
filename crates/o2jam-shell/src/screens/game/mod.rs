@@ -33691,6 +33691,8 @@ mod game_tests {
         // Confirm/Back are the keyboard arms of RETRY/BACK: the
         // pinned fallback rects answer while the buttons stage
         // nothing, and a miss lands nowhere.
+        // seam: this mirror is an ours-by-design local shortcut; the
+        // exe keyboard-Back target stays OPEN (#294 T3, no REA in lane).
         use MenuKey;
         let mut game = ScreenGame::new();
         finish_song(&mut game);
@@ -33705,6 +33707,97 @@ mod game_tests {
         paint_result_frame(&mut back);
         back.menu_key(MenuKey::Back, true);
         assert_eq!(back.screen(), Screen::Room);
+    }
+
+    /// #1076 computed badge position. Live chain: `main.rs::run_play`
+    /// -> `OnlineSession::paint` -> `ScreenGame::paint_result` ->
+    /// `ResultPaint.grade` -> `paint_result_body_frame`; the control
+    /// id comes from the same staged `STATE_RESULT` block.
+    #[test]
+    fn result_computed_badge_resolves_the_staged_control_and_inks_the_cursor_position() {
+        use crate::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+        use crate::screens::paint::RESULT_RANK_SPRITE;
+        use o2jam_render::expand_rgb555;
+
+        let id = "IDC_IMAGE_SRESULT_RANKINGFIELD";
+        let code = 0x1750_0007u32;
+        let rect = Rect {
+            x: 395,
+            y: 531,
+            w: 79,
+            h: 41,
+        };
+        let mut figure = AvatarFigure::default();
+        for word in [0x03E0u16, 0x7C00] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image {
+                    w: 1,
+                    h: 1,
+                    words: vec![word],
+                },
+                dx: rect.x,
+                dy: rect.y,
+                colorkey: 0x0000,
+            });
+        }
+        let mut game = ScreenGame::new();
+        let onsets = (0..51u64)
+            .map(|index| (2u8, 1_000 + index * 100, 7u32))
+            .collect();
+        game.load_chart(onsets);
+        walk_to_playing(&mut game);
+        for index in 0..51u64 {
+            game.strike_at(2, 1_000 + index * 100);
+        }
+        let mut result_buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut result_buf,
+                w: 800,
+                h: 600,
+            },
+            8_000,
+        );
+        game.load_scene(
+            Screen::Result,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: Some(RESULT_RANK_SPRITE.to_owned()),
+                rect,
+            }],
+            HashMap::from([(RESULT_RANK_SPRITE.to_owned(), figure)]),
+        );
+        let placed = game
+            .scene_placements(Screen::Result)
+            .iter()
+            .find(|placement| placement.id == id)
+            .expect("the computed badge control is staged");
+        assert_eq!(placed.code, code);
+        assert_eq!(placed.rect, rect);
+        assert_eq!(
+            game.grade(),
+            Some(8),
+            "the full-hit chart takes the max frame"
+        );
+
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            8_000,
+        );
+        assert_eq!(game.screen(), Screen::Result);
+        let (red, green, blue) = expand_rgb555(0x7C00);
+        assert_eq!(
+            buf[531 * 800 + 395],
+            pack_xrgb(red, green, blue),
+            "the computed frame inks the staged cursor position"
+        );
     }
 
     #[test]
