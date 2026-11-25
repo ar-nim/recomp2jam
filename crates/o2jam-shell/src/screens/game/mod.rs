@@ -23,8 +23,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
-use self::chat::ChatState;
-pub use self::chat::{ChatSendMode, LobbyChat, LobbyChatPanel, SlashCommand};
+use self::chat::{room_join_refusal_for, ChatState};
+pub use self::chat::{
+    ChatSendMode, LobbyChat, LobbyChatPanel, RoomJoinRefusal, SlashCommand, WhisperDelivery,
+};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 
@@ -135,7 +137,7 @@ use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
-    WaitingAdminMessage, WaitingUserMessage,
+    SendWhisperResponse, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
     ChangeName, EnterShop, EquipItem, RefreshBag, SellItem, SyncItemPurchase, SyncMusicPurchase,
@@ -3496,6 +3498,69 @@ impl ScreenGame {
         self.last_room_control_noop
     }
 
+    /// Refusal the last row press staged, if any. No caption is
+    /// invented for the unpinned already-started arm.
+    #[must_use]
+    pub fn room_join_refusal(&self) -> Option<RoomJoinRefusal> {
+        self.chat.room_join_refusal()
+    }
+
+    /// Stage one row-press refusal (the shell half of `0x493a50`).
+    pub fn stage_room_join_refusal(&mut self, refusal: RoomJoinRefusal) -> &mut Self {
+        self.chat.stage_room_join_refusal(refusal);
+        self
+    }
+
+    /// Forget a staged refusal when its one-OK sheet is dismissed.
+    pub fn clear_room_join_refusal(&mut self) -> &mut Self {
+        self.chat.clear_room_join_refusal();
+        self
+    }
+
+    /// Latest 2018 delivery verdict (`None` until a response lands).
+    #[must_use]
+    pub fn whisper_delivery(&self) -> Option<&WhisperDelivery> {
+        self.chat.whisper_delivery()
+    }
+
+    /// Stage one 2018 whisper answer (shell half; the drain lives in
+    /// the room-wire lane).
+    pub fn push_send_whisper_response(&mut self, message: &SendWhisperResponse) -> &mut Self {
+        self.chat.push_whisper_response(message);
+        self
+    }
+
+    /// Open the Room web user-list stand-in with its gift-on flag.
+    pub fn open_room_user_sheet(&mut self, gift_on: bool) -> &mut Self {
+        self.chat.open_room_user_sheet(gift_on);
+        self
+    }
+
+    /// Room teardown (`0x495a30`): close the sheet and refresh its
+    /// URL state from the staged gift-on word.
+    pub fn close_room_user_sheet(&mut self) -> &mut Self {
+        self.chat.close_room_user_sheet();
+        self
+    }
+
+    /// Whether the web user-list stand-in is mounted.
+    #[must_use]
+    pub fn room_user_sheet_open(&self) -> bool {
+        self.chat.room_user_sheet_open()
+    }
+
+    /// Gift-on word staged for the web user-list URL.
+    #[must_use]
+    pub fn room_user_sheet_gift_on(&self) -> bool {
+        self.chat.room_user_sheet_gift_on()
+    }
+
+    /// Gift-on word the teardown refreshed into the URL state.
+    #[must_use]
+    pub fn room_user_sheet_url_gift_on(&self) -> bool {
+        self.chat.room_user_sheet_url_gift_on()
+    }
+
     /// Stage the unsent input line (the 3011 source on send).
     /// Overlong lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
     pub fn set_chat_input(&mut self, line: &str) -> &mut Self {
@@ -4226,6 +4291,9 @@ impl ScreenGame {
     pub fn dialog_owns_input(&self) -> bool {
         self.messenger_liveness_open
             || self.myroom_notice.is_some()
+            || self.chat.room_join_refusal().is_some_and(|refusal| {
+                refusal != RoomJoinRefusal::Password && !refusal.message().is_empty()
+            })
             || self.myroom_confirm.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
@@ -4250,12 +4318,13 @@ impl ScreenGame {
             Screen::Channel => self
                 .channel_enter_at(x, y)
                 .map_or(PressKind::Local, PressKind::ChannelEnter),
-            Screen::Room => self
-                .room_entry_at(x, y)
-                .map_or(PressKind::Local, |(number, title)| PressKind::RoomRow {
-                    number,
-                    title,
-                }),
+            Screen::Room if self.room_press_is_joinable(x, y) => {
+                self.room_entry_at(x, y)
+                    .map_or(PressKind::Local, |(number, title)| PressKind::RoomRow {
+                        number,
+                        title,
+                    })
+            }
             Screen::Waiting if self.waiting_confirm_hit(x, y) => PressKind::WaitingConfirm,
             _ => PressKind::Local,
         }
@@ -4459,8 +4528,33 @@ impl ScreenGame {
     /// drains the queue; the offline walk drains nowhere, like the
     /// result outbox.
     fn exit_room_to_channel(&mut self) {
+        // The exe closes its web user-list window and rebuilds the URL
+        // on room teardown (`0x495a30`, REA `ev_96389df4…`).
+        self.chat.close_room_user_sheet();
+        self.chat.clear_room_join_refusal();
         self.outbox.pending_channel_logout = true;
         self.enter(Screen::Channel);
+    }
+
+    /// Pinned gate of `FUN_00493a50` for one staged wire row. The
+    /// player level comes from the 2001 identity record and a song
+    /// the staged catalog cannot name is unregistered.
+    fn room_join_refusal_for(&self, room: &RoomListEntry) -> Option<RoomJoinRefusal> {
+        let song_known = self.catalog_song_title(room.music_id).is_some();
+        room_join_refusal_for(room, self.quickjoin_player_level(), song_known)
+    }
+
+    /// Whether the row under a pointer can enter Waiting. The session
+    /// press gate uses the same verdict so a refused row never posts
+    /// 3002 before the shell can paint its popup.
+    fn room_press_is_joinable(&self, x: i32, y: i32) -> bool {
+        let Some(index) = self.room_index_at(x, y) else {
+            return false;
+        };
+        self.rooms
+            .get(index)
+            .and_then(|room| self.room_join_refusal_for(room))
+            .is_none()
     }
 
     fn click_room_row(&mut self, x: i32, y: i32) {
@@ -4471,11 +4565,15 @@ impl ScreenGame {
             return;
         };
         self.room_highlight = index;
-        // Locked rooms gate through the password dialog (lifecycle §7:
-        // `DIALOG_INPUTPASSWORD` `CDInputPassword`); unlocked rows join
-        // straight to Waiting.
-        if let Some(room) = self.rooms.get(index) {
-            if room.has_password {
+        let Some(room) = self.rooms.get(index).cloned() else {
+            return;
+        };
+        // Every pinned refusal arm stops here: the locked row still
+        // gates through its password sheet, the other arms paint the
+        // one-OK Information sheet from the exe caption bytes.
+        if let Some(refusal) = self.room_join_refusal_for(&room) {
+            self.chat.stage_room_join_refusal(refusal);
+            if refusal == RoomJoinRefusal::Password {
                 if self.password_art.is_some() {
                     self.open_password_dialog(room.number);
                 } else {
@@ -4484,9 +4582,10 @@ impl ScreenGame {
                         next_step: DIALOG_STAGE_STEP,
                     });
                 }
-                return;
             }
+            return;
         }
+        self.chat.clear_room_join_refusal();
         self.enter(Screen::Waiting);
     }
 
@@ -6337,6 +6436,18 @@ impl ScreenGame {
                 self.myroom_notice = None;
             }
             return;
+        }
+        if let Some(refusal) = self.chat.room_join_refusal() {
+            // A locked row keeps its own password sheet: let the click
+            // fall through to `click_room_row`. Other arms own the next
+            // click until OK; an arm with no pinned caption cannot own
+            // a sheet, so it clears on the next press instead.
+            if refusal != RoomJoinRefusal::Password {
+                if refusal.message().is_empty() || self.information_ok_hit(x, y) {
+                    self.chat.clear_room_join_refusal();
+                }
+                return;
+            }
         }
         if self.messenger_liveness_open {
             // The one-OK sheet owns every click until OK; it sends
@@ -9446,6 +9557,23 @@ impl ScreenGame {
                 self.room_avatar.as_ref(),
                 now_ms,
             );
+            // Local stand-in for the exe's browser-hosted user list:
+            // no web text is invented, only the staged DESC well fills
+            // while the sheet is mounted (#948, `0x495a30`).
+            if self.chat.room_user_sheet_open() {
+                if let Some(well) = art
+                    .placements
+                    .iter()
+                    .find(|placed| placed.id == "IDC_TEXT_SROOM_DESC")
+                {
+                    let rect = scale_rect_to_frame(&well.rect, frame.w, frame.h);
+                    o2jam_render::fill_rect(
+                        frame,
+                        &rect,
+                        o2jam_render::pack_xrgb(0x1A, 0x1A, 0x2E),
+                    );
+                }
+            }
         }
         // The open room dialog layers over the lobby: the staged sheet
         // dialog-relative first (child `.bnd` rects are parent-relative
@@ -9481,6 +9609,15 @@ impl ScreenGame {
         // its text, so the Room board stays visible behind it (#859).
         if let Some(notice) = self.myroom_notice.as_ref() {
             paint_information_message(frame, self.relay_down_art.as_ref(), &notice.message());
+        }
+        // Row-press refusal: only the pinned caption bytes are painted.
+        // The started-room arm has no pinned caption, so it stages the
+        // verdict without inventing a sheet.
+        if let Some(refusal) = self.chat.room_join_refusal() {
+            let message = refusal.message();
+            if !message.is_empty() {
+                paint_information_message(frame, self.relay_down_art.as_ref(), &message);
+            }
         }
         // The options dialog layers over the lobby exactly as over
         // the Planet board (EXIT/Escape closes back onto Room).
@@ -37621,5 +37758,257 @@ mod game_tests {
         assert_eq!(game.planet_modal(), None, "OK dismisses the dialog");
         assert_eq!(game.channel_rows(), channels, "OK reveals the staged list");
         assert_eq!(game.screen(), Screen::Channel, "exe's post-dialog state");
+    }
+
+    /// #947 row-press gates. Live chain (eligible arm):
+    ///   main.rs::run_play -> setup_online -> session press -> 3002 ->
+    ///   3003 -> ScreenGame::click_room_row -> Screen::Waiting.
+    /// Refusal arms stop at `ScreenGame::click_room_row` before the
+    /// session's join echo; every caption comes from the pinned exe
+    /// bytes (REA `ev_92af29…`, file offsets `0x248178`..`0x248330`).
+    #[test]
+    fn room_row_press_refuses_each_pinned_gate_without_entering_waiting() {
+        use o2jam_net::rooms::RoomListEntry;
+        use o2jam_net::KeyMode;
+
+        type RefusalCase = (
+            &'static str,
+            fn(RoomListEntry) -> RoomListEntry,
+            RoomJoinRefusal,
+        );
+        let base = room_lobby_with_controls(&[]);
+        let eligible = base.listed_rooms()[0].clone();
+        let cases: &[RefusalCase] = &[
+            (
+                "password",
+                |mut room| {
+                    room.has_password = true;
+                    room
+                },
+                RoomJoinRefusal::Password,
+            ),
+            (
+                "level",
+                |mut room| {
+                    room.min_level = 5;
+                    room.max_level = 9;
+                    room
+                },
+                RoomJoinRefusal::Level { min: 5, max: 9 },
+            ),
+            (
+                "full",
+                |mut room| {
+                    room.user_count = room.capacity;
+                    room
+                },
+                RoomJoinRefusal::Full,
+            ),
+            (
+                "loading",
+                |mut room| {
+                    room.state_code = 0;
+                    room
+                },
+                RoomJoinRefusal::Loading,
+            ),
+            (
+                "premium",
+                |mut room| {
+                    room.premium = true;
+                    room
+                },
+                RoomJoinRefusal::Premium,
+            ),
+            (
+                "7Key",
+                |mut room| {
+                    room.key_mode = KeyMode::SevenKeys as u8;
+                    room
+                },
+                RoomJoinRefusal::SevenKeys,
+            ),
+            (
+                "unregistered song",
+                |mut room| {
+                    room.music_id = 9999;
+                    room.key_mode = 0;
+                    room
+                },
+                RoomJoinRefusal::UnregisteredSong,
+            ),
+        ];
+        for (label, alter, expected) in cases {
+            let mut game = room_lobby_with_controls(&[]);
+            game.set_myroom_character(CharacterInfo {
+                level: 2,
+                ..CharacterInfo::default()
+            });
+            game.set_rooms(vec![alter(eligible.clone())]);
+            game.ingest_snapshot(&InputSnapshot::click_at(300, 154));
+            assert_eq!(game.screen(), Screen::Room, "{label} never joins");
+            assert_eq!(
+                game.room_join_refusal(),
+                Some(*expected),
+                "{label} stages its pinned refusal"
+            );
+        }
+    }
+
+    /// #947 unpinned caption arm. The gate stops the silent join,
+    /// but no caption is pinned for a started room in
+    /// `docs/pins/room-waiting.md`, so no popup text is invented.
+    #[test]
+    fn started_room_row_press_stages_the_arm_without_an_invented_caption() {
+        let mut game = room_lobby_with_controls(&[]);
+        let mut started = game.listed_rooms()[0].clone();
+        started.state_code = o2jam_net::RoomState::Playing as u8;
+        game.set_rooms(vec![started]);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 154));
+        let refusal = game.room_join_refusal().expect("started arm staged");
+        assert_eq!(refusal, RoomJoinRefusal::Started);
+        assert!(
+            refusal.message().is_empty(),
+            "no caption bytes are pinned for this arm"
+        );
+        assert_eq!(game.screen(), Screen::Room, "the press never joins");
+    }
+
+    /// #974 Room-panel half: the incoming whisper row names both
+    /// ends and keeps the user ink. Seam suffices for the row shape;
+    /// the 2019 drain belongs to the room-wire lane.
+    #[test]
+    fn pushing_a_room_whisper_names_the_sender_and_the_addressee() {
+        let mut game = ScreenGame::new();
+        game.push_lobby_whisper(LobbyChat::Room, &channel_whisper("host", "psst"), "me");
+        let row = &game.room_chat()[0];
+        assert_eq!(row.sender, "host");
+        assert_eq!(row.whisper_recipient.as_deref(), Some("me"));
+        assert!(
+            channel_chat_row_text(row).contains("psst"),
+            "the display name and text reach the row"
+        );
+        assert!(!row.admin, "a whisper is not an admin row");
+    }
+
+    /// #973 shell half: seam suffices — the room-wire lane owns the
+    /// 2018 drain, so this guard pins only the report state and row
+    /// the shell stages from a decoded answer.
+    #[test]
+    fn a_2018_answer_stages_the_delivery_verdict() {
+        use o2jam_net::rooms::SendWhisperResponse;
+
+        let mut game = ScreenGame::new();
+        game.push_send_whisper_response(&SendWhisperResponse {
+            invalid: false,
+            recipient: "peer".to_owned(),
+            content: Some("hi".to_owned()),
+        });
+        assert_eq!(
+            game.whisper_delivery(),
+            Some(&WhisperDelivery {
+                delivered: true,
+                recipient: "peer".to_owned(),
+                content: Some("hi".to_owned()),
+            })
+        );
+        assert_eq!(game.channel_chat().len(), 1, "delivered text stages a row");
+
+        let mut refused = ScreenGame::new();
+        refused.push_send_whisper_response(&SendWhisperResponse {
+            invalid: true,
+            recipient: "peer".to_owned(),
+            content: None,
+        });
+        assert_eq!(
+            refused
+                .whisper_delivery()
+                .map(|delivery| delivery.delivered),
+            Some(false)
+        );
+        assert!(
+            refused.channel_chat().is_empty(),
+            "a refusal carries no echoed text to stage"
+        );
+    }
+
+    /// #948 shell half. Live chain:
+    ///   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+    ///   ScreenGame::click_room_control -> ScreenGame::exit_room_to_channel
+    ///   -> ChatState::close_room_user_sheet.
+    #[test]
+    fn room_exit_closes_the_user_sheet_and_refreshes_its_gift_on_url() {
+        let mut game = room_lobby_with_controls(&[]);
+        game.open_room_user_sheet(true);
+        assert!(game.room_user_sheet_open());
+        assert!(game.room_user_sheet_gift_on());
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert!(!game.room_user_sheet_open(), "the sheet is closed");
+        assert!(
+            game.room_user_sheet_url_gift_on(),
+            "the refreshed URL keeps the gift-on word"
+        );
+    }
+
+    /// #946/#971/#972/#974: pinned ink per sender class. Seam test
+    /// suffices for the paint contract; the live leg below drives it
+    /// from boot with two wire rows.
+    #[test]
+    fn room_chat_rows_paint_user_gray_and_admin_amber_ink() {
+        use o2jam_render::pack_xrgb;
+
+        let list = Rect {
+            x: 171,
+            y: 432,
+            w: 412,
+            h: 119,
+        };
+        let mut game = room_lobby_with_placements(vec![
+            (0x1380_0014, "IDC_LIST_SROOM_CHAT", list),
+            (
+                0x1330_0015,
+                "IDC_EDIT_SROOM_CHAT",
+                Rect {
+                    x: 167,
+                    y: 561,
+                    w: 335,
+                    h: 19,
+                },
+            ),
+        ]);
+        game.push_lobby_user_message(LobbyChat::Room, &channel_user("alice", "hello"));
+        game.push_lobby_admin_message(LobbyChat::Room, &channel_admin("op", "quiet"));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let (left, top) = (
+            usize::try_from(list.x).unwrap_or(0),
+            usize::try_from(list.y).unwrap_or(0),
+        );
+        let region: Vec<u32> = buf
+            .chunks(800)
+            .skip(top)
+            .take(usize::try_from(list.h).unwrap_or(0))
+            .flat_map(|row| {
+                row[left..left + usize::try_from(list.w).unwrap_or(0)]
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert!(
+            region.contains(&pack_xrgb(0xDE, 0xDE, 0xDE)),
+            "the 2013 row inks user gray"
+        );
+        assert!(
+            region.contains(&pack_xrgb(0xE6, 0x71, 0x00)),
+            "the 2014 row inks admin amber"
+        );
     }
 }
