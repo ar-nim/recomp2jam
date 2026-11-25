@@ -1,5 +1,8 @@
 # Embedded-IE surfaces and the browser report-back seam (7.55)
 
+> Remote URL inventory, destination roles, and archive results:
+> [web-url-archive-audit.md](web-url-archive-audit.md).
+
 Static inventory only. No client was booted for this note. All addresses are
 virtual addresses (VA) of the pinned oracle; file offsets are VA − `0x400000`.
 Behavior below is described in our own words; no original code is reproduced.
