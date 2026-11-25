@@ -62,6 +62,59 @@ pub const RESULT_WORKER_RECORD_ORDINAL: usize = RESULT_WORKER_SLOT - RESULT_WORK
 /// that scales nothing (the launch client's path) cues with.
 const UNITY_GAIN: f32 = 1.0;
 
+/// Upper bound the exe's stop/re-arm call waits for the worker's
+/// acknowledgement (`0x54bce0`, file `0x14bce0`, ev
+/// 6cbc.b030.f246.641f.af4e.77ad.133a.8000.069d.f952.53f6.0130.5055.3af4.8ccf.637d).
+#[cfg(test)]
+pub(crate) const WORKER_ACK_TIMEOUT_MS: u32 = 1000;
+
+/// One step of the worker stop/re-arm handshake. The order is the
+/// behavior: flags first, acknowledge event cleared, start event
+/// signalled, then the bounded wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) enum WorkerHandshakeStep {
+    /// Set the two stop flags plus the optional third one.
+    SetStopFlags { optional: bool },
+    /// Clear the acknowledgement event.
+    ResetAck,
+    /// Signal the worker's start event.
+    SignalStart,
+    /// Wait for the acknowledgement, with the exe's millisecond bound.
+    WaitForAck { timeout_ms: u32 },
+}
+
+/// The worker handshake a focus-loss call performs. `0x54bce0` is
+/// reached from the focus/state path `0x5a4b90` through `0x551850`; it
+/// stops the music and re-arms the worker through the same event pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct WorkerHandshake {
+    steps: [WorkerHandshakeStep; 4],
+}
+
+#[cfg(test)]
+impl WorkerHandshake {
+    /// Steps of this handshake, in the order the worker sees them.
+    pub(crate) fn steps(&self) -> &[WorkerHandshakeStep] {
+        &self.steps
+    }
+
+    /// The stop/re-arm call with the optional flag from the argument.
+    pub(crate) fn with_optional_flag(optional: bool) -> Self {
+        Self {
+            steps: [
+                WorkerHandshakeStep::SetStopFlags { optional },
+                WorkerHandshakeStep::ResetAck,
+                WorkerHandshakeStep::SignalStart,
+                WorkerHandshakeStep::WaitForAck {
+                    timeout_ms: WORKER_ACK_TIMEOUT_MS,
+                },
+            ],
+        }
+    }
+}
+
 /// One latched scene-BGM selection: a one-based record over the
 /// bank plus the cue's loop flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +238,14 @@ impl SceneBgm {
     /// Silence the BGM channel.
     pub fn silence(&mut self) {
         self.latched = None;
+    }
+
+    /// Handle a window-leaves-active event: stop the latched track and
+    /// return the worker handshake the exe performs on the same path.
+    #[cfg(test)]
+    pub(crate) fn deactivate(&mut self, optional_flag: bool) -> WorkerHandshake {
+        self.silence();
+        WorkerHandshake::with_optional_flag(optional_flag)
     }
 
     /// Whether `request` leaves what sounds untouched (see
@@ -354,6 +415,29 @@ mod tests {
         assert_eq!(backend.samples_played(), 441);
         backend.set_scene_bgm(None, false).unwrap();
         assert_eq!(backend.samples_played(), 441);
+    }
+
+    #[test]
+    fn focus_loss_silences_the_track_and_signals_the_worker_ack_handshake() {
+        // seam: the event protocol of `0x5a4b90` -> `0x551850` ->
+        // `0x54bce0`; no Rust window caller of the BGM channel exists
+        // yet, so Tier 3 focus wiring stays OPEN outside this lane.
+        let bank = bank_with_track(10, 3);
+        let mut bgm = SceneBgm::new();
+        assert!(bgm.play_scene_music(3, true, &bank).is_some());
+        let handshake = bgm.deactivate(true);
+        assert!(!bgm.is_playing());
+        assert_eq!(
+            handshake.steps(),
+            &[
+                WorkerHandshakeStep::SetStopFlags { optional: true },
+                WorkerHandshakeStep::ResetAck,
+                WorkerHandshakeStep::SignalStart,
+                WorkerHandshakeStep::WaitForAck {
+                    timeout_ms: WORKER_ACK_TIMEOUT_MS
+                },
+            ]
+        );
     }
 
     #[test]
