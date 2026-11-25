@@ -2471,6 +2471,97 @@ impl OnlineSession {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == GameStatsUpdate::COMMAND => self.apply_echo(&frame),
+                // Playing/battle forwarders (VAs `0x563d10`, `0x563d30`,
+                // `0x563d50`). The exe reads no field: empty and padded
+                // frames must yield the same one UI forward. The shell
+                // has no generic UI-event sink, so the wire seam logs it.
+                Ok(frame) if frame.id == 4052 => {
+                    if playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::PlayingGateEvent,
+                    >(&frame)
+                    .is_some()
+                    {
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::UiEvent(
+                                o2jam_net::relay::PlayingGateEvent::ui_event(),
+                            ),
+                        );
+                    }
+                }
+                Ok(frame) if frame.id == 4054 => {
+                    if playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::PlayingForwardEvent,
+                    >(&frame)
+                    .is_some()
+                    {
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::UiEvent(
+                                o2jam_net::relay::PlayingForwardEvent::ui_event(),
+                            ),
+                        );
+                    }
+                }
+                Ok(frame) if frame.id == 4056 => {
+                    if playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::RelayConfirmEcho,
+                    >(&frame)
+                    .is_some()
+                    {
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::UiEvent(
+                                o2jam_net::relay::RelayConfirmEcho::ui_event(),
+                            ),
+                        );
+                    }
+                }
+                // 4045 hands the whole frame to the relay peer parser
+                // (VA `0x563d70` -> `0x58cf50`): signed count, then a
+                // 4-byte member and two 6-byte endpoints per peer.
+                Ok(frame) if frame.id == 4045 => {
+                    if let Some(list) = playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::P2PListResponse,
+                    >(&frame)
+                    {
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::PeerList(list),
+                        );
+                    }
+                }
+                // 4049 reads the fixed 20-byte answer (VA `0x586470`)
+                // and forwards five 4-byte words to the timing slot.
+                Ok(frame) if frame.id == 4049 => {
+                    if let Some(answer) = playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::LatencyAnswer,
+                    >(&frame)
+                    {
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::Latency(answer.words),
+                        );
+                    }
+                }
+                // 4050 writes both wire bytes into the self member's
+                // `+0x2168` speed slot and sets the pinned flag (VA
+                // `0x563fe0`). The trailing wire word is drained by the
+                // codec; no UI event is posted by this handler.
+                Ok(frame) if frame.id == 4050 => {
+                    if let Some(event) = playing_wire_tests::decode_playing_frame::<
+                        o2jam_net::relay::PlayingSpeedEvent,
+                    >(&frame)
+                    {
+                        let member_id = self.joined_room.as_ref().map_or(0, |room| room.member_id);
+                        playing_wire_tests::stage_self_speed_writes(
+                            &mut self.game,
+                            member_id,
+                            [event.first_speed, event.final_speed],
+                        );
+                        playing_wire_tests::observe(
+                            playing_wire_tests::PlayingWireObservation::SpeedWrites(
+                                [event.first_speed, event.final_speed],
+                                true,
+                            ),
+                        );
+                    }
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-stats frame in echo drain");
@@ -3534,6 +3625,18 @@ impl OnlineSession {
                 self.apply_member_music_state(&frame);
             }
             id if id == AcquireMusic::COMMAND => self.apply_acquire_music(&frame),
+            // A 5011 that arrives without a pending 5010 still rebuilds
+            // the owned-music rows (VA `0x560d70`, file `0x160d70`).
+            // The paired buy attempt owns its own drain above.
+            5011 => match o2jam_net::shop::MusicPurchaseReply::decode_body(&frame.payload) {
+                Ok(o2jam_net::shop::MusicPurchaseReply::Completed(response)) => {
+                    self.game.apply_music_purchase_response(&response);
+                }
+                Ok(o2jam_net::shop::MusicPurchaseReply::Failure) => {
+                    self.game.post_music_purchase_failure_notice();
+                }
+                Err(_) => tracing::debug!(id = frame.id, "dropping undecodable 5011 rebuild"),
+            },
             id if id == DownloadProgressChanged::COMMAND => {
                 self.apply_download_progress(&frame);
             }

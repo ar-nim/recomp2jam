@@ -1577,6 +1577,157 @@ impl WireMessage for P2PListResponse {
     }
 }
 
+/// 4052 (S→C): the Playing-gate event. The dispatcher handler at file
+/// `0x163d10` posts `(0x12, 4052, 0, 0)` to the UI queue and reads no
+/// wire field (`ev_59fe.f2a7…e2be.4929`). The event carries no body
+/// data, so a padded frame must yield the same event as an empty one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayingGateEvent;
+
+impl WireMessage for PlayingGateEvent {
+    const COMMAND: u16 = 4052;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(_body: &[u8]) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+impl PlayingGateEvent {
+    /// The UI-queue forward this event stands for (`0x12` category).
+    #[must_use]
+    pub const fn ui_event() -> (u32, u16, u8, u32) {
+        (0x12, Self::COMMAND, 0, 0)
+    }
+}
+
+/// 4054 (S→C): the body-ignored Playing forward. The handler at file
+/// `0x163d30` posts `(0x12, 4054, 0, 0)` and reads no wire field
+/// (`ev_1f0c.7727…3ca3.9d5e`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayingForwardEvent;
+
+impl WireMessage for PlayingForwardEvent {
+    const COMMAND: u16 = 4054;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(_body: &[u8]) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+impl PlayingForwardEvent {
+    /// The UI-queue forward this event stands for (`0x12` category).
+    #[must_use]
+    pub const fn ui_event() -> (u32, u16, u8, u32) {
+        (0x12, Self::COMMAND, 0, 0)
+    }
+}
+
+/// 4056 (S→C): the body-ignored relay-confirm echo. The handler at file
+/// `0x163d50` posts `(0x12, 4056, 0, 0)` without reading a body word
+/// (`ev_cc43.1c11…4263.1af5`). Unlike [`ConfirmRelayAnswer`], which
+/// models the empty Memoryer answer, this decoder models the
+/// dispatcher forward: padding cannot change the event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayConfirmEcho;
+
+impl WireMessage for RelayConfirmEcho {
+    const COMMAND: u16 = 4056;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(_body: &[u8]) -> Result<Self, Error> {
+        Ok(Self)
+    }
+}
+
+impl RelayConfirmEcho {
+    /// The UI-queue forward this event stands for (`0x12` category).
+    #[must_use]
+    pub const fn ui_event() -> (u32, u16, u8, u32) {
+        (0x12, Self::COMMAND, 0, 0)
+    }
+}
+
+/// 4050 (S→C): the two speed bytes the dispatcher handler at file
+/// `0x163fe0` writes into the self member `+0x2168` slot, followed by
+/// the one 4-byte wire word that handler drains (`ev_7689.1c2f…693d`).
+/// Both byte reads are pinned; why both target the same slot stays OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayingSpeedEvent {
+    /// First byte written to the speed slot.
+    pub first_speed: u8,
+    /// Second byte written to the same speed slot.
+    pub final_speed: u8,
+}
+
+impl WireMessage for PlayingSpeedEvent {
+    const COMMAND: u16 = 4050;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = vec![self.first_speed, self.final_speed];
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 2 {
+            return Err(Error::TruncatedMessage {
+                need: 2,
+                have: body.len(),
+            });
+        }
+        Ok(Self {
+            first_speed: body[0],
+            final_speed: body[1],
+        })
+    }
+}
+
+/// 4049 (S→C): the fixed 20-byte latency answer read by file `0x186470`
+/// into `+0x18`, then forwarded as five 4-byte words (`ev_8908.f66c…4572`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LatencyAnswer {
+    /// The five staged words, in wire order.
+    pub words: [u32; 5],
+}
+
+impl WireMessage for LatencyAnswer {
+    const COMMAND: u16 = 4049;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(20);
+        for word in self.words {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() != 20 {
+            return Err(Error::TruncatedMessage {
+                need: 20,
+                have: body.len(),
+            });
+        }
+        let mut words = [0u32; 5];
+        for (index, word) in words.iter_mut().enumerate() {
+            let at = index * 4;
+            *word = u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+        }
+        Ok(Self { words })
+    }
+}
+
 #[cfg(test)]
 mod relay_command_tests {
     use super::*;
@@ -3022,5 +3173,126 @@ mod seat_format_tests {
                 "mode {bits:#05x}, premium {premium}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod playing_wire_codec_tests {
+    use super::*;
+    use crate::frame::{decode_frame, encode_frame};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn playing_gate_4052_ignores_empty_and_padded_bodies() {
+        // seam: pure codec — the exe handler reads no wire field
+        // (VA `0x563d10`, file `0x163d10`, ev `59fe.f2a7…e2be.4929`).
+        let empty = decode_frame(&encode_frame(4052, &[])).unwrap();
+        let padded = decode_frame(&encode_frame(4052, &[7, 0x33, 0xaa])).unwrap();
+        assert_eq!(PlayingGateEvent::decode_frame(&empty), Ok(PlayingGateEvent));
+        assert_eq!(
+            PlayingGateEvent::decode_frame(&padded),
+            Ok(PlayingGateEvent),
+            "a padded frame must yield the same one event"
+        );
+        assert_eq!(PlayingGateEvent::ui_event(), (0x12, 4052, 0, 0));
+    }
+
+    #[test]
+    fn playing_forward_4054_stays_distinct_from_the_4052_gate_event() {
+        // seam: pure codec — the exe handler only forwards immediates
+        // (VA `0x563d30`, file `0x163d30`, ev `1f0c.7727…3ca3.9d5e`).
+        let forward = decode_frame(&encode_frame(4054, &[9, 9])).unwrap();
+        let gate = decode_frame(&encode_frame(4052, &[9, 9])).unwrap();
+        assert_eq!(
+            PlayingForwardEvent::decode_frame(&forward),
+            Ok(PlayingForwardEvent)
+        );
+        assert_eq!(
+            PlayingGateEvent::decode_frame(&forward),
+            Err(Error::UnknownCommand(4054))
+        );
+        assert_eq!(PlayingGateEvent::decode_frame(&gate), Ok(PlayingGateEvent));
+        assert_ne!(
+            PlayingForwardEvent::ui_event(),
+            PlayingGateEvent::ui_event(),
+            "the two body-ignored opcodes must not collapse into one event"
+        );
+    }
+
+    #[test]
+    fn relay_confirm_4056_echo_ignores_empty_and_padded_bodies() {
+        // seam: pure codec — the dispatcher forward reads no body word
+        // (VA `0x563d50`, file `0x163d50`, ev `cc43.1c11…4263.1af5`).
+        let empty = decode_frame(&encode_frame(4056, &[])).unwrap();
+        let padded = decode_frame(&encode_frame(4056, &[0xff; 6])).unwrap();
+        assert_eq!(RelayConfirmEcho::decode_frame(&empty), Ok(RelayConfirmEcho));
+        assert_eq!(
+            RelayConfirmEcho::decode_frame(&padded),
+            Ok(RelayConfirmEcho)
+        );
+        assert_eq!(RelayConfirmEcho::ui_event(), (0x12, 4056, 0, 0));
+    }
+
+    #[test]
+    fn playing_speed_4050_stages_both_byte_writes_and_drains_the_tail() {
+        // seam: pure codec — both byte writes and the trailing word are
+        // the whole wire body (VA `0x563fe0`, file `0x163fe0`,
+        // ev `7689.1c2f…693d`).
+        let event = PlayingSpeedEvent {
+            first_speed: 3,
+            final_speed: 9,
+        };
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(frame.id, 4050);
+        assert_eq!(frame.payload.len(), 6);
+        assert_eq!(PlayingSpeedEvent::decode_frame(&frame), Ok(event));
+        assert!(PlayingSpeedEvent::decode_body(&[3]).is_err());
+    }
+
+    #[test]
+    fn latency_answer_4049_reads_exactly_five_words() {
+        // seam: pure codec — the exe reads a fixed 20-byte area
+        // (VA `0x586470`, file `0x186470`, ev `8908.f66c…4572`).
+        let answer = LatencyAnswer {
+            words: [0x11, 0x2233, 0x4455_6677, 0x8899_aabb, 0xccdd_eeff],
+        };
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(frame.id, 4049);
+        assert_eq!(frame.payload.len(), 20);
+        assert_eq!(LatencyAnswer::decode_frame(&frame), Ok(answer));
+        assert!(LatencyAnswer::decode_body(&[0; 16]).is_err());
+        assert!(LatencyAnswer::decode_body(&[0; 24]).is_err());
+    }
+
+    #[test]
+    fn p2p_list_4045_two_peers_carry_member_and_both_six_byte_endpoints() {
+        // seam: pure codec — signed count plus 4-byte member and two
+        // 6-byte endpoints per peer (VA `0x58cf50`, file `0x18cf50`,
+        // ev `41b6.1271…f864.b518`; dispatch VA `0x563d70`).
+        let peers = P2PListResponse {
+            peers: vec![
+                PeerInfo {
+                    member_id: -2,
+                    public_endpoint: SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 4000),
+                    local_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 5), 4001),
+                },
+                PeerInfo {
+                    member_id: 3,
+                    public_endpoint: SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 4002),
+                    local_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 6), 4003),
+                },
+            ],
+        };
+        let body = peers.encode_body();
+        assert_eq!(body.len(), 4 + 2 * 16);
+        assert_eq!(
+            P2PListResponse::decode_body(&body),
+            Ok(peers),
+            "the signed member word and both endpoints must survive the round trip"
+        );
+        assert_eq!(
+            P2PListResponse::decode_body(&body[..19]),
+            Err(Error::TruncatedMessage { need: 36, have: 19 })
+        );
     }
 }
