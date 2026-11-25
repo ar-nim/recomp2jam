@@ -4851,8 +4851,10 @@ mod tests {
         // The shared top-bar captions stay shared (tickets #274/#275):
         // the staged pick re-inks the `LEVEL` badge and `MUSICNAME`.
         // #883: Waiting entry starts on the exe's random local
-        // selection, so the pick also replaces the random caption; both
-        // are shared caption sources, not dialog pixels.
+        // selection, but that word only mounts the `?` cards and the
+        // `Random` map caption. A plain room song must not inherit the
+        // yellow random caption from it (REA `ev_2cb3a3c4…`); this
+        // unflagged pick leaves the shared caption unchanged.
         // A guest never stages a pick live (the `MUSELECT` click handler
         // drops non-master clicks, file `0xb2622`); this test stages one
         // on purpose.
@@ -4920,10 +4922,15 @@ mod tests {
             changed, None,
             "guest staged no select pixels outside the shared captions: {changed:?}"
         );
-        assert_ne!(
+        // #883 right column: the local `?` selection no longer paints
+        // the yellow random caption for a plain room song (REA
+        // `ev_2cb3a3c4…`). An unflagged pick names the same title, so
+        // this rect must stay byte-identical; the variant-flagged
+        // caption has its own guard in `o2jam-shell`.
+        assert_eq!(
             o2jam_render::pixels_in_rect(&before, width, musicname),
             o2jam_render::pixels_in_rect(&after, width, musicname),
-            "the shared title replaces the random default caption"
+            "a plain pick must not invent a random caption"
         );
         assert_ne!(
             o2jam_render::pixels_in_rect(&before, width, speed),
