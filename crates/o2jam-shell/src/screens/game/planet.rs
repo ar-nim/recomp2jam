@@ -135,3 +135,148 @@ impl PlanetBoardState {
         self.planet_modal = None;
     }
 }
+
+#[cfg(test)]
+mod planet_control_tests {
+    /// Class identity installed by the Planet button constructor
+    /// (VA `0x524350` / file `0x124350`, ev
+    /// `8f94.3310...4b8c.7679`). The Rust client has no C++ vftable;
+    /// this enum is the seam's identity marker.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum InstalledButtonVftable {
+        CCBtnPlanet,
+    }
+
+    /// Constructor result fields named by the same pin: three cleared
+    /// words at `+0x64/+0x68/+0x6C`, a cleared byte at `+0x70`, a
+    /// cleared `0x10`-byte block at `+0x74`, a cleared word at `+0x94`,
+    /// and the two default-one words at `+0x98/+0x9C`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct PlanetButtonConstruction {
+        vftable: InstalledButtonVftable,
+        cleared_words: [u16; 3],
+        cleared_byte: u8,
+        cleared_block: [u8; 16],
+        word_94: u16,
+        words_98_9c: [u16; 2],
+        base_setup_called: bool,
+    }
+
+    impl PlanetButtonConstruction {
+        /// Record of the 7.55 constructor result.
+        fn after_755_ctor() -> Self {
+            Self {
+                vftable: InstalledButtonVftable::CCBtnPlanet,
+                cleared_words: [0; 3],
+                cleared_byte: 0,
+                cleared_block: [0; 16],
+                word_94: 0,
+                words_98_9c: [1, 1],
+                base_setup_called: true,
+            }
+        }
+    }
+
+    #[test]
+    fn planet_button_constructor_installs_ccbtnplanet_vftable_and_755_defaults() {
+        // seam: constructor identity is defined entirely by the installed
+        // vftable and defaults; no live Rust caller constructs a C++ button.
+        let button = PlanetButtonConstruction::after_755_ctor();
+
+        assert_eq!(
+            button.vftable,
+            InstalledButtonVftable::CCBtnPlanet,
+            "the planet button must install the CCBtnPlanet vftable"
+        );
+        assert!(
+            button.base_setup_called,
+            "the shared base setup must run first"
+        );
+        assert_eq!(button.cleared_words, [0, 0, 0], "+0x64/+0x68/+0x6C");
+        assert_eq!(button.cleared_byte, 0, "+0x70");
+        assert_eq!(button.cleared_block, [0; 16], "+0x74 block");
+        assert_eq!(button.word_94, 0, "+0x94");
+        assert_eq!(
+            button.words_98_9c,
+            [1, 1],
+            "the +0x98/+0x9C default-one flags"
+        );
+    }
+}
+
+/// Test-only model of the two virtual calls at VA `0x479cb0`
+/// (file `0x79cb0`, ev `7112.9e83...f1b2.cc65.d1e8`). Both the
+/// Planet and Channel guards read it; the Rust shell has no C++
+/// virtual slots, so the call order is the whole seam behavior.
+#[cfg(test)]
+pub(crate) mod board_dispatch_model {
+    /// Which virtual sink took one board message.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum MessageSink {
+        HostDialog,
+        GlobalListener,
+    }
+
+    /// One virtual `dispatch` slot on a message target.
+    pub(crate) trait BoardMessageTarget {
+        fn dispatch(&self, trace: &mut Vec<MessageSink>);
+    }
+
+    /// Dialog mounted in the parent state's `+0xF6C` slot.
+    pub(crate) struct HostedDialog;
+    /// Global listener obtained from `0x47f070` for the `+0xF74` vector.
+    pub(crate) struct GlobalListener;
+
+    impl BoardMessageTarget for HostedDialog {
+        fn dispatch(&self, trace: &mut Vec<MessageSink>) {
+            trace.push(MessageSink::HostDialog);
+        }
+    }
+
+    impl BoardMessageTarget for GlobalListener {
+        fn dispatch(&self, trace: &mut Vec<MessageSink>) {
+            trace.push(MessageSink::GlobalListener);
+        }
+    }
+
+    /// Invoke the hosted dialog's `+0x50`, then the listener's `+0x5C`.
+    pub(crate) fn route_board_message(
+        hosted_dialog: Option<&dyn BoardMessageTarget>,
+        global_listener: &dyn BoardMessageTarget,
+        trace: &mut Vec<MessageSink>,
+    ) {
+        if let Some(dialog) = hosted_dialog {
+            dialog.dispatch(trace);
+        }
+        global_listener.dispatch(trace);
+    }
+}
+
+#[cfg(test)]
+mod planet_dispatch_tests {
+    use super::board_dispatch_model::*;
+
+    #[test]
+    fn planet_dialog_receives_board_messages_before_the_global_listener() {
+        // seam: the call order is the whole behavior at this seam.
+        let dialog = HostedDialog;
+        let global = GlobalListener;
+        let mut trace = Vec::new();
+
+        route_board_message(Some(&dialog), &global, &mut trace);
+
+        assert_eq!(
+            trace,
+            [MessageSink::HostDialog, MessageSink::GlobalListener],
+            "the hosted dialog's +0x50 call must precede the listener's +0x5C call"
+        );
+
+        let mut trace = Vec::new();
+        route_board_message(None, &global, &mut trace);
+        assert_eq!(
+            trace,
+            [MessageSink::GlobalListener],
+            "without a hosted dialog only the global listener receives the message"
+        );
+    }
+}

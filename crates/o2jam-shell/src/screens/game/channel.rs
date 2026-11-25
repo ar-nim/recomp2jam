@@ -458,3 +458,24 @@ mod channel_tests {
         assert_eq!(channel_row_hit(572, 240, 10), None);
     }
 }
+
+#[cfg(test)]
+mod channel_dispatch_tests {
+    use super::super::planet::board_dispatch_model::*;
+
+    #[test]
+    fn channel_hosted_dialog_receives_dispatch_before_the_global_listener() {
+        // seam: the call order is the whole behavior at this seam.
+        let hosted = HostedDialog;
+        let global = GlobalListener;
+        let mut trace = Vec::new();
+
+        route_board_message(Some(&hosted), &global, &mut trace);
+
+        assert_eq!(
+            trace,
+            [MessageSink::HostDialog, MessageSink::GlobalListener],
+            "the +0xF6C dialog's +0x50 call must precede the listener's +0x5C call"
+        );
+    }
+}
