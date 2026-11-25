@@ -43,7 +43,7 @@ use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use super::game::OwnedRow;
 use super::side::{
-    cart_pager_digits, cart_row_cells, lanking_bpm_caption, lanking_diff_caption,
+    cart_pager_digits_from_pages, cart_row_cells, lanking_bpm_caption, lanking_diff_caption,
     lanking_genre_caption, lanking_lview_slots, lanking_rank_cells, lanking_rview_slots,
     lanking_tiled_rect, music_shop_buy_caption, music_shop_caption_rect,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
@@ -1324,6 +1324,9 @@ impl ShopPriceFace {
 /// Staged board data behind one Item Shop overlay pass. Bundled so
 /// the painter takes one parameter object instead of six arguments.
 pub struct ShopBoard<'a> {
+    /// Whether a modal MESSAGE entry is up (exe `shop +0x25a0`).
+    /// `FUN_0x4a21a0` skips both wallet digit calls while it is set.
+    pub message_sheet_up: bool,
     /// Lower-left panel face (entry MY BAG, row-pick SHOPPING BAG).
     pub panel: ShopPanel,
     /// True on the live state-3 entry: goods ink the four featured
@@ -1367,11 +1370,19 @@ pub fn paint_shop_board(
     } else {
         paint_shop_rows(frame, placements, board.goods);
     }
-    paint_shop_wallet(frame, placements, board.wallet);
+    if !board.message_sheet_up {
+        paint_shop_wallet(frame, placements, board.wallet);
+    }
     // The entry face is MY BAG (audit D4); cart ink only rides the
     // face the row pick opens. Both faces share the stage geometry.
     if board.panel == ShopPanel::ShoppingBag {
-        paint_shop_cart(frame, placements, board.cart, board.cart_page);
+        paint_shop_cart(
+            frame,
+            placements,
+            board.cart,
+            board.cart_page,
+            board.cart_pages,
+        );
     }
 }
 
@@ -1773,12 +1784,15 @@ fn paint_shop_cart(
     placements: &[ScenePlacement],
     cart: &[ShopGood],
     cart_page: usize,
+    cart_pages: usize,
 ) {
     // Totals ride their own TEXT rects, never the row templates:
     // they ink even when no cart row stages.
     paint_shop_cart_totals(frame, placements, cart);
     paint_shop_cart_rows(frame, placements, cart, cart_page);
-    let digits = cart_pager_digits(cart.len(), cart_page);
+    // The total half comes from the full vector's page count
+    // (`shop +0x233c`), not from this five-row visible slice.
+    let digits = cart_pager_digits_from_pages(cart_pages, cart_page, cart.is_empty());
     let Some(rects) = shop_cart_page_digit_rects(placements) else {
         return;
     };
@@ -5550,6 +5564,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
@@ -5568,6 +5583,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &[ShopGood {
@@ -5736,6 +5752,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
@@ -5801,6 +5818,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
@@ -5923,6 +5941,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &goods,
@@ -5994,6 +6013,7 @@ mod paint_tests {
             },
             &placements,
             ShopBoard {
+                message_sheet_up: false,
                 featured_cards: false,
                 panel: ShopPanel::ShoppingBag,
                 goods: &[],
@@ -6042,6 +6062,7 @@ mod paint_tests {
                 &mut frame,
                 &placements,
                 ShopBoard {
+                    message_sheet_up: false,
                     featured_cards: false,
                     panel: ShopPanel::ShoppingBag,
                     goods: &[],
@@ -6066,6 +6087,81 @@ mod paint_tests {
             cells_ink(std::slice::from_ref(&good)),
             (true, true),
             "the vector sum inks both cells"
+        );
+    }
+
+    #[test]
+    fn the_cart_pager_total_is_ceil_of_cart_len_over_five() {
+        // Live chain: main.rs::run_play -> ScreenGame::paint_at ->
+        // ScreenGame::paint_side -> paint_shop_board -> paint_shop_cart
+        // -> staged 0x14500082/83 digit cells. Statics: FUN_0x53bbb0
+        // measures the full 0x118 cart vector; FUN_0x4a1580 stores
+        // ceil(len/5) at shop +0x233c, which FUN_0x4a1b10 reads for the
+        // total half (ev_74b3e1f7…/ev_b6bbc7a8…). The captured `9`
+        // cannot come from a five-row visible slice.
+        let placements = vec![
+            shop_placement(SHOP_CART_PAGE_CUR_TENS_CODE, 100, 100, 14, 17),
+            shop_placement(SHOP_CART_PAGE_CUR_ONES_CODE, 120, 100, 14, 17),
+            shop_placement(SHOP_CART_PAGE_TOT_TENS_CODE, 140, 100, 14, 17),
+            shop_placement(SHOP_CART_PAGE_TOT_ONES_CODE, 160, 100, 14, 17),
+        ];
+        let good = ShopGood {
+            item_id: 1,
+            name: "VisibleRow".to_owned(),
+            price: 100,
+            gem_price: None,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
+        };
+        let visible_page = vec![good; 5];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            ShopBoard {
+                message_sheet_up: false,
+                featured_cards: false,
+                panel: ShopPanel::ShoppingBag,
+                goods: &[],
+                wallet: &WalletState::default(),
+                cart: &visible_page,
+                cart_page: 0,
+                cart_pages: 9,
+            },
+        );
+        let mut reference = vec![0u32; 800 * 600];
+        paint_text_into_rect(
+            &mut Frame {
+                buf: &mut reference,
+                w: 800,
+                h: 600,
+            },
+            Rect {
+                x: 160,
+                y: 100,
+                w: 14,
+                h: 17,
+            },
+            "9",
+            CP949_INK,
+        );
+        let crop = |frame: &[u32]| -> Vec<u32> {
+            (100..117)
+                .flat_map(|row| (160..174).map(move |col| frame[row * 800 + col]))
+                .collect()
+        };
+        assert_eq!(
+            crop(&buf),
+            crop(&reference),
+            "the total cell must ink nine pages, not the five-row slice's one"
+        );
+        assert!(
+            !has_ink_in(&buf, 800, 140, 100, 14, 17),
+            "nine pages has no total tens digit"
         );
     }
 
