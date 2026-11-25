@@ -27,8 +27,15 @@ burn-down waves pinned 556 bucket functions across `docs/pins/*.md`
 (room-waiting, planet-channel, result-playing, shops-myroom, net-a/b/c1/c2,
 ui-draw-1/2, input-msg, web-asset, misc-tail); cross-references in those
 docs pinned the rest. Same textual-scan rule as the baseline (an upper
-bound; a mention is not a passing test). The unpinned remainder (~226)
-sits mostly in the shared-container bucket, which is on-demand only.
+bound; a mention is not a passing test).
+
+**Behavior-relevant coverage (owner ruling 2026-11-25): 785 / 791 =
+99.2%.** The shared containers/allocators bucket (338 procedures) is
+excluded from the denominator: those are `std::vector`/`std::string`
+template bodies with no player-visible decisions, and the Rust
+reimplementation replaces them wholesale with `std` — pinning them adds
+no behavioral value. The remaining 6 unpinned behavior-relevant
+procedures (5 unassigned, 1 render support) are the last open slice.
 
 Repo pins in the other buckets: 87 library, 514 dead-or-unclassified.
 
