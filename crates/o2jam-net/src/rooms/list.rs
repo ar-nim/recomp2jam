@@ -4,10 +4,10 @@
 
 use crate::error::Error;
 use crate::frame::encode_frame;
+use crate::macros::wire_enum;
 use crate::message::WireMessage;
 use crate::reader::Reader;
-use crate::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
-use crate::macros::wire_enum;
+use crate::strings::{encode_null_terminated, MAX_STRING_LEN};
 /// Title cap (`StringMessageField(maxLength: 21)`).
 pub const ROOM_TITLE_LEN: usize = 21;
 
@@ -292,11 +292,287 @@ pub fn encode_frame_for(list: &RoomList) -> Vec<u8> {
     encode_frame(RoomList::COMMAND, &list.encode_body())
 }
 
+/// 2008 `RoomDescriptorChanged`: rewrite an existing 0xb4-byte row.
+///
+/// Exe handler at file `0x15bcb0` (VA `0x55bcb0`; REA analysis
+/// `fffc.d837…42f9` in `docs/pins/net-b.md`) reads the row index, two
+/// null-terminated names, five descriptor bytes, then a 32-bit word.
+/// The field names below are neutral because the exe pin names no
+/// meaning for the descriptor bytes; their order is the evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomDescriptorChanged {
+    /// Index of the staged row to rewrite.
+    pub number: i32,
+    /// First name on the row.
+    pub title: String,
+    /// First descriptor byte (row `+0x09` in the handler).
+    pub descriptor_a: u8,
+    /// Second descriptor byte (row `+0x0a`).
+    pub descriptor_b: u8,
+    /// Third descriptor byte (row `+0x01`).
+    pub descriptor_c: u8,
+    /// Second name on the row.
+    pub secondary_title: String,
+    /// Fourth descriptor byte (row `+0x0e`).
+    pub descriptor_d: u8,
+    /// Fifth descriptor byte (row `+0x0f`).
+    pub descriptor_e: u8,
+    /// 32-bit descriptor word (row `+0x04`).
+    pub descriptor_word: i32,
+}
+
+impl WireMessage for RoomDescriptorChanged {
+    const COMMAND: u16 = 2008;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.number.to_le_bytes().to_vec();
+        body.extend_from_slice(&encode_null_terminated(&self.title, MAX_STRING_LEN));
+        body.extend_from_slice(&[self.descriptor_a, self.descriptor_b, self.descriptor_c]);
+        body.extend_from_slice(&encode_null_terminated(
+            &self.secondary_title,
+            MAX_STRING_LEN,
+        ));
+        body.extend_from_slice(&[self.descriptor_d, self.descriptor_e]);
+        body.extend_from_slice(&self.descriptor_word.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let number = reader.read_i32()?;
+        let title = reader.read_string()?;
+        let descriptor_a = reader.read_u8()?;
+        let descriptor_b = reader.read_u8()?;
+        let descriptor_c = reader.read_u8()?;
+        let secondary_title = reader.read_string()?;
+        let descriptor_d = reader.read_u8()?;
+        let descriptor_e = reader.read_u8()?;
+        let descriptor_word = reader.read_i32()?;
+        reader.finish()?;
+        Ok(Self {
+            number,
+            title,
+            descriptor_a,
+            descriptor_b,
+            descriptor_c,
+            secondary_title,
+            descriptor_d,
+            descriptor_e,
+            descriptor_word,
+        })
+    }
+}
+
+/// 2009 `RoomUserCountChanged`: rewrite the occupancy words of one row.
+/// Exe handler file `0x15bdf0`, REA `e766.2b4b…b6d9`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomUserCountChanged {
+    /// Index of the staged row.
+    pub number: i32,
+    /// Seat capacity byte.
+    pub capacity: u8,
+    /// Seated-player byte.
+    pub user_count: u8,
+    /// 16-bit occupancy descriptor.
+    pub descriptor_word: u16,
+    /// Trailing occupancy byte.
+    pub descriptor_byte: u8,
+}
+
+impl WireMessage for RoomUserCountChanged {
+    const COMMAND: u16 = 2009;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.number.to_le_bytes().to_vec();
+        body.extend_from_slice(&[self.capacity, self.user_count]);
+        body.extend_from_slice(&self.descriptor_word.to_le_bytes());
+        body.push(self.descriptor_byte);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let number = reader.read_i32()?;
+        let capacity = reader.read_u8()?;
+        let user_count = reader.read_u8()?;
+        let descriptor_word = reader.read_u16()?;
+        let descriptor_byte = reader.read_u8()?;
+        reader.finish()?;
+        Ok(Self {
+            number,
+            capacity,
+            user_count,
+            descriptor_word,
+            descriptor_byte,
+        })
+    }
+}
+
+/// One named row of the 2011 user list. Exe handler file `0x15bec0`,
+/// REA `5b92.288a…6478`: id, two strings, then a 32-bit level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomUserListEntry {
+    /// Numeric user id.
+    pub id: i32,
+    /// Account name.
+    pub username: String,
+    /// Display name.
+    pub nickname: String,
+    /// Level word.
+    pub level: i32,
+}
+
+/// 2011 `RoomUserList`: counted user rows for the Room user sheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomUserList {
+    /// Users in wire order.
+    pub users: Vec<RoomUserListEntry>,
+}
+
+impl WireMessage for RoomUserList {
+    const COMMAND: u16 = 2011;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let count = i32::try_from(self.users.len()).unwrap_or(i32::MAX);
+        let mut body = count.to_le_bytes().to_vec();
+        for user in &self.users {
+            body.extend_from_slice(&user.id.to_le_bytes());
+            body.extend_from_slice(&encode_null_terminated(&user.username, MAX_STRING_LEN));
+            body.extend_from_slice(&encode_null_terminated(&user.nickname, MAX_STRING_LEN));
+            body.extend_from_slice(&user.level.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let count = reader.read_count("room users", true)?;
+        let mut users = Vec::with_capacity(count);
+        for _ in 0..count {
+            users.push(RoomUserListEntry {
+                id: reader.read_i32()?,
+                username: reader.read_string()?,
+                nickname: reader.read_string()?,
+                level: reader.read_i32()?,
+            });
+        }
+        reader.finish()?;
+        Ok(Self { users })
+    }
+}
+
+/// 2020 `RoomStateChanged`: one row's state byte. Exe handler file
+/// `0x15c600`, REA `deab.f4a7…5704`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomStateChanged {
+    /// Index of the staged row.
+    pub number: i32,
+    /// Raw state code (see [`RoomState::from_code`]).
+    pub state_code: u8,
+}
+
+impl WireMessage for RoomStateChanged {
+    const COMMAND: u16 = 2020;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.number.to_le_bytes().to_vec();
+        body.push(self.state_code);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let number = reader.read_i32()?;
+        let state_code = reader.read_u8()?;
+        reader.finish()?;
+        Ok(Self { number, state_code })
+    }
+}
+
+/// 2023 `RoomParameterChanged`: one 16-bit parameter word plus two
+/// descriptor bytes. Exe handler file `0x15c790`, REA `dce9.1ea8…7848`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomParameterChanged {
+    /// Index of the staged member.
+    pub number: i32,
+    /// Parameter word: low twelve bits plus a shifted high nibble.
+    pub parameter: u16,
+    /// First descriptor byte.
+    pub descriptor_a: u8,
+    /// Second descriptor byte.
+    pub descriptor_b: u8,
+}
+
+impl WireMessage for RoomParameterChanged {
+    const COMMAND: u16 = 2023;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.number.to_le_bytes().to_vec();
+        body.extend_from_slice(&self.parameter.to_le_bytes());
+        body.extend_from_slice(&[self.descriptor_a, self.descriptor_b]);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let number = reader.read_i32()?;
+        let parameter = reader.read_u16()?;
+        let descriptor_a = reader.read_u8()?;
+        let descriptor_b = reader.read_u8()?;
+        reader.finish()?;
+        Ok(Self {
+            number,
+            parameter,
+            descriptor_a,
+            descriptor_b,
+        })
+    }
+}
+
+/// 2025 `RoomSkillChanged`: replace one row's counted skill ids. Exe
+/// handler file `0x15c940`, REA `64aa.4e91…7dab`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomSkillChanged {
+    /// Index of the staged row.
+    pub number: i32,
+    /// Replacement skill ids.
+    pub skills: Vec<i32>,
+}
+
+impl WireMessage for RoomSkillChanged {
+    const COMMAND: u16 = 2025;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.number.to_le_bytes().to_vec();
+        let count = i32::try_from(self.skills.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for skill in &self.skills {
+            body.extend_from_slice(&skill.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let number = reader.read_i32()?;
+        let count = reader.read_count("room skills", true)?;
+        let mut skills = Vec::with_capacity(count);
+        for _ in 0..count {
+            skills.push(reader.read_i32()?);
+        }
+        reader.finish()?;
+        Ok(Self { number, skills })
+    }
+}
+
 #[cfg(test)]
 mod room_list_tests {
     use super::*;
     use crate::frame::decode_frame;
     use crate::message::{GameMode, KeyMode};
+    use crate::rooms::{
+        JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom, RoomMember, RoomSlot, RoomSlotState,
+    };
 
     fn lobby() -> RoomListEntry {
         RoomListEntry {
@@ -656,5 +932,136 @@ mod room_list_tests {
             })
         );
     }
-}
 
+    /// seam: pure 2003 row codec with no runtime caller beyond the
+    /// decode seam (`docs/live-path-reachability.md`).
+    #[test]
+    fn room_2003_row_stages_occupancy_limits_and_skills_in_exe_field_order() {
+        let expected = lobby();
+        let decoded = RoomList::decode_body(
+            &RoomList {
+                rooms: vec![expected.clone()],
+            }
+            .encode_body(),
+        )
+        .unwrap();
+        let staged = &decoded.rooms[0];
+        assert_eq!(staged.number, 3);
+        assert_eq!(staged.state_code, 1);
+        assert_eq!(staged.title, " Friday Jam ");
+        assert!(staged.has_password);
+        assert_eq!(staged.music_id, 757);
+        assert_eq!(staged.capacity, 8);
+        assert_eq!(staged.user_count, 5);
+        assert_eq!((staged.min_level, staged.max_level), (0, 10));
+        assert_eq!(staged.skills, vec![11, 22]);
+        assert_eq!(staged.room_type, 0);
+        assert_eq!(*staged, expected);
+    }
+
+    /// seam: pure 2008 codec; the field order is the pinned evidence,
+    /// and no caller exists beyond this decode seam yet.
+    #[test]
+    fn room_2008_descriptor_change_decodes_the_exe_field_sequence() {
+        assert_eq!(RoomDescriptorChanged::COMMAND, 2008);
+        let mut body = 4i32.to_le_bytes().to_vec();
+        body.extend_from_slice(&encode_null_terminated("Jam", MAX_STRING_LEN));
+        body.extend_from_slice(&[2, 3, 4]);
+        body.extend_from_slice(&encode_null_terminated("Stage", MAX_STRING_LEN));
+        body.extend_from_slice(&[5, 6]);
+        body.extend_from_slice(&0x1234_5678i32.to_le_bytes());
+        let decoded = RoomDescriptorChanged::decode_body(&body).unwrap();
+        assert_eq!(decoded.number, 4);
+        assert_eq!(decoded.title, "Jam");
+        assert_eq!(
+            (
+                decoded.descriptor_a,
+                decoded.descriptor_b,
+                decoded.descriptor_c
+            ),
+            (2, 3, 4)
+        );
+        assert_eq!(decoded.secondary_title, "Stage");
+        assert_eq!((decoded.descriptor_d, decoded.descriptor_e), (5, 6));
+        assert_eq!(decoded.descriptor_word, 0x1234_5678);
+    }
+
+    /// seam: pure 2009 codec with no runtime caller beyond the seam.
+    #[test]
+    fn room_2009_user_count_decodes_index_then_occupancy_fields() {
+        assert_eq!(RoomUserCountChanged::COMMAND, 2009);
+        let mut body = 3i32.to_le_bytes().to_vec();
+        body.extend_from_slice(&[8, 5]);
+        body.extend_from_slice(&0x0102u16.to_le_bytes());
+        body.push(7);
+        let decoded = RoomUserCountChanged::decode_body(&body).unwrap();
+        assert_eq!(decoded.number, 3);
+        assert_eq!((decoded.capacity, decoded.user_count), (8, 5));
+        assert_eq!(decoded.descriptor_word, 0x0102);
+        assert_eq!(decoded.descriptor_byte, 7);
+    }
+
+    /// seam: pure 2011 codec with no runtime caller beyond the seam.
+    #[test]
+    fn room_2011_user_list_decodes_named_counted_rows() {
+        assert_eq!(RoomUserList::COMMAND, 2011);
+        let mut body = 2i32.to_le_bytes().to_vec();
+        for (id, username, nickname, level) in [
+            (1i32, "host", "Host", 12i32),
+            (2i32, "guest", "Guest", 3i32),
+        ] {
+            body.extend_from_slice(&id.to_le_bytes());
+            body.extend_from_slice(&encode_null_terminated(username, MAX_STRING_LEN));
+            body.extend_from_slice(&encode_null_terminated(nickname, MAX_STRING_LEN));
+            body.extend_from_slice(&level.to_le_bytes());
+        }
+        let decoded = RoomUserList::decode_body(&body).unwrap();
+        assert_eq!(decoded.users.len(), 2);
+        assert_eq!(decoded.users[0].nickname, "Host");
+        assert_eq!(decoded.users[1].username, "guest");
+        assert_eq!(decoded.users[1].level, 3);
+    }
+
+    /// seam: pure 2020 codec with no runtime caller beyond the seam.
+    #[test]
+    fn room_2020_state_change_decodes_index_then_state_byte() {
+        assert_eq!(RoomStateChanged::COMMAND, 2020);
+        let mut body = 3i32.to_le_bytes().to_vec();
+        body.push(2);
+        let decoded = RoomStateChanged::decode_body(&body).unwrap();
+        assert_eq!(
+            decoded,
+            RoomStateChanged {
+                number: 3,
+                state_code: 2
+            }
+        );
+    }
+
+    /// seam: pure 2023 codec with no runtime caller beyond the seam.
+    #[test]
+    fn room_2023_parameter_change_decodes_word_and_two_bytes() {
+        assert_eq!(RoomParameterChanged::COMMAND, 2023);
+        let mut body = 3i32.to_le_bytes().to_vec();
+        body.extend_from_slice(&0xF123u16.to_le_bytes());
+        body.extend_from_slice(&[4, 5]);
+        let decoded = RoomParameterChanged::decode_body(&body).unwrap();
+        assert_eq!(decoded.number, 3);
+        assert_eq!(decoded.parameter, 0xF123);
+        assert_eq!((decoded.descriptor_a, decoded.descriptor_b), (4, 5));
+    }
+
+    /// seam: pure 2025 codec with no runtime caller beyond the seam.
+    #[test]
+    fn room_2025_skill_change_decodes_indexed_skill_ids() {
+        assert_eq!(RoomSkillChanged::COMMAND, 2025);
+        let mut body = 3i32.to_le_bytes().to_vec();
+        body.extend_from_slice(&2i32.to_le_bytes());
+        for skill in [11i32, 22i32] {
+            body.extend_from_slice(&skill.to_le_bytes());
+        }
+        let decoded = RoomSkillChanged::decode_body(&body).unwrap();
+        assert_eq!(decoded.number, 3);
+        assert_eq!(decoded.skills, vec![11, 22]);
+    }
+}
