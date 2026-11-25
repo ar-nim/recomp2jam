@@ -1,5 +1,5 @@
 //! Result-screen paint generation: verdict and grade frames,
-//! pinned GDI readouts, rank rows, album cover, portrait chips,
+//! pinned GDI readouts, rank rows, staged OPI pane, portrait chips,
 //! and the staged scene painters behind `FUN_004c2390`.
 //!
 //! Kept behind re-exports in `super::paint`, so callers and the
@@ -84,14 +84,13 @@ pub(crate) const RESULT_DIGIT_CELLS: usize = 8;
 
 /// Music-name box interior on the native canvas: the
 /// `Result_EachResult.ojs` body (`STATE_RESULT` rect 4
-/// `IDC_IMAGE_SRESULT_RESULTTAP`, 800×350 anchored (0,250)) bakes a
-/// default mascot pane into its inner box, and the played song's
-/// album art paints over exactly that interior — the reference photo's
-/// green panel measures this rect (body-local interior (70,54)–
+/// `IDC_IMAGE_SRESULT_RESULTTAP`, 800×350 anchored (0,250)) bakes its
+/// own pane into this inner box (body-local interior (70,54)–
 /// (733,268) plus the (0,250) anchor; the baked frame borders at
-/// x 68–69/734–735 and y 52–53/269–270 stay art). The cover section
-/// comes from the walked chart's `.ojn` (docs/file-formats/ojn.md); a
-/// missing cover leaves the baked box as-is.
+/// x 68–69/734–735 and y 52–53/269–270 stay art). The exe's Result
+/// fill selects staged body `0x17100001` and its left tab selects
+/// `0x17500004`; no chart cover enters this path (#294 T4, files
+/// `0xc3172`/`0xc2c8b`). The rect names baked art geometry only.
 pub const RESULT_MUSIC_BOX: Rect = Rect {
     x: 70,
     y: 304,
@@ -636,21 +635,6 @@ pub(crate) fn paint_album_cover(frame: &mut Frame<'_>, cover: &Rgb555Image, dest
     }
 }
 
-/// Paint the played song's album cover into the music-name box
-/// ([`RESULT_MUSIC_BOX`], scaled into the frame like the placements):
-/// the exe fills the box interior with the song's art over the baked
-/// default pane. `None` paints nothing — the staged box stays as-is.
-pub(crate) fn paint_result_album(frame: &mut Frame<'_>, album: Option<&Rgb555Image>) {
-    let Some(cover) = album else {
-        return;
-    };
-    paint_album_cover(
-        frame,
-        cover,
-        scale_rect_to_frame(&RESULT_MUSIC_BOX, frame.w, frame.h),
-    );
-}
-
 /// One eight-cell digit-sprite field through the exe painters
 /// (`FUN_004c44c0`/`FUN_004c4630`, files `0xc44c0`/`0xc4630`): the
 /// decimal digits of `value` (at least one, so 0 paints a 0) fill the
@@ -726,18 +710,15 @@ pub(crate) fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 /// Paint the pinned result numbers, the rank rows, and the per-row
 /// portrait chips (shared by the flat fallback and the staged scene;
 /// the numbers and rows are GDI text the exe paints regardless of
-/// art). The album cover paints first into the music-name box so the
-/// text layers over it, exactly on the green panel of the reference
-/// photo; the portrait chips resolve before the rows draw, the exe
-/// attach order.
+/// art). The music-name pane is baked into the staged OPI body and
+/// needs no per-song layer; the portrait chips resolve before the
+/// rows draw, the exe attach order.
 pub(crate) fn paint_result_content(
     frame: &mut Frame<'_>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
-    album: Option<&Rgb555Image>,
     portrait_slots: Option<&[ResultPortraitSlot; 8]>,
 ) {
-    paint_result_album(frame, album);
     paint_result_numbers(frame, score);
     paint_result_rank_rows(frame, rows);
     paint_result_portrait_chips(frame, rows, portrait_slots);
@@ -849,7 +830,7 @@ pub(crate) fn paint_result_portrait_chips(
     let _ = frame;
 }
 
-/// Paint the flat results fallback: card, album cover, the pinned
+/// Paint the flat results fallback: card, staged-pane ink, the pinned
 /// result numbers, the rank rows, and the portrait-chip resolution.
 /// The retired text verdict stays gone — the banner is a sprite frame
 /// of the staged art.
@@ -857,7 +838,6 @@ pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
-    album: Option<&Rgb555Image>,
     portrait_slots: Option<&[ResultPortraitSlot; 8]>,
 ) {
     paint_card(
@@ -865,13 +845,13 @@ pub(crate) fn paint_result(
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, score, rows, album, portrait_slots);
+    paint_result_content(frame, score, rows, portrait_slots);
 }
 
 /// One staged result paint: everything the scene layers over the
 /// backdrop, grouped so the painter keeps a readable signature
-/// (`docs/cresult-anchors.md` + the album cover in the music-name
-/// box).
+/// (`docs/cresult-anchors.md`; the music-name pane is baked into the
+/// staged OPI body).
 #[derive(Debug, Clone, Copy)]
 pub struct ResultPaint<'a> {
     /// Constant portrait slots for the current display mode
@@ -888,9 +868,6 @@ pub struct ResultPaint<'a> {
     pub verdict: ResultVerdict,
     /// Grade plate frame (1..=8; `None` paints no plate).
     pub grade: Option<u8>,
-    /// Played song's album cover (music-name box; `None` paints the
-    /// staged box as-is).
-    pub album: Option<&'a Rgb555Image>,
     /// Life-readout value for the eight `PointNum.ojs` cells
     /// (y=77, last cell x=460). The exe sums globals `0x77ee58 +
     /// 0x77ee60` (file `0xc394e`); both writers are register-held
@@ -909,10 +886,9 @@ pub struct ResultPaint<'a> {
 /// Paint the staged result scene (`docs/cresult-anchors.md`): the
 /// `.bnd`-bound block art first (minus the frame bodies), then the
 /// exe-selected verdict banner and grade plate frames, then the
-/// played song's album cover in the music-name box, the avatar
-/// figure, the pinned GDI numbers, and the rank rows on top — the
-/// fill order of `FUN_004c3120` (banner, then top-panel painter,
-/// then rows).
+/// avatar figure, the pinned GDI numbers, and the rank rows on top —
+/// the fill order of `FUN_004c3120` (banner, then top-panel painter,
+/// then rows). The music-name pane is the staged OPI body's ink.
 pub fn paint_result_scene(frame: &mut Frame<'_>, paint: &ResultPaint<'_>) {
     paint_result_backdrop(frame, paint.art);
     paint_result_body_frame(
@@ -947,7 +923,6 @@ pub fn paint_result_scene(frame: &mut Frame<'_>, paint: &ResultPaint<'_>) {
         frame,
         paint.score,
         paint.rows,
-        paint.album,
         paint.portrait_slots.as_ref(),
     );
 }
@@ -1046,7 +1021,6 @@ mod result_banner_tests {
                 art: &art,
                 verdict,
                 grade: None,
-                album: None,
                 life_readout: None,
                 bottom_counter: None,
             },

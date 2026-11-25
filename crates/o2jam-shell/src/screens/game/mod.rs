@@ -5276,17 +5276,17 @@ impl ScreenGame {
         }
     }
 
-    /// Result button click: RETRY re-enters Waiting, BACK leaves
-    /// for rooms — the keyboard Confirm/Back arms on mouse. Both
-    /// presses queue their pinned relay body for the session bridge
-    /// (4010 `0xfaa` / 4021 `0xfb5`, both empty).
+    /// Result button click: RETRY re-enters Waiting, BACK queues the
+    /// pinned empty 4021 and waits for the scripted 4022 answer before
+    /// it enters Waiting (`FUN_004c2cf0`, file `0xc2cf0`, and the
+    /// state-5 install, file `0x477990`; #294 T3). The keyboard Back
+    /// arm stays an ours-by-design local shortcut, not an exe pin.
     fn click_result_button(&mut self, x: i32, y: i32) {
         if self.result_button_hit(RESULT_RETRY_ID, &RESULT_RETRY_RECT, x, y) {
             self.outbox.pending_result_retry = true;
             self.enter(Screen::Waiting);
         } else if self.result_button_hit(RESULT_BACK_ID, &RESULT_BACK_RECT, x, y) {
             self.outbox.pending_result_back = true;
-            self.enter(Screen::Room);
         }
     }
 
@@ -9768,10 +9768,9 @@ impl ScreenGame {
     /// the exe-selected verdict banner and grade plate frames, the
     /// pinned GDI numbers from the live score, the rank rows from
     /// live peers plus room names, and the per-row portrait-chip
-    /// resolution. The played song's album cover paints into the
-    /// music-name box when it resolved (see [`Self::resolve_song_cover`]).
+    /// resolution. The music-name pane is baked into the staged OPI
+    /// body; the walked chart's JPEG never enters Result (#294 T4).
     fn paint_result(&self, frame: &mut Frame<'_>) {
-        let album = self.song_cover.as_ref();
         let numbers = self.result_numbers_score();
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
@@ -9790,7 +9789,6 @@ impl ScreenGame {
                     art,
                     verdict: self.result_verdict(),
                     grade: self.grade(),
-                    album,
                     // The exe life readout sums globals 0x77ee58 +
                     // 0x77ee60 and the bottom counter reads u16
                     // 0x76fc66; both writers are register-held, so no
@@ -9801,7 +9799,7 @@ impl ScreenGame {
                     bottom_counter: None,
                 },
             ),
-            None => paint_result(frame, &numbers, &self.result_rank_rows(), album, None),
+            None => paint_result(frame, &numbers, &self.result_rank_rows(), None),
         }
     }
 
@@ -10384,7 +10382,7 @@ mod game_tests {
     use super::super::paint::WaitingOpenCaption;
     use super::super::paint::{
         background_of, channel_chat_row_text, paint_myroom_data, rank_notice_board_text,
-        seat_origin, RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET,
+        seat_origin, SceneArt, RESULT_MUSIC_BOX, RESULT_POINT_NUM_ART_FILE_OFFSET,
         RESULT_TICKET_URL_FILE_OFFSET, RESULT_TICKET_URL_VIRTUAL_ADDRESS,
     };
     use super::super::select_paint::{select_active_ink, select_dim_ink};
@@ -10437,12 +10435,14 @@ mod game_tests {
     };
     use super::waiting::{RESULT_RETRY_BACKDROP_FRAME_SHA256S, RESULT_RETRY_MANIFEST_SHA256};
     use super::*;
+    use crate::avatar::paint_scene_figures;
     use crate::avatar::PlacementRole;
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
     use crate::screens::side::{
         SelectMusicSong, SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
     };
+    use crate::staging::{stage_state, StageContext, State};
     use crate::{GameLoop, MenuKey};
     use o2jam_file::ChartMask;
     use o2jam_net::play::MusicListEntry;
@@ -10450,7 +10450,7 @@ mod game_tests {
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
     use std::cell::RefCell;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
     #[test]
@@ -14963,13 +14963,14 @@ mod game_tests {
     }
 
     #[test]
-    // OPEN: this negative assertion is not yet exe-pinned.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
-    fn click_leaves_result_into_rooms() {
+    fn click_result_back_waits_for_the_4022_answer() {
+        // #294 T3: the pinned BACK rect queues 4021 but keeps Result
+        // until the scripted 4022 installs Waiting (the session owns
+        // that wire answer; the shell's keyboard Back stays ours).
         let mut game = result_game();
-        // Pinned BACK rect (711,569)-(794,593).
         game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
-        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.screen(), Screen::Result);
+        assert!(game.take_result_back().is_some(), "BACK queues 4021");
     }
 
     #[test]
@@ -15817,47 +15818,181 @@ mod game_tests {
         assert_eq!((cover.w, cover.h), (800, 600));
     }
 
-    #[test]
-    fn result_paint_layers_the_cover_over_the_scene_ink() {
-        // The full loop: the result scene paints, the cover fills the
-        // box interior at its pinned rect (dest (0,0) samples the
-        // cover's own (0,0)), driven by the staged catalog + selection.
-        // Skips when `install-root` is absent.
-        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(bytes) = std::fs::read(&chart) else {
-            return;
-        };
-        let cover_bytes = o2jam_file::ojn_cover_jpeg(&bytes).unwrap();
-        let cover = cover_image(&o2jam_file::decode_ojn_cover(&cover_bytes).unwrap());
+    /// `IDC_IMAGE_SRESULT_RESULTTAP`: the exe's result pane body
+    /// (`Result_EachResult.ojs`, 7.55, file offset `0xc2c8b`,
+    /// `ev_60cf35956afc87995bb37b08ab70b628cc044962e8aff5fa43f646c8edab4fa0`).
+    const RESULT_EACH_RESULT_CODE: u32 = 0x1750_0004;
+
+    /// One OJNList record for a walked chart: the tests use two
+    /// different covers so the pane cannot pass by carrying either one.
+    fn result_catalog_blob(music_id: u16, token: &str) -> Vec<u8> {
+        let mut record = vec![0u8; 300];
+        record[8..11].copy_from_slice(b"ojn");
+        record[4..8].copy_from_slice(&u32::from(music_id).to_le_bytes());
+        record[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+        record[112..117].copy_from_slice(b"First");
+        record[176..180].copy_from_slice(b"Band");
+        record[240..240 + token.len()].copy_from_slice(token.as_bytes());
+        record
+    }
+
+    /// The real `STATE_RESULT` rects and bodies the boot path stages.
+    fn result_scene_art(interface: &[u8]) -> SceneArt {
+        let staged = stage_state(interface, State::Result, StageContext::default());
+        let art = staged.art.expect("STATE_RESULT stages from Interface1.opi");
+        SceneArt {
+            placements: art.placements,
+            figures: art.figures,
+        }
+    }
+
+    fn result_pane_region(frame: &[u32]) -> Vec<u32> {
+        let pane_end_x = RESULT_MUSIC_BOX.x + i32::try_from(RESULT_MUSIC_BOX.w).unwrap();
+        let pane_end_y = RESULT_MUSIC_BOX.y + i32::try_from(RESULT_MUSIC_BOX.h).unwrap();
+        (RESULT_MUSIC_BOX.y..pane_end_y)
+            .flat_map(|y| (RESULT_MUSIC_BOX.x..pane_end_x).map(move |x| native_word(frame, x, y)))
+            .collect()
+    }
+
+    /// Small, stable fingerprint of the pane so a failed guard prints a
+    /// pair of numbers instead of hundreds of thousands of pixels.
+    fn result_pane_hash(frame: &[u32]) -> u64 {
+        result_pane_region(frame)
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, word| {
+                (hash ^ u64::from(*word)).wrapping_mul(0x100_0000_01B3)
+            })
+    }
+
+    fn native_word(frame: &[u32], x: i32, y: i32) -> u32 {
+        frame[usize::try_from(y).unwrap() * 800 + usize::try_from(x).unwrap()]
+    }
+
+    /// Ink the staged OPI body alone paints at one native point. The
+    /// isolated blit reads the same placement and figure the game stages,
+    /// so it names body ink without using the Result painter's output.
+    fn staged_result_pane_ink(art: &SceneArt, x: i32, y: i32) -> u32 {
+        let placed = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == RESULT_EACH_RESULT_CODE)
+            .expect("result pane placement staged");
+        let sprite = placed.sprite.as_deref().expect("result pane sprite");
+        let figure = art.figures.get(sprite).expect("result pane body staged");
+        let mut buf = vec![0u32; 800 * 600];
+        paint_scene_figures(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            std::slice::from_ref(placed),
+            &HashMap::from([(sprite.to_owned(), figure.clone())]),
+        );
+        native_word(&buf, x, y)
+    }
+
+    /// Walk one chart from boot staging to a painted Result frame and
+    /// return its cover word, pane hash, and pixels. `None` means the
+    /// install does not carry that chart (CI skips cleanly).
+    fn walked_result_pane(
+        root: &Path,
+        art: &SceneArt,
+        music_id: u16,
+        file: &str,
+        token: &str,
+    ) -> Option<(u16, u64, Vec<u32>)> {
+        let bytes = std::fs::read(root.join("Music").join(format!("{file}.ojn"))).ok()?;
+        let jpeg = o2jam_file::ojn_cover_jpeg(&bytes).unwrap();
+        let cover = cover_image(&o2jam_file::decode_ojn_cover(&jpeg).unwrap()).unwrap();
         let mut game = ScreenGame::new();
-        stage_waiting_song(&mut game);
+        game.load_scene(Screen::Result, art.placements.clone(), art.figures.clone());
+        let catalog = result_catalog_blob(music_id, token);
+        let entries = o2jam_file::parse_ojn_list(&catalog).unwrap();
+        game.set_song_catalog(&entries);
+        game.set_selected_music(o2jam_net::play::SetRoomMusic {
+            music_id,
+            difficulty: 2,
+            speed: 3,
+        });
+        assert_eq!(
+            game.song_cover().map(|staged| staged.words[0]),
+            Some(cover.words[0]),
+            "a different cover resolved for {file}"
+        );
         game.load_chart(vec![(2, 5000, 7)]);
         walk_to_playing(&mut game);
         game.strike_at(2, 5000);
-        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = vec![0u32; 800 * 600];
         game.paint_at(
             &mut Frame {
-                buf: &mut buf,
+                buf: &mut frame,
                 w: 800,
                 h: 600,
             },
             7_000,
         );
         assert_eq!(game.screen(), Screen::Result);
-        let at =
-            |x: i32, y: i32| buf[usize::try_from(y).unwrap() * 800 + usize::try_from(x).unwrap()];
-        // The box interior's top-left pixel carries the cover's
-        // top-left ink, widened to the frame (the wiring target).
-        let word = cover.as_ref().expect("cover resolves").words[0];
-        let (r, g, b) = (
-            (((word >> 10) & 31) as u8) << 3 | (((word >> 10) & 31) as u8) >> 2,
-            (((word >> 5) & 31) as u8) << 3 | (((word >> 5) & 31) as u8) >> 2,
-            ((word & 31) as u8) << 3 | ((word & 31) as u8) >> 2,
+        let mut later = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut later,
+                w: 800,
+                h: 600,
+            },
+            50_000,
         );
         assert_eq!(
-            at(RESULT_MUSIC_BOX.x, RESULT_MUSIC_BOX.y),
-            pack_xrgb(r, g, b)
+            result_pane_hash(&frame),
+            result_pane_hash(&later),
+            "the staged pane stays OPI ink over time for {file}"
+        );
+        Some((cover.words[0], result_pane_hash(&frame), frame))
+    }
+
+    #[test]
+    fn result_music_pane_uses_staged_opi_not_the_walked_ojn_cover() {
+        // Tier 3 headless live-path guard for #294 T4. Live caller chain:
+        //   main.rs::run_play -> stage_live_scenes -> stage_interface_scenes
+        //   -> stage_state(State::Result) -> ScreenGame::load_scene ->
+        //   ScreenGame::paint_at -> paint_result_scene -> paint_result_backdrop.
+        // The exe fills `0x17100001` and selects `0x17500004`, never a
+        // chart cover (`ev_531d1dedc876922b6d86bcb6cb798fac950bcc0f81e1314c3917e10e292131b1`,
+        // `ev_30a0db95887dd5efb982f643480cabc628f80d0b7f9a6f932491351ee00d908e`).
+        // Two walked covers must leave the pane identical. Skips without
+        // `install-root` (CI has no game data).
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam");
+        let Ok(interface) = std::fs::read(root.join("Image/Interface1.opi")) else {
+            return;
+        };
+        let art = result_scene_art(&interface);
+        let Some(first) = walked_result_pane(&root, &art, 757, "o2ma757", "o2ma757.ojm") else {
+            return;
+        };
+        let Some(second) = walked_result_pane(&root, &art, 100, "o2ma100", "o2ma100.ojm") else {
+            return;
+        };
+        assert_ne!(first.0, second.0, "the two covers differ");
+        assert_eq!(
+            first.1, second.1,
+            "the walked chart never repaints the OPI pane"
+        );
+        let painted = [first, second];
+        let point = [(80, 312), (100, 320), (200, 330), (400, 315)]
+            .into_iter()
+            .find(|&(x, y)| {
+                let ink = staged_result_pane_ink(&art, x, y);
+                painted
+                    .iter()
+                    .all(|(_, _, frame)| native_word(frame, x, y) == ink)
+                    && painted
+                        .iter()
+                        .all(|&(cover_word, _, _)| u32::from(cover_word) != ink)
+            })
+            .expect("a sampled pane point carries the staged OPI body ink");
+        assert!(
+            RESULT_MUSIC_BOX.x <= point.0 && RESULT_MUSIC_BOX.y <= point.1,
+            "the pane ink point lies inside the staged body"
         );
     }
 
@@ -32317,7 +32452,6 @@ mod game_tests {
             },
             &[],
             None,
-            None,
         );
         total_field_hash_from(&buf)
     }
@@ -32666,18 +32800,18 @@ mod game_tests {
     }
 
     #[test]
-    fn staged_back_click_returns_to_room() {
+    fn staged_back_click_queues_4021_and_holds_result() {
         // BACK (`IDC_BUTTON_SRESULT_BACK`, rect 5
-        // (711,569)-(794,593)): the walk stages the button, the
-        // click leaves for the room list — and queues the exe's
-        // relay body (4021 `0xfb5`, empty) for the session bridge.
+        // (711,569)-(794,593)): the staged button queues the exe's
+        // relay body (4021 `0xfb5`, empty) and keeps Result until the
+        // session's 4022 answer installs Waiting (#294 T3).
         let mut game = ScreenGame::new();
         stage_result_button(&mut game, RESULT_BACK_ID, RESULT_BACK_RECT);
         finish_song(&mut game);
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
         game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
-        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.screen(), Screen::Result);
         assert!(game.take_result_back().is_some());
         assert!(game.take_result_back().is_none(), "one take sends once");
     }
@@ -33237,17 +33371,17 @@ mod game_tests {
     }
 
     #[test]
-    fn result_back_release_outside_holds_rooms() {
-        // Ticket #163 (result leg, CLICK press + release-outside):
-        // BACK commits on down — Room plus the pinned 4021 `0xfb5`
-        // relay body (#87) — so an outside release cannot revert
-        // it: the scene holds Room.
+    fn result_back_press_queues_once_and_holds_result_until_the_wire_answer() {
+        // Ticket #163 press shape plus #294 T3 target: BACK commits on
+        // down with the pinned 4021 `0xfb5` relay body; an outside
+        // release sends nothing more and never moves the scene. The
+        // session owns the 4022 answer that installs Waiting.
         let mut game = swept_result_game();
         game.ingest_snapshot(&InputSnapshot::press_at(752, 581));
-        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.screen(), Screen::Result);
         assert!(game.take_result_back().is_some());
         game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
-        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.screen(), Screen::Result);
         assert!(game.take_result_back().is_none());
     }
 
@@ -33320,9 +33454,9 @@ mod game_tests {
     fn result_solo_and_battle_chrome_agree() {
         // Ticket #163 (result leg, CLICK solo vs battle): RETRY and
         // BACK answer identically with and without a battle claim —
-        // RETRY hands back to Waiting plus 4010, BACK leaves for
-        // rooms plus 4021. The battle verdict banner stays
-        // display-only: it never joins the click dispatch.
+        // RETRY hands back to Waiting plus 4010, BACK queues 4021
+        // and holds Result for the wire answer (#294 T3). The battle
+        // verdict banner stays display-only: no click branch.
         for battle in [false, true] {
             for retry in [true, false] {
                 let mut game = swept_result_game();
@@ -33340,7 +33474,7 @@ mod game_tests {
                     assert!(game.take_result_back().is_none());
                 } else {
                     game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
-                    assert_eq!(game.screen(), Screen::Room);
+                    assert_eq!(game.screen(), Screen::Result);
                     assert!(game.take_result_back().is_some());
                     assert!(game.take_result_retry().is_none());
                 }

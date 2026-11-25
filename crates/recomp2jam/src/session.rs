@@ -685,6 +685,9 @@ pub struct OnlineSession {
     /// `true` once this Result visit sent the tally triple
     /// (cleared on leaving Result, so the next song tallies again).
     tally_sent: bool,
+    /// A Result BACK 4021 reached the gateway; the scripted 4022
+    /// answer still has to install Waiting (#294 T3, exe state id 5).
+    result_back_answer_expected: bool,
     /// Silent-audio rig switch: `true` keeps every attach on the null
     /// sink even when hardware exists. A session starts fenced
     /// (`new`) — only the windowed live boot unfences it through
@@ -756,6 +759,7 @@ impl OnlineSession {
             loaded_sent: false,
             loading_pacing: LoadingGatePacing::default(),
             tally_sent: false,
+            result_back_answer_expected: false,
             silent_audio: true,
             slot_actions: [None; 8],
             ready_echoes: [None; 8],
@@ -2471,6 +2475,7 @@ impl OnlineSession {
     fn poll_tally(&mut self) {
         if self.game.screen() != Screen::Result {
             self.tally_sent = false;
+            self.result_back_answer_expected = false;
             return;
         }
         if !self.joined_waiting {
@@ -2509,6 +2514,9 @@ impl OnlineSession {
                 Ok(frame) if frame.id == GameRankUpdate::COMMAND => {
                     session.apply_rank_update(&frame);
                 }
+                Ok(frame) if frame.id == Event::UserLeaveGame.id() => {
+                    session.apply_result_back_answer(&frame);
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-tally frame in tally drain");
@@ -2516,6 +2524,30 @@ impl OnlineSession {
                 Err(_) => break,
             }
         });
+    }
+
+    /// Fold the 4022 answer to our BACK (exe `FUN_00560160`, file
+    /// `0x160160`): its first byte names the leaving seat; only the
+    /// local seat's answer installs state id 5, Waiting (not the room
+    /// state id 3). No other Result frame may move the screen. The
+    /// earlier 4021 from the tally triple never arms this latch.
+    fn apply_result_back_answer(&mut self, frame: &Frame) {
+        let Some(member_id) = frame.payload.first().copied() else {
+            tracing::debug!(id = frame.id, "dropping seat-less leave answer");
+            return;
+        };
+        let local_seat = self.joined_room.as_ref().map(|room| room.member_id);
+        if !self.result_back_answer_expected
+            || self.game.screen() != Screen::Result
+            || usize::from(member_id) >= SUBMITTER_MEMBER_LIMIT
+            || Some(member_id) != local_seat
+        {
+            tracing::debug!(id = frame.id, member_id, "skipping unrelated leave answer");
+            return;
+        }
+        self.result_back_answer_expected = false;
+        let _ = self.game.enter_screen(Screen::Waiting);
+        tracing::info!(member_id, "result BACK answer installed Waiting");
     }
 
     /// Fold one 4017 frame: the submitting member is traced (no totals
@@ -2587,7 +2619,9 @@ impl OnlineSession {
             self.send_result_frame(Request::StartGame.id(), &start.encode_body(), "retry");
         }
         if let Some(exit) = self.game.take_result_back() {
-            self.send_result_frame(Request::ExitPlaying.id(), &exit.encode_body(), "back");
+            if self.send_result_frame(Request::ExitPlaying.id(), &exit.encode_body(), "back") {
+                self.result_back_answer_expected = true;
+            }
         }
         if let Some(live) = self.game.take_result_battle_entry() {
             self.send_result_frame(
@@ -3175,9 +3209,15 @@ impl OnlineSession {
     /// Send one result-screen request frame; a failed send warns (the
     /// screen has already moved on — the tally send keeps its retry
     /// latch instead because Result stays).
-    fn send_result_frame(&mut self, command: u16, body: &[u8], what: &str) {
-        if let Err(source) = self.gateway.send_frame(command, body) {
-            tracing::warn!(%source, "result {what} send failed");
+    /// Send one result relay frame. `true` means the gateway accepted
+    /// it, so a BACK arm may wait for its 4022 answer.
+    fn send_result_frame(&mut self, command: u16, body: &[u8], what: &str) -> bool {
+        match self.gateway.send_frame(command, body) {
+            Ok(()) => true,
+            Err(source) => {
+                tracing::warn!(%source, "result {what} send failed");
+                false
+            }
         }
     }
 
@@ -9715,7 +9755,7 @@ pub(super) mod session_tests {
             stream.write_all(&encode_frame(4011, &[])).unwrap();
             let _ = loaded_send.send(first_opcode_with_timeout(
                 &mut stream,
-                Duration::from_secs(60),
+                Duration::from_secs(180),
             ));
         });
         let mut game = ScreenGame::new();
@@ -9734,8 +9774,9 @@ pub(super) mod session_tests {
         assert_eq!(session.game.screen(), Screen::Waiting);
 
         // The chart is still staged on the live paint path; only the
-        // gate's clock is explicit, so lane contention cannot eat the
-        // 60 s receive window while the debug Vorbis decode runs (#874).
+        // gate's clock is explicit. The gateway's 180 s read window
+        // survives a loaded workspace run while the debug Vorbis decode
+        // and other gates share the scheduler (#874).
         let gate_start = Instant::now();
         for _ in 0..50 {
             if session.game.screen() == Screen::Loading {
@@ -11074,15 +11115,16 @@ pub(super) mod session_tests {
     }
 
     #[test]
-    // OPEN story #294: this guard certified behavior the owner disproved.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #294.
-    fn settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer() {
-        // Ticket #683. Live caller chain:
-        //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
-        //   ScreenGame::click_result (rect 5 at (752,581)) ->
-        //   ScreenGame::take_result_back ->
-        //   OnlineSession::flush_result_wire -> C2S ExitPlaying 4021 ->
-        //   S2C 4022 -> Room.
+    // Tier 2 scripted-gateway guard for #294 T3. Live caller chain:
+    //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+    //   ScreenGame::click_result_button (rect 5 at (752,581)) ->
+    //   pending_result_back -> OnlineSession::flush_result_wire ->
+    //   C2S ExitPlaying 4021 -> scripted S2C 4022 -> Screen::Waiting.
+    // Exe statics (7.55, SHA-256 83a045418b62…): the 4022 self handler
+    //   installs state id 5 (Waiting vtables), not room state id 3
+    //   (`ev_e13ae1524aaf6fa578db91db4bd9e0f54820d6c45a6d6b4cd3cbb17409231d71`,
+    //   `ev_d6a8ea7f6a06fe7d34d824c0f31fe08613b76533442faa558c68ec7cf9d71c23`).
+    fn settled_solo_result_back_sends_4021_and_lands_in_waiting_after_4022() {
         // The settled panel is pinned by the qualified solo pack
         // `~/scratch/p366-solo/s3-result-timed` (manifest
         // `aabbe18e…c99ca2`, frame `3ea6c481…f75da550b44e2165c102e7a4`:
@@ -11138,10 +11180,18 @@ pub(super) mod session_tests {
         session.ingest_snapshot(&InputSnapshot::click_at(752, 581));
         assert_eq!(
             session.game.screen(),
-            Screen::Room,
-            "rect 5 leaves for Room"
+            Screen::Result,
+            "BACK waits for the 4022 answer"
         );
+        // The gateway writes 4022 after it reads the clicked 4021 in
+        // the same paint, so the next paint drains the answer.
         paint_frame(&mut session);
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Waiting,
+            "4022 installs the Waiting screen"
+        );
         server.join().unwrap();
     }
 
