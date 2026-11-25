@@ -43,6 +43,15 @@ Rules:
   ticket. Authoring template + tier ladder: `docs/live-path-reachability.md`;
   close discipline: `docs/agents/triage-labels.md` (rules 7-8).
 - Pin every RE note to version 7.55 with hashes, sizes, tool versions.
+- Coverage priority (owner 2026-11-25): pin the exe with static
+  analysis FIRST — the goal is 100% of the game-reachable function
+  inventory pinned (baseline `docs/exe-function-coverage.md`, 1,129
+  procedures). The rig is a verification method, not the primary
+  loop: a re-pair below 0.99 means the statics are INCOMPLETE, so the
+  next step is always more statics, never more rig fishing. Burn-down
+  order follows the backlog triage on #916 (Room/Waiting →
+  Planet/Channel → Playing/Result → shops/MyRoom → callers of net
+  handlers → support layers; shared containers only on demand).
 - Conventional Commits (`feat`/`fix`/`docs`/…), imperative subjects.
 
 Done means: `cargo fmt --check`, `cargo clippy --workspace
