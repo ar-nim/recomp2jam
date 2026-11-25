@@ -955,12 +955,57 @@ pub fn paint_room_scene_with_hover(
     hovered_code: Option<u32>,
     hovered_panel: Option<usize>,
 ) {
+    paint_room_scene_with_selection(
+        frame,
+        rooms,
+        highlight,
+        art,
+        hovered_code,
+        hovered_panel,
+        None,
+    );
+}
+
+/// Same staged room board, with the selected mode tab pinned at body
+/// frame 1 and the other two at frame 0. The exe's click arm marks the
+/// pressed tab through `FUN_0048c810` and resets the others (REA
+/// `ev_e9f783fce3671c057d37820439860dbf27036d606c2c75100eee35d4c61e0b23`);
+/// `docs/hover.md` measures frame 1 on the active tab. Thus a mode
+/// switch moves the frame with the selection (#290). `None` keeps the
+/// older all-layers stack for callers that pin no tab.
+/// Staged mode-filter tab codes, paired by `(code & 0xFFF) - 1` with
+/// the `State_Room.bnd` entries (owner rule `0c6c3`).
+pub(crate) const ROOM_MODE_TAB_CODES: [u32; 3] = [0x1320_1003, 0x1320_1004, 0x1320_1005];
+
+/// One mode tab's frame: 1 when active, 0 when a sibling, `None` when
+/// no selection was staged. The frame choice comes from the exe's
+/// click arm (REA `ev_e9f783fce3671c057d37820439860dbf27036d606c2c75100eee35d4c61e0b23`).
+fn selected_mode_tab_frame(active_tab_code: Option<u32>, placed: &ScenePlacement) -> Option<usize> {
+    let active = active_tab_code?;
+    (ROOM_MODE_TAB_CODES.contains(&placed.code) && placed.role == PlacementRole::Single)
+        .then(|| usize::from(active == placed.code))
+}
+
+pub fn paint_room_scene_with_selection(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    art: &SceneArt,
+    hovered_code: Option<u32>,
+    hovered_panel: Option<usize>,
+    active_tab_code: Option<u32>,
+) {
     let panels = room_panel_instances(&art.placements);
-    art.paint_backdrop_live(frame, Screen::Room, |placed| {
-        room_chrome_visible(placed.code)
-            && clone_instance_live(placed, &panels, rooms.len())
-            && password_clone_is_locked(placed, &panels, rooms)
-    });
+    art.paint_backdrop_live_selected(
+        frame,
+        Screen::Room,
+        |placed| {
+            room_chrome_visible(placed.code)
+                && clone_instance_live(placed, &panels, rooms.len())
+                && password_clone_is_locked(placed, &panels, rooms)
+        },
+        |placed| selected_mode_tab_frame(active_tab_code, placed),
+    );
     paint_room_row_icons(frame, art, rooms);
     paint_room_details(frame, rooms, highlight, Some(art));
     // Rows paint last so the live list and highlight cursor stay
@@ -982,7 +1027,10 @@ pub fn paint_room_scene_with_hover(
 /// stopped-state winedbg draw-state read per `docs/hover.md`. Active
 /// filter/tab codes never reach this painter (the resolver holds them
 /// at rest — EXE-pinned no-change), so every code here repaints layer
-/// 0. A missing placement, sprite, or frame paints nothing.
+/// 0. Mode-filter tabs now rest at their selected frame 0/1 through
+/// [`paint_room_scene_with_selection`]; their exact desaturated rest
+/// blend stays OPEN with the same stop-state draw read as the next
+/// step. A missing placement, sprite, or frame paints nothing.
 pub(crate) fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
     let Some(code) = hovered_code else {
         return;

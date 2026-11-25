@@ -45,8 +45,10 @@ rect ordinals, never bulk archive bytes.
    hover, key, or navigation actually does, from statics/REA or a rig
    capture. Where a guard and a playtest disagree, keep both and mark the
    contradiction OPEN for the exe to arbitrate: `#536`'s local
-   ALL/NORMAL/LIVE filter pin versus the `[W]`/`[A]` report in `#290`, and
-   `#88`'s Result BACK-to-Room pin versus `#294`.
+   ALL/NORMAL/LIVE filter pin and the `[W]`/`[A]` report in `#290` were
+   reconciled by the click arm (`FUN_0048fb40`: local row filter and
+   tab-frame mark, no 2002); the missing half was the visible frame.
+   `#88`'s Result BACK-to-Room pin versus `#294` stays OPEN.
 5. **Set the status with one of two exact forms.**
    - `VERIFIED: <guard name> (Tier N)` — the guard has a live chain from a
      user entry to the guarded symbol, and its assertion covers the exe pin.
@@ -77,8 +79,8 @@ rects**: **37 interactive rows** and **39 static/container rows** below, plus
 | -1 | `IDC_STATE_ROOM` (`0x13000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | `OPEN: statics pin of the container code; no input row` |
 | 0 | `IDC_BACK_SROOM_1` (`0x13100001`) | static art | 800x600 backdrop | `OPEN: Tier 3 live-art backdrop pin; seam every_bound_entry_paints_at_its_placement_origin (Tier 0)` |
 | 1 | `IDC_BUTTON_SROOM_BACK` (`0x13200002`) | nav-edge | Chrome returns to Channel; menu Back is ours-by-design (no exe scene key handler); leave opcode unpinned (`#38`, `docs/back-navigation-735.md`) | `OPEN: Tier 3 live click plus gateway opcode; seam click_staged_room_back_returns_to_channel (Tier 0)` |
-| 2 | `IDC_BUTTON_SROOM_SHOW_ALLMODE` (`0x13201003`) | tab | Local 2003 row filter only; peer tap carried no 2002 (W6FB-PEER-02, `#536`); `[W]` toggle reported dead (`#290`) | `OPEN: live click and both toggle edges; seam room_filter_tabs_keep_only_their_family_of_rows (Tier 0)` |
-| 3 | `IDC_BUTTON_SROOM_SHOW_NORMALMODE` (`0x13201004`) | tab | Local row filter; `[A]` toggle reported dead (`#290`) | `OPEN: live click and both toggle edges; seam room_filter_tabs_keep_only_their_family_of_rows (Tier 0)` |
+| 2 | `IDC_BUTTON_SROOM_SHOW_ALLMODE` (`0x13201003`) | tab | Local 2003 row filter only; peer tap carried no 2002 (W6FB-PEER-02, `#536`); click marks this tab active (frame 1), others frame 0, and repaints rows (`FUN_0048fb40`/`FUN_0048c810`, REA `ev_ff527707048e48accf48b6f291ad97a0abc6324dfb7b5a8f0df25f3318518c71`/`ev_e9f783fce3671c057d37820439860dbf27036d606c2c75100eee35d4c61e0b23`) | `VERIFIED: live_room_wa_tabs_toggle_the_selection_from_boot (Tier 3 live input; boot→Room→staged click→paint_at frame delta; no 2002)` |
+| 3 | `IDC_BUTTON_SROOM_SHOW_NORMALMODE` (`0x13201004`) | tab | Local row filter; click marks this tab active (frame 1) and [W] inactive (frame 0); no wire frame | `VERIFIED: live_room_wa_tabs_toggle_the_selection_from_boot (Tier 3 live input; both edges, round trip, paint_at frame delta)` |
 | 4 | `IDC_BUTTON_SROOM_SHOW_BATTLEMODE` (`0x13201005`) | tab | Local row filter (W6FB-PEER-02, `#536`) | `OPEN: live click and both toggle edges; seam room_filter_tabs_keep_only_their_family_of_rows (Tier 0)` |
 | 5 | `IDC_BUTTON_SROOM_QUICKJOIN` (`0x13200006`) | button | Join first open room; wire rule unpinned (`#32`) | `OPEN: REA click dispatch plus Tier 3 click; seam staged_room_control_without_a_target_records_a_labelled_noop (Tier 0, HANDLER_STEP)` |
 | 6 | `IDC_BUTTON_SROOM_CREATE` (`0x13200007`) | nav-edge | Opens create sheet; Commit 2004 → Waiting as master (`#53`, `#269`) | `OPEN: live Room CREATE press; seams live_staged_create_sheet_commits_a_title (Tier 3) and waiting_create_room_commit_stages_room_over_scripted_gateway (Tier 2)` |
@@ -177,7 +179,7 @@ rows:
 
 | Bug | Class | Census row |
 |---|---|---|
-| `#290` T1 `[W]`/`[A]` toggle | C1 | ord 2 and ord 3 (`SHOW_ALLMODE`, `SHOW_NORMALMODE`), both OPEN; ord 4 shares the filter guard |
+| `#290` T1 `[W]`/`[A]` toggle | C1 | ord 2 and ord 3 (`SHOW_ALLMODE`, `SHOW_NORMALMODE`), VERIFIED by `live_room_wa_tabs_toggle_the_selection_from_boot` (Tier 3); ord 4 shares the frame painter but has no live leg |
 | `#314` T2 Options keys inert / hover blanks | C2 + C4/C3 | ord 10 (`SHOW_…OPTION`), OPEN; Options key-tab rows: state section pending (#920) |
 | `#294` T3 Result BACK target | C2 | Result state section pending (#920); Room nav-edge pin stays OPEN |
 | `#294` T4 Result background source | C6 | Result state section pending (#920) |

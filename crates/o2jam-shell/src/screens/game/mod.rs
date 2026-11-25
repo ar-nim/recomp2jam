@@ -75,20 +75,20 @@ use super::paint::{
     paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
     paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
     paint_playing_backdrop, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
-    paint_shop_item_icons, paint_shop_notice_text, paint_shop_preview, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    shop_bagsort_kept, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_room_chat, paint_room_list, paint_room_no_response_dialog,
+    paint_room_scene_with_selection, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, shop_bagsort_kept, staged_rect_hit, waiting_confirm_control_id,
+    waiting_local_is_master, waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage,
+    LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState,
+    WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots,
+    WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -298,6 +298,17 @@ impl RoomListFilter {
             Self::Live => room.game_mode == GameMode::Live.as_u8(),
         }
     }
+
+    /// Staged mode tab whose frame 1 marks this family as active
+    /// (`docs/hover.md`; REA `FUN_0048fb40`, `FUN_0048c810`).
+    #[must_use]
+    fn tab_code(self) -> u32 {
+        match self {
+            Self::All => 0x1320_1003,
+            Self::Normal => 0x1320_1004,
+            Self::Live => 0x1320_1005,
+        }
+    }
 }
 
 /// One staged room chrome control: the bnd code, the `ControlList` id,
@@ -327,8 +338,9 @@ const HANDLER_STEP: &str =
 /// W-b (`W6FB-PEER-02`) pins the filter as a local view: the master
 /// changed ALL/NORMAL/LIVE while a resident peer's strip and rows
 /// stayed byte-identical and the tap carried no per-click frame. The
-/// press stays a labeled no-op; a new 2002 body would contradict the
-/// exe, so the next step is only a re-capture if the exe changes (#536).
+/// send half stays a labeled no-op while the local frame and rows do
+/// change; a new 2002 body would contradict the exe, so the next step
+/// is only a re-capture if the exe changes (#536).
 const ROOM_FILTER_SEND_STEP: &str = concat!(
     "W6FB-PEER-02: ALL/NORMAL/LIVE filters only the local 2003 rows; ",
     "a resident peer keeps its strip and rows and the tap is quiet (no 2002). "
@@ -4529,15 +4541,11 @@ impl ScreenGame {
         // Active filter/tab already shows frame 1 and never changes on
         // hover (EXE-pinned no-change, `docs/hover.md`), so hovering
         // one resolves to nothing: the hover must not repaint frame 1
-        // with frame 0. Filter/tab switching is unwired, so the
-        // default-active pair below never moves in the shell.
-        let tab_code = match self.room_filter {
-            RoomListFilter::All => 0x1320_1003,
-            RoomListFilter::Normal => 0x1320_1004,
-            RoomListFilter::Live => 0x1320_1005,
-        };
-        (control.code != tab_code && !ROOM_ACTIVE_CHROME_CODES.contains(&control.code))
-            .then_some(control)
+        // with frame 0. The active code follows `room_filter`, so the
+        // exemption moves with the [W]/[A] selection (#290).
+        (control.code != self.room_filter.tab_code()
+            && !ROOM_ACTIVE_CHROME_CODES.contains(&control.code))
+        .then_some(control)
     }
 
     /// Room-row index under a click, staged panels first (see
@@ -9158,13 +9166,14 @@ impl ScreenGame {
         // `SET 0x11` template clone (the exe's empty channel shows no
         // example rows), while chrome hover still repaints.
         if let Some(art) = self.scene_art(Screen::Room) {
-            paint_room_scene_with_hover(
+            paint_room_scene_with_selection(
                 frame,
                 &self.rooms,
                 self.room_highlight,
                 art,
                 hovered_code,
                 self.hovered_room_panel(),
+                Some(self.room_filter.tab_code()),
             );
         } else if self.rooms.is_empty() {
             paint_screen(frame, Screen::Room);
