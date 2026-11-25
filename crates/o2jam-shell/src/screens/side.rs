@@ -6429,13 +6429,17 @@ impl WalletRow {
 
 /// Wallet rows behind the payment/result displays, in order.
 pub const WALLET_ROW_COUNT: usize = 6;
-/// Gem row label (TOTAL GEM bar and first wallet row).
+/// Gem row label (TOTAL GEM bar and first wallet row). The 7.55 shop
+/// `GEMMONEY` cell does not ink this caption: it shows a baked `G`
+/// letter with the folded word painted as digits (#936).
 pub const GEM_LABEL: &str = "GEM";
 /// Cash-point row label.
 pub const CASH_POINT_LABEL: &str = "CASH POINT";
 /// Distribution-point row label.
 pub const POINT_LABEL: &str = "POINT";
-/// Premium-cash row label.
+/// Premium-cash row label. The 7.55 shop `MGASH` cell does not ink
+/// this caption: it shows a baked `W` letter with the folded word
+/// painted as digits (#936).
 pub const O2_CASH_LABEL: &str = "O2 CASH";
 /// Music-shop cash row label.
 pub const MUSIC_CASH_LABEL: &str = "MUSIC CASH";

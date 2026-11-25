@@ -2748,4 +2748,389 @@ mod live_input_leg_tests {
         }
         finish(session, gateway.server);
     }
+
+    /// Wallet leg wire ids. The 5028/5029 pair is the observed BACK
+    /// refresh; 5000/5001 is the repo's reply probe for the purchase
+    /// wallet prefix. No opcode is invented for a player action.
+    const WALLET_REFRESH_REQUEST: u16 = 5028;
+    const WALLET_REFRESH_ANSWER: u16 = 5029;
+    const SHOP_PURCHASE_PROBE: u16 = 5000;
+    const SHOP_PURCHASE_ANSWER: u16 = 5001;
+
+    /// Boot answers shared by every live leg: authorization, channel
+    /// list, channel login, room list. Kept separate from the wallet
+    /// script so each helper has one reason to change.
+    fn answer_wallet_leg_boot(stream: &mut TcpStream) {
+        assert_eq!(read_frame(stream).id, Request::Authorize.id());
+        stream
+            .write_all(
+                &AuthResponse {
+                    result_code: 0,
+                    tail: vec![],
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetChannelList.id());
+        stream
+            .write_all(
+                &ChannelList {
+                    channels: vec![channel_row()],
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::ChannelLogin.id());
+        stream
+            .write_all(
+                &ChannelLoginResponse {
+                    result_code: 0,
+                    restricted: Some(false),
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetChannelInfo.id());
+        stream
+            .write_all(
+                &RoomList {
+                    rooms: vec![room_row()],
+                }
+                .encode(),
+            )
+            .unwrap();
+    }
+
+    /// Scripted replies after boot: one 3003, two 5029 wallet snapshots
+    /// after their 5028 requests, and one 5001 with distinct prefix
+    /// words for the field-index probe.
+    struct WalletReplyScript {
+        joined: o2jam_net::JoinedRoom,
+        refreshes: std::vec::IntoIter<(i32, i32)>,
+        purchase_prefix: [i32; 4],
+        purchase_answered: bool,
+        join_answer: mpsc::Sender<()>,
+        wallet_answer: mpsc::Sender<()>,
+    }
+
+    impl WalletReplyScript {
+        fn answer(&mut self, stream: &mut TcpStream, frame: &Frame) {
+            match frame.id {
+                id if id == Request::JoinWaiting.id() => {
+                    stream
+                        .write_all(
+                            &JoinRoomResponse {
+                                result_code: 0,
+                                room: Some(self.joined.clone()),
+                            }
+                            .encode(),
+                        )
+                        .unwrap();
+                    self.join_answer.send(()).unwrap();
+                }
+                WALLET_REFRESH_REQUEST => {
+                    let (gem, cash_point) = self
+                        .refreshes
+                        .next()
+                        .expect("scripted gateway has another 5029");
+                    let mut body = Vec::with_capacity(8);
+                    body.extend_from_slice(&gem.to_le_bytes());
+                    body.extend_from_slice(&cash_point.to_le_bytes());
+                    stream
+                        .write_all(&encode_frame(WALLET_REFRESH_ANSWER, &body))
+                        .unwrap();
+                    self.wallet_answer.send(()).unwrap();
+                }
+                SHOP_PURCHASE_PROBE if !self.purchase_answered => {
+                    stream
+                        .write_all(&encode_frame(
+                            SHOP_PURCHASE_ANSWER,
+                            &scripted_purchase_reply_body(self.purchase_prefix),
+                        ))
+                        .unwrap();
+                    self.purchase_answered = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Gateway with the same boot answers as the other live legs plus
+    /// the wallet script. Appended here instead of changing the shared
+    /// boot gateway: sibling lanes own that function this wave.
+    fn spawn_wallet_leg_gateway(
+        joined: o2jam_net::JoinedRoom,
+        refreshes: Vec<(i32, i32)>,
+        purchase_prefix: [i32; 4],
+    ) -> (LiveLegGateway, Receiver<()>) {
+        let (reported, reports) = mpsc::channel();
+        let (join_written_tx, join_answer_written) = mpsc::channel();
+        let (wallet_written_tx, wallet_answer_written) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            answer_wallet_leg_boot(&mut stream);
+            let mut script = WalletReplyScript {
+                joined,
+                refreshes: refreshes.into_iter(),
+                purchase_prefix,
+                purchase_answered: false,
+                join_answer: join_written_tx,
+                wallet_answer: wallet_written_tx,
+            };
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                script.answer(&mut stream, &frame);
+                reported.send(frame).unwrap();
+            }
+        });
+        (
+            LiveLegGateway {
+                port,
+                reports,
+                join_answer_written,
+                server,
+            },
+            wallet_answer_written,
+        )
+    }
+
+    /// Wait for the scripted 5029 write before spending paint budget.
+    /// A gateway thread can be scheduled late under fleet load; the
+    /// signal, not a fixed number of polls, bounds that race (#754).
+    fn wait_for_wallet_answer(signal: &Receiver<()>, label: &str) {
+        match signal.recv_timeout(Duration::from_secs(10)) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => panic!("gateway never wrote {label} within 10s"),
+            Err(RecvTimeoutError::Disconnected) => panic!("gateway closed before {label}"),
+        }
+    }
+
+    /// 152-byte purchase reply with distinct prefix words so a staged
+    /// cell can identify its source word. The zero tail is the observed
+    /// empty-bag shape (`docs/shop.md`), not a new wire format.
+    fn scripted_purchase_reply_body(prefix: [i32; 4]) -> Vec<u8> {
+        let mut body = vec![0u8; o2jam_net::shop::SYNC_ITEM_PURCHASE_LIVE_REPLY_LEN];
+        for (slot, word) in prefix.iter().enumerate() {
+            let start = slot * std::mem::size_of::<i32>();
+            body[start..start + std::mem::size_of::<i32>()].copy_from_slice(&word.to_le_bytes());
+        }
+        body
+    }
+
+    /// Repaint until a scripted wire answer has folded into the shared
+    /// wallet. Counting paints instead of wall time keeps a loaded gate
+    /// from outrunning the gateway thread (#698).
+    fn paint_until_wallet(
+        session: &mut OnlineSession,
+        expected: impl Fn(&o2jam_shell::screens::side::WalletState) -> bool,
+        label: &str,
+    ) {
+        for attempt in 0..64 {
+            drop(paint_frame(session));
+            if expected(&session.game_mut().wallet()) {
+                return;
+            }
+            if attempt == 63 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("wallet {label} never folded after 64 paints");
+    }
+
+    /// Enter the Item Shop through the staged Room tab; all geometry
+    /// and input come from the same pointer snapshot the window queues.
+    fn enter_item_shop_from_room(session: &mut OnlineSession, aim: (i32, i32)) {
+        session.ingest_snapshot(&InputSnapshot::click_at(aim.0, aim.1));
+        paint(session);
+        assert_eq!(session.game_mut().side(), Some(SideScreen::Shop));
+    }
+
+    /// The staged BACK plate leaves the side and queues 5007/5028, the
+    /// pair that makes the gateway answer with a wallet snapshot.
+    fn leave_item_shop_by_back(session: &mut OnlineSession) {
+        let back_code = [
+            o2jam_shell::screens::side::SHOP_BACK_CODE,
+            o2jam_shell::screens::side::SHOP_STATIC_BACK_CODE,
+        ]
+        .into_iter()
+        .find(|code| session.game_mut().staged_side_control_rect(*code).is_some())
+        .expect("STATE_SHOP stages a BACK control");
+        click_staged_shop_control(session, back_code, 0);
+        paint(session);
+        assert_eq!(session.game_mut().side(), None);
+    }
+
+    /// Flat native pixels inside one staged wallet cell.
+    fn wallet_cell_crop(frame: &[u32], rect: Rect) -> Vec<u32> {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a frame index");
+        let left = usize::try_from(rect.x).expect("cell left fits a frame index");
+        let top = usize::try_from(rect.y).expect("cell top fits a frame index");
+        let columns = usize::try_from(rect.w).expect("cell width fits a frame index");
+        let rows = usize::try_from(rect.h).expect("cell height fits a frame index");
+        (top..top + rows)
+            .flat_map(|y| (left..left + columns).map(move |x| frame[y * width + x]))
+            .collect()
+    }
+
+    /// One horizontal band of a wallet crop: the baked letter sits in
+    /// the first 40 columns; the digit writer lives after column 45.
+    fn wallet_band(crop: &[u32], rect: Rect, from: usize, to: usize) -> Vec<u32> {
+        let columns = usize::try_from(rect.w).expect("cell width fits a band index");
+        let rows = usize::try_from(rect.h).expect("cell height fits a band index");
+        assert!(
+            to <= columns && from < to,
+            "band {from}..{to} fits the cell"
+        );
+        (0..rows)
+            .flat_map(|row| {
+                crop[row * columns + from..row * columns + to]
+                    .iter()
+                    .copied()
+            })
+            .collect()
+    }
+
+    /// #936 T10: the two shop wallet cells must show only digits from
+    /// the folded wire words over the baked G/W letters. Exe pin
+    /// (`FUN_0x4a0660`, file `0xa0660`, `ev_13a2300e…`, and
+    /// `FUN_0x4a21a0` -> `FUN_0x4a1d30`, files `0xa21a0`/`0xa1d30`,
+    /// `ev_45b073c8…`, `ev_3cec7935…`): the staged `0x14400028`/`29`
+    /// cells supply anchors for a digit-per-sprite writer; no caption
+    /// string exists. The exact 5001 prefix word index stays OPEN with
+    /// a gateway-tap-plus-memory-read next step in `findings-wallet.md`.
+    ///
+    /// Tier 3 live chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport -> assemble_online_session
+    ///   -> GameLoop::ingest_snapshot (splash, emblem, room row, shop tab)
+    ///   -> ScreenGame::visit_side(Shop) -> staged GEMMONEY/MGASH rects
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_shop(BACK)
+    ///   -> OnlineSession::flush_exit_shop -> C2S 5007/5028
+    ///   -> scripted S2C 5029 -> OnlineSession::poll_wallet_answer
+    ///   -> ScreenGame::apply_shop_cash_point -> WalletState::apply_cash_point
+    ///   -> ScreenGame::paint_at -> paint_shop_wallet -> wallet cells.
+    /// Tier 2 leg in the same test:
+    ///   ScreenGame::queue_shop_buy_for_reply_probe -> C2S 5000 ->
+    ///   scripted S2C 5001 -> OnlineSession::drain_shop_buy ->
+    ///   ScreenGame::apply_shop_purchase_reply -> prefix fold -> W cell.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn the_wallet_cell_ink_follows_the_pinned_word() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        // Distinct words: word 1 only the gem, word 3 the W cell,
+        // word 4 the cash-point slot that 5029 later overwrites.
+        let (gateway, wallet_answer_written) = spawn_wallet_leg_gateway(
+            joined_room(0, true),
+            vec![(15_527, 0), (626, 0)],
+            [1_111, 2_222, 3_333, 4_444],
+        );
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let shop_aim = room_top_tabs()[1].aim;
+        enter_item_shop_from_room(&mut session, shop_aim);
+        let gem_rect = session
+            .game_mut()
+            .staged_side_control_rect(o2jam_shell::screens::side::SHOP_GEMMONEY_CODE)
+            .expect("STATE_SHOP stages the GEMMONEY cell");
+        let cash_rect = session
+            .game_mut()
+            .staged_side_control_rect(o2jam_shell::screens::side::SHOP_MGASH_CODE)
+            .expect("STATE_SHOP stages the MGASH cell");
+
+        let entry_frame = paint_at_frame(&mut session, 0);
+        let entry_gem = wallet_cell_crop(&entry_frame, gem_rect);
+        let entry_cash = wallet_cell_crop(&entry_frame, cash_rect);
+
+        leave_item_shop_by_back(&mut session);
+        wait_for_wallet_answer(&wallet_answer_written, "first 5029");
+        paint_until_wallet(
+            &mut session,
+            |wallet| wallet.gem == Some(15_527) && wallet.cash_point == Some(0),
+            "first 5029",
+        );
+        enter_item_shop_from_room(&mut session, shop_aim);
+        let first_frame = paint_at_frame(&mut session, 0);
+        let first_gem = wallet_cell_crop(&first_frame, gem_rect);
+        assert_eq!(
+            wallet_band(&entry_gem, gem_rect, 0, 40),
+            wallet_band(&first_gem, gem_rect, 0, 40),
+            "the G cell has no GEM caption over its baked letter"
+        );
+        assert!(
+            changed_pixels(
+                &wallet_band(&entry_gem, gem_rect, 45, 95),
+                &wallet_band(&first_gem, gem_rect, 45, 95)
+            ) > 0,
+            "G digits follow the first 5029 word"
+        );
+
+        // Tier 2 scripted-gateway attempt at the 5001 field index:
+        // answer one 5000 with distinct prefix words and read which
+        // staged cell changes. Word 4 stays 4444 after the 5029 below;
+        // if the W cell followed it, its crop would move.
+        session.game_mut().queue_shop_buy_for_reply_probe();
+        paint_until_wallet(
+            &mut session,
+            |wallet| {
+                wallet.gem == Some(1_111)
+                    && wallet.o2_cash == Some(3_333)
+                    && wallet.cash_point == Some(4_444)
+            },
+            "5001 prefix",
+        );
+        let purchase_frame = paint_at_frame(&mut session, 0);
+        let purchase_gem = wallet_cell_crop(&purchase_frame, gem_rect);
+        let purchase_cash = wallet_cell_crop(&purchase_frame, cash_rect);
+        assert_eq!(
+            wallet_band(&entry_cash, cash_rect, 0, 40),
+            wallet_band(&purchase_cash, cash_rect, 0, 40),
+            "the W cell has no O2 CASH caption over its baked letter"
+        );
+        assert!(
+            changed_pixels(
+                &wallet_band(&entry_cash, cash_rect, 45, 95),
+                &wallet_band(&purchase_cash, cash_rect, 45, 95)
+            ) > 0,
+            "W digits appear from the scripted 5001 prefix"
+        );
+        let later_frame = paint_at_frame(&mut session, 20_000);
+        assert_eq!(
+            wallet_cell_crop(&later_frame, cash_rect),
+            purchase_cash,
+            "the W digits stay pinned across paint_at frames"
+        );
+
+        leave_item_shop_by_back(&mut session);
+        wait_for_wallet_answer(&wallet_answer_written, "second 5029");
+        paint_until_wallet(
+            &mut session,
+            |wallet| wallet.gem == Some(626) && wallet.cash_point == Some(0),
+            "second 5029",
+        );
+        enter_item_shop_from_room(&mut session, shop_aim);
+        let second_frame = paint_at_frame(&mut session, 0);
+        let second_gem = wallet_cell_crop(&second_frame, gem_rect);
+        let second_cash = wallet_cell_crop(&second_frame, cash_rect);
+        assert_eq!(
+            wallet_band(&entry_gem, gem_rect, 0, 40),
+            wallet_band(&second_gem, gem_rect, 0, 40),
+            "no caption returns after the second 5029"
+        );
+        assert!(
+            changed_pixels(
+                &wallet_band(&purchase_gem, gem_rect, 45, 95),
+                &wallet_band(&second_gem, gem_rect, 45, 95)
+            ) > 0,
+            "G digits change with the second 5029 word"
+        );
+        assert_eq!(
+            second_cash, purchase_cash,
+            "the W cell follows the 5001 word, not the 5029 cash-point word"
+        );
+
+        finish(session, gateway.server);
+    }
 }
