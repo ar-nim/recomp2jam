@@ -539,3 +539,39 @@ listed after each name is the one that turned it red.
   speed bytes swapped.
 - OPEN left for slice 4/5: the download bar geometry (`Wait_Downloding`
   art), the notice-box sheet, and the real transport.
+
+## 9. V13 music-select pair — chat and role are wire-scenario deltas
+
+The v13 music-select pair (`~/scratch/paired-shots-v3/states/music-select/exe.png`
+vs `~/scratch/paired-shots-v6/legs/music-select/rust/states/music-select-p2.png`)
+shows exe chat lines and a master START face where ours shows an empty
+chat box and a guest READY face. Per the owner A/B rule this verdict
+uses wire **and** server log, not one side alone:
+
+- Exe leg: `~/scratch/paired-shots-v3/legs/music-select/exe/wire/room-stage.log`
+  carries `3007 body=0001000000000000` (member 0 leaves, member 1
+  promoted) at 21:47:38 and `2007` at 21:47:43; its
+  `host/host.log` ends at `host guest JOINED` with no later opcode.
+- Rust leg: `~/scratch/paired-shots-v6/legs/music-select/rust/wire/room-stage.log`
+  carries neither; its `host/host.log` records
+  `opcode 0BBF len=8 ... 0100000000000000` at 08:27:40, then stop.
+- Both `server-identity` files show the same setup (host user 3,
+  channel 0/0, room WINEJOIN, music 757/2/1) but **different** Memoryer
+  boots: PID 37333 (boot epoch 2026-11-21T07:27:02Z) vs PID 616689
+  (2026-11-24T17:37:45Z). The claim is matched setup plus each leg's own
+  wire and host log; no shared-PID A/B is claimed.
+
+Both room snapshots carry `tester`/`t207probe` (§2's seat family), and
+`ev_50242b6c183543f49ce6cbb43eccad2e` pins the 3007 leave dispatch.
+The exe's Korean leave/skill notices appear in neither wire log; their
+local chat-append source remains **OPEN**. REA `analyze_function` on
+`FUN_0055d820` reports `referenced_strings: 0`
+(`ev_f1758b60a156a73195b00b422f96d127cae120e05ae3d33bb9924d6b5e2d8ae8`),
+so that ID must not be cited as a chat pin. Next step: pin the
+chat-list append call from the 3007/2007 handlers via an xref sweep from
+`LIST_SWAIT_CHAT 0x1680002B` / `TEXT_SWAIT_CHAT 0x1640003C` and one
+qualified leave capture with a memory read of the list object.
+No 4025/4035/4039 message-state difference is involved. No paint change
+is warranted: replaying the exe's 3007 into our client already promotes
+the local seat and flips the role-owned controls (guards in
+`docs/parity/waiting-chrome-dossier.md` §6).
