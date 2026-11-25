@@ -1315,11 +1315,110 @@ member_byte_event!(
     4005,
     "SetRoomMusicEcho 4005: one seat id names the peer whose pick is echoed."
 );
-member_byte_event!(
-    MemberStateChanged,
-    4026,
-    "MemberStateChanged 4026: one seat id names the member whose state changed."
-);
+
+/// MemberStateChanged 4026: one seat plus the two state bytes the
+/// handler writes through `0x541670` (`+0x2130`, playing) and `0x541480`
+/// (`+0x217c`, music). The body is `[member][playing][music]`
+/// (`docs/pins/net-b.md`, 4026 addendum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberStateChanged {
+    /// Seat index, 0..8.
+    pub member_id: u8,
+    /// Playing-state byte stored at the member record `+0x2130`.
+    pub playing_state: u8,
+    /// Music-state byte stored at the member record `+0x217c`.
+    pub music_state: u8,
+}
+
+impl WireMessage for MemberStateChanged {
+    const COMMAND: u16 = 4026;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.member_id, self.playing_state, self.music_state]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let member_id = reader.read_u8()?;
+        let playing_state = reader.read_u8()?;
+        let music_state = reader.read_u8()?;
+        reader.finish()?;
+        if member_id >= 8 {
+            return Err(Error::InvalidField {
+                field: "member_id",
+                reason: "seat index is not below eight",
+            });
+        }
+        Ok(Self {
+            member_id,
+            playing_state,
+            music_state,
+        })
+    }
+}
+
+/// One word of the 5027 peer music list: the low twelve bits name the
+/// song, the high four are split out by reader `0x540db0`
+/// (`docs/pins/net-c1.md`, 5027 pin). The high nibble's meaning stays
+/// OPEN; both halves are preserved here without interpretation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberMusicListEntry {
+    /// Song id in the word's low twelve bits.
+    pub music_id: u16,
+    /// Word's high four bits.
+    pub high_nibble: u8,
+}
+
+/// SyncMemberMusicList 5027: one member byte, a signed count and that
+/// many 16-bit music words (`0x563880`, reader `0x540db0`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncMemberMusicList {
+    /// Seat index, 0..8.
+    pub member_id: u8,
+    /// One split word per owned song.
+    pub entries: Vec<MemberMusicListEntry>,
+}
+
+impl WireMessage for SyncMemberMusicList {
+    const COMMAND: u16 = 5027;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = vec![self.member_id];
+        let count = i32::try_from(self.entries.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for entry in &self.entries {
+            let word = (u16::from(entry.high_nibble & 0x0F) << 12) | (entry.music_id & 0x0FFF);
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let member_id = reader.read_u8()?;
+        let raw_count = reader.read_i32()?;
+        if member_id >= 8 {
+            return Err(Error::InvalidField {
+                field: "member_id",
+                reason: "seat index is not below eight",
+            });
+        }
+        let count = usize::try_from(raw_count.max(0)).map_err(|_| Error::InvalidField {
+            field: "music list count",
+            reason: "count exceeds usize",
+        })?;
+        let mut entries = Vec::with_capacity(count);
+        for _ in 0..count {
+            let word = reader.read_u16()?;
+            entries.push(MemberMusicListEntry {
+                music_id: word & 0x0FFF,
+                high_nibble: u8::try_from(word >> 12).unwrap_or(0),
+            });
+        }
+        reader.finish()?;
+        Ok(Self { member_id, entries })
+    }
+}
 
 /// MusicLoaded 4013: the named seat's loaded byte (`0x55f950`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2385,14 +2484,42 @@ mod waiting_wire_codec_tests {
     }
 
     #[test]
-    fn member_state_changed_guards_the_seat_byte() {
-        // seam: pure codec; the 4026 handler names one in-range member.
-        let frame = decode_frame(&MemberStateChanged { member_id: 5 }.encode()).unwrap();
-        assert_eq!(
-            MemberStateChanged::decode_frame(&frame),
-            Ok(MemberStateChanged { member_id: 5 })
-        );
-        assert!(MemberStateChanged::decode_body(&[9]).is_err());
+    fn member_state_changed_guards_the_three_byte_state_body() {
+        // seam: pure codec; the 4026 handler reads the member plus two
+        // state bytes (docs/pins/net-b.md addendum).
+        let change = MemberStateChanged {
+            member_id: 5,
+            playing_state: 1,
+            music_state: 4,
+        };
+        let frame = decode_frame(&change.encode()).unwrap();
+        assert_eq!(MemberStateChanged::decode_frame(&frame), Ok(change));
+        assert!(MemberStateChanged::decode_body(&[5, 1]).is_err());
+        assert!(MemberStateChanged::decode_body(&[5, 1, 4, 0]).is_err());
+        assert!(MemberStateChanged::decode_body(&[9, 1, 4]).is_err());
+    }
+
+    #[test]
+    fn sync_member_music_list_splits_each_word_and_guards_the_seat() {
+        // seam: pure codec; the 5027 handler (`0x563880`) reads a seat
+        // byte then a counted list of 16-bit words through `0x540db0`.
+        let list = SyncMemberMusicList {
+            member_id: 2,
+            entries: vec![
+                MemberMusicListEntry {
+                    music_id: 757,
+                    high_nibble: 0,
+                },
+                MemberMusicListEntry {
+                    music_id: 0x2F5,
+                    high_nibble: 0xF,
+                },
+            ],
+        };
+        let frame = decode_frame(&list.encode()).unwrap();
+        assert_eq!(SyncMemberMusicList::decode_frame(&frame), Ok(list));
+        assert!(SyncMemberMusicList::decode_body(&[8, 0, 0, 0, 0]).is_err());
+        assert!(SyncMemberMusicList::decode_body(&[1, 1, 0, 0, 0]).is_err());
     }
 
     #[test]
