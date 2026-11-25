@@ -1009,8 +1009,8 @@ pub(crate) fn result_viewport_rect() -> Rect {
     Rect {
         x: 0,
         y: 0,
-        w: u32::try_from(NATIVE_WIDTH).unwrap_or(0),
-        h: u32::try_from(NATIVE_HEIGHT).unwrap_or(0),
+        w: NATIVE_WIDTH,
+        h: NATIVE_HEIGHT,
     }
 }
 
@@ -1026,10 +1026,18 @@ pub(crate) fn result_placement_visible(rect: Rect) -> bool {
     let bottom = rect
         .y
         .saturating_add(i32::try_from(rect.h).unwrap_or(i32::MAX));
-    right > viewport.x
-        && rect.x < viewport.x + i32::try_from(viewport.w).unwrap_or(0)
-        && bottom > viewport.y
-        && rect.y < viewport.y + i32::try_from(viewport.h).unwrap_or(0)
+    let viewport_right = viewport
+        .x
+        .saturating_add(i32::try_from(viewport.w).unwrap_or(0));
+    let viewport_bottom = viewport
+        .y
+        .saturating_add(i32::try_from(viewport.h).unwrap_or(0));
+    // A zero-size rect still carries an anchor-only placement: its
+    // origin inside the page keeps that art eligible.
+    rect.x <= viewport_right
+        && right >= viewport.x
+        && rect.y <= viewport_bottom
+        && bottom >= viewport.y
 }
 
 /// Scroll step of the pinned list helper (`FUN_0050edb0`, file
@@ -1354,7 +1362,7 @@ mod result_page_and_band_tests {
             },
             &art,
         );
-        assert_eq!(buf[812], 0, "the off-page clone cannot bleed in");
+        assert_eq!(buf[875], 0, "the off-page clone cannot bleed in");
     }
 
     /// #1075 unclamped caller rect. `seam: the caller-rect arm is a

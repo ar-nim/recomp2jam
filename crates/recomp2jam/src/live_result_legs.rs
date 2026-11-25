@@ -180,9 +180,12 @@ mod live_result_leg_tests {
             })
             .filter(|(offset, expected)| frame.get(*offset) == Some(expected))
             .count();
+        // The fill body covers the whole 800x600 page. Other staged
+        // bodies reuse some of its RGB555 words, so the guard asks for
+        // whole-page coverage, not a single coincidental match.
         assert!(
-            matches > 0,
-            "the settled Result frame must carry the staged fill body's ink"
+            matches > 100_000,
+            "the settled frame must carry the whole-page fill body's ink ({matches} matches)"
         );
         assert_eq!(
             session
