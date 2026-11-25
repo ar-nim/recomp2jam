@@ -6,9 +6,11 @@ pub use super::super::paint::ChatSendMode;
 use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
 use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
 use crate::screen::Screen;
+use o2jam_net::message::KeyMode;
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    RoomListEntry, RoomState, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    SendWhisperResponse, WaitingAdminMessage, WaitingUserMessage,
 };
 
 /// Parsed chat draft behind the lobby/waiting slash grammar: the exe
@@ -239,6 +241,195 @@ impl LobbyChat {
     }
 }
 
+/// One 2018 delivery report the shell can show without guessing a
+/// caption: the server's invalid word, recipient, and echoed text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhisperDelivery {
+    /// Server's `invalid` word (`true` = nobody heard the whisper).
+    pub delivered: bool,
+    /// Recipient the 2017 request named.
+    pub recipient: String,
+    /// Echoed text, absent for an undelivered whisper.
+    pub content: Option<String>,
+}
+
+/// Gate reasons the Room row press refuses, named by the exe's pinned
+/// message bytes (`docs/pins/room-waiting.md`, `0x493a50`). The
+/// already-started arm has no pinned caption here, so it stays absent
+/// rather than inventing text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomJoinRefusal {
+    /// Locked row (caption at file `0x248178`).
+    Password,
+    /// Level window excludes the player (file `0x248190`).
+    Level { min: i32, max: i32 },
+    /// No free seat (file `0x248250`).
+    Full,
+    /// Game-info still loading (file `0x248208`).
+    Loading,
+    /// Premium-only room without PT (file `0x2481e8`).
+    Premium,
+    /// 7Key room below the level in its caption (file `0x248280`).
+    SevenKeys,
+    /// Song the catalog does not name (file `0x248330`).
+    UnregisteredSong,
+    /// Started room: this arm has no pinned caption in
+    /// `docs/pins/room-waiting.md`, so it stages no popup text.
+    Started,
+}
+
+/// The held room-list message bytes, read from the pinned 7.55 image
+/// (sha256 `83a04541…72c823b`; REA `ev_92af29…`, file offsets
+/// `0x248178`..`0x248330`). Own-words meanings are on the variants.
+impl RoomJoinRefusal {
+    fn template(self) -> &'static [u8] {
+        match self {
+            Self::Password => PASSWORD_REQUIRED,
+            Self::Level { .. } => LEVEL_WINDOW,
+            Self::Full => ROOM_FULL,
+            Self::Loading => GAME_INFO_LOADING,
+            Self::Premium => NEED_PT,
+            Self::SevenKeys => SEVEN_KEY_LEVEL,
+            Self::UnregisteredSong => UNREGISTERED_SONG,
+            Self::Started => &[],
+        }
+    }
+
+    /// CP949 bytes for the one-OK sheet; an unpinned arm stays empty.
+    #[must_use]
+    pub fn message(self) -> Vec<u8> {
+        let template = self.template();
+        let values: Vec<Vec<u8>> = match self {
+            Self::Level { min, max } => {
+                vec![min.to_string().into_bytes(), max.to_string().into_bytes()]
+            }
+            _ => Vec::new(),
+        };
+        let mut message = Vec::with_capacity(template.len());
+        let mut index = 0;
+        let mut value = 0;
+        while index < template.len() {
+            if template[index] == b'%'
+                && index + 1 < template.len()
+                && matches!(template[index + 1], b'd' | b's')
+            {
+                if let Some(part) = values.get(value) {
+                    message.extend_from_slice(part);
+                    value += 1;
+                } else {
+                    // The full-room caption's `%s` argument is not
+                    // pinned; keep the literal rather than invent one.
+                    message.extend_from_slice(&template[index..index + 2]);
+                }
+                index += 2;
+                continue;
+            }
+            message.push(template[index]);
+            index += 1;
+        }
+        message
+    }
+}
+
+/// Which pinned gate refuses one wire row, if any. The level window
+/// uses the same player source as QUICKJOIN; the 7Key level floor is
+/// the number in its caption. PT is a row flag here because the shell
+/// has no local PT word, and an unknown catalog song is unregistered.
+#[must_use]
+pub(super) fn room_join_refusal_for(
+    room: &RoomListEntry,
+    player_level: Option<i32>,
+    song_known: bool,
+) -> Option<RoomJoinRefusal> {
+    if room.state_code == RoomState::Playing as u8 {
+        return Some(RoomJoinRefusal::Started);
+    }
+    if room.state_code == RoomState::Unavailable as u8 {
+        return Some(RoomJoinRefusal::Loading);
+    }
+    if room.has_password {
+        return Some(RoomJoinRefusal::Password);
+    }
+    if room.user_count >= room.capacity {
+        return Some(RoomJoinRefusal::Full);
+    }
+    if room.min_level != 0 || room.max_level != 0 {
+        // A boot without the 2001 identity has no local level to
+        // compare; the exe's byte source is then unset, so the
+        // window cannot refuse.
+        let inside = player_level.is_none_or(|level| {
+            i32::from(room.min_level) <= level && level <= i32::from(room.max_level)
+        });
+        if !inside {
+            return Some(RoomJoinRefusal::Level {
+                min: i32::from(room.min_level),
+                max: i32::from(room.max_level),
+            });
+        }
+    }
+    if room.premium {
+        return Some(RoomJoinRefusal::Premium);
+    }
+    const SEVEN_KEY_MIN_LEVEL: i32 = 4;
+    if room.key_mode == KeyMode::SevenKeys as u8
+        && player_level.is_some_and(|level| level < SEVEN_KEY_MIN_LEVEL)
+    {
+        return Some(RoomJoinRefusal::SevenKeys);
+    }
+    if room.music_id != 0 && !song_known {
+        return Some(RoomJoinRefusal::UnregisteredSong);
+    }
+    None
+}
+
+const PASSWORD_REQUIRED: &[u8] = &[
+    0xC6, 0xD0, 0xBD, 0xBA, 0xBF, 0xF6, 0xB5, 0xE5, 0xB8, 0xA6, 0x20, 0xC0, 0xD4, 0xB7, 0xC2, 0xC7,
+    0xCF, 0xBC, 0xBC, 0xBF, 0xE4,
+];
+const LEVEL_WINDOW: &[u8] = &[
+    0x5B, 0xC1, 0xA4, 0xBA, 0xB8, 0x5D, 0xB7, 0xB9, 0xBA, 0xA7, 0xC0, 0xCC, 0x20, 0xB8, 0xC2, 0xC1,
+    0xF6, 0x20, 0xBE, 0xCA, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0x0A, 0xC0, 0xD4, 0xC0,
+    0xE5, 0xC7, 0xCF, 0xBD, 0xC7, 0x20, 0xBC, 0xF6, 0x20, 0xC0, 0xD6, 0xB4, 0xC2, 0x20, 0xB7, 0xB9,
+    0xBA, 0xA7, 0xC0, 0xBA, 0x20, 0x0A, 0x0A, 0x25, 0x64, 0xB7, 0xB9, 0xBA, 0xA7, 0xBF, 0xA1, 0xBC,
+    0xAD, 0x20, 0x25, 0x64, 0xB7, 0xB9, 0xBA, 0xA7, 0xB1, 0xEE, 0xC1, 0xF6, 0x20, 0xC0, 0xD4, 0xB4,
+    0xCF, 0xB4, 0xD9, 0x2E,
+];
+const ROOM_FULL: &[u8] = &[
+    0xB9, 0xE6, 0xC0, 0xCE, 0xBF, 0xF8, 0xC0, 0xCC, 0x20, 0xB8, 0xF0, 0xB5, 0xCE, 0x20, 0xC3, 0xA1,
+    0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x0A, 0x0A, 0x28, 0x25, 0x73, 0x29,
+];
+const GAME_INFO_LOADING: &[u8] = &[
+    0xB0, 0xD4, 0xC0, 0xD3, 0xC1, 0xA4, 0xBA, 0xB8, 0x20, 0xB7, 0xCE, 0xB5, 0xF9, 0xC1, 0xDF, 0x20,
+    0xBB, 0xF3, 0xC5, 0xC2, 0xBF, 0xA9, 0xBC, 0xAD, 0x0A, 0xC0, 0xD4, 0xC0, 0xE5, 0xC7, 0xD2, 0x20,
+    0xBC, 0xF6, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0xC0, 0xE1, 0xBD,
+    0xC3, 0xC8, 0xC4, 0x20, 0xB4, 0xD9, 0xBD, 0xC3, 0x20, 0xBD, 0xC3, 0xB5, 0xB5, 0xC7, 0xD8, 0xC1,
+    0xD6, 0xBC, 0xBC, 0xBF, 0xE4, 0x2E,
+];
+const NEED_PT: &[u8] = &[
+    0x50, 0x54, 0x28, 0xC6, 0xF7, 0xC0, 0xCE, 0xC6, 0xAE, 0x29, 0xB0, 0xA1, 0x20, 0xBA, 0xCE, 0xC1,
+    0xB7, 0xC7, 0xD5, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+const SEVEN_KEY_LEVEL: &[u8] = &[
+    0xC0, 0xE1, 0xB1, 0xF1, 0x21, 0x20, 0xC0, 0xCC, 0x20, 0xB9, 0xE6, 0xC0, 0xBA, 0x20, 0x37, 0x4B,
+    0x65, 0x79, 0xB8, 0xF0, 0xB5, 0xE5, 0x20, 0xC7, 0xC3, 0xB7, 0xB9, 0xC0, 0xCC, 0x20, 0xC1, 0xDF,
+    0xC0, 0xD4, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0x0A, 0xBF, 0xC0, 0xC5, 0xF5, 0xC0, 0xEB, 0xC0,
+    0xC7, 0x20, 0xC2, 0xFC, 0xC0, 0xE7, 0xB9, 0xCC, 0x21, 0x20, 0x37, 0x4B, 0x65, 0x79, 0xB8, 0xF0,
+    0xB5, 0xE5, 0xB8, 0xA6, 0x20, 0xC1, 0xF1, 0xB1, 0xE2, 0xB7, 0xC1, 0xB8, 0xE9, 0x0A, 0xB7, 0xB9,
+    0xBA, 0xA7, 0xC0, 0x34, 0xB8, 0xA6, 0x20, 0xB4, 0xDE, 0xBC, 0xBA, 0xC7, 0xCF, 0xBC, 0xC5, 0xBE,
+    0xDF, 0x20, 0xC7, 0xD5, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x0A, 0x0A, 0xBD, 0xC5, 0xB3, 0xAA, 0xB4,
+    0xC2, 0x20, 0xB5, 0xE5, 0xB7, 0xB3, 0xB8, 0xF0, 0xB5, 0xE5, 0x28, 0x33, 0x4B, 0x65, 0x79, 0x29,
+    0x20, 0xC7, 0xC3, 0xB7, 0xB9, 0xC0, 0xCC, 0xB8, 0xA6, 0x20, 0xC5, 0xEB, 0xC7, 0xD8, 0x0A, 0xB7,
+    0xB9, 0xBA, 0xA7, 0xC0, 0x34, 0xBF, 0xCD, 0x20, 0x37, 0x4B, 0x65, 0x79, 0xB8, 0xF0, 0xB5, 0xE5,
+    0xBF, 0xA1, 0x20, 0xB5, 0xB5, 0xC0, 0xFC, 0xC7, 0xD8, 0x20, 0xBA, 0xB8, 0xBC, 0xBC, 0xBF, 0xE4,
+    0x21,
+];
+const UNREGISTERED_SONG: &[u8] = &[
+    0xB5, 0xEE, 0xB7, 0xCF, 0xB5, 0xC7, 0xC1, 0xF6, 0x20, 0xBE, 0xCA, 0xC0, 0xBA, 0x20, 0xB0, 0xEE,
+    0xC0, 0xBB, 0x0A, 0xBB, 0xE7, 0xBF, 0xEB, 0xC7, 0xCF, 0xB0, 0xED, 0x20, 0xC0, 0xD6, 0xB4, 0xC2,
+    0x20, 0xB9, 0xE6, 0xC0, 0xD4, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+
 /// Every chat word the shell owns: two lobby panels, the waiting
 /// room's draft and history, and the last whisper peer. The game seam
 /// gates typing by screen and dialog focus and resolves rank-notice
@@ -248,6 +439,11 @@ impl LobbyChat {
 pub(super) struct ChatState {
     channel_panel: LobbyChatPanel,
     room_panel: LobbyChatPanel,
+    room_join_refusal: Option<RoomJoinRefusal>,
+    whisper_delivery: Option<WhisperDelivery>,
+    room_user_sheet_open: bool,
+    room_user_sheet_gift_on: bool,
+    room_user_sheet_url_gift_on: bool,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
     waiting_send_mode: ChatSendMode,
@@ -619,5 +815,65 @@ impl ChatState {
             self.remember_whisper_peer(recipient);
         }
         command
+    }
+
+    /// Refusal the current row press staged (painted by the game seam).
+    pub(super) fn room_join_refusal(&self) -> Option<RoomJoinRefusal> {
+        self.room_join_refusal
+    }
+
+    /// Stage the gate verdict; a later row press replaces it.
+    pub(super) fn stage_room_join_refusal(&mut self, refusal: RoomJoinRefusal) {
+        self.room_join_refusal = Some(refusal);
+    }
+
+    /// Forget the verdict when the one-OK sheet is dismissed.
+    pub(super) fn clear_room_join_refusal(&mut self) {
+        self.room_join_refusal = None;
+    }
+
+    /// Latest 2018 delivery verdict.
+    pub(super) fn whisper_delivery(&self) -> Option<&WhisperDelivery> {
+        self.whisper_delivery.as_ref()
+    }
+
+    /// Stage one decoded 2018 answer in both lobby panels: an echoed
+    /// text paints one row, while a refusal only changes the verdict.
+    pub(super) fn push_whisper_response(&mut self, message: &SendWhisperResponse) {
+        self.whisper_delivery = Some(WhisperDelivery {
+            delivered: !message.invalid,
+            recipient: message.recipient.clone(),
+            content: message.content.clone(),
+        });
+        if let Some(content) = message.content.as_deref().filter(|text| !text.is_empty()) {
+            let row = ChannelChatMessage::user(&message.recipient, content);
+            self.panel_mut(LobbyChat::Channel).push_row(row.clone());
+            self.panel_mut(LobbyChat::Room).push_row(row);
+        }
+    }
+
+    /// Mount the local stand-in for the exe's web user-list sheet.
+    pub(super) fn open_room_user_sheet(&mut self, gift_on: bool) {
+        self.room_user_sheet_open = true;
+        self.room_user_sheet_gift_on = gift_on;
+    }
+
+    /// Close the sheet and rebuild its URL word from the gift-on flag
+    /// (exe `0x495a30`; the web view itself is outside this client).
+    pub(super) fn close_room_user_sheet(&mut self) {
+        self.room_user_sheet_open = false;
+        self.room_user_sheet_url_gift_on = self.room_user_sheet_gift_on;
+    }
+
+    pub(super) fn room_user_sheet_open(&self) -> bool {
+        self.room_user_sheet_open
+    }
+
+    pub(super) fn room_user_sheet_gift_on(&self) -> bool {
+        self.room_user_sheet_gift_on
+    }
+
+    pub(super) fn room_user_sheet_url_gift_on(&self) -> bool {
+        self.room_user_sheet_url_gift_on
     }
 }
