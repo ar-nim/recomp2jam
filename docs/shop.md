@@ -890,3 +890,33 @@ painter gates the staged mascot on the sheet-open flag
 (`ScreenGame::shop_charge_confirm_open`) rather than inventing a control
 write. Next evidence step (F5, controller): a stopped-state control
 write or a sheet-open/close frame pair naming the hiding class method.
+
+## #886 — cart residual, named v12 bands (close-out lane, 2026-11-27)
+
+Version pin: `OTwo.exe` 7.55, 5,029,888 B, SHA-256
+`83a04541…72c823b`; REA/Ghidra 12.2. Oracle: v3 quiesced cart frame
+`~/scratch/paired-shots-v3/states/itemshop-cart/exe.png`; Rust pair:
+v12 leg `~/scratch/paired-shots-v6/legs/itemshop-cart/rust/states/itemshop-cart-p1.png`
+(build `0b2a4a9`, structural 0.9773). Bands below are 100 px tall /
+133 px wide over the 800×600 frame. Crops and pixel probes:
+`~/scratch/cart-residual/crops/`.
+
+| Band | Control / exe shows / ours shows | Pin | Resolution |
+|---|---|---|---|
+| y100–200, x532–798 | set-item card 4 (`콘트루리`): exe frame has open eyes and hands down; ours holds the entry pose (closed eyes, hands up). Card label and price are the same words. | `FUN_0049e8d0` (`0x49e8d0`, REA `ev_f5a5731f…43a903a`) refreshes each `0x1401d088+slot` card via `FUN_00529230`; its instruction walk `ev_1af6f770…4542f9` calls `FUN_0052b480` at `0x529409` (figure write) and `FUN_0042f870(0,0)` at `0x52960f`–`0x529619` (empty-cell frame). `FUN_0042f870` sets the control frame (`ev_5ce481b1…f60e50`). Our fixed frame-21 pixel pin (§#877) matches the v3 **entry** frame; the cart frame caught another animation phase. | Content verdict: capture-class animation phase, not a 1 px geometry bug. No chase; next evidence step is a timed frame-index read on the same control between entry and cart. |
+| y300, x266–532 | `Dialog_Question1` TEXT `0x22200002`: exe caption is brighter/bolder than ours; same two Korean lines, same icon and rect. | The TEXT slot-9 painter reads the control's font/color fields (`0x50f320`, REA `ev_39166fab…75da8`); fonts are Gulimche 6×12 (`docs/gdi-text.md`, stager `0x50f280`). | Content verdict: approved modern-font rasterization (`e8d01`), not staged content. No fix; the caption bytes and `.bnd` rect already match. |
+| y500, x0–133 | `IDC_BUTTON_SSHOP_BAGSORT` (`0x142000B7`): exe shows the blue `아이템정렬` plate baked into `State_ItemShop.ojs`; ours paints a second blue plate over it. The G/W totals behind it also differ (`G 0` / right-anchored `4500` in exe; `G --` / left-of-cell digits in ours). | Backdrop pixel read (local archive fact); image-wide byte scan for `0x142000B7` finds no code use (`ev_fed78af0c…e536f09`). `FUN_004a1010` gates the total cells on cart count (existing pin `ev_ec83763a…`); our `--` is the documented no-gem-source default, and the exe's total-ink writer stays OPEN. | Fixed: baked-body sprite detached at staging; hit rect kept. Totals: content verdict — the capture also has 1 cart row in exe vs 5 in ours (`01/01/01` vs `9/9/9`), so alignment/count is a scenario delta, not a paint-only pin. |
+| y500, x665–798 | bottom-right `IDC_BUTTON_SSHOP_CONFERENCE` (`0x142000B6`), `IDC_BUTTON_SSHOP_MESSENGER` (`0x142000B8`), `IDC_IMAGE_SSHOP_MESSENGER_ALRAM` (`0x145000B9`), `IDC_BUTTON_SSHOP_BACK` (`0x14200002`): exe has the baked purple lamp, blue `?` and gray BACK; ours paints the orange lamp frame and blue button frames on top. Dotted shop-master pane matches on both. | `State_ItemShop.ojs` contains all three baked plates at `(668,569)`, `(625,569)`, `(711,569)`; `Messenger_Alram.ojs` frames 1/2 are the orange face. Byte scans: `ev_fed78af0c…` (B6), `ev_451125410…` (B7), `ev_0d88694a…` (B8); `0x14200002` appears only in BUYITEM's click dispatch at `0x4997b8`/`0x4997c4` (`ev_5373f4bd…`, `ev_aa237e31…`). The alarm code is a positive pin, not a negative one: `FUN_004984d0` writes `FUN_0042f5a0(3)` on `0x145000B9`/`BA` at `0x4988d5`–`0x498905` (`ev_7bd1198a…`), case 3 zeroes the current frame (`ev_3d8872a9…`), and `FUN_0042f870` maps frame to surface `frame - 1` (`ev_5ce481b1…`): zero paints no alarm body, so the baked lamp remains. | Fixed: those bodies detach at staging, rects stay for clicks. Hover-frame behavior is unpinned (capture class). |
+
+Fix: `stage_shop_baked_chrome` in `crates/o2jam-shell/src/staging.rs`
+clears `sprite` on the five baked codes in the `State::Shop` arm;
+no rect or literal coordinate is introduced. TDD guard
+`shop_back_and_messenger_lamp_stay_baked_into_the_backdrop` in
+`crates/o2jam-shell/tests/shop_baked_chrome.rs` drives
+`stage_state(State::Shop)` → `ScreenGame::load_side_scene` →
+`visit_side` → `paint_side` → `paint_side_scene_selected` and checks
+the oracle pixel colors at `(720,575)` and `(630,575)`. Red proof:
+`~/scratch/cart-residual/red-baked-chrome.log` (`[0,132,231]` vs gray
+plate) and mutation `~/scratch/cart-residual/mutation-red-final.log`
+(`exit=101`, `got 0, oracle 197`). A second guard keeps the staged
+BACK hit rect at `(711,569,83,24)`. Data-free runs skip at the seam.

@@ -974,6 +974,43 @@ fn stage_shop_master_mascot(art: &mut StagedArt) {
     }
 }
 
+/// Shop chrome already painted inside `State_ItemShop.ojs`. The
+/// quiesced 7.55 cart frame shows the baked gray BACK plate at
+/// `(711,569)`, purple messenger lamp at `(625,569)`, blue `?` plate
+/// at `(668,569)`, and item-sort plate at `(29,546)`.
+/// Staging the matching `ControlList` bodies as a second paint covers
+/// that art with the blue button frames and the orange lamp frame.
+///
+/// Statics pin: image-wide byte scans find no code use of `0x142000B6`,
+/// `0x142000B7`, or `0x142000B8` (REA 7.55 `ev_fed78af0c…`,
+/// `ev_451125410…`, `ev_0d88694a…`); `0x14200002` occurs only in
+/// BUYITEM's click dispatch (`FUN_00499760` at `0x4997b8`/`0x4997c4`,
+/// REA `ev_5373f4bd…`, `ev_aa237e31…`). State open `FUN_004984d0`
+/// writes `FUN_0042f5a0(3)` on both alarm controls (`0x145000B9`/`BA`
+/// at `0x4988d5`–`0x498905`, REA `ev_7bd1198a…`); case 3 sets the
+/// current frame to zero (`ev_3d8872a9…`), and `FUN_0042f870` maps a
+/// current frame to surface `frame - 1` (`ev_5ce481b1…`), so zero
+/// paints no alarm body. The baked lamp stays visible. Hover frames
+/// stay capture-class.
+const SHOP_BAKED_CHROME_CODES: [u32; 5] = [
+    0x1420_0002, // IDC_BUTTON_SSHOP_BACK
+    0x1420_00B6, // IDC_BUTTON_SSHOP_CONFERENCE
+    0x1420_00B7, // IDC_BUTTON_SSHOP_BAGSORT
+    0x1420_00B8, // IDC_BUTTON_SSHOP_MESSENGER
+    0x1450_00B9, // IDC_IMAGE_SSHOP_MESSENGER_ALRAM
+];
+
+/// Keep a baked chrome control's staged rect for hit testing but
+/// detach the body the backdrop already contains. No geometry is
+/// invented: the rect still comes from `State_ItemShop.bnd`.
+fn stage_shop_baked_chrome(art: &mut StagedArt) {
+    for placed in &mut art.placements {
+        if SHOP_BAKED_CHROME_CODES.contains(&placed.code) {
+            placed.sprite = None;
+        }
+    }
+}
+
 /// Put the exe's child origin on the shop controls that have no
 /// sprite anchor to carry it: art-less TEXT ink and the art-less
 /// gift half. Anchored ITEMBUY/ITEMPRE placements keep the raw rect
@@ -1309,6 +1346,7 @@ fn stage_bound_row_hiding(
         stage_shop_child_origin(&mut art);
         stage_shop_set_card_children(&mut art);
         stage_shop_master_mascot(&mut art);
+        stage_shop_baked_chrome(&mut art);
     }
     let visible_names: Vec<String> = staged_names(&resolved.names, row.extra_sprites)
         .into_iter()
