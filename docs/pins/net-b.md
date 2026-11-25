@@ -558,3 +558,21 @@ entries come from that dispatch table, not from the handler bodies.
   `crates/o2jam-shell/src/screens/game/mod.rs:4781` that calls it OPEN is stale.
 - No cargo gates were run (docs-only lane). `scripts/check-cited-hashes.sh`
   must exit 0 on this file before the lane reports done.
+
+### `0x55ca00` wire-body addendum — 3001 KeyModeChanged body layout (2026-11-25 senior REA pass)
+
+- **Body layout (own words)**: two length-prefixed strings (the exe's
+  string reader ) staged at the room record's descriptor
+  slots at record `+0x54` and `+0x94` (64 bytes apart), then five
+  single bytes () into record bytes `+0xd4`, `+0xd5`,
+  `+0xd6`, `+0xe4`, `+0xe6`, then one u16 flag word. The flag word's
+  high nibble (`& 0xf000`) is shifted left 16 and OR'd into the member
+  word at record `+0xd8` (the `+0x24` member word of the room-row
+  record) — the same shifted-nibble mechanism the 2023 story (#990)
+  pins. The handler then posts UI event `(0x12, 0xbb9, 0, 0)`.
+- **Consequence**: the wire codec for #1002 is pinnable as
+  `[string][string][5 bytes][u16]`; the shell descriptor setter stays
+  the hand-off.
+- **Evidence**: `ev_cd7e22b998ce16fa63d3a8f52cb2e26523a710a601307a0e54543c7eb5b0f7e4`
+  (dossier), `ev_fddb145926cbdfe7e7a4df93aba651a0011eec33b490b5060987035cc3015b74`
+  (pseudocode page).
