@@ -662,11 +662,16 @@ pub fn shop_child_geometry(code: u32) -> Option<ShopChildGeometry> {
     in_run(SHOP_ITEMGIFT_FIRST_CODE).then_some(ShopChildGeometry::ArtlessButton)
 }
 
-/// Item-list scroll (`IDC_SCROLL_SSHOP_ITEM`): pager children ride
-/// scroll-relative.
+/// Item-list scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x14022047`): its two
+/// notify handlers add/subtract the scroll offset and repaint the
+/// eight goods (`ev_5eb3c20e…`, `ev_7509bf98…`). The shipped `.bnd`
+/// stages the parent and its SET arrows at absolute canvas rects. A
+/// press on the bare track maps to the same `ItemPrev`/`ItemNext`
+/// state change as an arrow; which notify constant each arrow sends
+/// stays OPEN (stopped-state read of `state+0x78`).
 pub const SHOP_SCROLL_CODE: u32 = 0x1402_2047;
-/// Scroll pager children (staged scroll-relative; hit-test offsets
-/// by the staged scroll origin).
+/// Scroll pager children (staged at absolute `.bnd` canvas rects;
+/// the parent origin is never added twice).
 pub const SHOP_SCROLL_LEFT_CODE: u32 = 0x1420_0048;
 pub const SHOP_SCROLL_RIGHT_CODE: u32 = 0x1420_0049;
 /// Bag pager (`IDC_BUTTON_SSHOP_BAGLEFT/RIGHT`): pages the owned
@@ -1708,6 +1713,14 @@ pub enum ShopAction {
     /// Category tab selected (0-based in the five-button row). The
     /// FASHION press frame pins the highlight, not a filter rule.
     SelectCategory(usize),
+    /// Submenu tab selected (0-based in the six-button row). The exe
+    /// tab handler writes `state+0x59` and gates the caption table; no
+    /// wire frame belongs to the arm.
+    SelectSubmenu(usize),
+    /// Ext-menu theme tab selected (0-based in the twelve-button row).
+    /// The exe tab handler writes `state+0x5C`, hides the planet grid,
+    /// and reseeds the layout; no wire frame belongs to the arm.
+    SelectTheme(usize),
     /// Full-bleed BACK plate or static BACK arm: leave the side and
     /// send `ExitShop` 5007.
     BackToLobby,
@@ -1738,15 +1751,33 @@ pub enum ShopAction {
     SortBag,
 }
 
-/// Board click under native pixel (`x`, `y`): the staged placement
-/// whose parsed `.bnd` rect contains the point and whose exe code
-/// names a row toggle, the cart buy, or a pager (`None` elsewhere).
-/// Scroll pager children stage scroll-relative, so they hit-test
-/// through the staged scroll origin — every rect stays parsed.
+/// Board click under native pixel (`x`, `y`) on the entry face, where
+/// the ext-menu filters are hidden. Live callers use
+/// [`Self::shop_action_at_on_board`] with the staged ext-menu word.
 #[must_use]
 pub fn shop_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<ShopAction> {
-    for placed in placements {
-        let rect = shop_click_rect(placements, placed);
+    shop_action_at_on_board(placements, x, y, false)
+}
+
+/// Board click on the face the painter actually shows. Hidden ext-menu
+/// filters never swallow a press over the goods underneath; the same
+/// visibility rule that hides their art gates their hit rects.
+/// The scroll parent has no button code, so its bare track is tested
+/// after the named children and routed to the same page step as an
+/// arrow press.
+#[must_use]
+pub fn shop_action_at_on_board(
+    placements: &[ScenePlacement],
+    x: i32,
+    y: i32,
+    ext_menu_open: bool,
+) -> Option<ShopAction> {
+    let visible: Vec<&ScenePlacement> = placements
+        .iter()
+        .filter(|placed| shop_extmenu_kept(placed, ext_menu_open))
+        .collect();
+    for placed in &visible {
+        let rect = shop_click_rect(placed);
         if !super::paint::rect_hit(&rect, x, y) {
             continue;
         }
@@ -1754,26 +1785,27 @@ pub fn shop_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<S
             return Some(action);
         }
     }
-    None
+    let scroll = visible.into_iter().find(|placed| {
+        placed.code == SHOP_SCROLL_CODE && super::paint::rect_hit(&placed.rect, x, y)
+    })?;
+    let midpoint = scroll
+        .rect
+        .x
+        .saturating_add(i32::try_from(scroll.rect.w / 2).unwrap_or(i32::MAX));
+    Some(if x < midpoint {
+        ShopAction::ItemPrev
+    } else {
+        ShopAction::ItemNext
+    })
 }
 
-/// Click rect for one staged placement: scroll pager children shift
-/// by the staged scroll origin, and the priced row buttons answer at
-/// the exe's child origin; every other control answers at its own
-/// staged rect. An anchored button's sprite still paints from the
-/// raw rect — its decoded anchor already carries the visible +70 px
-/// art position — so only its hit rect follows the child origin.
-fn shop_click_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Rect {
-    if placed.code == SHOP_SCROLL_LEFT_CODE || placed.code == SHOP_SCROLL_RIGHT_CODE {
-        if let Some(origin) = shop_scroll_origin(placements) {
-            return Rect {
-                x: origin.x + placed.rect.x,
-                y: origin.y + placed.rect.y,
-                w: placed.rect.w,
-                h: placed.rect.h,
-            };
-        }
-    }
+/// Click rect for one staged placement: the priced row buttons answer
+/// at the exe's child origin; every other control, including the
+/// scroll arrows, answers at its own staged rect. Anchored button
+/// sprites still paint from the raw rect — their decoded anchors
+/// already carry the visible +70 px art position — so only the hit
+/// rect follows the child origin.
+fn shop_click_rect(placed: &ScenePlacement) -> Rect {
     let anchored_button = shop_child_geometry(placed.code)
         == Some(ShopChildGeometry::AnchoredButton)
         && placed.sprite.is_some();
@@ -1784,14 +1816,6 @@ fn shop_click_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Re
         };
     }
     placed.rect
-}
-
-/// Native origin of the staged item-list scroll (`None` unstaged).
-fn shop_scroll_origin(placements: &[ScenePlacement]) -> Option<Rect> {
-    placements
-        .iter()
-        .find(|placed| placed.code == SHOP_SCROLL_CODE)
-        .map(|placed| placed.rect)
 }
 
 /// Action behind one hit control code (`None` for unnamed controls).
@@ -1824,6 +1848,8 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
             .or_else(|| shop_gender_action(code))
             .or_else(|| shop_bag_item_slot(code))
             .or_else(|| shop_category_slot(code))
+            .or_else(|| shop_submenu_slot(code))
+            .or_else(|| shop_theme_slot(code))
             .or_else(|| {
                 shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
                     .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
@@ -1861,6 +1887,23 @@ pub fn shop_category_index(code: u32) -> Option<usize> {
 fn shop_category_slot(code: u32) -> Option<ShopAction> {
     let slot = shop_row_slot(SHOP_CATEGORY_FIRST_CODE, code)?;
     (slot < SHOP_CATEGORY_BUTTONS).then_some(ShopAction::SelectCategory(slot))
+}
+
+/// Submenu tab behind one `SHOP_SUBMENU_FIRST_CODE` code. The exe
+/// handler writes `code - base` into `state+0x59` and gates the
+/// caption table (`0x498bc0`, `ev_1240440e…`); no wire is sent.
+fn shop_submenu_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_SUBMENU_FIRST_CODE, code)?;
+    (slot < SHOP_SUBMENU_BUTTONS).then_some(ShopAction::SelectSubmenu(slot))
+}
+
+/// Ext-menu theme tab behind one `SHOP_EXTMENU_FIRST_CODE` code. The
+/// exe handler writes `code - 0x1420109B` into `state+0x5C` at
+/// `0x499399` (`ev_1240440e…`); the `0xC` new-arrivals word has no
+/// staged control, so only the twelve authored tabs map here.
+fn shop_theme_slot(code: u32) -> Option<ShopAction> {
+    let slot = shop_row_slot(SHOP_EXTMENU_FIRST_CODE, code)?;
+    (slot < SHOP_EXTMENU_BUTTONS).then_some(ShopAction::SelectTheme(slot))
 }
 
 /// Row slot behind one per-row button run (`None` below the run's
@@ -7628,8 +7671,10 @@ mod side_tests {
             placements.push(area(SHOP_ITEMBUY_FIRST_CODE + slot as u32, *x, *y, 81, 17));
         }
         placements.push(area(SHOP_SCROLL_CODE, 221, 374, 545, 18));
-        placements.push(area(SHOP_SCROLL_LEFT_CODE, 0, 0, 18, 18));
-        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 527, 0, 18, 18));
+        // The shipped `State_ItemShop.bnd` stages both SET arrows at
+        // absolute canvas rects (left `221,374`, right `748,374`).
+        placements.push(area(SHOP_SCROLL_LEFT_CODE, 221, 374, 18, 18));
+        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 748, 374, 18, 18));
         placements.push(area(SHOP_BUYITEM_CODE, 17, 563, 49, 23));
         placements.push(area(SHOP_CART_LEFT_CODE, 198, 564, 47, 22));
         placements.push(area(SHOP_CART_RIGHT_CODE, 317, 564, 47, 22));
@@ -7660,10 +7705,10 @@ mod side_tests {
     }
 
     #[test]
-    fn shop_scroll_pager_offsets_by_staged_scroll_origin() {
+    fn shop_scroll_arrows_answer_their_staged_bnd_rects() {
         let placements = shop_board_placements();
-        // Pager children stage scroll-relative; the staged scroll
-        // origin carries them onto the canvas pager.
+        // Both arrows stage at absolute `.bnd` rects; the parent
+        // scroll origin must not be added a second time.
         assert_eq!(
             shop_action_at(&placements, 225, 378),
             Some(ShopAction::ItemPrev)

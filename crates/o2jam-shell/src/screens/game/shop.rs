@@ -7,10 +7,10 @@ use super::super::side::{
     CheckoutMode, CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender,
     ShopGood, ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
     TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_CATEGORY_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
+    SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
     SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
     SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
-    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS,
+    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS, SHOP_SUBMENU_BUTTONS,
     SHOP_SUBMENU_FIRST_CODE,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
@@ -107,6 +107,10 @@ pub(crate) struct ShopState {
     /// frame `d4074ce7…` moves only the tab highlight; no wire frame
     /// and no catalogue filter rule is pinned yet.
     pub(crate) shop_category: Option<usize>,
+    /// Ext-menu theme tab `state+0x5C` (0-based over the twelve
+    /// `0x1420109B..A6` tabs). `None` until a theme tab answers; the
+    /// `0xC` new-arrivals word has no staged control here.
+    theme: Option<usize>,
     /// Previewed item id (`ITEMPRE` pick, `ITEMBACK` clears; `None`
     /// until picked). Ids stay stable across pages (unlike slots).
     pub(crate) preview: Option<u32>,
@@ -216,6 +220,7 @@ impl ShopState {
         self.preview = None;
         self.bag_page = 0;
         self.shop_category = None;
+        self.theme = None;
         self.bag_selection = None;
         self.bag_notice = None;
         self.chrome_notice = None;
@@ -308,6 +313,11 @@ impl ShopState {
     /// Selected category tab (`None` until a FASHION-class press).
     pub(crate) fn category(&self) -> Option<usize> {
         self.shop_category
+    }
+
+    /// Selected ext-menu theme tab (0..=11), `None` before a press.
+    pub(crate) fn theme(&self) -> Option<usize> {
+        self.theme
     }
 
     /// Checked cart item ids in toggle order.
@@ -875,7 +885,39 @@ impl ShopState {
             ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
             ShopAction::OpenCashCharge | ShopAction::BackToLobby | ShopAction::GoMyRoom => false,
             ShopAction::SelectCategory(slot) => {
+                // Tab handler `FUN_00498bc0`: write `state+0x58`, reset
+                // submenu `+0x59` and both face flags, then rebuild the
+                // eight goods (`ev_d7cb6a21…`, `ev_a4bd0e68…`). No send.
                 self.shop_category = Some(slot);
+                self.selected_submenu = None;
+                self.panel = ShopPanel::MyBag;
+                self.shop_page = 0;
+                false
+            }
+            ShopAction::SelectSubmenu(slot) => {
+                // `state+0x59 = code - 0x14208012` (clamped to six).
+                // Caption word gating stays in `shop_submenu_caption_kept`;
+                // the selected frame follows through `shop_shop_frame_for`.
+                self.selected_submenu = u32::try_from(slot)
+                    .ok()
+                    .and_then(|offset| SHOP_SUBMENU_FIRST_CODE.checked_add(offset))
+                    .filter(|code| *code < SHOP_SUBMENU_FIRST_CODE + SHOP_SUBMENU_BUTTONS as u32);
+                false
+            }
+            ShopAction::SelectTheme(slot) => {
+                // Tab handler case at `0x499399` (`ev_1240440e…`):
+                // `state+0x5C = 0..0xB`, hide the 12x3 planet grid and
+                // reseed its layout words. The exact reseed call count
+                // stays OPEN (next step: one stopped-state trace of the
+                // layout writes), so model one pass, not an invented
+                // count. No send, and the goods grid is untouched.
+                self.theme = (slot < SHOP_EXTMENU_BUTTONS).then_some(slot);
+                if self.theme.is_some() {
+                    self.planet_hidden_cells = self.planet_grid_nonzero;
+                    self.planet_grid_nonzero = 0;
+                    self.planet_reseeds = self.planet_reseeds.saturating_add(1);
+                    self.planet_layout_flags = SHOP_PLANET_LAYOUT_FLAGS;
+                }
                 false
             }
             ShopAction::CartBuy => !self.shop_cart.is_empty(),
