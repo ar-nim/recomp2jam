@@ -156,6 +156,10 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` (present + hidden install-root arms).
 - Re-run any named guard or test the junior claims green.
+- Re-run the close gate on the junior's close comment for player-visible
+  work: `scripts/check-guard-evidence.sh --close-gate <file> [--diff <base>]`.
+  Exit 0 is required; a tier-0-only close or a `seam:` reason over a live
+  caller is a FAIL. Current guards are grandfathered (close handoff rule 4).
 - Pixel verification: no screenshot, frame, or log excerpt is cited until
   the reviewer has opened that exact artifact with their own eyes. Compare
   the opened artifacts with each other as well: the fabricated #240/#242
@@ -181,7 +185,7 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.
 
-Close handoff rules (retro #175; rule 3 from retro #922):
+Close handoff rules (retro #175; rule 3 from retro #922, rule 4 from #921):
 
 1. **Ancestor check before close.** A fix is not done until
    `git merge-base --is-ancestor <fix-sha> <branch-under-test>` passes; quote
@@ -200,6 +204,15 @@ Close handoff rules (retro #175; rule 3 from retro #922):
    a verified SHA or explicitly marked UNVERIFIED. Record the command and
    its exit code in the close table. This enforces the prose rule in
    `docs/agents/triage-labels.md` rule 6.
+4. **Mechanical close gate for player-visible work.** Run
+   `scripts/check-guard-evidence.sh --close-gate <close-comment-file>`
+   (add `--diff <base>` for NEW/changed guards) and require exit 0 before
+   posting the close. The gate fails a tier-0-only close and a `seam:`
+   reason over a behavior with a live caller; ambiguity fails too. Current
+   tree guards are grandfathered: the check reads close comments and
+   NEW/changed guards, not the whole tree, and OPEN debt stays in
+   `docs/interaction-census.md` (#919/#920). Record the command and its
+   output in the close record; the confirmation leg still stands.
 
 ## Senior completeness pre-flight
 

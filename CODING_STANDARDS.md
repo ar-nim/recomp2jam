@@ -4,6 +4,32 @@ Judgement calls only — mechanical patterns belong in checks
 (`scripts/gate-check.sh`, `scripts/close-spec.sh`, clippy `-D warnings`),
 not here.
 
+## Guard tiers are part of the name (#921)
+
+The ladder in `docs/live-path-reachability.md` is also a naming
+convention. A new player-visible guard's name or its `## Guards` close
+entry declares its tier as `tier 0` through `tier 4`. Existing guards are
+grandfathered; the tier is required for NEW/changed guards
+(`scripts/check-guard-evidence.sh --close-gate <file> --diff <base>`) and
+for every guard named in a close comment. `docs/interaction-census.md`
+consumes these declarations; OPEN debt stays in its OPEN rows (#919/#920).
+
+One real guard per tier, all present in `crates/`:
+
+| Tier | Name | What it drives |
+|---|---|---|
+| 0 seam | `parse_claim_rows_reads_id_level_anchor_and_cells` (`crates/recomp2jam/src/ledger_check.rs`) | parser math; `ScreenGame` never enters |
+| 1 window-input seam | `live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot` (`crates/recomp2jam/src/live_input_legs.rs`) | extracted arm helper with a pointer snapshot, not the real window |
+| 2 scripted gateway | `shop_buy_round_trips_through_scripted_gateway` (`crates/recomp2jam/src/session.rs`) | `connect`/`session` round trip; no real server or archives |
+| 3 live path | `live_boot_default_stages_shop_catalog` (`crates/recomp2jam/src/live_boot_gate.rs`); also `session_walk::drive_walk` and `live_input_legs` guards | headless boot or walk through `main.rs::run_play` / `session.rs` production paths |
+| 4 timing or capture | `solo_gate_pacing_holds_through_the_wall_trace_windows` (`crates/recomp2jam/src/loading.rs`) | wall-clock pacing; a screenshot alone cannot prove the timing |
+
+A Tier 0 guard proves logic, never reachability. A player-visible close
+listing only Tier 0 guards fails
+`scripts/check-guard-evidence.sh --close-gate <close-comment-file>`; so
+does a `seam:` reason that conflicts with a live caller named in the
+guard's source. See `docs/agents/triage-labels.md` rule 7.
+
 ## Player-visible guards must assert painted output over time
 
 A guard for a paint-path behavior must include a rendered-output

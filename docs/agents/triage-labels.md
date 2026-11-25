@@ -221,6 +221,18 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    use the `(none -- docs: ...)` / `(none -- presentational: ...)` exemption
    from rule 5 and skip this leg.
 
+   **Mechanical close gate (#921).** Write the closing comment to a file
+   and run `scripts/check-guard-evidence.sh --close-gate <file>` (add
+   `--diff <base>` when the close also covers NEW/changed guards). Exit 0
+   is required before posting. Each `## Guards` entry declares a tier from
+   `docs/live-path-reachability.md` and a live chain or `seam: <reason>`.
+   The gate fails a state whose guards are all Tier 0 and any `seam:`
+   reason that contradicts a live caller in the guard's source; ambiguity
+   fails too. Current tree guards are grandfathered: the gate reads close
+   comments and NEW/changed guards only, never the whole tree. OPEN debt
+   stays in the census OPEN rows (#919/#920). A green close gate does not
+   replace the confirmation leg or the red-proof above.
+
 ## Edit tracker
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
