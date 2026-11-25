@@ -4920,10 +4920,15 @@ mod tests {
             changed, None,
             "guest staged no select pixels outside the shared captions: {changed:?}"
         );
-        assert_ne!(
+        // #883 right column: the local `?` selection no longer paints
+        // the yellow random caption for a plain room song (REA
+        // `ev_2cb3a3c4…`). An unflagged pick names the same title, so
+        // this rect must stay byte-identical; the variant-flagged
+        // caption has its own guard in `o2jam-shell`.
+        assert_eq!(
             o2jam_render::pixels_in_rect(&before, width, musicname),
             o2jam_render::pixels_in_rect(&after, width, musicname),
-            "the shared title replaces the random default caption"
+            "a plain pick must not invent a random caption"
         );
         assert_ne!(
             o2jam_render::pixels_in_rect(&before, width, speed),

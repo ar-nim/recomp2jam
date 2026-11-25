@@ -3881,8 +3881,12 @@ impl ScreenGame {
     /// names the same flag.
     #[must_use]
     fn waiting_random_song(&self) -> bool {
-        self.waiting_local_selection_random
-            || self.room_song_variant_nibble != 0
+        // The local selection word mounts the `?` cards and the
+        // `Random` map caption (`FUN_004ad350`), but only the room
+        // song's variant nibble reaches the yellow caption and AX
+        // badge (`FUN_004b2e30`). Do not let the entry default paint a
+        // random song caption for a plain 4001 id (#883).
+        self.room_song_variant_nibble != 0
             || self
                 .waiting
                 .as_ref()
@@ -9390,6 +9394,7 @@ impl ScreenGame {
             skill_slots: Some(&self.skill_slots),
             level: self.waiting_level(),
             random: self.waiting_random_song(),
+            local_random_selection: self.waiting_local_selection_random,
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
@@ -14262,6 +14267,14 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
         walk_to_waiting(&mut game);
+        // An explicit pick clears the entry's local `?` selection, so
+        // this guard measures the toggle art, not the quiesced Random
+        // border override (#883).
+        game.set_selected_music(o2jam_net::play::SetRoomMusic {
+            music_id: 757,
+            difficulty: 2,
+            speed: 1,
+        });
         let rects = [
             (
                 "IDC_BUTTON_SWAIT_TOPEFFECT",
@@ -15116,6 +15129,240 @@ mod game_tests {
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    /// One guest room: the slot-0 row claims master, the local seat is
+    /// elsewhere, so `waiting_local_is_master` resolves to false.
+    fn waiting_guest_room() -> JoinedRoom {
+        let mut room = waiting_room();
+        room.member_id = 5;
+        room
+    }
+
+    /// Two-record synthetic body: the painter must select one record,
+    /// never stack both (`docs/ui-draw.md` image-control semantics).
+    fn waiting_record_pair(first: u16, second: u16) -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let mut figure = AvatarFigure::default();
+        for word in [first, second] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0x0000,
+            });
+        }
+        figure
+    }
+
+    fn waiting_placed(id: &str, x: i32, y: i32) -> ScenePlacement {
+        use crate::avatar::PlacementRole;
+        ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: Some(format!("{id}.ojs")),
+            rect: Rect { x, y, w: 1, h: 1 },
+        }
+    }
+
+    fn waiting_right_column_game(
+        room: JoinedRoom,
+        mut placements: Vec<ScenePlacement>,
+        mut figures: HashMap<String, AvatarFigure>,
+    ) -> ScreenGame {
+        // One staged cover switches the painter from the flat fallback
+        // to the staged Waiting path that owns the right column.
+        placements.push(waiting_placed("IDC_IMAGE_SWAIT_COVERAVATAR1", 5, 5));
+        figures.insert(
+            "IDC_IMAGE_SWAIT_COVERAVATAR1.ojs".to_owned(),
+            waiting_record_pair(0x001F, 0x001F),
+        );
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn local_random_selection_does_not_set_the_room_song_random_flag() {
+        // #883 right column: the entry's local selection word (`0x7789dc`
+        // high half) mounts the two `?` cards, while the random caption
+        // and AX badge read the room song's `0x7789d8` high half
+        // (`FUN_004ad350` vs `FUN_004b2e30`, REA batch
+        // `ev_2cb3a3c4…` / caption dossier `ev_46c80b83…`). A plain
+        // 4001 song id 757 must not turn the top bar yellow.
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 757;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        assert!(
+            !game.waiting_random_song(),
+            "plain room song must not inherit the local `?` selection"
+        );
+    }
+
+    #[test]
+    fn local_random_selection_inks_the_random_map_caption() {
+        // `FUN_004ad350` centres the literal `Random` when the local
+        // selection word carries the high flag (REA
+        // `ev_2cb3a3c4…`, rdata file `0x2498a4`). The caption lives at
+        // bind rect 23; an arena-0 room with the entry default must
+        // still show it. Live chain: `set_joined_room` ->
+        // `walk_to_waiting` -> `paint_at` -> `paint_waiting` ->
+        // `paint_waiting_staged` -> `paint_waiting_mapname`.
+        let mut game = waiting_right_column_game(
+            waiting_room(),
+            vec![waiting_placed("IDC_TEXT_SWAIT_MAPNAME", 60, 60)],
+            HashMap::new(),
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        let band: Vec<u32> = frame.iter().skip(60 * 800 + 60).take(20).copied().collect();
+        assert!(
+            band.iter().any(|word| *word == pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "the local random selection must ink Random at MAPNAME"
+        );
+    }
+
+    #[test]
+    fn local_random_selection_lights_the_first_effect_card_record() {
+        // The quiesced 7.55 pair shows the bright magenta border on
+        // EFFECT_1 (top) and the dim border on EFFECT_2 (bottom) while
+        // the entry's local random word stands. The applier mounts the
+        // two Random bodies at bind rects 68/69 (REA
+        // `ev_2cb3a3c4…`); this guard fixes the quiesced frame choice,
+        // not the click animation (OPEN).
+        let first = "IDC_BUTTON_SWAIT_TOPEFFECT";
+        let second = "IDC_BUTTON_SWAIT_BOTTOMEFFECT";
+        let mut figures = HashMap::new();
+        figures.insert(format!("{first}.ojs"), waiting_record_pair(0x03E0, 0x7C1F));
+        figures.insert(format!("{second}.ojs"), waiting_record_pair(0x03E0, 0x7C1F));
+        let mut game = waiting_right_column_game(
+            waiting_room(),
+            vec![
+                waiting_placed(first, 70, 70),
+                waiting_placed(second, 80, 70),
+            ],
+            figures,
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[70 * 800 + 70],
+            pack_xrgb(0xFF, 0x00, 0xFF),
+            "top effect card carries the bright border"
+        );
+        assert_eq!(
+            frame[70 * 800 + 80],
+            pack_xrgb(0, 255, 0),
+            "bottom effect card carries the dim border"
+        );
+    }
+
+    #[test]
+    fn guest_skill_covers_paint_their_second_record_after_the_arrows() {
+        // #883 right column: the guest arm of `FUN_004ae350` sets all
+        // three skill covers to frame 1 (REA batch `ev_fb099d23…`,
+        // file `0xae7..`), so the dark cover wins over the bright
+        // arrow body. Live chain: `set_joined_room` -> `walk_to_waiting`
+        // -> `paint_at` -> `paint_waiting` ->
+        // `paint_waiting_scene_with_confirm` -> `paint_waiting_staged`
+        // -> `paint_waiting_skill_covers`.
+        let cover_id = "IDC_IMAGE_SWAIT_COVERSKILLLEFT";
+        let later_id = "IDC_IMAGE_SWAIT_SPEED_NUM";
+        let mut figures = HashMap::new();
+        figures.insert(
+            format!("{cover_id}.ojs"),
+            waiting_record_pair(0x03E0, 0x001F),
+        );
+        figures.insert(
+            format!("{later_id}.ojs"),
+            waiting_record_pair(0x7C00, 0x7C00),
+        );
+        let mut guest = waiting_guest_room();
+        guest.speed = 0;
+        let mut game = waiting_right_column_game(
+            guest,
+            vec![
+                waiting_placed(cover_id, 20, 20),
+                waiting_placed(later_id, 20, 20),
+            ],
+            figures,
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[20 * 800 + 20],
+            pack_xrgb(0, 0, 255),
+            "guest cover record 1 must sit above the arrow body"
+        );
+    }
+
+    #[test]
+    fn guest_base_ready_hides_the_speed_inactive_overlay() {
+        // The `0x77ee86 == 3` guest branch resets `SPEEDBUTTEONINACTIVE
+        // 0x1650006f` to frame 1 (REA batch `ev_fb099d23…`); the body
+        // `Waiting_Speed_Inactive.ojs` has one record only, so no
+        // overlay ink reaches the speed row at rest.
+        let id = "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE";
+        let mut figures = HashMap::new();
+        // The real `Waiting_Speed_Inactive.ojs` has one record only.
+        figures.insert(format!("{id}.ojs"), solid_test_figure([0x00, 0x7C]));
+        let mut game = waiting_right_column_game(
+            waiting_guest_room(),
+            vec![waiting_placed(id, 30, 30)],
+            figures,
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[30 * 800 + 30],
+            0,
+            "no purple inactive overlay at rest"
+        );
+    }
+
+    #[test]
+    fn guest_team_buttons_hold_no_highlight_cursor() {
+        // The guest branch disables every team button and resets its
+        // frame (`FUN_004ae350`, REA batch `ev_fb099d23…`), so the
+        // amber cursor must not mark the room's team.
+        let id = "IDC_BUTTON_SWAIT_TEAMB";
+        let mut figures = HashMap::new();
+        figures.insert(
+            "Wait_TeamB.ojs".to_owned(),
+            waiting_record_pair(0x7C00, 0x7C00),
+        );
+        let mut placement = waiting_placed(id, 40, 40);
+        placement.sprite = Some("Wait_TeamB.ojs".to_owned());
+        let mut game = waiting_right_column_game(waiting_guest_room(), vec![placement], figures);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            frame[40 * 800 + 40],
+            pack_xrgb(0xFF, 0xD0, 0x20),
+            "guest team button must not carry the cursor"
+        );
+    }
+
+    #[test]
+    fn waiting_back_button_ink_paints_only_its_rest_record() {
+        // The staged `Wait_Back.ojs` has two records; the quiesced exe
+        // frame shows the rest (gray) face, never the stacked pressed
+        // face. Control code `0x16200002`, bind rect 1
+        // (711,569)-(794,593) from the parsed `State_Waiting.bnd`.
+        let id = "IDC_BUTTON_SWAIT_BACK";
+        let mut figures = HashMap::new();
+        figures.insert(format!("{id}.ojs"), waiting_record_pair(0x03E0, 0x001F));
+        let mut game = waiting_right_column_game(
+            waiting_guest_room(),
+            vec![waiting_placed(id, 50, 50)],
+            figures,
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[50 * 800 + 50],
+            pack_xrgb(0, 255, 0),
+            "BACK must paint its rest record only"
+        );
     }
 
     #[test]

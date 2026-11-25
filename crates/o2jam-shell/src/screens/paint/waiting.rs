@@ -215,6 +215,13 @@ pub struct WaitingCaptions<'a> {
     /// (`0x7789d8 & 0xf0000000`): yellow random caption plus AX badge
     /// family (`FUN_004b2e30`).
     pub random: bool,
+    /// High half of the exe's local selection word `0x7789dc`. The
+    /// entry seeds it (`FUN_004bb2c0`, file `0xbb2c0`) and the song
+    /// applier (`FUN_004ad350`, file `0xad350`) reads it for the
+    /// `Random` map caption and the two `?` card bodies. It is not
+    /// the room-song variant above: a plain 4001 song keeps this word
+    /// random without turning the top-bar caption yellow.
+    pub local_random_selection: bool,
     /// Pinned notice standing over the top-bar room line (the exe's
     /// notice box above the START control,
     /// `docs/music-availability.md` §4); `None` paints the room title.
@@ -590,10 +597,20 @@ pub fn paint_waiting_scene_with_confirm(
     paint_waiting_seat_marks(frame, &seats, art);
     paint_waiting_stamp(frame, art, captions.wait_stamp_lit);
     if waiting_has_staged_covers(&art.placements) {
-        paint_waiting_staged(frame, room, art, captions);
+        paint_waiting_staged(frame, room, art, captions, is_room_master);
     } else {
         paint_waiting_rows(frame, room);
     }
+    paint_waiting_guest_skill_covers(frame, art, is_room_master);
+    paint_waiting_back_rest(frame, art);
+    // The quiesced pair pins the border records for an arena-0 room;
+    // a named arena keeps the toggle records (next evidence step:
+    // capture the animation in a named-arena room).
+    paint_waiting_random_effect_borders(
+        frame,
+        art,
+        captions.local_random_selection && room.arena == 0,
+    );
 }
 
 /// Whether a Waiting control paints one selected record instead of its
@@ -619,6 +636,9 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || WAIT_CHAT_TAB_IDS.contains(&id)
         || WAIT_MESSENGER_LAMP_IDS.contains(&id)
         || WAIT_STAMP_IDS.contains(&id)
+        || WAITING_SKILL_COVER_IDS.contains(&id)
+        || WAITING_INACTIVE_OVERLAY_IDS.contains(&id)
+        || id == WAITING_BACK_ID
 }
 
 /// Header class chips have no staged wire source. The p343 matched exe
@@ -933,6 +953,30 @@ const WAITING_SPEED_ARROW_IDS: [&str; 2] = [
     "IDC_BUTTON_SWAIT_SPEED_LEFT",
     "IDC_BUTTON_SWAIT_SPEED_RIGHT",
 ];
+/// Waiting BACK button (`0x16200002`, bind rect 1): the quiesced exe
+/// paints its rest record, never the stacked pressed face.
+const WAITING_BACK_ID: &str = "IDC_BUTTON_SWAIT_BACK";
+
+/// The guest's three gray skill covers (`0x1650005B..5D`, bind rects
+/// 90..92). The guest arm of `FUN_004ae350` stages frame 1 on each.
+const WAITING_SKILL_COVER_IDS: [&str; 3] = [
+    "IDC_IMAGE_SWAIT_COVERSKILLLEFT",
+    "IDC_IMAGE_SWAIT_COVERSKILLRIGHT",
+    "IDC_IMAGE_SWAIT_COVERSKILLSEL",
+];
+
+/// The two inactive-dress overlays (`0x1650006E/6F`). The guest branch
+/// of `FUN_004ae350` stages frame 1, which names no body in
+/// `Waiting_Speed_Inactive.ojs`, so the speed row keeps its bare art.
+const WAITING_INACTIVE_OVERLAY_IDS: [&str; 2] = [
+    "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE",
+    "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE",
+];
+
+/// High-word caption of the local selection word (`FUN_004ad350`,
+/// rdata `Random` string at file `0x2498a4`).
+const WAITING_RANDOM_MAP_NAME: &str = "Random";
+
 /// Skill-slot art ids top to bottom (`1/2/3SKILL`, codes
 /// `0x16500058..5A` → rects 87..89, the X boxes of the SKILL panel).
 pub(crate) const WAITING_SKILL_IDS: [&str; 3] = [
@@ -1456,6 +1500,7 @@ pub(crate) fn paint_waiting_staged(
     room: &JoinedRoom,
     art: &SceneArt,
     captions: &WaitingCaptions<'_>,
+    is_room_master: bool,
 ) {
     let placements = &art.placements;
     match captions.notice {
@@ -1465,7 +1510,7 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
     paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
-    paint_waiting_team_highlight(frame, room, placements);
+    paint_waiting_team_highlight(frame, room, placements, is_room_master);
     paint_waiting_effect_toggle(frame, art, captions.effect);
     paint_waiting_chat_tabs(frame, art, captions.chat_channel);
     paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
@@ -1473,7 +1518,7 @@ pub(crate) fn paint_waiting_staged(
     let speed = captions.level.map_or(room.speed, |level| level.speed);
     paint_waiting_speed_art(frame, speed, art);
     paint_waiting_random_card(frame, art);
-    paint_waiting_random_effect_cards(frame, art, captions.random);
+    paint_waiting_random_effect_cards(frame, art, captions.local_random_selection);
     paint_waiting_speed_arrows(frame, art);
     paint_waiting_skills(frame, room, captions.skill_slots, placements);
     paint_waiting_skillcounts(
@@ -1482,7 +1527,7 @@ pub(crate) fn paint_waiting_staged(
         captions.skill_slots,
         placements,
     );
-    paint_waiting_mapname(frame, room, placements);
+    paint_waiting_mapname(frame, room, placements, captions.local_random_selection);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
     paint_waiting_music(frame, placements, captions.song, captions.random);
 }
@@ -1722,7 +1767,14 @@ pub(crate) fn paint_waiting_team_highlight(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     placements: &[ScenePlacement],
+    is_room_master: bool,
 ) {
+    // The guest branch resets all eight team buttons and disables them
+    // (`FUN_004ae350`, REA batch `ev_fb099d23…`, files `0xaec..`), so
+    // the amber press mark cannot stand on a guest's team.
+    if !is_room_master {
+        return;
+    }
     let index = usize::from(room.team);
     let (Some(button), Some(expected)) =
         (WAITING_TEAM_IDS.get(index), WAIT_TEAM_SPRITES.get(index))
@@ -1951,6 +2003,56 @@ fn paint_waiting_random_card(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
 }
 
+/// Paint one staged record of a control instead of its whole stack.
+/// The exe's image control paints the one frame its setter staged
+/// (`docs/ui-draw.md` steps 3-6); a record past the body's end paints
+/// nothing.
+fn paint_waiting_one_record(frame: &mut Frame<'_>, art: &SceneArt, id: &str, record: usize) {
+    let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+        return;
+    };
+    let shares_body = placed
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared_sprite_names(&art.placements).contains(sprite));
+    paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
+}
+
+/// Stage the guest's three skill covers after the generic art pass:
+/// the guest arm of `FUN_004ae350` sets frame 1 on each (REA batch
+/// `ev_fb099d23…`). The two inactive overlays take frame 1 too, but
+/// their bodies have one record only, so `waiting_paints_one_record`
+/// leaves them unpainted for both roles. The master arm clears the
+/// covers, so nothing is painted there.
+fn paint_waiting_guest_skill_covers(frame: &mut Frame<'_>, art: &SceneArt, is_room_master: bool) {
+    if is_room_master {
+        return;
+    }
+    for id in WAITING_SKILL_COVER_IDS {
+        paint_waiting_one_record(frame, art, id, 1);
+    }
+}
+
+/// Paint the BACK button's rest record over its stacked pressed face.
+/// The 7.55 quiesced frame carries the dark face at bind rect 1.
+fn paint_waiting_back_rest(frame: &mut Frame<'_>, art: &SceneArt) {
+    paint_waiting_one_record(frame, art, WAITING_BACK_ID, 0);
+}
+
+/// Paint the quiesced border records on the two mini-card rects: the
+/// first card's bright frame and the second card's dim frame. The
+/// applier mounts its two Random bodies there (`FUN_004ad350`, REA
+/// `ev_2cb3a3c4…`); the staged button bodies carry the same two
+/// borders. The click animation remains OPEN.
+fn paint_waiting_random_effect_borders(frame: &mut Frame<'_>, art: &SceneArt, local_random: bool) {
+    if !local_random {
+        return;
+    }
+    for (index, id) in WAIT_EFFECT_IDS.iter().enumerate() {
+        paint_waiting_one_record(frame, art, id, usize::from(index == 0));
+    }
+}
+
 /// Paint the two arrow bodies at their rest record. The generic stack
 /// used to end on the dark pressed frame, dimming the whole SPEED
 /// plate against the 7.55 pair (#883).
@@ -2170,16 +2272,22 @@ pub(crate) fn paint_waiting_mapname(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     placements: &[ScenePlacement],
+    local_random: bool,
 ) {
-    // The quiet 7.55 pair leaves the sheet's baked `Random` label in
-    // this cell for an arena-0 room. The static map-cycle table still
-    // names stage entries for other arena words; this negative is the
-    // oracle for the paired room word (next step: tap a non-zero arena).
-    if room.arena == 0 {
+    // The local selection's high flag selects the applier's `Random`
+    // caption. The paired 7.55 frame carries an arena-0 word; that is
+    // the only case this pin covers. A named arena keeps its map-cycle
+    // caption (the non-zero-arena Random arm stays OPEN: next step is
+    // a capture of a Random selection in a named-arena room).
+    let name = if local_random && room.arena == 0 {
+        WAITING_RANDOM_MAP_NAME
+    } else if room.arena == 0 {
         return;
-    }
+    } else {
+        waiting_map_name(room.arena)
+    };
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MAPNAME_ID, frame) {
-        paint_room_detail_line(frame, x, y, waiting_map_name(room.arena), art_title_ink());
+        paint_room_detail_line(frame, x, y, name, art_title_ink());
     }
 }
 
