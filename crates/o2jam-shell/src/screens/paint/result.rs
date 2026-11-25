@@ -580,7 +580,14 @@ pub(crate) fn paint_result_body_frame(
         return;
     };
     let (x, y) = anchor_in_frame(layer.dx, layer.dy, frame.w, frame.h);
-    blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+    o2jam_render::blit_rgb555_clipped(
+        frame,
+        &layer.image.view(),
+        x,
+        y,
+        Some(layer.colorkey),
+        Some(&result_viewport_rect()),
+    );
 }
 
 /// Stretch the album cover over one rect, opaque: JPEG pixels carry
@@ -696,6 +703,7 @@ pub(crate) fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
     let stacked: Vec<ScenePlacement> = art
         .placements
         .iter()
+        .filter(|placed| result_placement_visible(placed.rect))
         .filter(|placed| {
             placed
                 .sprite
@@ -944,6 +952,90 @@ pub(crate) fn paint_result_digit_field_if_staged(
     }
 }
 
+/// One six-byte record of the grade/wire table (exe insert helper
+/// `FUN_004c5940`, file `0xc5940`, ev `f95a.05cd…`): a two-byte id,
+/// a four-byte word, and a one-byte marker. Only the storage shape
+/// and one record per grade band are pinned; what each field means
+/// to the grade chooser stays OPEN.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultGradeBandRecord {
+    /// Two-byte id/value field.
+    pub id: u16,
+    /// Four-byte word field.
+    pub word: u32,
+    /// One-byte marker field.
+    pub marker: u8,
+}
+
+impl ResultGradeBandRecord {
+    /// Exe vector stride for one band record. The field packing
+    /// inside those six bytes stays OPEN; the struct keeps the
+    /// named fields separate instead of inventing an overlap.
+    pub const STORED_BYTES: usize = 6;
+}
+
+/// The six grade bands as six-byte records. The band frames and
+/// thresholds (stored as thousandths) mirror the pinned chooser
+/// ([`o2jam_game::grade_frame`]); the record fields are our storage
+/// mirror, not a claim about the exe's field semantics.
+#[must_use]
+pub fn grade_band_records() -> [ResultGradeBandRecord; 6] {
+    let bands = [
+        (300u32, 1u16),
+        (500, 2),
+        (700, 3),
+        (800, 4),
+        (900, 5),
+        (950, 6),
+    ];
+    std::array::from_fn(|index| {
+        let (threshold_thousandths, frame) = bands[index];
+        ResultGradeBandRecord {
+            id: frame,
+            word: threshold_thousandths,
+            marker: u8::try_from(frame).unwrap_or(0),
+        }
+    })
+}
+
+/// Native viewport the Result page draws clip against (page-clamp
+/// `FUN_0042afd0`, file `0x2afd0`, ev `5092.1018…`). Larger
+/// framebuffers still clip art to the 800×600 page the exe painted.
+#[must_use]
+pub(crate) fn result_viewport_rect() -> Rect {
+    Rect {
+        x: 0,
+        y: 0,
+        w: u32::try_from(NATIVE_WIDTH).unwrap_or(0),
+        h: u32::try_from(NATIVE_HEIGHT).unwrap_or(0),
+    }
+}
+
+/// Whether one staged `.bnd` rect lies inside the native page. The
+/// Result backdrop drops art authored wholly outside it instead of
+/// letting it paint into a larger framebuffer.
+#[must_use]
+pub(crate) fn result_placement_visible(rect: Rect) -> bool {
+    let viewport = result_viewport_rect();
+    let right = rect.x.saturating_add(i32::try_from(rect.w).unwrap_or(i32::MAX));
+    let bottom = rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(i32::MAX));
+    right > viewport.x && rect.x < viewport.x + i32::try_from(viewport.w).unwrap_or(0)
+        && bottom > viewport.y
+        && rect.y < viewport.y + i32::try_from(viewport.h).unwrap_or(0)
+}
+
+/// Scroll step of the pinned list helper (`FUN_0050edb0`, file
+/// `0x10edb0`, ev `c5fe.35c5…`): the requested position is clamped
+/// into the visible window and at zero, and the signed change is the
+/// difference from the previous position. The shell stages no Result
+/// scroll list, so this is a pure seam mirror.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn result_scroll_step(requested: i32, previous: i32, max_top: i32) -> (i32, i32) {
+    let clamped = requested.min(max_top).max(0);
+    (clamped, clamped - previous)
+}
+
 #[cfg(test)]
 mod result_banner_tests {
     use std::collections::HashMap;
@@ -1102,5 +1194,274 @@ mod result_banner_tests {
         let winning_pixels = paint_banner(ResultVerdict::Battle(winning_verdict));
         assert_eq!(ink_at(&winning_pixels, 100, 190), banner_ink(0));
         assert_ne!(ink_at(&winning_pixels, 100, 190), expected_ink);
+    }
+}
+
+#[cfg(test)]
+mod result_page_and_band_tests {
+    use o2jam_render::{expand_rgb555, pack_xrgb, Frame, Rect, Rgb555Image};
+
+    use super::{
+        grade_band_records, paint_album_cover, paint_information_message, paint_result_body_frame,
+        paint_result_scene, result_placement_visible, result_scroll_step, result_viewport_rect,
+        quit_fallback_rects, BattleVerdict, ResultPaint, ResultVerdict, ResultGradeBandRecord,
+        RESULT_RANK_SPRITE,
+    };
+    use crate::screens::paint::SceneArt;
+    use crate::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+    use std::collections::HashMap;
+
+    /// One opaque 1×1 layer at an arbitrary native anchor.
+    fn single_layer_figure(dx: i32, dy: i32, word: u16) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image {
+                w: 1,
+                h: 1,
+                words: vec![word],
+            },
+            dx,
+            dy,
+            colorkey: 0x0000,
+        });
+        figure
+    }
+
+    /// Framebuffer colour of one RGB555 word.
+    fn ink(word: u16) -> u32 {
+        let (red, green, blue) = expand_rgb555(word);
+        pack_xrgb(red, green, blue)
+    }
+
+    /// One score at a pinned band boundary; the live chooser is the
+    /// independent source of truth for the plate, not this test.
+    fn band_score(points: u64) -> o2jam_game::Score {
+        o2jam_game::Score {
+            points,
+            ..o2jam_game::Score::default()
+        }
+    }
+
+    /// #1072 record-storage seam. Live chain: `main.rs::run_play` →
+    /// `ScreenGame::paint_result` → `ScreenGame::grade` →
+    /// `result_grade_frame` → `grade_frame`; the record struct mirrors
+    /// the six-byte vector behind the chooser and wire reader.
+    /// `seam: the vector stride and band count are the whole storage
+    /// contract; field semantics stay OPEN in `docs/pins/result-playing.md`.`
+    #[test]
+    fn grade_table_stages_six_byte_band_records() {
+        let records = grade_band_records();
+        assert_eq!(records.len(), 6, "one record per pinned grade band");
+        assert_eq!(ResultGradeBandRecord::STORED_BYTES, 6);
+        assert_eq!(
+            records.map(|record| record.id),
+            [1, 2, 3, 4, 5, 6],
+            "the record ids must name the six band frames"
+        );
+        assert_eq!(
+            records.map(|record| record.word),
+            [300u32, 500, 700, 800, 900, 950],
+            "the four-byte words carry the pinned thresholds (thousandths)"
+        );
+        assert_eq!(
+            records.map(|record| record.marker),
+            [1, 2, 3, 4, 5, 6],
+            "each band carries its own marker"
+        );
+        // The chooser still climbs the pinned table independently.
+        assert_eq!(
+            super::result_grade_frame(&band_score(3_135), 51),
+            Some(1)
+        );
+        assert_eq!(
+            super::result_grade_frame(&band_score(9_928), 51),
+            Some(6)
+        );
+    }
+
+    /// #1073 page clip. Live chain: `main.rs::run_play` →
+    /// `ScreenGame::paint_result` → `paint_result_scene` →
+    /// `paint_result_body_frame` → the viewport-gated page blit.
+    #[test]
+    fn result_body_frame_clips_to_the_active_native_page() {
+        let mut figure = single_layer_figure(0, 0, 0x03E0);
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image {
+                w: 1,
+                h: 1,
+                words: vec![0x7C00],
+            },
+            dx: 700,
+            dy: 10,
+            colorkey: 0x0000,
+        });
+        let mut figures = HashMap::new();
+        figures.insert(RESULT_RANK_SPRITE.to_owned(), figure);
+        let mut buf = vec![0u32; 1000 * 700];
+        paint_result_body_frame(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1000,
+                h: 700,
+            },
+            &figures,
+            RESULT_RANK_SPRITE,
+            Some(2),
+        );
+        // The anchor scales to x=875 in this larger framebuffer: it
+        // is inside the buffer but outside the 800x600 exe page.
+        assert_eq!(buf[12 * 1000 + 875], 0, "art outside the page is clipped");
+        assert_eq!(result_viewport_rect().w, 800);
+    }
+
+    /// #1074 active-page art. Live chain: `main.rs::run_play` →
+    /// `ScreenGame::paint_result` → `paint_result_scene` →
+    /// `paint_result_backdrop` → the staged placement's page draw.
+    #[test]
+    fn result_backdrop_drops_art_authored_outside_the_page() {
+        let sprite = "OutsidePage.ojs";
+        let mut figures = HashMap::new();
+        figures.insert(sprite.to_owned(), single_layer_figure(-200, 0, 0x03E0));
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                id: "IDC_OUTSIDE".to_owned(),
+                code: 0x1710_0099,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 900,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                role: PlacementRole::Single,
+            }],
+            figures,
+        };
+        assert!(
+            !result_placement_visible(art.placements[0].rect),
+            "a rect wholly outside the page is not staged"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        super::paint_result_backdrop(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        assert_eq!(buf[0], 0, "its anchor cannot bleed back into the page");
+    }
+
+    /// #1075 unclamped caller rect. `seam: the caller-rect arm is a
+    /// pure page-draw contract with no live Result caller; the pane's
+    /// retired chart-cover path is not revived here (story OPEN).`
+    #[test]
+    fn result_caller_supplied_rect_skips_the_page_clamp() {
+        let cover = Rgb555Image {
+            w: 1,
+            h: 1,
+            words: vec![0x7C00],
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_album_cover(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &cover,
+            Rect {
+                x: 900,
+                y: 0,
+                w: 10,
+                h: 10,
+            },
+        );
+        assert!(
+            buf.iter().all(|pixel| *pixel == 0),
+            "an off-page caller rect paints nothing; it is never clamped in"
+        );
+    }
+
+    /// #1077 fixed-rect notice gate. Live chain: `0x55c0a0` 2016
+    /// handler → `FUN_0050ce50` → caption helper → fixed rect; our
+    /// painter route is `paint_information_message` →
+    /// `paint_cp949_into_rect` → `paint_text_into_rect`.
+    #[test]
+    fn result_notice_gate_keeps_empty_text_off_the_fixed_rect() {
+        let (message, _, _) = quit_fallback_rects();
+        let frame_rect = |text: &[u8]| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_information_message(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                None,
+                text,
+            );
+            let width = 800usize;
+            let top = usize::try_from(message.y).expect("rect top fits usize");
+            let left = usize::try_from(message.x).expect("rect left fits usize");
+            let rows = usize::try_from(message.h).expect("rect height fits usize");
+            let columns = usize::try_from(message.w).expect("rect width fits usize");
+            (top..top + rows)
+                .flat_map(|y| (left..left + columns).map(move |x| (y, x)))
+                .map(|(y, x)| buf[y * width + x])
+                .collect::<Vec<_>>()
+        };
+        let empty = frame_rect(b"");
+        let noticed = frame_rect(b"NOTICE");
+        assert!(
+            !empty.contains(&ink(0x7FFF)),
+            "an empty caption paints no white ink"
+        );
+        assert!(
+            noticed.contains(&ink(0x7FFF)),
+            "the fixed rect inks a nonempty caption in white"
+        );
+    }
+
+    /// #1078 scroll clamp. `seam: pure math mirror of the pinned
+    /// scroll helper; the shell stages no Result scroll list.`
+    #[test]
+    fn result_scroll_clamps_at_the_window_and_zero() {
+        assert_eq!(result_scroll_step(9, 1, 4), (4, 3), "window clamp");
+        assert_eq!(result_scroll_step(-5, 2, 4), (0, -2), "zero clamp");
+        assert_eq!(result_scroll_step(3, 1, 4), (3, 2), "signed change");
+    }
+
+    /// Tier-3 paint legs need a full ResultPaint; this keeps the
+    /// seam tests independent of any staged archive.
+    #[test]
+    fn result_seam_scene_paints_without_staged_art() {
+        let mut figures = HashMap::new();
+        figures.insert(RESULT_RANK_SPRITE.to_owned(), single_layer_figure(395, 531, 0x7C00));
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures,
+        };
+        let score = o2jam_game::Score::default();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                portrait_slots: None,
+                score: &score,
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Battle(Some(BattleVerdict::Other)),
+                grade: None,
+                life_readout: None,
+                bottom_counter: None,
+            },
+        );
+        assert_eq!(buf[531 * 800 + 395], 0, "no grade stages no plate");
     }
 }
