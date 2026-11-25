@@ -20,11 +20,15 @@ mod live_guard;
 mod live_input_legs;
 #[cfg(test)]
 mod live_leg_support;
+mod live_payment_legs;
+mod live_planet_channel_legs;
 mod live_room_chat_legs;
 mod live_room_input_legs;
 mod live_room_seat_legs;
 mod live_room_wire_legs;
 mod live_stats;
+mod live_waiting_seat_legs;
+mod live_waiting_wire_legs;
 mod loading;
 mod menu_trace_replay;
 mod relay_gate;
