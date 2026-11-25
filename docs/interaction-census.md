@@ -987,3 +987,375 @@ Input edges with no matching ControlList entry:
 |---|---|---|
 | Music-shop sort direction and pager pairing | Directions/pairings ASSUMED in `docs/parity/musicshop.md`. | OPEN: SendInput sweep + gateway replay; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
 | TOP100 standings contents | Eight chrome rects answer presses; standings unpinned (#179). | OPEN: capture with a 5011 rank reply; seam music_shop_top100_arm_stages_eight_rects_and_answer_each_press (Tier 0) |
+
+## Options
+
+The ControlList defines three option sheets (`DIALOG_OPTION_KEY`,
+`DIALOG_OPTION_SOUND`, `DIALOG_OPTION_GAME`); there is no combined
+`STATE_OPTION` block. Each sheet is censused below.
+
+### Options / Key sheet
+
+Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
+(lines 1242–1277; 26 entries / 25 rects). Ordinals are `(code & 0xFFF) - 1`.
+Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
+from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_OPTION_KEY` (`0x25000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DOPTION_1` (`0x25100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_DOPTION_KEY_BACK` (`0x25500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_BUTTON_DOPTION_3KEY` (`0x25201003`) | tab / toggle | Key tab 3K selector; switches the staged-code family (#18). | OPEN: live tab press from Planet and Room (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
+| 3 | `IDC_BUTTON_DOPTION_7KEY` (`0x25201004`) | tab / toggle | Key tab 7K selector; switches the staged-code family (#18). | OPEN: live tab press from Planet and Room (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
+| 4 | `IDC_BUTTON_DOPTION_KEYTEST` (`0x2520A005`) | tab / toggle | Key-test checkbox; checked state paints the key-down bodies (#845). | OPEN: checkbox press capture (#845); seam options_sheets_paint_rest_hover_and_active_frames (Tier 0) |
+| 5 | `IDC_IMAGE_DOPTION_3KEYSELECT` (`0x25500006`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 6 | `IDC_IMAGE_DOPTION_KEYSELECT` (`0x25500007`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 7 | `IDC_BUTTON_DOPTION_3KEY_1` (`0x25209008`) | tab / toggle | 3K lane 1 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 8 | `IDC_BUTTON_DOPTION_3KEY_2` (`0x25209009`) | tab / toggle | 3K lane 2 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 9 | `IDC_BUTTON_DOPTION_3KEY_3` (`0x2520900A`) | tab / toggle | 3K lane 3 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 10 | `IDC_BUTTON_DOPTION_3KEY_4` (`0x2520900B`) | tab / toggle | 3K lane 4 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 11 | `IDC_BUTTON_DOPTION_KEY1` (`0x2520900C`) | tab / toggle | 7K lane 1 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 12 | `IDC_BUTTON_DOPTION_KEY2` (`0x2520900D`) | tab / toggle | 7K lane 2 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 13 | `IDC_BUTTON_DOPTION_KEY3` (`0x2520900E`) | tab / toggle | 7K lane 3 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 14 | `IDC_BUTTON_DOPTION_KEY4` (`0x2520900F`) | tab / toggle | 7K lane 4 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 15 | `IDC_BUTTON_DOPTION_KEY5` (`0x25209010`) | tab / toggle | 7K lane 5 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 16 | `IDC_BUTTON_DOPTION_KEY6` (`0x25209011`) | tab / toggle | 7K lane 6 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 17 | `IDC_BUTTON_DOPTION_KEY7` (`0x25209012`) | tab / toggle | 7K lane 7 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 18 | `IDC_IMAGE_DOPTION_3KEYDOWN` (`0x25500013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 19 | `IDC_IMAGE_DOPTION_KEYDOWN` (`0x25500014`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 20 | `IDC_BUTTON_DOPTION_DEFAULT` (`0x25200015`) | button | Restores the tab defaults; SAVE rejects zero/duplicate binds (#18). | OPEN: live press + ini leg; seam options_default_restores_the_exe_defaults_per_tab (Tier 0) |
+| 21 | `IDC_BUTTON_DOPTION_SAVE` (`0x25200016`) | button | Commits option.ini beside the install root (#18). | OPEN: live press + ini leg; seam options_save_commits_beside_the_install_root (Tier 0) |
+| 22 | `IDC_BUTTON_DOPTION_EXIT` (`0x25200017`) | button | Closes without saving; Escape also closes (#18). | OPEN: live press + dialog-ownership leg (#314) |
+| 23 | `IDC_BUTTON_DOPTION_SOUNDSET` (`0x25600018`) | button | Switches to the Sound tab at the staged rect (#854). | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
+| 24 | `IDC_BUTTON_DOPTION_GAMESET` (`0x25600019`) | button | Switches to the Game tab at the staged rect (#854). | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
+
+### Options / Sound sheet
+
+Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
+(lines 1281–1308; 23 entries / 22 rects). Ordinals are `(code & 0xFFF) - 1`.
+Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
+from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_OPTION_SOUND` (`0x26000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DOPTIONSOUND` (`0x26100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DOPTIONSOUND_BGDOWN` (`0x26200002`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 2 | `IDC_BUTTON_DOPTIONSOUND_BGUP` (`0x26200003`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 3 | `IDC_BUTTON_DOPTIONSOUND_GAMEALLDOWN` (`0x26200004`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 4 | `IDC_BUTTON_DOPTIONSOUND_GAMEALLUP` (`0x26200005`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 5 | `IDC_BUTTON_DOPTIONSOUND_GAMEMUSICDOWN` (`0x26200006`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 6 | `IDC_BUTTON_DOPTIONSOUND_GAMEMUSICUP` (`0x26200007`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 7 | `IDC_BUTTON_DOPTIONSOUND_GAMEKEYDOWN` (`0x26200008`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 8 | `IDC_BUTTON_DOPTIONSOUND_GAMEKEYUP` (`0x26200009`) | button | Volume step ±4 in 0..255; first pair moves GameBGVolume and BGVolume together (#712). | OPEN: live slider click + ini leg (#314); seam options_sound_tab_steps_move_volumes_with_exe_bounds (Tier 0) |
+| 9 | `IDC_IMAGE_DOPTIONSOUND_BGEDGE` (`0x2650000A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 10 | `IDC_IMAGE_DOPTIONSOUND_GAMEALLEDGE` (`0x2650000B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 11 | `IDC_IMAGE_DOPTIONSOUND_GAMEMUSICEDGE` (`0x2650000C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 12 | `IDC_IMAGE_DOPTIONSOUND_GAMEKEYEDGE` (`0x2650000D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 13 | `IDC_IMAGE_DOPTIONSOUND_KEYSET` (`0x2660000E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 14 | `IDC_IMAGE_DOPTIONSOUND_GAMESET` (`0x2660000F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 15 | `IDC_BUTTON_DOPTIONSOUND_DEFAULT` (`0x26200010`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_default_restores_the_exe_defaults_per_tab (Tier 0) |
+| 16 | `IDC_BUTTON_DOPTIONSOUND_SAVE` (`0x26200011`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_default_restores_the_exe_defaults_per_tab (Tier 0) |
+| 17 | `IDC_BUTTON_DOPTIONSOUND_EXIT` (`0x26200012`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_default_restores_the_exe_defaults_per_tab (Tier 0) |
+| 18 | `IDC_IMAGE_DOPTIONSOUND_BGBAR` (`0x26500013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 19 | `IDC_IMAGE_DOPTIONSOUND_GAMEALLBAR` (`0x26500014`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 20 | `IDC_IMAGE_DOPTIONSOUND_GAMEMUSICBAR` (`0x26500015`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 21 | `IDC_IMAGE_DOPTIONSOUND_GAMEKEYBAR` (`0x26500016`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+### Options / Game sheet
+
+Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
+(lines 1611–1639; 24 entries / 23 rects). Ordinals are `(code & 0xFFF) - 1`.
+Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
+from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_OPTION_GAME` (`0x2F000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DOPTION_GAME` (`0x2F100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DOPTIONGAME_EFFECTHIGH` (`0x2F209002`) | tab / toggle | Effects High → in-memory 2 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 2 | `IDC_BUTTON_DOPTIONGAME_EFFECTNORMAL` (`0x2F209003`) | tab / toggle | Effects Normal → in-memory 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 3 | `IDC_BUTTON_DOPTIONGAME_EFFECTLOW` (`0x2F209004`) | tab / toggle | Effects Low → in-memory 0 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 4 | `IDC_BUTTON_DOPTIONGAME_BLENDHALF_YES` (`0x2F209005`) | tab / toggle | EQ Yes → 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 5 | `IDC_BUTTON_DOPTIONGAME_BLENDHALF_NO` (`0x2F209006`) | tab / toggle | EQ No → 0 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 6 | `IDC_BUTTON_DOPTIONGAME_NOTETYPE1` (`0x2F209007`) | tab / toggle | NoteType1 → 0 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 7 | `IDC_BUTTON_DOPTIONGAME_NOTETYPE2` (`0x2F209008`) | tab / toggle | NoteType2 → 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 8 | `IDC_BUTTON_DOPTIONGAME_NOTEGUIDELONG` (`0x2F209009`) | tab / toggle | Guide Long → 3 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 9 | `IDC_BUTTON_DOPTIONGAME_NOTEGUIDEMIDDLE` (`0x2F20900A`) | tab / toggle | Guide Middle → 2 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 10 | `IDC_BUTTON_DOPTIONGAME_NOTEGUIDESHORT` (`0x2F20900B`) | tab / toggle | Guide Short → 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 11 | `IDC_BUTTON_DOPTIONGAME_NOTEGUIDENOUSE` (`0x2F20900C`) | tab / toggle | Guide NoUse → 0 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 12 | `IDC_BUTTON_DOPTIONGAME_DEFAULT` (`0x2F20000D`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 13 | `IDC_BUTTON_DOPTIONGAME_SAVE` (`0x2F20000E`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 14 | `IDC_BUTTON_DOPTIONGAME_EXIT` (`0x2F20000F`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 15 | `IDC_BUTTON_DOPTIONGAME_KEYSET` (`0x2F600010`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
+| 16 | `IDC_BUTTON_DOPTIONGAME_SOUNDSET` (`0x2F600011`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
+| 17 | `IDC_IMAGE_DOPTIONGAME_EFFECTUNCHECK1` (`0x2F500012`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 18 | `IDC_IMAGE_DOPTIONGAME_EFFECTUNCHECK2` (`0x2F500013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 19 | `IDC_BUTTON_DOPTIONGAME_MODEFULL` (`0x2F209014`) | tab / toggle | ModeFull → 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 20 | `IDC_BUTTON_DOPTIONGAME_MODEWIN` (`0x2F209015`) | tab / toggle | ModeWin → 2 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 21 | `IDC_BUTTON_DOPTIONGAME_LONGNOTEMODE_USED` (`0x2F209016`) | tab / toggle | Longnote Used → 1 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+| 22 | `IDC_BUTTON_DOPTIONGAME_LONGNOTEMODE_NONE` (`0x2F209017`) | tab / toggle | Longnote None → 0 (`docs/options.md`). | OPEN: live press + ini leg (#314); seam options_game_tab_buttons_map_to_the_pinned_ini_values (Tier 0) |
+
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Options raw-key capture and focus | Mapped press writes the active bind table; unmapped keys refused; keys leak to chat/background in Room and Planet (#314). | OPEN: live raw-key leg from both entry paths (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
+| Options hover over key/slider cells | Hover blanks the key area in Room/Planet (#314 C4/C3); sheet rest/hover/active frames are seam-pinned only. | OPEN: off/on/off pixel trio from both entry paths; seam options_sheets_paint_rest_hover_and_active_frames (Tier 0) |
+
+## Dialogs
+
+The ControlList defines the dialog families below. Each entry is one row;
+`Dialog_*.bnd` rects pair by `(code & 0xFFF) - 1` (`docs/bnd-semantics.md`).
+
+### create room / DIALOG_CREATEROOM
+
+Source: `BOUND "Dialog_CreateRoom.bnd"` (lines 1222–1238; 10 entries / 9 rects).
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CROOM` (`0x24000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DCROOM_1` (`0x24100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DCROOM_CREATE` (`0x24200002`) | button | Commit 2004 → Waiting as master; typed title and mode fields ride the staged form (`#53`, `#269`). | OPEN: live CREATE press + 2004 gateway leg (#53/#269); seam waiting_create_room_commit_stages_room_over_scripted_gateway (Tier 2) |
+| 2 | `IDC_BUTTON_DCROOM_CANCEL` (`0x24200003`) | button | Cancels the sheet and returns to the lobby board. | OPEN: live CANCEL click + sheet-dismissal leg |
+| 3 | `IDC_BUTTON_DCROOM_NORMAL_MODE` (`0x2420B004`) | tab / toggle | NORMAL-mode selector; baked disabled faces on a fresh open (#53). | OPEN: mode toggle capture; seam create_room_toggle_click_paints_the_selected_face_under_the_cursor (Tier 0) |
+| 4 | `IDC_BUTTON_DCROOM_LIVEBATTLE_MODE` (`0x2420B005`) | tab / toggle | LIVE BATTLE-mode selector; same disabled-face rule. | OPEN: mode toggle capture; seam create_room_toggle_click_paints_the_selected_face_under_the_cursor (Tier 0) |
+| 5 | `IDC_BUTTON_DCROOM_3KEY_MODE` (`0x2420B006`) | tab / toggle | 3-key mode selector; live toggle face under the cursor (#53). | OPEN: mode toggle capture; seam create_room_toggle_click_paints_the_selected_face_under_the_cursor (Tier 0) |
+| 6 | `IDC_BUTTON_DCROOM_7KEY_MODE` (`0x2420B007`) | tab / toggle | 7-key mode selector; live toggle face under the cursor (#53). | OPEN: mode toggle capture; seam create_room_toggle_click_paints_the_selected_face_under_the_cursor (Tier 0) |
+| 7 | `IDC_EDIT_DCROOM_TITLE` (`0x24300008`) | edit / key-path | Room-title draft; Commit 2004 carries the typed string. | OPEN: live typing + 2004 body leg; seam create_room_commit_stages_the_typed_title (Tier 0) |
+| 8 | `IDC_EDIT_DCROOM_PASSWORD` (`0x24300009`) | edit / key-path | Password draft; Commit 2004 carries the typed string. | OPEN: live typing + 2004 body leg; seam create_room_form (Tier 2) |
+
+### password / DIALOG_INPUTPASSWORD
+
+Source: `BOUND "Dialog_Password.bnd"` (lines 1494–1503; 6 entries / 5 rects).
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_PASSWORD` (`0x28000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DPASSWORD_1` (`0x28100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_TEXT_PASSWORDINFO` (`0x28400002`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 2 | `IDC_EDIT_DPASSWORD` (`0x28300003`) | edit / key-path | Password draft; join body carries it. | OPEN: live typing + 3002 password-body leg |
+| 3 | `IDC_BUTTON_DPASSWORD_OK` (`0x28200004`) | button | Join Commit 3002 with the typed password → Waiting (#269). | OPEN: live typed Commit + 3002 gateway leg (#269); seam password_join_commit_stages_room_over_scripted_gateway (Tier 2) |
+| 4 | `IDC_BUTTON_DPASSWORD_CANCEL` (`0x28200005`) | button | Dismisses the password sheet without a join. | OPEN: live CANCEL click + sheet-dismissal leg |
+
+### shop confirm / DIALOG_INFORMATION
+
+Source: block `DIALOG_INFORMATION` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_INFO` (`0x21000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DINFO` (`0x21100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DINFO_OK` (`0x21200002`) | button | One-OK information sheet: dismisses and releases held rows (#717 / relay-down pin). | VERIFIED: live_click_dialog_ok_releases_the_held_channel_rows (Tier 3) — boot → OK click → rows released |
+| 2 | `IDC_TEXT_DINFO_MESSAGE` (`0x21400003`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### shop confirm / DIALOG_QUESTION1
+
+Source: block `DIALOG_QUESTION1` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_QUESTION1` (`0x22000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DQUESTION1` (`0x22100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DQUESTION1_OK` (`0x22200002`) | button | BUYITEM MESSAGE sheet OK: local commit, no purchase opcode (#867). | VERIFIED: live_boot_cart_row_buy_paints_the_native_message_sheet (Tier 3) — boot → BUYITEM → OK commit, no buy wire |
+| 2 | `IDC_BUTTON_DQUESTION1_CANCEL` (`0x22200003`) | button | BUYITEM MESSAGE sheet CANCEL: dismiss, no purchase opcode (#867). | VERIFIED: live_boot_cart_row_buy_paints_the_native_message_sheet (Tier 3) — boot → BUYITEM → CANCEL dismiss, no buy wire |
+| 3 | `IDC_TEXT_DQUESTION1_MESSAGE` (`0x22400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### shop confirm / DIALOG_QUESTION2
+
+Source: block `DIALOG_QUESTION2` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_QUESTION2` (`0x23000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DQUESTION2` (`0x23100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DQUESTION2_YES` (`0x23200002`) | button | YES arm of the two-choice sheet; no live shop mount pinned. | OPEN: pin a live exe mount of Dialog_Question2, then a Tier 3 YES click leg |
+| 2 | `IDC_BUTTON_DQUESTION2_NO` (`0x23200003`) | button | NO arm of the two-choice sheet; no live shop mount pinned. | OPEN: pin a live exe mount of Dialog_Question2, then a Tier 3 NO click leg |
+| 3 | `IDC_TEXT_DQUESTION2_MESSAGE` (`0x23400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### shop confirm / DIALOG_SHOPPINGBAG_ADD
+
+Source: block `DIALOG_SHOPPINGBAG_ADD` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_SHOPPINGBAG_ADD` (`0x82000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_SHOPPINGBAG_ADD` (`0x82100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_SHOPPINGBAG_ADD_GEM` (`0x82200002`) | button | Gem-price purchase choice; sheet parked with no exe mount or add opcode (#316 / #685). | OPEN: one qualified cart-add click + add/reply opcode capture (#316 story 11, #685) |
+| 2 | `IDC_BUTTON_SHOPPINGBAG_ADD_CASH` (`0x82200003`) | button | Cash-price purchase choice; same parked-sheet rule. | OPEN: one qualified cart-add click + add/reply opcode capture (#316 story 11, #685) |
+| 3 | `IDC_BUTTON_SHOPPINGBAG_ADD_CANCEL` (`0x82200004`) | button | Cancels the parked add sheet; no live exe frame. | OPEN: one qualified cart-add dismissal capture (#316 story 11) |
+| 4 | `IDC_TEXT_SHOPPINGBAG_ADD_ITEMNAME` (`0x82400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 5 | `IDC_TEXT_SHOPPINGBAG_ADD_GEMPRICE` (`0x82400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 6 | `IDC_TEXT_SHOPPINGBAG_ADD_CASHPRICE` (`0x82400007`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### messenger / liveness / DIALOG_MESSENGER_MAIN
+
+Source: block `DIALOG_MESSENGER_MAIN` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_MAIN` (`0x86000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_MAIN` (`0x86100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_MAIN_CLOSE` (`0x86200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND1` (`0x86041003`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 3 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND2` (`0x86041004`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 4 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND3` (`0x86041005`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 5 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND4` (`0x86041006`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 6 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND5` (`0x86041007`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 7 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND6` (`0x86041008`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 8 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND7` (`0x86041009`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 9 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND8` (`0x8604100A`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 10 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND9` (`0x8604100B`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 11 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND10` (`0x8604100C`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 12 | `IDC_BUTTON2_MESSENGER_FRIEND_EXTEND11` (`0x8604100D`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 13 | `IDC_IMAGE_MESSENGER_MAIN_CHECK` (`0x8650000E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 14 | `IDC_TEXT_MESSENGER_MAIN_GROUPNAME` (`0x8640000F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 15 | `IDC_IMAGE_MESSENGER_MAIN_FLISTONOFF` (`0x86500010`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 16 | `IDC_TEXT_MESSENGER_MAIN_FRIENDNAME` (`0x86400011`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 17 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND1` (`0x86042012`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 18 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND2` (`0x86042013`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 19 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND3` (`0x86042014`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 20 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND4` (`0x86042015`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 21 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND5` (`0x86042016`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 22 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND6` (`0x86042017`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 23 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND7` (`0x86042018`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 24 | `IDC_BUTTON2_MESSENGER_NOTE_EXTEND8` (`0x86042019`) | row panel (SET parent) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 25 | `IDC_TEXT_MESSENGER_MAIN_SENDUSERNAME` (`0x8640001A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 26 | `IDC_TEXT_MESSENGER_MAIN_RECVMESAGE` (`0x8640001B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 27 | `IDC_IMAGE_MESSENGER_MAIN_NOTEDEL` (`0x8650001C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 28 | `IDC_IMAGE_MESSENGER_MAIN_RECVNOTE` (`0x8660001D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 29 | `IDC_IMAGE_MESSENGER_MAIN_SAVENOTE` (`0x8660001E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 30 | `IDC_TEXT_MESSENGER_MAIN_RECVNOTE` (`0x8640001F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 31 | `IDC_TEXT_MESSENGER_MAIN_SAVENOTE` (`0x86400020`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 32 | `IDC_BUTTON_MESSENGER_MAIN_NOTEPAGELEFT` (`0x86200021`) | button (static digit) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 33 | `IDC_BUTTON_MESSENGER_MAIN_NOTEPAGERIGHT` (`0x86200022`) | button (static digit) | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 34 | `IDC_TEXT_MESSENGER_MAIN_NOTEPAGENUM` (`0x86400023`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 35 | `IDC_BUTTON_MESSENGER_MAIN_NOTESEND` (`0x86200024`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 36 | `IDC_BUTTON_MESSENGER_MAIN_FRIENDLIST_TAP` (`0x86201025`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 37 | `IDC_BUTTON_MESSENGER_MAIN_NOTE_TAP` (`0x86201026`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 38 | `IDC_BUTTON_MESSENGER_MAIN_CHAT1_TAP` (`0x8620B027`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 39 | `IDC_BUTTON_MESSENGER_MAIN_CHAT2_TAP` (`0x8620B028`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 40 | `IDC_BUTTON_MESSENGER_MAIN_CHAT3_TAP` (`0x8620B029`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 41 | `IDC_BUTTON_MESSENGER_MAIN_CHAT4_TAP` (`0x8620B02A`) | tab / toggle | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 42 | `IDC_IMAGE_MESSENGER_MAIN_NOTE_ALARM` (`0x8650002B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 43 | `IDC_IMAGE_MESSENGER_MAIN_CHAT1_ALARM` (`0x8650002C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 44 | `IDC_IMAGE_MESSENGER_MAIN_CHAT2_ALARM` (`0x8650002D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 45 | `IDC_IMAGE_MESSENGER_MAIN_CHAT3_ALARM` (`0x8650002E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 46 | `IDC_IMAGE_MESSENGER_MAIN_CHAT4_ALARM` (`0x8650002F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 47 | `IDC_TEXT_MESSENGER_MAIN_CHAT1_TAP` (`0x86400030`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 48 | `IDC_TEXT_MESSENGER_MAIN_CHAT2_TAP` (`0x86400031`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 49 | `IDC_TEXT_MESSENGER_MAIN_CHAT3_TAP` (`0x86400032`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 50 | `IDC_TEXT_MESSENGER_MAIN_CHAT4_TAP` (`0x86400033`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 51 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_TAPUP` (`0x86200034`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 52 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_TAPDOWN` (`0x86200035`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 53 | `IDC_IMAGE_MESSENGER_MAIN_TAPUP_ALARM` (`0x86500036`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 54 | `IDC_IMAGE_MESSENGER_MAIN_TAPDOWN_ALARM` (`0x86500037`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 55 | `IDC_BUTTON_MESSENGER_MAIN_FRIEND_ADD` (`0x86200038`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 56 | `IDC_BUTTON_MESSENGER_MAIN_GROUP_ADD` (`0x86200039`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 57 | `IDC_IMAGE_MESSENGER_MAIN_O2JAMFRINED_TAP` (`0x8660003A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 58 | `IDC_IMAGE_MESSENGER_MAIN_OTHER_TAP` (`0x8660003B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 59 | `IDC_IMAGE_MESSENGER_MAIN_OTHER_TAP_BACK` (`0x8650003C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 60 | `IDC_TEXT_MESSENGER_MAIN_O2JAMFRINED_TAP` (`0x8640003D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 61 | `IDC_TEXT_MESSENGER_MAIN_OTHER_TAP` (`0x8640003E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 62 | `IDC_EDIT_MESSENGER_MAIN_CHAT` (`0x8630003F`) | edit / key-path | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 63 | `IDC_LIST_MESSENGER_MAIN_CHAT` (`0x86800040`) | list | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 64 | `IDC_SCROLL_MESSENGER_MAIN_FRIEND` (`0x86021041`) | scrollbar | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 65 | `IDC_BUTTON_MESSENGER_MAIN_SCROLLUP` (`0x86200042`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 66 | `IDC_BUTTON_MESSENGER_MAIN_SCROLLDOWN` (`0x86200043`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 67 | `IDC_BUTTON_MESSENGER_MAIN_SCROLLBAR` (`0x86200044`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 68 | `IDC_BUTTON_MESSENGER_MAIN_SCROLLRANGE` (`0x86200045`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 69 | `IDC_SCROLL_MESSENGER_MAIN_CHAT` (`0x86022046`) | scrollbar | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 70 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_SCROLLUP` (`0x86200047`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 71 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_SCROLLDOWN` (`0x86200048`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 72 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_SCROLLBAR` (`0x86200049`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 73 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_SCROLLRANGE` (`0x8620004A`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 74 | `IDC_IMAGE_MESSENGER_MAIN_CHARROOM_ICON` (`0x8650004B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 75 | `IDC_TEXT_MESSENGER_MAIN_CHATROOM_USERNAME` (`0x8640004C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 76 | `IDC_BUTTON_MESSENGER_MAIN_CHAT_CLOSE` (`0x8620004D`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+
+### messenger / liveness / DIALOG_MESSENGER_FRIENDADD
+
+Source: block `DIALOG_MESSENGER_FRIENDADD` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_FRIENDADD` (`0x87000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_FRIENDADD` (`0x87100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_FRIENDADD_OK` (`0x87200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_BUTTON_MESSENGER_FRIENDADD_CANCEL` (`0x87200003`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 3 | `IDC_EDIT_MESSENGER_FRIENDADD_NICKNAME` (`0x87300004`) | edit / key-path | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 4 | `IDC_BUTTON_MESSENGER_FRIENDADD_SEARCH` (`0x87200005`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 5 | `IDC_TEXT_MESSENGER_FRIENDADD_RESULT` (`0x87400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### messenger / liveness / DIALOG_MESSENGER_QUESTION
+
+Source: block `DIALOG_MESSENGER_QUESTION` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_QUESTION` (`0x88000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_QUESTION` (`0x88100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_QUESTION_OK` (`0x88200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_BUTTON_MESSENGER_QUESTION_CANCEL` (`0x88200003`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 3 | `IDC_TEXT_MESSENGER_QUESTION_TITLE` (`0x88400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 4 | `IDC_TEXT_MESSENGER_QUESTION_OK` (`0x88400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 5 | `IDC_TEXT_MESSENGER_QUESTION_CANCEL` (`0x88400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 6 | `IDC_TEXT_MESSENGER_QUESTION_MESSAGE` (`0x88400007`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### messenger / liveness / DIALOG_MESSENGER_NOTE
+
+Source: block `DIALOG_MESSENGER_NOTE` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_NOTE` (`0x89000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_NOTE` (`0x89100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_NOTE_CLOSE` (`0x89200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_BUTTON_MESSENGER_NOTE_SEARCH` (`0x89200003`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 3 | `IDC_EDIT_MESSENGER_NOTE_SERACH` (`0x89300004`) | edit / key-path | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 4 | `IDC_EDIT_MESSENGER_NOTE_MESSAGE` (`0x89300005`) | edit / key-path | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 5 | `IDC_TEXT_MESSENGER_NOTE_RESULT` (`0x89400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 6 | `IDC_BUTTON_MESSENGER_NOTE_SEND` (`0x89200007`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 7 | `IDC_BUTTON_MESSENGER_NOTE_CANCEL` (`0x89200008`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 8 | `IDC_BUTTON_MESSENGER_NOTE_REPLY` (`0x89200009`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 9 | `IDC_BUTTON_MESSENGER_NOTE_SAVE` (`0x8920000A`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 10 | `IDC_TEXT_MESSENGER_NOTE_SENDUSER` (`0x8940000B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 11 | `IDC_TEXT_MESSENGER_NOTE_SENDTIME` (`0x8940000C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 12 | `IDC_TEXT_MESSENGER_NOTE_CHECKMESSAGE` (`0x8940000D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+### messenger / liveness / DIALOG_MESSENGER_POPUPMENU
+
+Source: block `DIALOG_MESSENGER_POPUPMENU` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_POPUPMENU` (`0x8A000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_POPUPMENU` (`0x8A100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_POPUPMENU01` (`0x8A200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_BUTTON_MESSENGER_POPUPMENU02` (`0x8A200003`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 3 | `IDC_BUTTON_MESSENGER_POPUPMENU03` (`0x8A200004`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 4 | `IDC_BUTTON_MESSENGER_POPUPMENU04` (`0x8A200005`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 5 | `IDC_BUTTON_MESSENGER_POPUPMENU05` (`0x8A200006`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+
+### messenger / liveness / DIALOG_MESSENGER_INFORMATION
+
+Source: block `DIALOG_MESSENGER_INFORMATION` in the pinned ControlList; see the family note above.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MESSENGER_INFORMATION` (`0x8B000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MESSENGER_INFORMATION` (`0x8B100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MESSENGER_INFORMATION_OK` (`0x8B200002`) | button | Messenger sheet control; only the Room one-OK liveness host is pinned (wave-2 `w2-messenger-exe`, #859). | OPEN: REA host routing pin for this sheet then Tier 3 click/key leg (#648/#650/#652) |
+| 2 | `IDC_TEXT_MESSENGER_INFORMATION_TITLE` (`0x8B400003`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 3 | `IDC_TEXT_MESSENGER_INFORMATION_OK` (`0x8B400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 4 | `IDC_TEXT_MESSENGER_INFORMATION_MESSAGE` (`0x8B400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+
+Input edges with no separate ControlList row:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Dialog OK / Esc ownership | One-OK sheets dismiss on OK; Escape closes options; key leak to chat/background is OPEN (#314). | OPEN: live dialog-ownership leg from Room and Planet; seam dialog_owns_input (Tier 0) |
+| Room messenger liveness press | Room `IDC_BUTTON_SROOM_MESSENGER` mounts a one-OK sheet with no wire frame (wave-2 pin). | VERIFIED: live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot (Tier 1 live input leg) |
