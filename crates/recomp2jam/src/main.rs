@@ -22,6 +22,7 @@ mod live_input_legs;
 mod live_leg_support;
 mod live_payment_legs;
 mod live_planet_channel_legs;
+mod live_playing_render_legs;
 mod live_playing_shell_legs;
 mod live_playing_wire_legs;
 mod live_result_legs;
