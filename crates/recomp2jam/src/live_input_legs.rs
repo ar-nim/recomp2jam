@@ -22,7 +22,7 @@ mod live_input_leg_tests {
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
-    use o2jam_shell::screens::game::ScreenGame;
+    use o2jam_shell::screens::game::{RoomListFilter, ScreenGame};
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
 
@@ -1051,6 +1051,147 @@ mod live_input_leg_tests {
         );
         session.ingest_snapshot(&InputSnapshot::click_at(aim.0, aim.1));
         assert_mounts_item_shop(&mut session, &samples, "MyRoom GOSHOP");
+
+        finish(session, gateway.server);
+    }
+
+    /// Press one staged mode tab by its parsed `.bnd` control id, from
+    /// a real boot and through pointer snapshots only. The tab centre
+    /// is the painter's rect, never a literal coordinate.
+    fn click_staged_room_filter(session: &mut OnlineSession, id: &str) {
+        click_staged(session, Screen::Room, id);
+    }
+
+    /// Paint one frame and keep the pixels inside the staged [W]/[A]
+    /// rects: the area where the exe moves the active-tab frame. The
+    /// rects come from the parsed `.bnd` placements, never a literal.
+    fn paint_wa_region(session: &mut OnlineSession) -> Vec<u32> {
+        let rects: Vec<Rect> = [
+            "IDC_BUTTON_SROOM_SHOW_ALLMODE",
+            "IDC_BUTTON_SROOM_SHOW_NORMALMODE",
+        ]
+        .iter()
+        .map(|id| {
+            session
+                .game_mut()
+                .scene_placements(Screen::Room)
+                .iter()
+                .find(|placed| placed.id == *id)
+                .unwrap_or_else(|| panic!("no staged placement {id}"))
+                .rect
+        })
+        .collect();
+        let frame = paint_frame(session);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let mut pixels = Vec::new();
+        for rect in &rects {
+            let top = usize::try_from(rect.y).expect("rect top fits usize");
+            let left = usize::try_from(rect.x).expect("rect left fits usize");
+            let rows = usize::try_from(rect.h).expect("rect height fits usize");
+            let columns = usize::try_from(rect.w).expect("rect width fits usize");
+            for y in top..top + rows {
+                for x in left..left + columns {
+                    pixels.push(
+                        *frame
+                            .get(y * width + x)
+                            .unwrap_or_else(|| panic!("tab pixel ({x},{y}) is in frame")),
+                    );
+                }
+            }
+        }
+        pixels
+    }
+
+    /// Number of changed native pixels in one staged tab region.
+    fn changed_pixels(before: &[u32], after: &[u32]) -> usize {
+        before
+            .iter()
+            .zip(after)
+            .filter(|(before, after)| before != after)
+            .count()
+    }
+
+    /// #290 T1: the Room [W]/[A] chrome must flip the local room-family
+    /// selection and the visible active-tab frame in both directions.
+    /// Exe pin: `FUN_0048fb40` at `0x48fb40` writes mode 0/1/2 at state
+    /// `+0x60`, marks the pressed tab through `FUN_0048c810`, resets
+    /// `+0x70` to zero, and calls the row repainter `FUN_00492300`; it
+    /// sends no wire frame (`ev_ff527707048e48accf48b6f291ad97a0abc6324dfb7b5a8f0df25f3318518c71`,
+    /// `ev_e9f783fce3671c057d37820439860dbf27036d606c2c75100eee35d4c61e0b23`,
+    /// `ev_e56494975137c66dc51178cefd71cc920ca8b8b38cc2fe7ee179fb6a5c19a76d`).
+    /// `docs/hover.md` pins the active tab at body frame 1.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_dispatch
+    ///   -> ScreenGame::click_room_row -> ScreenGame::click_room_control
+    ///   -> ScreenGame::room_control_at -> RoomControlAction::RoomFilter
+    ///   -> ScreenGame::refresh_visible_rooms -> ScreenGame::paint_room
+    ///   -> paint_room_scene_with_selection (active tab frame 1).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_wa_tabs_toggle_the_selection_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        assert_eq!(session.game_mut().room_filter(), RoomListFilter::All);
+        // Room entry answers 3002; drain it so the tab taps are measured
+        // against a quiet outbox (the exe arm sends no 2002).
+        while gateway.reports.try_recv().is_ok() {}
+        let all_pixels = paint_wa_region(&mut session);
+
+        click_staged_room_filter(&mut session, "IDC_BUTTON_SROOM_SHOW_NORMALMODE");
+        assert_eq!(
+            session.game_mut().room_filter(),
+            RoomListFilter::Normal,
+            "[A] must select the Normal family"
+        );
+        let normal_pixels = paint_wa_region(&mut session);
+        let moved = changed_pixels(&all_pixels, &normal_pixels);
+        assert!(
+            moved > 0,
+            "[A] must move the active frame off [W] onto [A]; moved {moved} px"
+        );
+
+        click_staged_room_filter(&mut session, "IDC_BUTTON_SROOM_SHOW_ALLMODE");
+        assert_eq!(
+            session.game_mut().room_filter(),
+            RoomListFilter::All,
+            "[W] must select all families"
+        );
+        let back_to_all = paint_wa_region(&mut session);
+        assert_eq!(
+            changed_pixels(&all_pixels, &back_to_all),
+            0,
+            "[W] restores the initial frame"
+        );
+
+        click_staged_room_filter(&mut session, "IDC_BUTTON_SROOM_SHOW_NORMALMODE");
+        assert_eq!(
+            session.game_mut().room_filter(),
+            RoomListFilter::Normal,
+            "[A] must toggle back after [W]"
+        );
+        let normal_again = paint_wa_region(&mut session);
+        assert_eq!(
+            changed_pixels(&normal_pixels, &normal_again),
+            0,
+            "[A] toggles deterministically"
+        );
+        assert!(
+            matches!(
+                gateway.reports.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "the local toggle must send no wire frame"
+        );
 
         finish(session, gateway.server);
     }

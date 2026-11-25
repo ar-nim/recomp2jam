@@ -4704,8 +4704,9 @@ pub use self::result::{
 };
 pub(crate) use self::room::*;
 pub use self::room::{
-    paint_room_scene, paint_room_scene_with_hover, paint_room_user_panel, ROOM_HOVER_SPRITE,
-    ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE, ROOM_PASSWORD_SPRITE, ROOM_STATE_SPRITE,
+    paint_room_scene, paint_room_scene_with_hover, paint_room_scene_with_selection,
+    paint_room_user_panel, ROOM_HOVER_SPRITE, ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE,
+    ROOM_PASSWORD_SPRITE, ROOM_STATE_SPRITE,
 };
 pub(crate) use self::waiting::{
     paint_waiting_members, waiting_bnd_origin, waiting_local_is_master,
