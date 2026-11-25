@@ -3762,4 +3762,136 @@ mod live_input_leg_tests {
         assert_eq!(leave, vec![0, 0], "BACK still posts the 3005 leave");
         finish(session, gateway.server);
     }
+
+    /// One mounted side board must ink its staged control rect at every
+    /// paint clock. Comparing against the Room frame keeps the check on
+    /// the side the click mounted, not on a static fallback face.
+    fn assert_staged_side_rect_repaints(
+        session: &mut OnlineSession,
+        room_frame: &[u32],
+        rect: Rect,
+    ) {
+        for now_ms in [0, 20_000, 50_000] {
+            let mounted = paint_at_frame(session, now_ms);
+            assert!(
+                changed_pixels_in_rect(room_frame, &mounted, rect) > 0,
+                "the mounted side must ink staged rect {rect:?} at {now_ms} ms"
+            );
+        }
+    }
+
+    /// Census #916 Room ord 7. The 7.55 Room dispatcher `0x48fd20` sends
+    /// ITEMSHOP `0x13200008` to state 3 (`docs/parity/lanking.md`, entry
+    /// statics, `ev_ac6983f7…`); the seam guard only pressed a synthetic
+    /// rect. This leg presses the staged `.bnd` rect from boot and reads
+    /// the mounted board, the staged state pixels, and the 5006 entry.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_dispatch
+    ///   -> ScreenGame::click_room_row -> ScreenGame::click_room_control
+    ///   -> ScreenGame::room_control_at -> RoomControlAction::EnterShopSide(Shop)
+    ///   -> ScreenGame::enter_room_side_with_enter_shop -> ScreenGame::visit_side
+    ///   -> ScreenGame::mount_staged_side_art -> ScreenGame::paint_at -> paint_side
+    ///   -> staged STATE_SHOP board (`SHOP_SCROLL_RIGHT_CODE` rect).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_itemshop_click_mounts_the_shop_side_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let samples = staged_shop_samples();
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let itemshop = &room_top_tabs()[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        let room_frame = paint_frame(&mut session);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::Shop),
+            "the staged ITEMSHOP rect must mount the Shop side"
+        );
+        assert_mounts_item_shop(&mut session, &samples, "Room ITEMSHOP tier-3 leg");
+
+        let scroll_rect = session
+            .game_mut()
+            .staged_side_control_rect(SHOP_SCROLL_RIGHT_CODE)
+            .expect("STATE_SHOP stages the scroll control");
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+        assert_staged_side_rect_repaints(&mut session, &room_frame, scroll_rect);
+        assert_eq!(
+            *cue_calls.borrow(),
+            cue_baseline,
+            "the mounted shop board queues no repeated cue across paint clocks"
+        );
+        wait_for_enter_shop(&gateway.reports, itemshop.id);
+        finish(session, gateway.server);
+    }
+
+    /// Census #916 Room ord 8. The same 7.55 dispatcher sends MYROOM
+    /// `0x13200009` to state 4 (`docs/parity/lanking.md`, entry statics,
+    /// `ev_ac6983f7…`); the seam guard only pressed a synthetic rect.
+    /// This leg presses the staged `.bnd` rect from boot and reads the
+    /// mounted MyRoom board and the 5006 entry.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_dispatch
+    ///   -> ScreenGame::click_room_row -> ScreenGame::click_room_control
+    ///   -> ScreenGame::room_control_at -> RoomControlAction::EnterShopSide(MyRoom)
+    ///   -> ScreenGame::enter_room_side_with_enter_shop -> ScreenGame::visit_side
+    ///   -> ScreenGame::mount_staged_side_art -> ScreenGame::paint_at -> paint_side
+    ///   -> staged STATE_MYROOM board (`MYROOM_GOSHOP_CODE` rect).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_myroom_click_mounts_the_myroom_side_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let myroom = &room_top_tabs()[2];
+        assert_tab_aim_is_staged(&mut session, myroom);
+        let room_frame = paint_frame(&mut session);
+        session.ingest_snapshot(&InputSnapshot::click_at(myroom.aim.0, myroom.aim.1));
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::MyRoom),
+            "the staged MYROOM rect must mount the MyRoom side"
+        );
+        assert_eq!(
+            session.game_mut().myroom().panel(),
+            MyRoomPanel::Inventory,
+            "live MyRoom entry stages the exe's Inventory face"
+        );
+
+        let goshop_rect = session
+            .game_mut()
+            .staged_side_control_rect(MYROOM_GOSHOP_CODE)
+            .expect("STATE_MYROOM stages the GOSHOP control");
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+        assert_staged_side_rect_repaints(&mut session, &room_frame, goshop_rect);
+        assert_eq!(
+            *cue_calls.borrow(),
+            cue_baseline,
+            "the mounted MyRoom board queues no repeated cue across paint clocks"
+        );
+        wait_for_enter_shop(&gateway.reports, myroom.id);
+        finish(session, gateway.server);
+    }
 }
