@@ -1416,6 +1416,72 @@ mod live_input_leg_tests {
         finish(session, gateway.server);
     }
 
+    /// Room QUICKJOIN (`0x13200006`) from the real boot path. The
+    /// recording gateway must see exactly one 3002 whose room number is
+    /// the eligible staged row; the 3003 answer then repaints Waiting.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> stage_online_identity -> assemble_online_session ->
+    ///   GameLoop::ingest_snapshot -> OnlineSession::ingest_snapshot ->
+    ///   ScreenGame::click_room_row -> ScreenGame::click_room_control ->
+    ///   RoomControlAction::QuickJoin -> ScreenGame::queue_quickjoin ->
+    ///   GameOutbox.pending_join -> OnlineSession::poll_attempts ->
+    ///   OnlineSession::flush_join -> C2S 3002 -> recording gateway ->
+    ///   S2C 3003 -> ScreenGame::set_joined_room -> Screen::Waiting.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_room_quickjoin_click_posts_3002_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        // This gateway boot fetches no character; stage the same 2001
+        // identity record that a channel login installs, so the exe's
+        // level window reads a real player level.
+        session
+            .game_mut()
+            .set_myroom_character(o2jam_net::CharacterInfo {
+                nickname: "Tester".to_owned(),
+                level: 10,
+                ..o2jam_net::CharacterInfo::default()
+            });
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        // Room entry itself answers one 3002; drain it so the leg
+        // measures only the QUICKJOIN press.
+        while gateway.reports.try_recv().is_ok() {}
+        let before = paint_frame(&mut session);
+
+        let (x, y) = staged_code_centre(&mut session, Screen::Room, 0x1320_0006);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        paint(&mut session);
+        let posted = gateway
+            .reports
+            .recv_timeout(Duration::from_secs(3))
+            .expect("QUICKJOIN must post one 3002 on the gateway");
+        assert_eq!(posted.id, Request::JoinWaiting.id());
+        let join = JoinRoom::decode_body(&posted.payload).expect("3002 body decodes");
+        assert_eq!(join.number, 3, "the staged eligible row's number");
+        assert_eq!(join.music_state, 0);
+        assert!(join.password.is_empty());
+        assert!(
+            matches!(gateway.reports.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "one press queues one 3002, never a second frame"
+        );
+        gateway
+            .join_answer_written
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the gateway answered the 3003");
+        paint_until_screen(&mut session, Screen::Waiting);
+        let after = paint_frame(&mut session);
+        assert_ne!(before, after, "the answered join repaints Waiting");
+
+        finish(session, gateway.server);
+    }
+
     /// Press one staged mode tab by its parsed `.bnd` control id, from
     /// a real boot and through pointer snapshots only. The tab centre
     /// is the painter's rect, never a literal coordinate.
