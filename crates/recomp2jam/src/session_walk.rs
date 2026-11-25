@@ -792,6 +792,8 @@ mod session_walk_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn garbage_archive_bytes_stage_nothing() {
         // Every staging call degrades without failing: bound rows
         // stage nothing with a miss in the ledger, while the
@@ -1015,6 +1017,8 @@ mod session_walk_tests {
     /// reads the choice: pure, no device open, and a broken fence
     /// fails here instead of on the operator's speakers.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn live_walk_bank_attach_stays_on_the_null_sink() {
         use o2jam_audio::SinkChoice;
         let (port, server) = o2jam_net::testing::fake_gateway(|_stream| {});

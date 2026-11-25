@@ -460,6 +460,8 @@ mod tests {
     /// never change tier, so the ADR-0001 sample-clock deviation
     /// cannot change any judgement on a fixed clock.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn song_clock_equivalence_replay_stays_inside_the_pinned_windows() {
         let onsets = fixture_onsets();
         let trace = record_wall_trace();

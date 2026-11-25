@@ -984,6 +984,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn fifth_tail_value_lights_no_guide_button() {
         assert_eq!(guide_of_note_tail(0), Some(NoteGuide::NoUse));
         assert_eq!(guide_of_note_tail(3), Some(NoteGuide::Long));

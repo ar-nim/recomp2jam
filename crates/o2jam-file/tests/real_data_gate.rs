@@ -31,6 +31,8 @@ fn write_pack(root: &Path, archive_names: &[&str]) {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn absent_pack_reports_skip_and_returns_no_directory() {
     let root = fixture_root("absent");
     let report = pack_skip_report(&root, "absent probe");

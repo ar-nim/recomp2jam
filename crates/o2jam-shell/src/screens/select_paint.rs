@@ -451,6 +451,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unstaged_dialog_names_no_text_slots() {
         // Art-less stage: nothing inks, no invented geometry.
         let slots = SelectTextSlots::from_placements(&[]);
@@ -459,6 +461,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn bands_without_set_templates_stage_no_rows() {
         // Row bands alone cannot place text: without the `SET`
         // templates the rows stay empty rather than falling back to a
@@ -479,6 +483,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn text_layer_inks_at_the_staged_slots_and_draws_no_plate() {
         // The frame starts on the retired scrim tone (0x101018, what the
         // old plates filled): after the layer every slot holds glyph

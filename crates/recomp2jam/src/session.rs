@@ -4939,6 +4939,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn flush_sends_nothing_while_the_draft_is_empty() {
         let (mut session, server) = waiting_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -5001,6 +5003,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn confirm_sends_the_draft_and_stays_waiting() {
         let (mut session, server) = waiting_session(|mut stream| {
             let frame = read_frame(&mut stream);
@@ -5025,6 +5029,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn confirm_outside_waiting_sends_nothing() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -5058,6 +5064,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn flush_channel_sends_nothing_while_the_draft_is_empty() {
         let (mut session, server) = channel_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -5067,6 +5075,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_confirm_sends_the_draft_and_stays_in_channel() {
         let (mut session, server) = channel_session(|mut stream| {
             let frame = read_frame(&mut stream);
@@ -5879,6 +5889,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn sell_failure_leaves_the_gem_wallet_untouched() {
         // Same live chain as the refund guard. The invalid sell leg
         // `9c9af74a…50d67` answers 5002 slot999 with 5003 `01000000`:
@@ -6026,6 +6038,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_buy_failure_round_trip_leaves_the_song_unowned_in_the_scripted_gateway() {
         // Live caller chain (same as the success guard):
         //   OnlineSession::paint -> flush_music_buy (5010) ->
@@ -6105,6 +6119,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn scripted_music_buy_failure_opens_the_native_notice_and_invents_no_wire() {
         // Live caller chain:
         //   OnlineSession::paint (GameLoop, the windowed frame entry
@@ -6188,6 +6204,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_entry_sends_no_gift_list_fetch_on_the_scripted_gateway() {
         // Ticket #857. Live caller chain:
         //   main.rs::run_online -> OnlineSession::paint -> poll_wire ->
@@ -6792,6 +6810,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_confirm_stays_on_rejected_login() {
         // A rejected 1005 answers no identity fetch (no 2000 follows)
         // and keeps Channel, so the next Confirm retries the entry.
@@ -6978,6 +6998,8 @@ pub(super) mod session_tests {
         }
 
         #[test]
+        // OPEN: this negative assertion is not yet exe-pinned.
+        // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
         fn result_seven_posts_the_no_channel_information_sheet() {
             refusal_posts_sheet(7, None, CHANNEL_NO_CHANNEL_MESSAGE_CP949);
         }
@@ -6988,6 +7010,8 @@ pub(super) mod session_tests {
         }
 
         #[test]
+        // OPEN: this negative assertion is not yet exe-pinned.
+        // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
         fn successful_login_posts_no_refusal_sheet() {
             let (mut session, server) =
                 channel_session(|mut stream| answer_entry_login(&mut stream));
@@ -7102,6 +7126,8 @@ pub(super) mod session_tests {
 
     #[test]
     #[ignore = "wall-clock paint measurement; run alone in release (#874): cargo test --release --bin recomp2jam channel_login_no_reply_never_blocks_paint -- --ignored --nocapture"]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_login_no_reply_never_blocks_paint() {
         // Ticket #172, the freeze itself: a server that takes the
         // 1004 and never answers must not stall the frame loop — the
@@ -7339,6 +7365,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn attach_with_no_bank_keeps_silent_play() {
         let (mut session, server) = channel_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -7365,6 +7393,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn flush_whisper_sends_nothing_without_draft_or_recipient() {
         let (mut session, server) = channel_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -7436,6 +7466,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn slash_help_sends_nothing_and_clears_the_channel_draft() {
         let (mut session, server) = channel_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -7448,6 +7480,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn slash_help_sends_nothing_and_clears_the_waiting_draft() {
         let (mut session, server) = waiting_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -7682,6 +7716,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn synthetic_2026_body_leaves_the_channel_promo_selection_to_the_carousel() {
         // Live caller chain: fake gateway S2C:2026 ->
         // OnlineSession::paint -> poll_lobby_chat (foreign-id skip) ->
@@ -8225,6 +8261,8 @@ pub(super) mod session_tests {
     /// The body here is synthetic (no exe body was captured), so this
     /// pins only the absence of a local mutation, not a wire layout.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn hypothetical_2009_frame_is_a_no_op_on_the_channel_observer() {
         let (mut session, server) = channel_session(|mut stream| {
             stream
@@ -8535,6 +8573,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_confirm_rejected_stays_in_room() {
         use o2jam_net::{JoinRoom, JoinRoomResponse};
         let (mut session, server) = room_session(|mut stream| {
@@ -8558,6 +8598,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_confirm_foreign_frame_stays_in_room() {
         use o2jam_net::{JoinRoom, MainRoomUserMessage};
         let (mut session, server) = room_session(|mut stream| {
@@ -8592,6 +8634,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn guest_confirm_sends_ready_toggle_and_stays_waiting() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
             // The 4008 toggle rides an empty body (exe send sites push
@@ -8664,6 +8708,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_music_member_blocks_start_and_kicks_the_room_song_download() {
         // docs/music-availability.md §4, live chain: `main.rs::run_play`
         // -> `assemble_online_session` -> `OnlineSession::paint`
@@ -9788,6 +9834,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn loading_confirm_offline_sends_nothing() {
         let (mut session, server) = waiting_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -10248,6 +10296,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_ui_has_no_submitter_marker_from_4017() {
         // #679: REA finds the queue's type-0x12 consumers in the two
         // Playing states, never in Result. The 0xFB1 arm checks a
@@ -11024,6 +11074,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN story #294: this guard certified behavior the owner disproved.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #294.
     fn settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer() {
         // Ticket #683. Live caller chain:
         //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
@@ -11094,6 +11146,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn guest_tally_stages_winning_teams_and_leaves_to_room() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
             stream.write_all(&encode_frame(4011, &[])).unwrap();
@@ -11950,6 +12004,8 @@ pub(super) mod session_tests {
     ///   room-row press -> begin_room_join -> poll_room_join ->
     ///   resolve_room_join -> ScreenGame::set_joined_room.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn rejoin_after_a_disbanded_pick_posts_no_stale_music_select() {
         let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
             assert_eq!(read_frame(&mut stream).id, 3005);
@@ -12321,6 +12377,8 @@ pub(super) mod session_tests {
     /// `ScreenGame::press_start` -> `StartGateVerdict::MusicDownloading`
     /// -> `OnlineSession` send/no-send.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn start_stays_closed_while_a_peer_reports_downloading() {
         let mut room = joined_snapshot();
         room.slots[1].member = Some(member_on_team("peer", true, 1));
@@ -12557,6 +12615,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn invalid_rank_notice_stages_no_row_over_the_wire() {
         use o2jam_net::rooms::RankNotification;
         let notice = RankNotification {
@@ -12575,6 +12635,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_announcement_stages_no_row_over_the_wire() {
         use o2jam_net::rooms::Announcement;
         let notice = Announcement {
@@ -12736,6 +12798,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn tick_stays_quiet_outside_playing() {
         let (mut session, server) = waiting_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -13211,6 +13275,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn stage_chart_bytes_reject_stages_no_cover() {
         let (mut session, server) = waiting_session(|mut stream| {
             assert_quiet(&mut stream);
@@ -13597,6 +13663,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn mu_select_open_sends_no_4051_or_4053_over_scripted_gateway() {
         // Ticket #407: no exe send pin names StartSelectMusic 4051 or
         // CancelSelectMusic 4053, so a master's MUSELECT open must put
@@ -13624,6 +13692,8 @@ pub(super) mod session_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_select_ok_close_sends_no_4051_or_4053_over_scripted_gateway() {
         // Ticket #407 close leg: the OK confirm closes the dialog and
         // flushes the staged 4000, but never invents a 4051/4053 pair.
@@ -13893,6 +13963,8 @@ pub(super) mod session_tests {
     /// Caller chain: boot → Room → staged CREATE sheet → clear title →
     /// Commit → paint → the creator socket stays silent.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn refused_empty_title_sends_no_create_frame_on_the_gateway() {
         use o2jam_render::Rect;
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
@@ -14667,6 +14739,8 @@ pub(super) mod session_tests {
     /// `pump_dialog_queue`. Enter/Escape/Space share the OK path
     /// through [`ScreenGame::menu_key`] / lane key 3.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_fuse_ok_posts_queue_type_100_and_sends_no_fff0() {
         let (port, server) = fake_gateway(|mut stream| {
             stream
@@ -14726,6 +14800,8 @@ pub(super) mod session_tests {
     /// `pump_dialog_queue`. Named exe click: #367 dossier TEXT
     /// `0x21400003` / OK `0x21200002`; no qualified tapped pack yet.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn fuse_ok_pops_one_dialog_level_and_leaves_the_room_sheet_below() {
         let (port, server) = fake_gateway(|mut stream| {
             stream
@@ -14799,6 +14875,8 @@ pub(super) mod session_tests {
     /// -> `ScreenGame::click_planet_modal` ->
     /// `ScreenGame::cancel_quit_confirm`.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn quit_cancel_closes_only_the_sheet_and_emits_no_wire_frame() {
         let (port, server) = fake_gateway(|mut stream| {
             stream
@@ -15196,6 +15274,8 @@ pub(super) mod session_tests {
     ///   peer: MenuKey::Confirm -> begin_room_join -> poll_room_join ->
     ///   JoinRoom 3002 -> JoinRoomResponse 3003 -> resolve_room_join.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn peer_join_pair_leaves_the_create_room_sheet_and_master_frame_unchanged() {
         use o2jam_net::rooms::{JoinRoom, JoinRoomResponse};
         use o2jam_net::Request;

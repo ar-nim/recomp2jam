@@ -57,6 +57,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn absent_music_folder_answers_no_local_knowledge() {
         // §1's scan needs a directory. Without one (CI ships no game
         // data) the answer is `None`, never "no songs installed": the

@@ -8312,6 +8312,8 @@ mod side_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn my_room_character_without_gear_wears_nothing() {
         let table = side_item_table();
         assert!(my_room_equipment_from_character(&table, &side_character([0; 17])).is_empty());
@@ -8734,6 +8736,8 @@ mod side_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn select_music_dialog_stays_empty_without_block() {
         let list = o2jam_file::parse_control_list(&side_control_text()).unwrap();
         assert!(select_music_sprite_names(&list).is_empty());

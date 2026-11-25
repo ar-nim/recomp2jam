@@ -4225,6 +4225,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_press_rates_nothing() {
         let mut live = LivePlay::new(&[(2, 1000, 7)]);
         assert_eq!(live.strike_lane(0, 1000), None);
@@ -5039,6 +5041,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn mirror_ring_flips_lanes_with_no_curtain() {
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         let mut never_called = || -> u32 { panic!("mirror draws no randomness") };
@@ -5048,6 +5052,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn random_ring_shuffles_lanes_with_no_curtain() {
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.apply_skill_ring(
@@ -5145,6 +5151,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_peer_slots_paint_no_gauges() {
         // Reference photo: the solo room shows no peer gauges — zeroed
         // slots are unset peers, not empty shells to draw.
@@ -5599,6 +5607,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn judgement_word_stays_at_the_line_while_combo_digits_ink_the_box() {
         // The word keeps its line-relative staged anchor; the combo
         // digits moved to the exe layout box (scaled (7,6) here).
@@ -6075,6 +6085,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn staged_play_time_font_paints_nothing_without_a_verified_anchor() {
         // bnd-audit 31's bar-centered MMSS anchor was invented: no
         // `.bnd` rect pairs `PlayTimeNum.ojs` (17 + 19 rect walk), the
@@ -6262,6 +6274,8 @@ mod live_play_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn play_time_digits_paint_nowhere_without_a_verified_anchor() {
         // bnd-audit 31 / claims A32 carried the MMSS paint on an
         // assumed bar-centered anchor. Ground truth: no `.bnd` rect
@@ -7220,6 +7234,8 @@ mod avatar_scene_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn scene_paints_no_captions_over_the_stage_deck() {
         // The photo's stage deck carries no song or volume ink — the
         // song line and VOL readout live in the bottom strip, so the
@@ -7238,6 +7254,8 @@ mod avatar_scene_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn missing_captions_paint_nothing() {
         let layout = AvatarLayout::for_frame(800, 600);
         let buf = paint_scene(&AvatarScene::default(), None, 800, 600);

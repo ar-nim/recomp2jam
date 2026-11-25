@@ -1578,6 +1578,8 @@ mod avatar_io_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn missing_item_table_stays_an_error() {
         let archive = opa_blob(&[("AA.ojs", &red_sprite())]);
         assert!(stack_worn_figure(&archive, &[1], false).is_err());
@@ -1810,6 +1812,8 @@ mod song_flow_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_music_member_reports_no_music_state_and_no_blind_progress() {
         // Acceptance for #276 slice 2: a member whose chart file is
         // missing reports `NoMusic 1` through `UpdateMusicState` 4025
@@ -2308,6 +2312,8 @@ mod wallet_flow_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn wallet_fetch_stays_quiet_without_the_flag() {
         let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             answer_login(&mut stream);

@@ -19,6 +19,8 @@ fn synthetic_archive_entry_body_round_trips_without_game_data() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn synthetic_archive_missing_entry_stays_absent() {
     let archive = test_archive::build_archive(&[("State_Room.bnd", b"rect-data".as_slice())]);
     let entries = parse_opi(&archive).unwrap();

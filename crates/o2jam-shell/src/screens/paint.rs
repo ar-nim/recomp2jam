@@ -5412,6 +5412,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_gem_cell_reads_the_exe_zero_when_no_price_word_is_pinned() {
         // D3 red proof: the exe entry frame `05b24e64…cb00` inks
         // `0` in every visible ITEMGEM cell (won `4500` beside it).
@@ -6438,6 +6440,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_no_archive_fallback_carries_the_offline_stand_in_marker() {
         // #388: with no archive, the Item Shop card is a labeled
         // stand-in, never an online-shop claim. The marker ink is
@@ -6857,6 +6861,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_master_paints_no_inactive_dress_over_the_confirm_rect() {
         // The master arm frame-resets both inactive-dress overlays
         // (fetch file 0xae796/0xae7cb, reset at file 0xae7c6/0xae7fb).
@@ -6972,6 +6978,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_confirm_face_leaves_the_other_role_control_unpainted() {
         // The role filter stays the single home for which control shows
         // (`waiting_control_armed_for_role`): arming the local face never
@@ -8285,6 +8293,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn battle_verdict_stays_empty_without_winner_or_self() {
         let empty = RoomTeams::new();
         assert_eq!(battle_verdict(&empty, Some(0)), None);
@@ -9123,6 +9133,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unresolved_battle_paints_no_banner() {
         let buf = painted_native_scene(&banner_art(), ResultVerdict::Battle(None), None);
         for ink in [frame_ink(0), frame_ink(1), frame_ink(2), frame_ink(3)] {
@@ -9224,6 +9236,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn live_plate_stays_off_without_chart_or_ratio() {
         // No word, or a word with no reference (26 unscored records),
         // or a ratio under 0.30: the enter painter's frame 0 stays.
@@ -9339,6 +9353,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn seat_byte_above_eight_resolves_nothing() {
         // The exe index is unguarded — byte 0 reads below the array
         // and bytes 9+ read above it. The shell resolves neither
@@ -9350,6 +9366,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn portrait_chip_resolution_paints_nothing_visible_yet() {
         // The eight slots are image-less sprite objects and what the
         // draw path renders from +0x15c stays OPEN, so a fully
@@ -9804,6 +9822,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_om_icon_shows_the_no_song_frame_below_the_music_floor() {
         // Floor compare `0x1251da` + constant level 1 (`0x1266b9`):
         // below the floor the row shows frame 1; past it an unknown
@@ -10033,6 +10053,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_scene_without_art_paints_nothing() {
         // Pinned no-fill rule: an empty stage contributes zero
         // staged pixels and no selection means no cursor, so the
@@ -11119,6 +11141,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_hover_without_staged_figure_paints_nothing() {
         // No highlight without art: the hovered control stages no
         // figure, so the frame stays untouched (no invented pixels).
@@ -11296,6 +11320,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn loading_bar_geometry_stays_open_placeholder() {
         // OPEN placeholder guard: the centered track/caption math
         // below is not exe-grounded (`MusicLoading.ojs` is a single
@@ -11896,6 +11922,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_user_panel_leaves_the_desc_well_empty_without_a_web_source() {
         // The bottom plate is the staged `IDC_TEXT_SROOM_DESC` well
         // (`0x13400046`, `(646,468)-(776,534)`): the 7.55 room capture
@@ -12628,6 +12656,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn wins_box_stays_empty_without_a_champion() {
         let placements = vec![waiting_probe(
             "IDC_TEXT_SWAIT_WINNERSCROE",
@@ -12939,6 +12969,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn musicname_paints_nothing_without_a_song_source() {
         // No joined room and no staged pick: the caption has no song
         // to name and leaves the pinned rect untouched (the staged
@@ -13000,6 +13032,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_chat_box_paints_no_history_without_a_source() {
         // Chat controls (`EDIT_SWAIT_CHAT` rect 19 `(20,563,460,583)`,
         // `LIST_SWAIT_CHAT` rect 42 `(24,455,511,553)`) name the history
@@ -13333,6 +13367,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_chat_without_rows_paints_nothing() {
         let mut buf = vec![0u32; 64 * 48];
         paint_channel_chat(
@@ -13425,6 +13461,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_random_cards_carry_no_card_data() {
         // The `?` cards name no per-card wire data: the big card sits
         // on `RANDMAP` (rect 78 `(619,468,708,533)`) and the small cards
@@ -13642,6 +13680,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unstaged_regions_paint_nothing() {
         // Missing placements paint nothing: the exe leaves untouched
         // icons alone — no invented coordinates anywhere.
@@ -13830,6 +13870,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn map_arrow_cycle_skips_the_pinned_stages_and_leaves_random_wrap_open() {
         // Seam pin for the pure cycle: the live click path is guarded
         // in `screens::game::game_tests`, and this table leg needs no
@@ -13859,6 +13901,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn spriteless_channel_block_stages_no_scene_art() {
         // Shape-faithful `STATE_CHANNEL` skeleton (bare `BOUND`, the
         // real image/button/text/`SET` code classes, zero quoted
@@ -13891,6 +13935,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_channel_art_paints_no_fill() {
         // Pinned no-fill rule (`docs/channel-fill.md`): no staged
         // figures means no staged ink and no invented fill — the bare
@@ -13916,6 +13962,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn staged_empty_backdrop_leaves_every_frame_untouched() {
         // The exe contributes zero pixels behind art-less states, so
         // an empty stage paints nothing on any screen: a patterned
@@ -14343,6 +14391,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn inactive_row_paints_empty_slot_no_digits() {
         // Ticket #190: an inactive row paints the baked empty slot —
         // no digit plates over the tens/ones wells, so the wells keep
@@ -14394,6 +14444,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn inactive_row_paints_empty_slot_no_count_strip() {
         // Ticket #190 strip leg: an inactive row paints no count
         // strip, so the strip position keeps the bar ink even with a
@@ -15371,6 +15423,8 @@ mod paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_leaves_instname_and_notice_rects_unpainted() {
         // `INSTNAME` names zero code immediates (OPEN 1) and the
         // NOTICE dialog `+0x46c` fill is untraced (OPEN 2): their
@@ -16685,6 +16739,8 @@ mod dialog_paint_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn dialog_rest_leaves_baked_button_plates_visible() {
         // #885/#845: the 7.55 rest frames show the OK and Options
         // button plates baked into their sheets, not the blue bodies

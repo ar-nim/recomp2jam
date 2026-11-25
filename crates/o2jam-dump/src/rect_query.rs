@@ -157,6 +157,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_coords_on_unknown() {
         let archive = test_archive::build_archive(&[
             ("ControlList_Interface.txt", control_text().as_bytes()),

@@ -154,6 +154,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn root_without_a_data_folder_has_no_game_data() {
         let root = std::env::temp_dir().join("o2jam-data-root-empty-probe");
         std::fs::create_dir_all(&root).expect("fixture root dir");

@@ -106,6 +106,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn messenger_rest_leaves_the_staged_stack_alone() {
         let state = MessengerFrameState::default();
         assert_eq!(
@@ -159,6 +161,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn messenger_single_record_control_has_no_active_frame() {
         let mut figure = AvatarFigure::default();
         figure.push_layer(crate::avatar::FigureLayer {

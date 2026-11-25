@@ -398,6 +398,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_shop_has_no_visitor_request_in_the_shop_family() {
         // Static-sweep guard for #179 story 35: the 5000 shop family
         // holds only the download announce (5012). There is no
@@ -410,6 +412,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn item_shop_has_no_visitor_request_in_the_shop_family() {
         // #178 story 39: the Item Shop shares this request family with
         // the Music Shop. A visit is a local `visit_side(Shop)` staging

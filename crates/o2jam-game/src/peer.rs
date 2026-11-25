@@ -216,6 +216,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn out_of_range_slot_writes_nothing_and_forwards_nothing() {
         let mut peers = PeerBars::new();
         assert_eq!(peers.apply_stats_update(8, STAT_LIFE, 500), None);
@@ -223,6 +225,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unknown_discriminator_writes_nothing_and_forwards_nothing() {
         let mut peers = PeerBars::new();
         assert_eq!(peers.apply_stats_update(2, 2, 500), None);

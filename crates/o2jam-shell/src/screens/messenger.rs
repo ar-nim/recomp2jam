@@ -200,6 +200,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn note_send_stays_a_labeled_noop_without_an_exe_send_pin() {
         // seam: the whole claim is the no-op contract — the 13-rect
         // Note sheet stages, but the qualified packs never mount it
@@ -241,6 +243,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn messenger_p0_noops_stay_unpinned_and_answer_nothing() {
         // seam: this is the whole P0 contract. The six Messenger sheets park
         // with no exe mount (`N-MOUNT`) and no send pack (`N-WIRE`), so no

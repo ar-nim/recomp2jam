@@ -2160,6 +2160,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn jam_gauge_empty_shows_no_fill() {
         let gauge = JamGauge::starting();
         assert_eq!(gauge.level(), 0);
@@ -2419,6 +2421,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn fresh_hold_bonus_holds_nothing() {
         let bonus = LongNoteBonus::new();
         assert_eq!(bonus.ticks(), 0);
@@ -2473,6 +2477,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unknown_difficulty_selects_no_life_set() {
         assert!(LifeDeltas::for_difficulty(3).is_none());
         assert!(LifeDeltas::for_difficulty(u8::MAX).is_none());
@@ -2497,6 +2503,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn hard_good_changes_nothing() {
         let mut bar = LifeBar::new(2).expect("hard");
         bar.apply(Judgement::Good);
@@ -2678,6 +2686,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn grade_ratio_stays_zero_without_a_reference() {
         // 26 or fewer records score nothing (files 0xc22e5-0xc2307):
         // no denominator, no ratio, never a divide-by-zero.
@@ -2813,6 +2823,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn first_insert_becomes_the_end_marker_and_stays_pinned() {
         // Loader parity (fourth trace): chart order 4000/8000/12000
         // inserts ascending; the earliest note takes *(header+4) and

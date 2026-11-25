@@ -545,6 +545,8 @@ mod tests {
     /// Seam suffices: `menu_of` is a pure key-code mapping with no
     /// caller beyond the window's edge queue.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn escape_stays_the_pinned_splash_and_dialog_key() {
         assert_eq!(menu_of(KeyCode::Escape), Some(MenuKey::Back));
         assert_eq!(menu_of(KeyCode::Enter), Some(MenuKey::Confirm));
@@ -587,6 +589,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn snapshot_starts_empty_with_no_pointer_or_edges() {
         let snapshot = InputSnapshot::new();
         assert_eq!(snapshot.pointer(), None);
@@ -629,6 +633,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn motion_to_moves_the_pointer_with_no_edges() {
         let snapshot = InputSnapshot::motion_to(100, 200);
         assert_eq!(snapshot.pointer(), Some((100, 200)));

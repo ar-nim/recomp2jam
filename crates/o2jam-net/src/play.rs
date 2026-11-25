@@ -2255,6 +2255,8 @@ mod song_sync_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn stats_channel_stays_empty_on_unknown_kind() {
         let update = GameStatsUpdate {
             member_id: 1,
@@ -2413,6 +2415,8 @@ mod song_sync_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn acquire_music_request_carries_no_body() {
         // §4: the master's acquire ping is an empty request (gate
         // verdict -2, send site file `0xb23d2`).

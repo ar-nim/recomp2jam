@@ -1025,6 +1025,8 @@ mod myroom_tab_guards {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn gift_row_art_stays_hidden_on_the_my_bag_face() {
         // Live caller chain: `visit_side(MyRoom)` stages the bound art
         // -> `ScreenGame::paint_side` -> `paint_scene_figures_selected`

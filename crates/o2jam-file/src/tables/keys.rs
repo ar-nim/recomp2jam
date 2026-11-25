@@ -215,6 +215,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn filter_arms_past_chosung_select_no_indexed_entry() {
         // Arms 14+ have no indexed slot at the table base: the fixed
         // `ssang` arms (14..18) and the word/letter rows load from

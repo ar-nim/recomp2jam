@@ -779,6 +779,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn backspace_release_routes_nowhere() {
         let (mut handler, probe) = probed_handler();
         handler.route_key(KeyCode::Backspace, false);
@@ -1145,6 +1147,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn mouse_input_arm_drops_the_edge_when_no_position_is_known() {
         // No motion/enter ever arrived (the headless case): the edge
         // has no position source — winit 0.30 offers no pointer query
