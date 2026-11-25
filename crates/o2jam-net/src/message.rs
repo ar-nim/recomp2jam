@@ -13,6 +13,16 @@ use super::reader::Reader;
 use super::rows::rows_reject_negative_exact;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
+/// Room-list and room-row codecs live in the split `rooms/list.rs`.
+/// The module is compiled here until the `rooms/` split is wired, so its
+/// codec guards run with the rest of the net suite (lane room-wire).
+#[path = "rooms/list.rs"]
+pub mod room_wire;
+pub use room_wire::{
+    RoomDescriptorChanged, RoomParameterChanged, RoomSkillChanged, RoomStateChanged,
+    RoomUserCountChanged, RoomUserList, RoomUserListEntry,
+};
+
 /// Encode/decode contract for one command's body.
 pub trait WireMessage: Sized {
     /// Command id this body travels under.

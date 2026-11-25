@@ -144,13 +144,18 @@ use anyhow::Context;
 use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
 use o2jam_net::gift::{GiftClaimReply, GiftType};
+use o2jam_net::message::{
+    RoomDescriptorChanged, RoomParameterChanged, RoomSkillChanged, RoomStateChanged,
+    RoomUserCountChanged, RoomUserList,
+};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
     RoomList, RoomListEntry, RoomSlot, RoomSlotAction, RoomSlotState, RoomSlotUpdate, RoomState,
-    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    SendMainRoomMessage, SendWaitingMessage, SendWhisper, SendWhisperResponse, WaitingAdminMessage,
+    WaitingUserMessage,
 };
 use o2jam_net::shop::{
     EnterShop, EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag,
@@ -333,13 +338,6 @@ const START_BROADCAST_COMMAND: u16 = 4011;
 const MUSIC_SOURCE_ENV: &str = "O2JAM_MUSIC_SOURCE";
 /// 4011 `StartResult::Success` (Memoryer `StartGameEventData`).
 const START_RESULT_SUCCESS: i32 = 0;
-/// 2009 `RoomUserCountChanged`: Memoryer sends no such frame to a
-/// channel observer (p379 taps `d66d693d…01ca7`/`1c9dbcdb…8e119`;
-/// probe `0c917c9f…7299d` saw pings only). The join count arrives in
-/// 3003 for the joiner and 3004 for the master, never in a board row
-/// update, so a scripted 2009 is a labeled no-op — no local mutation.
-const ROOM_USER_COUNT_EVENT_COMMAND: u16 = 2009;
-
 /// Four-byte `SetRoomMusic` 4000 body the paired CREATE leg sees right
 /// after the 2004 answer (exe wire sha256 `3e368ba4…`, journey-matrix
 /// `create` pack). The exe's Waiting send sites stage the room song in
@@ -3972,9 +3970,15 @@ impl OnlineSession {
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
             id if id == RoomList::COMMAND => self.apply_room_list(&frame),
-            id if id == ROOM_USER_COUNT_EVENT_COMMAND => {
-                tracing::debug!(id, "no observer user-count event; row count unchanged");
+            id if id == RoomDescriptorChanged::COMMAND => {
+                self.apply_room_descriptor(&frame);
             }
+            id if id == RoomUserCountChanged::COMMAND => self.apply_room_user_count(&frame),
+            id if id == RoomUserList::COMMAND => self.note_room_user_list(&frame),
+            id if id == RoomStateChanged::COMMAND => self.apply_room_state(&frame),
+            id if id == RoomParameterChanged::COMMAND => self.apply_room_parameter(&frame),
+            id if id == RoomSkillChanged::COMMAND => self.apply_room_skills(&frame),
+            id if id == SendWhisperResponse::COMMAND => self.apply_whisper_answer(chat, &frame),
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
@@ -4096,6 +4100,119 @@ impl OnlineSession {
             return;
         };
         self.game.remove_room(removed.number);
+    }
+
+    /// Rewrite one staged row number in place. The exe writes into its
+    /// 0xb4-byte table (`docs/pins/net-b.md`); our shell exposes the
+    /// currently visible rows, so an update to a row hidden by the
+    /// active tab stays OPEN until the shell exposes all staged rows.
+    fn rewrite_room_row(&mut self, number: i32, rewrite: impl FnOnce(&mut RoomListEntry)) {
+        let Some(mut room) = self
+            .game
+            .listed_rooms()
+            .iter()
+            .find(|staged| staged.number == number)
+            .cloned()
+        else {
+            tracing::debug!(number, "room row not staged; skipping wire rewrite");
+            return;
+        };
+        rewrite(&mut room);
+        self.game.upsert_room(room);
+    }
+
+    /// 2008: the exe overwrites the named row's names and descriptor
+    /// words. Our row carries the title; the unnamed descriptor bytes
+    /// stay in the codec until the shell models those fields.
+    fn apply_room_descriptor(&mut self, frame: &Frame) {
+        let Ok(change) = RoomDescriptorChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room descriptor");
+            return;
+        };
+        self.rewrite_room_row(change.number, |room| room.title = change.title);
+    }
+
+    /// 2009: the exe rewrites the named row's occupancy bytes. The
+    /// earlier client no-op followed Memoryer's lack of an observer
+    /// send; the 7.55 handler is the oracle, so a received frame moves
+    /// the row (pin `e766.2b4b…b6d9` at file `0x15bdf0`).
+    fn apply_room_user_count(&mut self, frame: &Frame) {
+        let Ok(change) = RoomUserCountChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room user count");
+            return;
+        };
+        self.rewrite_room_row(change.number, |room| {
+            room.capacity = change.capacity;
+            room.user_count = change.user_count;
+        });
+    }
+
+    /// 2011: decode the named user rows so a fuse answer cannot be
+    /// dropped by the lobby drain. The user-sheet paint stays in the
+    /// shell (census Room ord 69/70).
+    fn note_room_user_list(&mut self, frame: &Frame) {
+        let Ok(users) = RoomUserList::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room user list");
+            return;
+        };
+        self.game.track_room_user_list_reply();
+        tracing::debug!(count = users.users.len(), "room user list decoded");
+    }
+
+    /// 2020: the exe writes one state byte into the named row. The
+    /// raw code is kept, as the row icon paints the byte itself.
+    fn apply_room_state(&mut self, frame: &Frame) {
+        let Ok(change) = RoomStateChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room state change");
+            return;
+        };
+        self.rewrite_room_row(change.number, |room| room.state_code = change.state_code);
+    }
+
+    /// 2023: the exe masks the parameter word into the row's staged
+    /// word. Our row exposes its low twelve bits as the music id; the
+    /// shifted high nibble has no row counterpart yet.
+    fn apply_room_parameter(&mut self, frame: &Frame) {
+        let Ok(change) = RoomParameterChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room parameter");
+            return;
+        };
+        self.rewrite_room_row(change.number, |room| {
+            room.music_id = change.parameter & 0x0FFF;
+        });
+    }
+
+    /// 2025: the exe clears the row's skill list and reads the frame's
+    /// ids back into it.
+    fn apply_room_skills(&mut self, frame: &Frame) {
+        let Ok(change) = RoomSkillChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room skill change");
+            return;
+        };
+        self.rewrite_room_row(change.number, |room| room.skills = change.skills);
+    }
+
+    /// 2018: the exe posts a `<<` delivery/refusal line into the lobby
+    /// chat parent. Our shell stages one user-ink row carrying the
+    /// named recipient and the echoed text when the server sent one;
+    /// the zero-ink failure variant stays a shell-paint hand-off.
+    fn apply_whisper_answer(&mut self, chat: LobbyChat, frame: &Frame) {
+        let Ok(answer) = SendWhisperResponse::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable whisper answer");
+            return;
+        };
+        let mut text = answer.recipient;
+        if let Some(content) = answer.content {
+            text.push_str(": ");
+            text.push_str(&content);
+        }
+        self.game.push_lobby_user_message(
+            chat,
+            &MainRoomUserMessage {
+                sender: "<<".to_owned(),
+                content: text.into_bytes(),
+            },
+        );
     }
 }
 
