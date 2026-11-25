@@ -103,7 +103,7 @@ use super::side::{
     side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
     CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
     MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
-    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction,
+    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand,
     PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
     SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
     SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
@@ -2600,6 +2600,21 @@ impl ScreenGame {
     #[must_use]
     pub fn waiting_channel_number(&self) -> Option<u16> {
         self.waiting_channel_number
+    }
+
+    /// Zero-based record of the top-left `Wait_CH_Category.ojs` plate.
+    /// The exe's setup writes frame `DAT_0076fc38 + 1` (file
+    /// `0xbcab8`); `0x76fc38` is the five-emblem family index written
+    /// by the Planet press handler (file `0x48e2fb`). The shell's
+    /// `PlanetBand` comes from the same control codes, so map back:
+    /// HARD `0x19201002` -> 0, NORMAL -> 1, EASY -> 2. FREE/DRUM are
+    /// unbound and record no pick, so they stage no record.
+    fn waiting_channel_family_record(&self) -> Option<usize> {
+        match self.planet_selection()? {
+            PlanetBand::Hard => Some(0),
+            PlanetBand::Normal => Some(1),
+            PlanetBand::Easy => Some(2),
+        }
     }
 
     /// Room number staged for the waiting header wells.
@@ -9408,6 +9423,7 @@ impl ScreenGame {
             team_highlight_armed: self.waiting_team_highlight_armed,
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
+            channel_family_record: self.waiting_channel_family_record(),
             room_number: self.waiting_room_number,
             effect: self.waiting_effect,
             chat_channel: self.waiting_chat_channel(),
@@ -15240,16 +15256,17 @@ mod game_tests {
     #[test]
     fn local_random_selection_lights_the_first_effect_card_record() {
         // The quiesced 7.55 pair shows the bright magenta border on
-        // EFFECT_1 (top) and the dim border on EFFECT_2 (bottom) while
-        // the entry's local random word stands. The applier mounts the
-        // two Random bodies at bind rects 68/69 (REA
-        // `ev_2cb3a3c4…`); this guard fixes the quiesced frame choice,
-        // not the click animation (OPEN).
+        // EFFECT_1 (top) and the dim backdrop border on EFFECT_2
+        // (bottom) while the entry's local random word stands. The
+        // shipped `Wait_Btn_EffectBottom.ojs` has a magenta border in
+        // both records, so neither frame can make the dim border; the
+        // second card must keep the staged backdrop. Applier: REA
+        // `ev_2cb3a3c4…`, bind rects 68/69. Click animation stays OPEN.
         let first = "IDC_BUTTON_SWAIT_TOPEFFECT";
         let second = "IDC_BUTTON_SWAIT_BOTTOMEFFECT";
         let mut figures = HashMap::new();
         figures.insert(format!("{first}.ojs"), waiting_record_pair(0x03E0, 0x7C1F));
-        figures.insert(format!("{second}.ojs"), waiting_record_pair(0x03E0, 0x7C1F));
+        figures.insert(format!("{second}.ojs"), waiting_record_pair(0x7C1F, 0x7C1F));
         let mut game = waiting_right_column_game(
             waiting_room(),
             vec![
@@ -15266,8 +15283,79 @@ mod game_tests {
         );
         assert_eq!(
             frame[70 * 800 + 80],
-            pack_xrgb(0, 255, 0),
-            "bottom effect card carries the dim border"
+            0,
+            "bottom effect card keeps its dim backdrop border"
+        );
+    }
+
+    #[test]
+    fn the_picked_planet_family_inks_only_its_waiting_category_plate() {
+        // Statics: `FUN_004bcaa0` (file `0xbcaa0`) sets control
+        // `0x16500049` to frame `DAT_0076fc38 + 1` (REA
+        // `ev_6b57088ac8898bbb711087e60504b404a21a9817cda16fc1c27c0855e973d4a6`).
+        // The global is the five-emblem family index written by the
+        // Planet press handler (`docs/captures/static-play/pins.md`,
+        // file `0x48e2fb`) with global xrefs REA
+        // `ev_5d2286498abaffaaa9984d127455e193051906fca549f0f8a2eb5c18d62ffa04`).
+        // Both v13 legs click the EASY/H plate at (136,88): family 2,
+        // so the exe inks `사람손` (record 2) while our stack ends on
+        // the last record. Live chain: `main.rs::run_play` -> Planet
+        // emblem click -> Channel -> Room -> Waiting -> `paint_at` ->
+        // `paint_waiting_scene_with_confirm` -> `paint_waiting_staged`
+        // -> `paint_waiting_channel_category`.
+        use crate::avatar::{AvatarFigure, FigureLayer};
+        use o2jam_render::Rgb555Image;
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SPLANET_EASY".to_owned(),
+                code: 0x1920_1004,
+                sprite: Some("Planet_Btn_Easy.ojs".to_owned()),
+                rect: Rect {
+                    x: 87,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.click_planet(136, 88);
+        assert_eq!(game.planet_selection(), Some(PlanetBand::Easy));
+        game.set_joined_room(waiting_room());
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+
+        let mut plate = AvatarFigure::default();
+        for word in [0x7C00_u16, 0x03E0, 0x001F, 0x7C1F, 0x03FF, 0x7C1F] {
+            plate.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        let placements = vec![
+            waiting_placed("IDC_IMAGE_SWAIT_COVERAVATAR1", 5, 5),
+            waiting_placed("IDC_IMAGE_SWAIT_CHCATEGORY", 10, 10),
+        ];
+        let mut figures = HashMap::from([("IDC_IMAGE_SWAIT_CHCATEGORY.ojs".to_owned(), plate)]);
+        figures.insert(
+            "IDC_IMAGE_SWAIT_COVERAVATAR1.ojs".to_owned(),
+            waiting_record_pair(0x001F, 0x001F),
+        );
+        game.load_scene(Screen::Waiting, placements, figures);
+
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[10 * 800 + 10],
+            pack_xrgb(0, 0, 255),
+            "the EASY family inks its third category record"
         );
     }
 

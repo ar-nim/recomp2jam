@@ -539,3 +539,21 @@ listed after each name is the one that turned it red.
   speed bytes swapped.
 - OPEN left for slice 4/5: the download bar geometry (`Wait_Downloding`
   art), the notice-box sheet, and the real transport.
+
+## 9. V13 music-select pair — chat and role are wire-scenario deltas
+
+The v13 music-select pair (`~/scratch/paired-shots-v3/states/music-select/exe.png`
+vs `~/scratch/paired-shots-v6/legs/music-select/rust/states/music-select-p2.png`)
+shows exe chat lines and a master START face where ours shows an empty
+chat box and a guest READY face. Per the owner A/B rule this is not a
+scenario dismissal: the wire proves it. The exe leg's `room-stage.log`
+carries `3007 body=0001000000000000` (member 0 leaves, member 1 promoted)
+and then `2007`; the Rust leg carries neither. Both legs logged in as
+user 1 and both room snapshots carry `tester`/`t207probe` (§2's seat
+family). The exe's Korean leave/skill notices appear in neither wire
+log, so they are locally generated chat on that 3007/2007 path (handler
+evidence `ev_50242b6c183543f49ce6cbb43eccad2e`); no 4025/4035/4039
+message-state difference is involved. No paint change is warranted:
+replaying the exe's 3007 into our client already promotes the local
+seat and flips the role-owned controls (guards in
+`docs/parity/waiting-chrome-dossier.md` §6).

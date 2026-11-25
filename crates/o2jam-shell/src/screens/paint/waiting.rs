@@ -233,6 +233,11 @@ pub struct WaitingCaptions<'a> {
     /// One-based channel number behind the two `CHNUM` digit wells:
     /// the resident 1003 `channel_id` plus one, staged on login.
     pub channel_number: Option<u16>,
+    /// Zero-based record of `Wait_CH_Category.ojs`, from the picked
+    /// Planet family index (`FUN_004bcaa0` sets frame index + 1).
+    /// `None` keeps the staged stack, which is only safe before a
+    /// family pick exists.
+    pub channel_family_record: Option<usize>,
     /// Room number behind the three `RMNUM` digit wells: the number
     /// from the accepted 3002 join request, staged on join.
     pub room_number: Option<i32>,
@@ -590,6 +595,8 @@ pub fn paint_waiting_scene_with_confirm(
             && waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
+            && !(captions.channel_family_record.is_some()
+                && placed.id == WAITING_CHANNEL_CATEGORY_ID)
             && !waiting_inactive_overlay_hidden_by_role(&placed.id, member_role)
             && !waiting_header_chip_hidden(&placed.id)
             && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
@@ -1521,6 +1528,7 @@ pub(crate) fn paint_waiting_staged(
         None => paint_waiting_title(frame, room, placements),
     }
     paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
+    paint_waiting_channel_category(frame, art, captions.channel_family_record);
     paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(
@@ -1530,7 +1538,12 @@ pub(crate) fn paint_waiting_staged(
         is_room_master,
         team_highlight_armed,
     );
-    paint_waiting_effect_toggle(frame, art, captions.effect);
+    // The quiesced arena-0 Random frame owns the two effect cards:
+    // the exclusive toggle would paint the bottom card's magenta
+    // rest record over the dim backdrop border the exe shows.
+    if !(captions.local_random_selection && room.arena == 0) {
+        paint_waiting_effect_toggle(frame, art, captions.effect);
+    }
     paint_waiting_chat_tabs(frame, art, captions.chat_channel);
     paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
     paint_waiting_wins(frame, room, placements);
@@ -1549,6 +1562,22 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_mapname(frame, room, placements, captions.local_random_selection);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
     paint_waiting_music(frame, placements, captions.song, captions.random);
+}
+
+/// Top-left category plate (`IDC_IMAGE_SWAIT_CHCATEGORY`, code
+/// `0x16500049`): one record, never the whole six-record stack.
+/// `FUN_004bcaa0` (file `0xbcaa0`) sets frame `DAT_0076fc38 + 1`;
+/// the global is the five-emblem family index written at file
+/// `0x48e2fb`. The v13 pair clicks the EASY/H plate (family 2) and
+/// the exe inks `사람손` (record 2), while the stack ended on the
+/// last body. With no pick staged nothing is invented.
+const WAITING_CHANNEL_CATEGORY_ID: &str = "IDC_IMAGE_SWAIT_CHCATEGORY";
+
+fn paint_waiting_channel_category(frame: &mut Frame<'_>, art: &SceneArt, record: Option<usize>) {
+    let Some(record) = record else {
+        return;
+    };
+    paint_waiting_one_record(frame, art, WAITING_CHANNEL_CATEGORY_ID, record);
 }
 
 /// Top-bar digit wells: `IDC_IMAGE_SWAIT_CHNUM_10/01` show the one-
@@ -2068,18 +2097,20 @@ fn paint_waiting_back_rest(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_waiting_one_record(frame, art, WAITING_BACK_ID, 0);
 }
 
-/// Paint the quiesced border records on the two mini-card rects: the
-/// first card's bright frame and the second card's dim frame. The
-/// applier mounts its two Random bodies there (`FUN_004ad350`, REA
-/// `ev_2cb3a3c4…`); the staged button bodies carry the same two
-/// borders. The click animation remains OPEN.
+/// Paint the quiesced bright border on the first mini-card rect only.
+/// The applier mounts its two Random bodies on the spriteless
+/// `EFFECT_1/2` rects (`FUN_004ad350`, REA `ev_2cb3a3c4…`). Both
+/// records of `Wait_Btn_EffectBottom.ojs` carry a magenta border, so
+/// no frame of that body can make the exe's dim second border; the
+/// dim border is the staged backdrop. The click animation stays OPEN.
 fn paint_waiting_random_effect_borders(frame: &mut Frame<'_>, art: &SceneArt, local_random: bool) {
     if !local_random {
         return;
     }
-    for (index, id) in WAIT_EFFECT_IDS.iter().enumerate() {
-        paint_waiting_one_record(frame, art, id, usize::from(index == 0));
-    }
+    let Some(first) = WAIT_EFFECT_IDS.first() else {
+        return;
+    };
+    paint_waiting_one_record(frame, art, first, 1);
 }
 
 /// Paint the two arrow bodies at their rest record. The generic stack
