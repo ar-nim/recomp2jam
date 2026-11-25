@@ -3075,6 +3075,20 @@ impl OnlineSession {
         });
     }
 
+    /// Fold one completed 5011 into the shell: the pinned rebuild
+    /// names owned songs, and each one joins the Music Shop transfer
+    /// queue. `enqueue` ignores an id already waiting, so a repeated
+    /// sync cannot duplicate the fetch (#1130).
+    fn stage_music_purchase_completion(
+        &mut self,
+        response: &o2jam_net::shop::SyncMusicPurchaseResponse,
+    ) {
+        for entry in &response.music_list {
+            self.game.begin_music_download(entry.music_id);
+        }
+        self.game.apply_music_purchase_response(response);
+    }
+
     /// Move one song-shop buy attempt leg: drain until the socket
     /// goes quiet, folding the 5011 wallet words on the reply.
     /// Returns the attempt while it still awaits an answer.
@@ -3084,7 +3098,7 @@ impl OnlineSession {
                 Ok(frame) if frame.id == 5011 => {
                     match MusicPurchaseReply::decode_body(&frame.payload) {
                         Ok(MusicPurchaseReply::Completed(response)) => {
-                            self.game.apply_music_purchase_response(&response);
+                            self.stage_music_purchase_completion(&response);
                         }
                         Ok(MusicPurchaseReply::Failure) => {
                             // SCRIPTED-GATEWAY body only. No server
@@ -3650,7 +3664,7 @@ impl OnlineSession {
             // The paired buy attempt owns its own drain above.
             5011 => match o2jam_net::shop::MusicPurchaseReply::decode_body(&frame.payload) {
                 Ok(o2jam_net::shop::MusicPurchaseReply::Completed(response)) => {
-                    self.game.apply_music_purchase_response(&response);
+                    self.stage_music_purchase_completion(&response);
                 }
                 Ok(o2jam_net::shop::MusicPurchaseReply::Failure) => {
                     self.game.post_music_purchase_failure_notice();
@@ -3695,8 +3709,18 @@ impl OnlineSession {
             }
             5016 => {
                 // Body-ignored: an empty and a padded frame raise the
-                // same bare UI notice (VA `0x562e90`).
+                // same bare UI notice (VA `0x562e90`). The exe's web
+                // page then reported the purchase back; our native
+                // flow synthesizes the empty 5010 reply probe here,
+                // only for an approved Music Shop buy still holding
+                // its cart. No HTTP request line is invented (#1136).
                 self.game.note_start_payment_answer();
+                let buy_pending = self.game.music_shop_payment_mode()
+                    == Some(o2jam_shell::screens::side::CheckoutMode::Buy)
+                    && !self.game.music_shop_cart().is_empty();
+                if buy_pending {
+                    self.game.stage_music_buy_reply_probe();
+                }
                 true
             }
             5018 => {
@@ -4446,6 +4470,13 @@ impl OnlineSession {
             id if id == RoomSkillChanged::COMMAND => self.apply_room_skills(&frame),
             id if id == SendWhisperResponse::COMMAND => self.apply_whisper_answer(chat, &frame),
             id if Generic::from_id(id).is_some() => {}
+            // The Music Shop overlay lives on the Room scene, so the
+            // pinned 5015 answer must land here as well as in the
+            // Waiting drain. This is the same body-ignored payment
+            // arm that synthesizes the native 5010 (#1128).
+            5016 => {
+                self.apply_payment_frame(&frame);
+            }
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
         }
     }
