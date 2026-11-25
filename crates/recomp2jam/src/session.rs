@@ -145,8 +145,10 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
 use o2jam_net::gift::{GiftClaimReply, GiftType};
 use o2jam_net::message::{
-    RoomDescriptorChanged, RoomParameterChanged, RoomSkillChanged, RoomStateChanged,
-    RoomUserCountChanged, RoomUserList,
+    ExitWaitingAnswer, FreeMusicStatusAnswer, MemberStateChanged, MusicLoaded, RoomClosedNotice,
+    RoomDescriptorChanged, RoomDisappearedNotice, RoomParameterChanged, RoomSkillChanged,
+    RoomStateChanged, RoomUserCountChanged, RoomUserList, SetRoomMusicEcho, StartGameAnswer,
+    WaitingMemberRows, WaitingSkillChanged, WaitingSkillExChanged, WaitingValueMemberEvent,
 };
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
@@ -177,6 +179,7 @@ use o2jam_shell::screens::game::{
     AutoPickOutcome, ChatSendMode, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict,
     StartRequest,
 };
+use o2jam_shell::screens::paint::WaitingSkillItem;
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -3509,11 +3512,23 @@ impl OnlineSession {
             id if id == WaitingAdminMessage::COMMAND => {
                 self.apply_waiting_admin_message(&frame);
             }
+            id if id == StartGameAnswer::COMMAND => self.apply_start_game_answer(&frame),
             START_BROADCAST_COMMAND => self.apply_start_broadcast(&frame.payload),
             id if id == UserJoinedWaiting::COMMAND => self.apply_user_joined(&frame),
             id if id == UserLeftWaiting::COMMAND => self.apply_user_left(&frame),
             id if id == RoomSlotUpdate::COMMAND => self.apply_slot_update(&frame),
             id if id == MemberReadyStateChanged::COMMAND => self.apply_ready_echo(&frame),
+            id if id == FreeMusicStatusAnswer::COMMAND => self.apply_free_music_status(&frame),
+            id if id == ExitWaitingAnswer::COMMAND => self.apply_exit_waiting_answer(&frame),
+            id if id == RoomClosedNotice::COMMAND => self.apply_room_closed_notice(),
+            id if id == RoomDisappearedNotice::COMMAND => self.apply_room_disappeared_notice(),
+            id if id == SetRoomMusicEcho::COMMAND => self.apply_music_pick_echo(&frame),
+            id if id == MusicLoaded::COMMAND => self.apply_music_loaded(&frame),
+            id if id == WaitingMemberRows::COMMAND => self.apply_waiting_member_rows(&frame),
+            id if id == WaitingSkillChanged::COMMAND => self.apply_waiting_skill_list(&frame),
+            id if id == WaitingSkillExChanged::COMMAND => self.apply_waiting_skill_ex_list(&frame),
+            id if id == MemberStateChanged::COMMAND => self.apply_member_state_changed(&frame),
+            id if id == WaitingValueMemberEvent::COMMAND => self.apply_waiting_value_member(&frame),
             id if id == SyncMemberMusicStateEvent::COMMAND => {
                 self.apply_member_music_state(&frame);
             }
@@ -3775,6 +3790,196 @@ impl OnlineSession {
                 );
             }
             Err(_) => tracing::debug!(id = frame.id, "dropping undecodable download progress"),
+        }
+    }
+
+    /// Fold one 2035 answer into the auto-pick ceiling. The handler
+    /// (VA `0x55b6d0`) reads a result word and stages the cap byte only
+    /// on success; a non-zero result leaves the standing cap alone.
+    fn apply_free_music_status(&mut self, frame: &Frame) {
+        let Ok(answer) = FreeMusicStatusAnswer::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable free-music answer");
+            return;
+        };
+        if let Some(cap) = answer.level_cap {
+            self.game.set_auto_pick_level_cap(u16::from(cap));
+        }
+    }
+
+    /// Fold one 3006 answer into the Room board. The handler
+    /// (VA `0x55d700`) releases the seats and switches UI state to 2
+    /// only for a zero result; a refusal keeps Waiting intact.
+    fn apply_exit_waiting_answer(&mut self, frame: &Frame) {
+        let Ok(answer) = ExitWaitingAnswer::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable exit answer");
+            return;
+        };
+        if answer.result != 0 {
+            tracing::info!(result = answer.result, "exit refused; staying in Waiting");
+            return;
+        }
+        self.clear_waiting_seats();
+        self.joined_waiting = false;
+        self.joined_room = None;
+        self.resident_room = None;
+        self.clear_room_echo();
+        let _ = self.game.enter_screen(Screen::Room);
+    }
+
+    /// Release the eight staged Waiting seats for a room-close event.
+    fn clear_waiting_seats(&mut self) {
+        for seat in 0..8u8 {
+            self.game.clear_waiting_member_seat(seat);
+        }
+    }
+
+    /// 3010 clears the seats before choosing its pinned caption. The
+    /// caption choice needs a shell setter that is not in this lane's
+    /// scope; the seat reset is staged here and the caption is a
+    /// hand-off.
+    fn apply_room_closed_notice(&mut self) {
+        self.clear_waiting_seats();
+    }
+
+    /// 3014 clears the same seats and posts one fixed caption. The
+    /// caption hand-off is tracked outside this lane.
+    fn apply_room_disappeared_notice(&mut self) {
+        self.clear_waiting_seats();
+    }
+
+    /// A 4005 echo names the peer whose song pick changed.
+    /// The body carries only that seat (VA `0x55f3f0`), so the client
+    /// keeps its staged room song and announces its own state again
+    /// instead of inventing a song id.
+    fn apply_music_pick_echo(&mut self, frame: &Frame) {
+        let Ok(echo) = SetRoomMusicEcho::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable music pick echo");
+            return;
+        };
+        tracing::debug!(member = echo.member_id, "peer song pick echoed");
+        self.announce_music_state();
+    }
+
+    /// Fold one 4011 answer into the start transition. A zero result
+    /// arms the existing Loading walk (`poll_start_at`); refusal codes
+    /// keep the room in Waiting. Their pinned CP949 captions need a
+    /// shell setter outside this lane.
+    fn apply_start_game_answer(&mut self, frame: &Frame) {
+        // The rigs send a bare 4011 with no result word; that shape is
+        // the success broadcast the existing `apply_start_broadcast`
+        // accepted before the result-word handler was added (#355).
+        let result = if frame.payload.is_empty() {
+            0
+        } else {
+            match StartGameAnswer::decode_frame(frame) {
+                Ok(answer) => answer.result,
+                Err(_) => {
+                    tracing::debug!(id = frame.id, "dropping undecodable start answer");
+                    return;
+                }
+            }
+        };
+        if result == 0 {
+            self.game.clear_waiting_notice();
+            self.start_announced = true;
+        } else {
+            // The refusal word is the server's "a member still lacks
+            // the song" answer. Keep the pinned download notice the
+            // bare-broadcast arm already posted for this verdict.
+            self.game.note_waiting_download();
+            tracing::info!(result, "START refused; waiting remains");
+        }
+    }
+
+    /// Fold one 4013 loaded byte into its staged seat (VA `0x55f950`).
+    fn apply_music_loaded(&mut self, frame: &Frame) {
+        let Ok(loaded) = MusicLoaded::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable loaded state");
+            return;
+        };
+        self.game
+            .set_member_music_state(loaded.member_id, loaded.state);
+    }
+
+    /// Fold the counted 4029 rows into staged seat states. The value-1
+    /// arm is the only one whose extra byte names the state (VA
+    /// `0x55ff00`); wide seats are dropped by the decoder.
+    fn apply_waiting_member_rows(&mut self, frame: &Frame) {
+        let Ok(event) = WaitingMemberRows::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable member rows");
+            return;
+        };
+        for row in event.rows {
+            if let Some(state) = row.state {
+                self.game.set_member_music_state(row.member_id, state);
+            }
+        }
+    }
+
+    /// Stage the raw item ids from one skill-list event. The two
+    /// catalog bytes the exe derives from each id have no pinned table
+    /// in this lane, so no count is invented: ids are staged with a
+    /// zero count and the wide seat value is left OPEN.
+    fn stage_skill_item_ids(&mut self, slot: usize, item_ids: &[u32], value: u32, member_id: u8) {
+        let items = item_ids
+            .iter()
+            .map(|id| WaitingSkillItem {
+                id: i32::try_from(id & 0x7FFF_FFFF).unwrap_or(0),
+                count: 0,
+            })
+            .collect();
+        self.game.set_skill_slot_items(slot, items);
+        tracing::debug!(slot, value, member_id, "skill ids staged from the wire");
+    }
+
+    /// 4024 owns the first skill vector (VA `0x5602a0`).
+    fn apply_waiting_skill_list(&mut self, frame: &Frame) {
+        match WaitingSkillChanged::decode_frame(frame) {
+            Ok(event) => {
+                self.stage_skill_item_ids(0, &event.item_ids, event.value, event.member_id)
+            }
+            Err(_) => tracing::debug!(id = frame.id, "skill list kept its announce-only arm"),
+        }
+        // The skill broadcast keeps the old 4024 arms: auto-pick on a
+        // master and a fresh 4025 for the staged room song. A legacy
+        // short body still reaches them even with no ids to stage.
+        self.apply_auto_pick_after_seat_change(WaitingSkillChanged::COMMAND);
+        self.announce_music_state();
+    }
+
+    /// 4058 owns the extended skill vector (VA `0x560600`).
+    fn apply_waiting_skill_ex_list(&mut self, frame: &Frame) {
+        match WaitingSkillExChanged::decode_frame(frame) {
+            Ok(event) => {
+                self.stage_skill_item_ids(1, &event.item_ids, event.value, event.member_id)
+            }
+            Err(_) => tracing::debug!(id = frame.id, "skill extension kept its announce-only arm"),
+        }
+        self.apply_auto_pick_after_seat_change(WaitingSkillExChanged::COMMAND);
+        self.announce_music_state();
+    }
+
+    /// 4026 names a member whose two state setters the exe calls.
+    /// The body carries no state byte and neither setter is pinned to
+    /// a shell field, so this arm only validates the frame.
+    fn apply_member_state_changed(&mut self, frame: &Frame) {
+        match MemberStateChanged::decode_frame(frame) {
+            Ok(change) => tracing::debug!(member = change.member_id, "member state changed"),
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable member state"),
+        }
+    }
+
+    /// 4028 stages a wide word and one member byte (VA `0x560a00`).
+    /// No shell field is pinned as the word's destination, so the
+    /// validated pair is only traced.
+    fn apply_waiting_value_member(&mut self, frame: &Frame) {
+        match WaitingValueMemberEvent::decode_frame(frame) {
+            Ok(event) => tracing::debug!(
+                value = event.value,
+                member = event.member_id,
+                "waiting value/member pair"
+            ),
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable value/member pair"),
         }
     }
 
