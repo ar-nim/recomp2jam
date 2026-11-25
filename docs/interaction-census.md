@@ -502,9 +502,10 @@ Input edges with no matching ControlList entry:
 ## MyRoom
 
 Source: the `BOUND "State_Myroom.bnd"` block of the pinned
-`ControlList_Interface.txt` (lines 436–583; 112 entries / 111 rects),
+`ControlList_Interface.txt` (lines 436–583; **117 raw IDC entries =
+112 live + 5 commented-out MY BAG scroll-bar tokens** / 111 rects),
 with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
-`(code & 0xFFF) - 1`.
+`(code & 0xFFF) - 1`. The five commented tokens are enumerated below.
 
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
@@ -621,6 +622,17 @@ with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
 | 109 | `IDC_IMAGE_SMYROOM_MESSENGER_ALRAM` (`0x1550006E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 110 | `IDC_IMAGE_SMYROOM_MESSENGER_ALRAM1` (`0x1550006F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 
+Commented-out MY BAG scroll-bar family (raw IDC tokens at lines 498, 503–506; counted by the raw block walk, but authored with a `//` prefix). Each ordinal collides with a live entry above; do not resolve the collision silently. The exe does not have a pinned consumer for the commented codes.
+
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| 43 | `IDC_SCROLL_SMYROOM_MYBAG` (`0x1502102C`) | scrollbar | Authored comment `O2_SBS_HORZ 5 15`; ordinal 43 is already held by `MYBAGITEM10`. Exe consumption unpinned. | OPEN: REA statics pin of the commented scrollbar code plus Tier 3 drag/click leg; #180 |
+| 44 | `IDC_BUTTON_SMYROOM_SMYBAGLEFT` (`0x1520002D`) | scrollbar (SET child) | Authored comment `Myroom_MybagScroll_Left.ojs`; ordinal 44 is already held by `BAGLEFT`. | OPEN: REA statics pin of the commented arrow code plus Tier 3 click; #180 |
+| 45 | `IDC_BUTTON_SMYROOM_SMYBAGRIGHT` (`0x1520002E`) | scrollbar (SET child) | Authored comment `Myroom_MybagScroll_Right.ojs`; ordinal 45 is already held by `BAGRIGHT`. | OPEN: REA statics pin of the commented arrow code plus Tier 3 click; #180 |
+| 46 | `IDC_BUTTON_SMYROOM_SMYBAGBAR` (`0x1520002F`) | scrollbar (SET child) | Authored comment `Myroom_MybagScroll_Bar.ojs`; ordinal 46 is already held by `LPAGECNT_10`. | OPEN: REA statics pin of the commented thumb code plus Tier 3 drag; #180 |
+| 47 | `IDC_BUTTON_SMYROOM_SMYBAGRANGE` (`0x15200030`) | scrollbar (SET child) | Authored comment with no sprite; ordinal 47 is already held by `LPAGECNT_1`. | OPEN: REA statics pin of the commented track code plus Tier 3 click; #180 |
+
 Input edges with no matching ControlList entry:
 
 | Edge | Exe behavior pin | Status |
@@ -631,9 +643,11 @@ Input edges with no matching ControlList entry:
 ## Item Shop
 
 Source: the `BOUND "State_ItemShop.bnd"` block of the pinned
-`ControlList_Interface.txt` (lines 179–431; 187 entries / 186 rects);
+`ControlList_Interface.txt` (lines 179–431; **192 raw IDC entries =
+187 live + 5 commented-out MY BAG scroll-bar tokens** / 186 rects);
 BUYITEM and browse-grid pins are in `docs/shop.md` and
-`docs/parity/shop.md`. Ordinal is `(code & 0xFFF) - 1`.
+`docs/parity/shop.md`. Ordinal is `(code & 0xFFF) - 1`. The five
+commented tokens are enumerated below.
 
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
@@ -824,6 +838,17 @@ BUYITEM and browse-grid pins are in `docs/shop.md` and
 | 183 | `IDC_BUTTON_SSHOP_MESSENGER` (`0x142000B8`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dispatch plus Tier 3 click; web/P0 chrome sends nothing |
 | 184 | `IDC_IMAGE_SSHOP_MESSENGER_ALRAM` (`0x145000B9`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 185 | `IDC_IMAGE_SSHOP_MESSENGER_ALRAM1` (`0x145000BA`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+Commented-out MY BAG scroll-bar family (raw IDC tokens at lines 271, 285–288; counted by the raw block walk, but authored with a `//` prefix). Each ordinal collides with a live entry above; do not resolve the collision silently. The exe does not have a pinned consumer for the commented codes.
+
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| 71 | `IDC_SCROLL_SSHOP_MYBAG` (`0x14023048`) | scrollbar | Authored comment `O2_SBS_HORZ 5 15`; ordinal 71 is already held by `SITEMLEFT`. Exe consumption unpinned. | OPEN: REA statics pin of the commented scrollbar code plus Tier 3 drag/click leg; #178 T7 |
+| 76 | `IDC_BUTTON_SSHOP_SMYBAGLEFT` (`0x1420004D`) | scrollbar (SET child) | Authored comment `Shop_MybagScroll_Left.ojs`; ordinal 76 is already held by `BAGRIGHT`. | OPEN: REA statics pin of the commented arrow code plus Tier 3 click; #178 T7 |
+| 77 | `IDC_BUTTON_SSHOP_SMYBAGRIGHT` (`0x1420004E`) | scrollbar (SET child) | Authored comment `Shop_MybagScroll_Right.ojs`; ordinal 77 is already held by `LPAGECNT_10`. | OPEN: REA statics pin of the commented arrow code plus Tier 3 click; #178 T7 |
+| 78 | `IDC_BUTTON_SSHOP_SMYBAGBAR` (`0x1420004F`) | scrollbar (SET child) | Authored comment `Shop_MybagScroll_Bar.ojs`; ordinal 78 is already held by `LPAGECNT_1`. | OPEN: REA statics pin of the commented thumb code plus Tier 3 drag; #178 T7 |
+| 79 | `IDC_BUTTON_SSHOP_SMYBAGRANGE` (`0x14200050`) | scrollbar (SET child) | Authored comment with no sprite; ordinal 79 is already held by `RPAGECNT_10`. | OPEN: REA statics pin of the commented track code plus Tier 3 click; #178 T7 |
 
 Input edges with no matching ControlList entry:
 
@@ -1107,8 +1132,11 @@ Input edges with no matching ControlList entry:
 
 ## Dialogs
 
-The ControlList defines the dialog families below. Each entry is one row;
-`Dialog_*.bnd` rects pair by `(code & 0xFFF) - 1` (`docs/bnd-semantics.md`).
+The pinned ControlList defines **27 dialog-family blocks / 489 IDC
+entries** (`DIALOG_*` plus `DAILOG_SELECTMUSIC`). Three option sheets
+are censused under `## Options`; the other 24 blocks are listed here.
+No family is scoped out. Each entry is one row; `Dialog_*.bnd` rects
+pair by `(code & 0xFFF) - 1` (`docs/bnd-semantics.md`).
 
 ### create room / DIALOG_CREATEROOM
 
@@ -1351,6 +1379,360 @@ Source: block `DIALOG_MESSENGER_INFORMATION` in the pinned ControlList; see the 
 | 2 | `IDC_TEXT_MESSENGER_INFORMATION_TITLE` (`0x8B400003`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 3 | `IDC_TEXT_MESSENGER_INFORMATION_OK` (`0x8B400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 4 | `IDC_TEXT_MESSENGER_INFORMATION_MESSAGE` (`0x8B400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+
+### DIALOG_WHISPER
+
+Source: `Dialog_Whisper.bnd` block in the pinned ControlList (lines 1507–1516; 6 entries / 5 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_WHISPER` (`0x29000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_WHISPER` (`0x29100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_TEXT_WHISPER` (`0x29400002`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 2 | `IDC_EDIT_WHISPER` (`0x29300003`) | edit / key-path | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 3 | `IDC_BUTTON_WHISPER_OK` (`0x29200004`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 4 | `IDC_BUTTON_WHISPER_CANCEL` (`0x29200005`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+
+
+### DIALOG_CHANGETITLE
+
+Source: `Dialog_ChangeTitle.bnd` block in the pinned ControlList (lines 1520–1529; 6 entries / 5 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CHANGETITLE` (`0x2A000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_CHANGETITLE` (`0x2A100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_TEXT_CHANGETITLE` (`0x2A400002`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 2 | `IDC_EDIT_CHANGETITLE` (`0x2A300003`) | edit / key-path | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 3 | `IDC_BUTTON_CHANGETITLE_OK` (`0x2A200004`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 4 | `IDC_BUTTON_CHANGETITLE_CANCEL` (`0x2A200005`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+
+
+### DIALOG_EMOTION
+
+Source: `Dialog_EmotionHelp.bnd` block in the pinned ControlList (lines 1533–1546; 10 entries / 9 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_EMOTION` (`0x2B000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_EMOTION` (`0x2B100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_EMOTION_CLOSE` (`0x2B200002`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 2 | `IDC_BUTTON_EMOTION_LEFT` (`0x2B200003`) | pager | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 3 | `IDC_BUTTON_EMOTION_RIGHT` (`0x2B200004`) | pager | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 4 | `IDC_IMAGE_EMOTION_PAGE01` (`0x2B500005`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 5 | `IDC_IMAGE_EMOTION_PAGE10` (`0x2B500006`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 6 | `IDC_IMAGE_EMOTION_TPAGE01` (`0x2B500007`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 7 | `IDC_IMAGE_EMOTION_TPAGE10` (`0x2B500008`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 8 | `IDC_IMAGE_EMOTION_CONTENTS` (`0x2B500009`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+
+### DIALOG_GIFTVIEW
+
+Source: `Dialog_GiftView.bnd` block in the pinned ControlList (lines 1550–1573; 20 entries / 19 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_GIFTVIEW` (`0x2C000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_GIFTVIEW` (`0x2C100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_GIFT_OK` (`0x2C200002`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 2 | `IDC_BUTTON_GIFT_GOGIFTBOX` (`0x2C200003`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 3 | `IDC_BUTTON_GIFT_LEFT` (`0x2C200004`) | pager | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 4 | `IDC_BUTTON_GIFT_RIGHT` (`0x2C200005`) | pager | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 5 | `IDC_TEXT_GIFT_SEND_NICKNAME` (`0x2C400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 6 | `IDC_TEXT_GIFT_SEND_DATETIME` (`0x2C400007`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 7 | `IDC_TEXT_GIFT_SEND_TITLE1` (`0x2C400008`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 8 | `IDC_TEXT_GIFT_SEND_TITLE2` (`0x2C400009`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 9 | `IDC_TEXT_GIFT_CONTENTS1` (`0x2C40000A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 10 | `IDC_TEXT_GIFT_CONTENTS2` (`0x2C40000B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 11 | `IDC_TEXT_GIFT_CONTENTS3` (`0x2C40000C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 12 | `IDC_TEXT_GIFT_CONTENTS4` (`0x2C40000D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 13 | `IDC_TEXT_GIFT_CONTENTS5` (`0x2C40000E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 14 | `IDC_TEXT_GIFT_CONTENTS6` (`0x2C40000F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 15 | `IDC_IMAGE_GIFT_PAGE01` (`0x2C500010`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 16 | `IDC_IMAGE_GIFT_PAGE10` (`0x2C500011`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 17 | `IDC_IMAGE_GIFT_TPAGE01` (`0x2C500012`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 18 | `IDC_IMAGE_GIFT_TPAGE10` (`0x2C500013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+
+### DIALOG_SKILLIINFO
+
+Source: `Dialog_SkillInfo.bnd` block in the pinned ControlList (lines 1577–1592; 12 entries / 11 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_SKILLINFO` (`0x2D000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_SKILLINFO` (`0x2D100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_SKILLINFO_OK` (`0x2D200002`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 2 | `IDC_TEXT_SKILLINFO_ITEMNAME` (`0x2D400003`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 3 | `IDC_TEXT_SKILLINFO_COUNT` (`0x2D400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 4 | `IDC_TEXT_SKILLINFO_SKILLNAME` (`0x2D400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 5 | `IDC_IMAGE_SKILLINFO_SKILLIMAGE` (`0x2D500006`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 6 | `IDC_TEXT_SKILLINFO_DESC1` (`0x2D400007`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 7 | `IDC_TEXT_SKILLINFO_DESC2` (`0x2D400008`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 8 | `IDC_TEXT_SKILLINFO_DESC3` (`0x2D400009`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 9 | `IDC_TEXT_SKILLINFO_DESC4` (`0x2D40000A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 10 | `IDC_TEXT_SKILLINFO_DESC5` (`0x2D40000B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+
+### DIALOG_CHANGENICKNAME
+
+Source: `Dialog_ChangeNickName.bnd` block in the pinned ControlList (lines 1597–1607; 7 entries / 6 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CHANGENICKNAME` (`0x2E000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_CHANGENICKNAME` (`0x2E100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_EDIT_CHANGENICKNAME` (`0x2E300002`) | edit / key-path | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 2 | `IDC_TEXT_CHANGENICKNAME` (`0x2E400003`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 3 | `IDC_BUTTON_SEARCHNICKNAME` (`0x2E200004`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 4 | `IDC_BUTTON_CHANGENICKNAME_OK` (`0x2E200005`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 5 | `IDC_BUTTON_CHANGENICKNAME_CANCEL` (`0x2E200006`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+
+
+### DIALOG_MUSICINFO
+
+Source: `Dialog_MusicInfo.bnd` block in the pinned ControlList (lines 1643–1669; 23 entries / 22 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_MUSICINFO` (`0x81000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DIALOG_MUSICINFO` (`0x81100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_MUSICINFO_CANCEL` (`0x81200002`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 2 | `IDC_IMAGE_MUSICINFO_MUSICIMAGE` (`0x81500003`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 3 | `IDC_TEXT_MUSICINFO_TITLE` (`0x81400004`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 4 | `IDC_TEXT_MUSICINFO_ARTIST` (`0x81400005`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 5 | `IDC_TEXT_MUSICINFO_EDITOR` (`0x81400006`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 6 | `IDC_TEXT_MUSICINFO_GANRE` (`0x81400007`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 7 | `IDC_TEXT_MUSICINFO_BPM` (`0x81400008`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 8 | `IDC_TEXT_MUSICINFO_LABEL` (`0x81400009`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 9 | `IDC_TEXT_MUSICINFO_NOTECNT` (`0x8140000A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 10 | `IDC_TEXT_MUSICINFO_LAVEL_E` (`0x8140000B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 11 | `IDC_TEXT_MUSICINFO_LAVEL_N` (`0x8140000C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 12 | `IDC_TEXT_MUSICINFO_LAVEL_H` (`0x8140000D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 13 | `IDC_IMAGE_MUSICINFO_RANKIMAGE` (`0x8150000E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 14 | `IDC_IMAGE_MUSICINFO_CLEAR` (`0x8150000F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 15 | `IDC_IMAGE_MUSICINFO_ALLCOM` (`0x81500010`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 16 | `IDC_IMAGE_MUSICINFO_ALLCOOL` (`0x81500011`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 17 | `IDC_TEXT_MUSICINFO_MAXSCORE` (`0x81400012`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 18 | `IDC_TEXT_MUSICINFO_DATE` (`0x81400013`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 19 | `IDC_BUTTON_MUSICINFO_QUESTION` (`0x81200014`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+| 20 | `IDC_IMAGE_MUSICINFO_GUIDIMG` (`0x81500015`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 21 | `IDC_TEXT_MUSICINFO_RANKRESULT` (`0x81400016`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+
+
+### DIALOG_EVENT
+
+Source: `Dialog_Event.bnd` block in the pinned ControlList (lines 1701–1709; 4 entries / 3 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_EVENT` (`0x84000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_EVENT` (`0x84100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_EVENT_WEB` (`0x84500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_BUTTON_EVENT_CLOSE` (`0x84200003`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+
+
+### DIALOG_CONFERENCE
+
+Source: `Dialog_Conference.bnd` block in the pinned ControlList (lines 1713–1720; 4 entries / 3 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CONFERENCE` (`0x85000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_CONFERENCE` (`0x85100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_CONFERENCE_WEB` (`0x85500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_BUTTON_CONFERENCE_CLOSE` (`0x85200003`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#316) |
+
+
+### DIALOG_CHARGECASH
+
+Source: `Dialog_ChargeCash.bnd` block in the pinned ControlList (lines 1689–1697; 4 entries / 3 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CHARGECASH` (`0x83000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_CHARGECASH` (`0x83100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_CHARGECASH_WEB` (`0x83500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_BUTTON_CHARGECASH_CLOSE` (`0x83200003`) | button | Sheet input; exe wiring untraced in the pinned docs. | OPEN: REA state handler pin plus Tier 3 click/key leg (#867) |
+
+
+### DIALOG_CHANNEL_INFO
+
+Source: `Dialog_ChannelInfo.bnd` block in the pinned ControlList (lines 1932–1975; 28 entries / 27 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_CHANNEL_INFO` (`0x8C000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_CHANNEL_INFO` (`0x8C100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_CHANNEL_INFO_CLOSE` (`0x8C200002`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 2 | `IDC_BUTTON_CHANNEL_INFO_EXTEND1` (`0x8C01A003`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 3 | `IDC_BUTTON_CHANNEL_INFO_EXTEND2` (`0x8C01A004`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 4 | `IDC_BUTTON_CHANNEL_INFO_EXTEND3` (`0x8C01A005`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 5 | `IDC_BUTTON_CHANNEL_INFO_EXTEND4` (`0x8C01A006`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 6 | `IDC_IMAGE_CH_BACK` (`0x8C500007`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 7 | `IDC_IMAGE_CH10` (`0x8C500008`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 8 | `IDC_IMAGE_CH01` (`0x8C500009`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 9 | `IDC_IMAGE_CH_CONNECT_COUNT` (`0x8C50000A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 10 | `IDC_IMAGE_CH_ENTER` (`0x8C50000B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 11 | `IDC_SCROLL_CHANNEL_INFO` (`0x8C02100C`) | scrollbar | Scroll control at the paired rect; dispatch unpinned | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 12 | `IDC_BUTTON_CHANNEL_SCROLLUP` (`0x8C20000D`) | button | Channel-select bar arrow/thumb/track; arrows step the viewport, highlight untouched (#55). | OPEN: Tier 3 arrow/thumb leg plus REA dispatch pin (#55) |
+| 13 | `IDC_BUTTON_CHANNEL_SCROLLDOWN` (`0x8C20000E`) | button | Channel-select bar arrow/thumb/track; arrows step the viewport, highlight untouched (#55). | OPEN: Tier 3 arrow/thumb leg plus REA dispatch pin (#55) |
+| 14 | `IDC_BUTTON_CHANNEL_SCROLLBAR` (`0x8C20000F`) | button | Channel-select bar arrow/thumb/track; arrows step the viewport, highlight untouched (#55). | OPEN: Tier 3 arrow/thumb leg plus REA dispatch pin (#55) |
+| 15 | `IDC_BUTTON_CHANNEL_SCROLLRANGE` (`0x8C200010`) | button | Channel-select bar arrow/thumb/track; arrows step the viewport, highlight untouched (#55). | OPEN: Tier 3 arrow/thumb leg plus REA dispatch pin (#55) |
+| 16 | `IDC_BUTTON_CHANNEL_INFO_HARD` (`0x8C201011`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 17 | `IDC_BUTTON_CHANNEL_INFO_NORMAL` (`0x8C201012`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 18 | `IDC_BUTTON_CHANNEL_INFO_EASY` (`0x8C201013`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 19 | `IDC_BUTTON_CHANNEL_INFO_FREE` (`0x8C201014`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 20 | `IDC_BUTTON_CHANNEL_INFO_DRUM` (`0x8C201015`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+| 21 | `IDC_TEXT_CHANNEL_INFO_HARD` (`0x8C400016`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 22 | `IDC_TEXT_CHANNEL_INFO_NORMAL` (`0x8C400017`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 23 | `IDC_TEXT_CHANNEL_INFO_EASY` (`0x8C400018`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 24 | `IDC_TEXT_CHANNEL_INFO_FREE` (`0x8C400019`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 25 | `IDC_TEXT_CHANNEL_INFO_DRUM` (`0x8C40001A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 26 | `IDC_BUTTON_CHANNEL_INFO_EXIT` (`0x8C20001B`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dialog-chrome dispatch pin plus Tier 3 click (#26/#55) |
+
+
+### DAILOG_SELECTMUSIC
+
+Source: `Dialog_SelectMusic.bnd` block in the pinned ControlList (lines 1312–1490; 134 entries / 133 rects). Exe wiring for this family is unpinned; every row carries a named next step.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_DIALOG_SELECTMUSIC` (`0x27000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_DSMUSIC_1` (`0x27100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_DSMUSIC_OK` (`0x27200002`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 2 | `IDC_BUTTON_DSMUSIC_CANCEL` (`0x27200003`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 3 | `IDC_BUTTON_DSMUSIC_EXTEND1` (`0x27017004`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 4 | `IDC_BUTTON_DSMUSIC_EXTEND2` (`0x27017005`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 5 | `IDC_BUTTON_DSMUSIC_EXTEND3` (`0x27017006`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 6 | `IDC_BUTTON_DSMUSIC_EXTEND4` (`0x27017007`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 7 | `IDC_BUTTON_DSMUSIC_EXTEND5` (`0x27017008`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 8 | `IDC_BUTTON_DSMUSIC_EXTEND6` (`0x27017009`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 9 | `IDC_BUTTON_DSMUSIC_EXTEND7` (`0x2701700A`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 10 | `IDC_BUTTON_DSMUSIC_EXTEND8` (`0x2701700B`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 11 | `IDC_BUTTON_DSMUSIC_EXTEND9` (`0x2701700C`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 12 | `IDC_BUTTON_DSMUSIC_EXTEND10` (`0x2701700D`) | button | Song-select row cell; master row click commits the room song and queues 4000 (#15, `#272`); row note/grade icons stay unpainted. | OPEN: live row-click + 4000 gateway leg (#272/#276); seam click_staged_select_row_commits_song_and_queues_4000 (Tier 0) |
+| 13 | `IDC_IMAGE_DSMUSIC_CHECK` (`0x2750000E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 14 | `IDC_IMAGE_DSMUSIC_REMOVE` (`0x2750000F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 15 | `IDC_IMAGE_DSMUSIC_COLOR` (`0x27500010`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 16 | `IDC_IMAGE_DSMUSIC_IMG_DIFF` (`0x27500011`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 17 | `IDC_TEXT_DSMUSIC_TITLE` (`0x27400012`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 18 | `IDC_TEXT_DSMUSIC_ARTIST` (`0x27400013`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 19 | `IDC_TEXT_DSMUSIC_TXT_DIFF` (`0x27400014`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 20 | `IDC_IMAGE_DSMUSIC_ISDOWN` (`0x27500015`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 21 | `IDC_IMAGE_DSMUSIC_HEAR` (`0x27500016`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 22 | `IDC_IMAGE_DSMUSIC_INFO` (`0x27500017`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 23 | `IDC_IMAGE_DSMUSIC_RANK` (`0x27500018`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 24 | `IDC_IMAGE_DSMUSIC_SELECT_BG` (`0x27500019`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 25 | `IDC_BUTTON_DSMUSIC_MUISCSELECT` (`0x2720001A`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 26 | `IDC_BUTTON_DSMUSIC_RANDOMSELECT` (`0x2720001B`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 27 | `IDC_BUTTON_DSMUSIC_STEP1_ALL` (`0x2720101C`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 28 | `IDC_BUTTON_DSMUSIC_STEP1_EASY` (`0x2720101D`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 29 | `IDC_BUTTON_DSMUSIC_STEP1_INTERMEDIATE` (`0x2720101E`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 30 | `IDC_BUTTON_DSMUSIC_STEP1_HIGH` (`0x2720101F`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 31 | `IDC_BUTTON_DSMUSIC_STEP1_HIGHEST` (`0x27201020`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 32 | `IDC_BUTTON_DSMUSIC_STEP2_ALL` (`0x2720B021`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 33 | `IDC_BUTTON_DSMUSIC_STEP2_GOLD` (`0x2720B022`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 34 | `IDC_BUTTON_DSMUSIC_STEP2_BLACK` (`0x2720B023`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 35 | `IDC_BUTTON_DSMUSIC_STEP2_BLUE` (`0x2720B024`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 36 | `IDC_BUTTON_DSMUSIC_STEP2_RED` (`0x2720B025`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 37 | `IDC_BUTTON_DSMUSIC_STEP2_SILVER` (`0x2720B026`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 38 | `IDC_BUTTON_DSMUSIC_STEP3_ALL` (`0x2720B027`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 39 | `IDC_BUTTON_DSMUSIC_STEP3_BALLAD` (`0x2720B028`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 40 | `IDC_BUTTON_DSMUSIC_STEP3_ROCK` (`0x2720B029`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 41 | `IDC_BUTTON_DSMUSIC_STEP3_DANCE` (`0x2720B02A`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 42 | `IDC_BUTTON_DSMUSIC_STEP3_HIPHOP_SOUL` (`0x2720B02B`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 43 | `IDC_BUTTON_DSMUSIC_STEP3_JAZZ_FUNK` (`0x2720B02C`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 44 | `IDC_BUTTON_DSMUSIC_STEP3_CLASSIC` (`0x2720B02D`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 45 | `IDC_BUTTON_DSMUSIC_STEP3_ETC` (`0x2720B02E`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 46 | `IDC_IMAGE_DSMUSIC_TABRESULT` (`0x2760002F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 47 | `IDC_IMAGE_DSMUSIC_TABPLAYLIST` (`0x27600030`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 48 | `IDC_IMAGE_DSMUSIC_TABPLAYLIST_BACK` (`0x27500031`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 49 | `IDC_IMAGE_DSMUSIC_TABPLAYLIST_ANI` (`0x27500032`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 50 | `IDC_TEXT_DSMUSIC_TABRESULT` (`0x27400033`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 51 | `IDC_TEXT_DSMUSIC_TABPLAYLIST` (`0x27400034`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 52 | `IDC_BUTTON_DSMUSIC_SERACH_SORT_NEW` (`0x27200035`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 53 | `IDC_BUTTON_DSMUSIC_POPULAR` (`0x27200036`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 54 | `IDC_IMAGE_DSMUSIC_CHECKALL_BG` (`0x27500037`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 55 | `IDC_BUTTON_DSMUSIC_CHECKALL` (`0x27201038`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 56 | `IDC_IMAGE_DSMUSIC_REMOVALL_BG` (`0x27500039`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 57 | `IDC_BUTTON_DSMUSIC_REMOVEALL` (`0x2720003A`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 58 | `IDC_BUTTON_DSMUSIC_COLOR` (`0x2720003B`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 59 | `IDC_BUTTON_DSMUSIC_DIFF` (`0x2720003C`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 60 | `IDC_BUTTON_DSMUSIC_TITLE` (`0x2720003D`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 61 | `IDC_BUTTON_DSMUSIC_ARTIST` (`0x2720003E`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 62 | `IDC_BUTTON_DSMUSIC_DIFF_LEVEL` (`0x2720003F`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 63 | `IDC_BUTTON_DSMUSIC_ISDOWN` (`0x27200040`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 64 | `IDC_BUTTON_DSMUSIC_RANK` (`0x27200041`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 65 | `IDC_TEXT_DSMUSIC_SERACHRESHLT` (`0x27400042`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 66 | `IDC_IMAGE_DSMUSIC_UPDOWN_BG` (`0x27500043`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 67 | `IDC_BUTTON_DSMUSIC_UP` (`0x27200044`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 68 | `IDC_BUTTON_DSMUSIC_DOWN` (`0x27200045`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 69 | `IDC_BUTTON_DSMUSIC_LEFT` (`0x27200046`) | pager | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 70 | `IDC_BUTTON_DSMUSIC_RIGHT` (`0x27200047`) | pager | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 71 | `IDC_TEXT_DSMUSIC_PAGENUM` (`0x27400048`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 72 | `IDC_BUTTON_DSMUSIC_SEARCH_TITLE` (`0x27201049`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 73 | `IDC_BUTTON_DSMUSIC_SEARCH_ARTIST` (`0x2720104A`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 74 | `IDC_EDIT_DSMUSIC_SEARCH` (`0x2730004B`) | edit / key-path | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 75 | `IDC_BUTTON_DSMUSIC_SERACH` (`0x2720004C`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 76 | `IDC_IMAGE_DSMUSIC_RANDOM1_BG` (`0x2750004D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 77 | `IDC_BUTTON_DSMUSIC_RANDOM1_ALL` (`0x2720004E`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 78 | `IDC_BUTTON_DSMUSIC_RANDOM1_EASY` (`0x2720104F`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 79 | `IDC_BUTTON_DSMUSIC_RANDOM1_INTERMEDIATE` (`0x27201050`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 80 | `IDC_BUTTON_DSMUSIC_RANDOM1_HIGH` (`0x27201051`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 81 | `IDC_BUTTON_DSMUSIC_RANDOM1_HIGHEST` (`0x27201052`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 82 | `IDC_BUTTON_DSMUSIC_LABELQUESTION` (`0x27200053`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 83 | `IDC_IMAGE_DSMUSIC_LABELGUIDIMG` (`0x27500054`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 84 | `IDC_BUTTON_DSMUSIC_SEARCHQUESTION` (`0x27200055`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 85 | `IDC_IMAGE_DSMUSIC_SEARCHGUIDIMG` (`0x27500056`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 86 | `IDC_IMAGE_DSMUSIC_LISTGUIDIMG` (`0x27500057`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 87 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX0` (`0x27200058`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 88 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX1` (`0x27200059`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 89 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX2` (`0x2720005A`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 90 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX3` (`0x2720005B`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 91 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX4` (`0x2720005C`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 92 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX5` (`0x2720005D`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 93 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX6` (`0x2720005E`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 94 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX7` (`0x2720005F`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 95 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX8` (`0x27200060`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 96 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX9` (`0x27200061`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 97 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX10` (`0x27200062`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 98 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX11` (`0x27200063`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 99 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX12` (`0x27200064`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 100 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX13` (`0x27200065`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 101 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX14` (`0x27200066`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 102 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX15` (`0x27200067`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 103 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX16` (`0x27200068`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 104 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX17` (`0x27200069`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 105 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX18` (`0x2720006A`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 106 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX19` (`0x2720006B`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 107 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX20` (`0x2720006C`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 108 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX21` (`0x2720006D`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 109 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX22` (`0x2720006E`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 110 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX23` (`0x2720006F`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 111 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX24` (`0x27200070`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 112 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX25` (`0x27200071`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 113 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX26` (`0x27200072`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 114 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX27` (`0x27200073`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 115 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX28` (`0x27200074`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 116 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX29` (`0x27200075`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 117 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX30` (`0x27200076`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 118 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX31` (`0x27200077`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 119 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX32` (`0x27200078`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 120 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX33` (`0x27200079`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 121 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX34` (`0x2720007A`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 122 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX35` (`0x2720007B`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 123 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX36` (`0x2720007C`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 124 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX37` (`0x2720007D`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 125 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX38` (`0x2720007E`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 126 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX39` (`0x2720007F`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 127 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX40` (`0x27200080`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 128 | `IDC_BUTTON_DSMUSIC_SERACH_INDEX41` (`0x27200081`) | button | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 129 | `IDC_BUTTON_DSMUSIC_SERACH_NEW` (`0x2720B082`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 130 | `IDC_BUTTON_DSMUSIC_SERACH_SPECIAL1` (`0x2720B083`) | tab / toggle | Song-select sheet chrome; filters/pager/search/OK clicks fall through in the current spec (#15); exe handler unpinned. | OPEN: REA chrome handler pin plus Tier 3 click/frame leg (#15); seam select_row_hit_maps_the_search_table_bands (Tier 0) |
+| 131 | `IDC_TEXT_DSMUSIC_SERACH_NEW` (`0x27400084`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 132 | `IDC_TEXT_DSMUSIC_SERACH_SPECIAL1` (`0x27400085`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 
 
 Input edges with no separate ControlList row:
