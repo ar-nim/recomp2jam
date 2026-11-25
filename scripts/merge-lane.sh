@@ -172,7 +172,12 @@ run_cleanup_step() {
 }
 
 release_lane_data() {
-    (cd "$lane_path" && bash "$WORKTREE_RELEASE")
+    # Use the lane's own copy: worktree-release.sh resolves its checkout
+    # from its own path, so main's copy always refuses (Guard 1) and the
+    # slot claim orphans when the worktree is removed anyway.
+    local release_script="$lane_path/scripts/worktree-release.sh"
+    [ -f "$release_script" ] || release_script="$WORKTREE_RELEASE"
+    (cd "$lane_path" && bash "$release_script")
 }
 
 cleanup_lane() {
