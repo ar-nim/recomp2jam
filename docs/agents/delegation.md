@@ -330,6 +330,22 @@ Guarded conflicts and pushes (retro 2026-11-20, paint_channel):
 
 The issue-tracker copy is a pointer; this section is canonical.
 
+## Standard merge path (issue #918)
+
+`scripts/merge-lane.sh <branch>` is the standard senior merge path, run from
+the main checkout. It refuses a linked worktree, a dirty tree, a missing or
+already-merged branch, or a checkout not on `main`; merges with `--no-ff`;
+runs `scripts/gate-check.sh --arm full` with `GATE_CHECK_NO_PUSH=1`; and
+resets local main to the pre-merge SHA if any red step occurs before the
+push. On green it pushes `main`, verifies `main == origin/main`, prints the
+merge commit, releases the lane worktree, and deletes the merged branch.
+`--no-push` leaves a green merge local; `--keep-worktree` leaves the lane
+worktree in place. The script orchestrates; gate-check.sh owns every check.
+
+A manual merge plus push is the exception, not the default: it needs a named
+reason in the close report (for example, a conflict that needs hand
+resolution). Pushing without an observed full-gate rc=0 stays forbidden.
+
 ## Land-or-rebase timing pointer
 
 Land (merge) only after the full gates
