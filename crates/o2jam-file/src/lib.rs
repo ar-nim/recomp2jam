@@ -235,6 +235,27 @@ pub use resolve::*;
 pub use sprites::*;
 pub use tables::*;
 
+/// Byte offset of the current-frame word in the exe image state
+/// (VA `0x41e120`, file `0x1e120`, ev aec1.1f01…).
+pub const IMAGE_FRAME_INDEX_OFFSET: usize = 0x134;
+/// Byte offset of the image frame-count word
+/// (VA `0x41e140`, file `0x1e140`, ev e368.b966…).
+pub const IMAGE_FRAME_COUNT_OFFSET: usize = 0x11c;
+/// Byte offset of a staged control's frame-count word
+/// (VA `0x42f760`, file `0x2f760`, ev 4a8d.c42b…).
+pub const CONTROL_FRAME_COUNT_OFFSET: usize = 0x148;
+
+/// Read one little-endian `u16` word from an image/control state block.
+/// `None` when the two bytes are outside the block.
+#[must_use]
+pub fn state_word_at(block: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let bytes = block.get(offset..end)?;
+    let low = *bytes.first()?;
+    let high = *bytes.get(1)?;
+    Some(u16::from_le_bytes([low, high]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1919,5 +1940,46 @@ mod tests {
             deinterleave_stripes(&[0u8; 32], 8),
             Err(FileError::UnknownFormat { .. })
         ));
+    }
+
+    #[test]
+    fn exe_frame_index_word_reads_its_pinned_state_slot() {
+        // seam: the frame word is a state-read contract (pure parser,
+        // pin 0x41e120 / ev aec1.1f01…); the Tier 3 leg uses it as
+        // the oracle for the staged Playing frame.
+        let mut state = vec![0u8; 0x150];
+        state[IMAGE_FRAME_COUNT_OFFSET..IMAGE_FRAME_COUNT_OFFSET + 2]
+            .copy_from_slice(&7u16.to_le_bytes());
+        state[IMAGE_FRAME_INDEX_OFFSET..IMAGE_FRAME_INDEX_OFFSET + 2]
+            .copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(state_word_at(&state, IMAGE_FRAME_INDEX_OFFSET), Some(2));
+    }
+
+    #[test]
+    fn frame_count_word_reads_its_pinned_state_slot() {
+        // seam: the count bounds frame selection (pin 0x41e140 /
+        // ev e368.b966…); the Tier 3 leg stages the bound frames.
+        let mut state = vec![0u8; 0x150];
+        state[IMAGE_FRAME_COUNT_OFFSET..IMAGE_FRAME_COUNT_OFFSET + 2]
+            .copy_from_slice(&5u16.to_le_bytes());
+        assert_eq!(state_word_at(&state, IMAGE_FRAME_COUNT_OFFSET), Some(5));
+    }
+
+    #[test]
+    fn control_count_word_reads_its_pinned_state_slot() {
+        // seam: the control count setter stores a 16-bit word
+        // (pin 0x42f760 / ev 4a8d.c42b…); the Tier 3 leg stages
+        // the same count from the installed figure.
+        let mut state = vec![0u8; 0x150];
+        state[CONTROL_FRAME_COUNT_OFFSET..CONTROL_FRAME_COUNT_OFFSET + 2]
+            .copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(state_word_at(&state, CONTROL_FRAME_COUNT_OFFSET), Some(3));
+        assert_eq!(
+            state_word_at(
+                &state[..CONTROL_FRAME_COUNT_OFFSET],
+                CONTROL_FRAME_COUNT_OFFSET
+            ),
+            None
+        );
     }
 }
