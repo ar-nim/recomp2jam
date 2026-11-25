@@ -915,17 +915,21 @@ pub const SHOP_SET_CARD_PARENT_IDS: [&str; 4] = [
     "IDC_BUTTON_SSHOP_SETITEM_EX4",
 ];
 
+/// Cloned `SET_PRICE` cell under each featured card. The exe's
+/// price-row writer selects this cell by state face (#937).
+pub const SHOP_SET_PRICE_CODE: u32 = 0x1440_0094;
+
 pub const SHOP_SET_CARD_CHILD_CODES: [u32; 10] = [
-    0x1470_008D, // SET_AVATAR
-    0x1440_008E, // SET_TITLE
-    0x1440_008F, // SET_TYPE1
-    0x1440_0090, // SET_TYPE2
-    0x1440_0091, // SET_TYPE3
-    0x1440_0092, // SET_TYPE4
-    0x1440_0093, // SET_TYPE5
-    0x1440_0094, // SET_PRICE
-    0x1450_0097, // SET_RESERVE
-    0x1450_0098, // SET_RESERVE2
+    0x1470_008D,         // SET_AVATAR
+    0x1440_008E,         // SET_TITLE
+    0x1440_008F,         // SET_TYPE1
+    0x1440_0090,         // SET_TYPE2
+    0x1440_0091,         // SET_TYPE3
+    0x1440_0092,         // SET_TYPE4
+    0x1440_0093,         // SET_TYPE5
+    SHOP_SET_PRICE_CODE, // SET_PRICE
+    0x1450_0097,         // SET_RESERVE
+    0x1450_0098,         // SET_RESERVE2
 ];
 
 /// The 7.55 image controls show one sprite frame, not the whole

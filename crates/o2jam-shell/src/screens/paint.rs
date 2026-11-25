@@ -1288,6 +1288,39 @@ fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], t
     }
 }
 
+/// State face that selects the featured card's price cells. The exe's
+/// `FUN_0x4a21a0` (`ev_bec61aed…`, file `0xa21a0`) inks the four cloned
+/// `SET_PRICE` rows only on the `PriceRows` face; the other two faces
+/// leave those cells dark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopPriceFace {
+    /// `+0x168 == 0` and `+0x144 != 0`: the card price-row writer runs.
+    PriceRows,
+    /// `+0x168 != 0`: the set-item detail face writes no price row.
+    Detail,
+    /// `+0x168 == 0` and `+0x144 == 0`: grid prices, not clone rows.
+    Plain,
+}
+
+impl ShopPriceFace {
+    /// Whether this face inks the cloned card price rows.
+    #[must_use]
+    pub const fn inks_card_price_rows(self) -> bool {
+        matches!(self, Self::PriceRows)
+    }
+
+    /// The face our two pinned shop panels mount. The row-pick cart
+    /// frame is the non-price face from the v6 pair; the entry frame
+    /// keeps the four price rows (#937).
+    #[must_use]
+    pub const fn for_panel(panel: ShopPanel) -> Self {
+        match panel {
+            ShopPanel::MyBag => Self::PriceRows,
+            ShopPanel::ShoppingBag => Self::Detail,
+        }
+    }
+}
+
 /// Staged board data behind one Item Shop overlay pass. Bundled so
 /// the painter takes one parameter object instead of six arguments.
 pub struct ShopBoard<'a> {
@@ -1333,7 +1366,13 @@ pub fn paint_shop_board(
 ) {
     if board.featured_cards {
         let fonts = crate::staging::staged_shop_price_fonts();
-        paint_shop_featured_captions(frame, placements, board.goods, fonts.as_deref());
+        paint_shop_featured_captions(
+            frame,
+            placements,
+            ShopPriceFace::for_panel(board.panel),
+            board.goods,
+            fonts.as_deref(),
+        );
     } else {
         paint_shop_rows(frame, placements, board.goods);
     }
@@ -1416,7 +1455,7 @@ fn shop_card_attribute_lines(
 /// `0..9`, won prefix `11`, gold `G` prefix `10` from the won atlas.
 /// The modern-font ink below stays only as the no-archive fallback
 /// (owner decision `e8d01`); with staged art the raster is the exe's.
-const SHOP_SET_PRICE_CODE: u32 = 0x1440_0094;
+const SHOP_SET_PRICE_CODE: u32 = super::side::SHOP_SET_PRICE_CODE;
 const SHOP_PRICE_CELL_SHIFT_X: i32 = 0x28;
 const SHOP_WON_PRICE_ANCHOR_X: i32 = 5;
 const SHOP_GEM_PRICE_ANCHOR_X: i32 = 0x46;
@@ -1628,6 +1667,7 @@ fn paint_shop_card_price_row(
 fn paint_shop_featured_captions(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
+    face: ShopPriceFace,
     goods: &[ShopGood],
     fonts: Option<&ShopPriceFonts>,
 ) {
@@ -1660,7 +1700,9 @@ fn paint_shop_featured_captions(
         {
             paint_text_left_in_cell(frame, rect, &good.name, CP949_INK, SHOP_CARD_INK_ORIGIN_Y);
         }
-        paint_shop_card_price_row(frame, placements, parent, good, fonts);
+        if face.inks_card_price_rows() {
+            paint_shop_card_price_row(frame, placements, parent, good, fonts);
+        }
     }
 }
 
@@ -5079,6 +5121,28 @@ mod paint_tests {
         );
     }
 
+    /// The row-pick cart face and the plain face both select the exe
+    /// branches that leave the cloned card price cells dark. The v6
+    /// cart frame pins the cart case; the exe pin covers the plain
+    /// branch too (`FUN_0x4a21a0`, `ev_bec61aed…`, file `0xa21a0`).
+    ///
+    /// seam: the face-to-cell decision is a pure painter branch; the
+    /// data-present cart walk in `live_input_legs` proves reachability.
+    #[test]
+    fn a_cart_face_does_not_ink_set_item_price_rows() {
+        let fonts = synthetic_price_fonts();
+        let price_cell_has_ink = |buf: &[u32]| {
+            (238..250).any(|row| (219..345).any(|col| buf[row as usize * 800 + col as usize] != 0))
+        };
+        for face in [ShopPriceFace::Detail, ShopPriceFace::Plain] {
+            let buf = featured_price_fixture_with_face(face, Some(&fonts));
+            assert!(
+                !price_cell_has_ink(&buf),
+                "{face:?} must leave the cloned SET_PRICE cell dark"
+            );
+        }
+    }
+
     #[test]
     fn featured_price_row_inks_a_green_won_glyph_and_a_gold_gem_glyph() {
         // Live caller chain: boot -> stage_live_scenes ->
@@ -6217,6 +6281,14 @@ mod paint_tests {
     /// The same fixture with an injected font atlas, for the sprite
     /// raster guard; `None` keeps the no-data text fallback.
     fn featured_price_fixture_with_fonts(fonts: Option<&ShopPriceFonts>) -> Vec<u32> {
+        featured_price_fixture_with_face(ShopPriceFace::PriceRows, fonts)
+    }
+
+    /// The same fixture on an explicitly pinned shop face.
+    fn featured_price_fixture_with_face(
+        face: ShopPriceFace,
+        fonts: Option<&ShopPriceFonts>,
+    ) -> Vec<u32> {
         let parent = super::super::side::SHOP_SET_CARD_PARENT_IDS[0].to_owned();
         let placements = [ScenePlacement {
             role: PlacementRole::Clone,
@@ -6246,6 +6318,7 @@ mod paint_tests {
                 h: 600,
             },
             &placements,
+            face,
             &goods,
             fonts,
         );
