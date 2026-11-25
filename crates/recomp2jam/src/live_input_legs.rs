@@ -28,7 +28,9 @@ mod live_input_leg_tests {
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
-    use o2jam_shell::screens::game::{LobbyChat, PlanetModal, RoomListFilter, ScreenGame};
+    use o2jam_shell::screens::game::{
+        ChatSendMode, LobbyChat, PlanetModal, RoomListFilter, ScreenGame,
+    };
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
 
@@ -2521,6 +2523,280 @@ mod live_input_leg_tests {
             assert!(
                 changed_pixels_in_rect(&on_bag, &sampled, gift_cell) > 0,
                 "the gift face still inks the gift cell at {now_ms} ms"
+            );
+        }
+        finish(session, gateway.server);
+    }
+
+    /// Boot gateway with two differently addressed 3012 chat rows in the
+    /// 3003 answer. The rows arrive on the socket, not through a seam.
+    fn spawn_chat_tabs_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
+        let (reported, reports) = mpsc::channel();
+        let (join_written_tx, join_answer_written) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(
+                    &ChannelList {
+                        channels: vec![channel_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(
+                    &RoomList {
+                        rooms: vec![room_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                if frame.id == Request::JoinWaiting.id() {
+                    stream
+                        .write_all(
+                            &JoinRoomResponse {
+                                result_code: 0,
+                                room: Some(joined.clone()),
+                            }
+                            .encode(),
+                        )
+                        .unwrap();
+                    for (sender, text, seat) in [("host", "host row", 0), ("peer", "peer row", 1)] {
+                        let row = o2jam_net::rooms::WaitingUserMessage {
+                            sender: sender.to_owned(),
+                            content: text.as_bytes().to_vec(),
+                            member_id: seat,
+                        };
+                        stream.write_all(&row.encode()).unwrap();
+                    }
+                    join_written_tx.send(()).unwrap();
+                }
+                reported.send(frame).unwrap();
+            }
+        });
+        LiveLegGateway {
+            port,
+            reports,
+            join_answer_written,
+            server,
+        }
+    }
+
+    /// One staged Waiting placement's native rect, read from the same
+    /// `.bnd` window live boot mounted.
+    fn staged_waiting_rect(session: &mut OnlineSession, id: &str) -> Rect {
+        session
+            .game_mut()
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == id)
+            .unwrap_or_else(|| panic!("Waiting does not stage {id}"))
+            .rect
+    }
+
+    /// Pixels where the four tab faces and the received rows manifest.
+    fn paint_chat_tab_regions(session: &mut OnlineSession) -> (Vec<u32>, Vec<u32>) {
+        let frame = paint_frame(session);
+        let tabs: Vec<u32> = [
+            "IDC_BUTTON_SWAIT_CHAT_ALL",
+            "IDC_BUTTON_SWAIT_CHAT_FRIEND",
+            "IDC_BUTTON_SWAIT_CHAT_GUILD",
+            "IDC_BUTTON_SWAIT_CHAT_WHISPER",
+        ]
+        .iter()
+        .flat_map(|id| {
+            let rect = staged_waiting_rect(session, id);
+            staged_rect_pixels_from(&frame, rect)
+        })
+        .collect();
+        let rows =
+            staged_rect_pixels_from(&frame, staged_waiting_rect(session, "IDC_LIST_SWAIT_CHAT"));
+        (tabs, rows)
+    }
+
+    /// Type one live raw-key sequence through the same route a window
+    /// uses; every text event arrives before its queued edge.
+    fn type_live_keys(session: &mut OnlineSession, keymap: &mut Keymap, keys: &[(KeyCode, &str)]) {
+        for (code, text) in keys {
+            let _ = route_raw_key(session, keymap, *code, Some(text));
+        }
+    }
+
+    /// #916 Waiting ords 13-16: a tab click picks the next send
+    /// destination, not a received-row filter. Exe pin `FUN_004b7c60`
+    /// (file `0xb760`, dossier `ev_556285166f4768fb4190c8b3f6f2089b830a2022a93119727e7a61f31358ac6a`)
+    /// lights one tab through `FUN_0048c810` and leaves the incoming
+    /// list `0x1680002b` alone (`FUN_004bb6c0`). `FUN_004b8d00` reads
+    /// mode 3 to pick the whisper target (file `0xb8f4b`).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash, emblem,
+    ///   room row, staged Waiting tab rects) -> ScreenGame::click_waiting_button
+    ///   -> ChatState::select_waiting_send_mode -> paint_waiting_chat_tabs
+    ///   (one lit face) and paint_waiting_chat (both wire rows stay in the
+    ///   staged LIST rect); then route_key_event -> ScreenGame::text_input
+    ///   -> push_chat_char -> ChatState::type_whisper_prompt_char ->
+    ///   ScreenGame::confirm_whisper_prompt -> GameLoop::ingest_snapshot ->
+    ///   OnlineSession::confirm_waiting -> flush_chat_action ->
+    ///   flush_chat_for_mode -> flush_chat_whisper -> C2S 2017.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_waiting_chat_tabs_keep_addressed_rows_and_send_with_the_selected_mode_from_boot() {
+        use o2jam_net::rooms::SendWhisper;
+
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_chat_tabs_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+
+        for _ in 0..MAX_SCREEN_PAINTS {
+            if session.game_mut().waiting_chat().len() == 2 {
+                break;
+            }
+            paint(&mut session);
+        }
+        assert_eq!(
+            session.game_mut().waiting_chat().len(),
+            2,
+            "both 3012 rows must arrive before any tab is pressed"
+        );
+        let (all_tabs, all_rows) = paint_chat_tab_regions(&mut session);
+        while gateway.reports.try_recv().is_ok() {}
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+
+        for (code, expected, label) in [
+            (0x1620_100F, ChatSendMode::Friend, "FRIEND"),
+            (0x1620_1010, ChatSendMode::Guild, "GUILD"),
+            (0x1620_1011, ChatSendMode::Whisper, "WHISPER"),
+        ] {
+            let (x, y) = staged_code_centre(&mut session, Screen::Waiting, code);
+            session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            assert_eq!(
+                session.game_mut().waiting_send_mode(),
+                expected,
+                "{label} click"
+            );
+            assert_eq!(
+                session.game_mut().waiting_chat().len(),
+                2,
+                "{label} must not clear the received rows"
+            );
+            let (tabs, rows) = paint_chat_tab_regions(&mut session);
+            assert_eq!(
+                changed_pixels(&all_rows, &rows),
+                0,
+                "{label} must keep both rows"
+            );
+            assert!(
+                changed_pixels(&all_tabs, &tabs) > 0,
+                "{label} must light its own tab"
+            );
+        }
+        assert!(
+            session.game_mut().whisper_prompt_open(),
+            "WHISPER posts the local nickname prompt"
+        );
+        assert!(
+            matches!(
+                gateway.reports.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "tab clicks must send no wire frame"
+        );
+        assert_eq!(*cue_calls.borrow(), cue_baseline, "tabs queue no audio cue");
+
+        // The prompt owns typing until its staged OK; then a plain
+        // draft goes out as 2017 to the typed nickname.
+        let mut keymap = Keymap::new();
+        type_live_keys(
+            &mut session,
+            &mut keymap,
+            &[
+                (KeyCode::KeyP, "p"),
+                (KeyCode::KeyE, "e"),
+                (KeyCode::KeyE, "e"),
+                (KeyCode::KeyR, "r"),
+            ],
+        );
+        assert_eq!(session.game_mut().whisper_prompt_target(), "peer");
+        let _ = route_raw_key(&mut session, &mut keymap, KeyCode::Enter, None);
+        assert_eq!(session.game_mut().whisper_recipient(), Some("peer"));
+        type_live_keys(
+            &mut session,
+            &mut keymap,
+            &[
+                (KeyCode::KeyP, "p"),
+                (KeyCode::KeyI, "i"),
+                (KeyCode::KeyN, "n"),
+                (KeyCode::KeyG, "g"),
+            ],
+        );
+        let _ = route_raw_key(&mut session, &mut keymap, KeyCode::Enter, None);
+        let whisper_body = wait_for_opcode(&gateway.reports, Request::SendWhisper.id());
+        let whisper = SendWhisper::decode_body(&whisper_body).unwrap();
+        assert_eq!(
+            whisper.recipient, "peer",
+            "mode 3 must address the prompt target"
+        );
+        assert_eq!(whisper.content, "ping");
+
+        // ALL returns to the room send; the received rows survive both
+        // sends and every tab face stays fixed across painted time.
+        let (x, y) = staged_code_centre(&mut session, Screen::Waiting, 0x1620_100E);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert_eq!(session.game_mut().waiting_send_mode(), ChatSendMode::Room);
+        type_live_keys(
+            &mut session,
+            &mut keymap,
+            &[
+                (KeyCode::KeyR, "r"),
+                (KeyCode::KeyO, "o"),
+                (KeyCode::KeyO, "o"),
+                (KeyCode::KeyM, "m"),
+            ],
+        );
+        let _ = route_raw_key(&mut session, &mut keymap, KeyCode::Enter, None);
+        let room_body = wait_for_opcode(&gateway.reports, 3011);
+        assert_eq!(room_body, b"room".to_vec());
+        assert_eq!(session.game_mut().waiting_chat().len(), 2);
+
+        let list_rect = staged_waiting_rect(&mut session, "IDC_LIST_SWAIT_CHAT");
+        for now_ms in [0, 20_000, 50_000] {
+            let sampled = paint_at_frame(&mut session, now_ms);
+            let rows = staged_rect_pixels_from(&sampled, list_rect);
+            assert_eq!(
+                changed_pixels(&all_rows, &rows),
+                0,
+                "both received rows stay painted at {now_ms} ms"
             );
         }
         finish(session, gateway.server);

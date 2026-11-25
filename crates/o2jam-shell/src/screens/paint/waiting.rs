@@ -292,8 +292,8 @@ pub struct WaitingCaptions<'a> {
     pub room_number: Option<i32>,
     /// Selected decorative effect layer (exe global `0x7789e0`).
     pub effect: WaitingEffect,
-    /// Selected Waiting chat tab (exe toggle group `0x1620100E..11`).
-    pub chat_channel: WaitingChatChannel,
+    /// Outgoing chat mode picked by the Waiting tab group (`0x1620100E..11`).
+    pub chat_send_mode: ChatSendMode,
     /// Whether either authored messenger lamp shows its alert frame.
     pub messenger_lamp_lit: bool,
     /// Whether the two WAITING stamp controls show their armed frame.
@@ -410,31 +410,38 @@ const WAIT_EFFECT_IDS: [&str; 2] = [
     "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
 ];
 
-/// Waiting chat tab selected by the four `STATE_WAITING` buttons
-/// `IDC_BUTTON_SWAIT_CHAT_ALL/FRIEND/GUILD/WHISPER` (`0x1620100E..11`).
-/// `FUN_004b7c60` arms them as one four-control toggle group
-/// (`FUN_0048c810` with base `0x1620100e`, count 4) and writes zero to
-/// the dialog's `+0x298` word on every tab; the WHISPER arm also zeroes
-/// the 256-byte draft buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+/// Destination of the next outgoing Waiting chat send, picked by the
+/// four `STATE_WAITING` buttons `IDC_BUTTON_SWAIT_CHAT_ALL/FRIEND/GUILD/
+/// WHISPER` (`0x1620100E..11`). `FUN_004b7c60` lights exactly one tab
+/// through `FUN_0048c810`; ALL/FRIEND/GUILD zero the outgoing-mode word
+/// `+0x298`, and WHISPER clears the 256-byte draft at `+0x18c` and posts
+/// a local nickname prompt (files `0xb7d73`-`0xb7e24`). The send path
+/// `FUN_004b8d00` reads `+0x298` and uses the whisper target only for
+/// mode 3. No incoming row class is filtered (`FUN_004bb6c0`).
+///
+/// OPEN: the exact `+0x298` values written for FRIEND and GUILD are not
+/// pinned. They stay distinct modes here; the room-chat send is their
+/// stand-in until a tapped send body names their addressee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WaitingChatChannel {
+pub enum ChatSendMode {
     /// Room chat (`0x1620100E`), also the Waiting setup default.
     #[default]
-    All,
-    /// Friend chat (`0x1620100F`).
+    Room,
+    /// Friend chat (`0x1620100F`); exact mode word OPEN.
     Friend,
-    /// Guild chat (`0x16201010`).
+    /// Guild chat (`0x16201010`); exact mode word OPEN.
     Guild,
-    /// Whisper chat (`0x16201011`); additionally clears the draft.
+    /// Whisper chat (`0x16201011`); clears the draft and opens the
+    /// local nickname prompt.
     Whisper,
 }
 
-impl WaitingChatChannel {
-    /// Tab selected by one staged control code (`None` for other codes).
+impl ChatSendMode {
+    /// Send mode selected by one staged tab code (`None` otherwise).
     #[must_use]
     pub const fn from_code(code: u32) -> Option<Self> {
         match code {
-            0x1620_100E => Some(Self::All),
+            0x1620_100E => Some(Self::Room),
             0x1620_100F => Some(Self::Friend),
             0x1620_1010 => Some(Self::Guild),
             0x1620_1011 => Some(Self::Whisper),
@@ -442,11 +449,11 @@ impl WaitingChatChannel {
         }
     }
 
-    /// Staged control code of this tab.
+    /// Staged tab code of this send mode.
     #[must_use]
     pub const fn code(self) -> u32 {
         match self {
-            Self::All => 0x1620_100E,
+            Self::Room => 0x1620_100E,
             Self::Friend => 0x1620_100F,
             Self::Guild => 0x1620_1010,
             Self::Whisper => 0x1620_1011,
@@ -1592,7 +1599,7 @@ pub(crate) fn paint_waiting_staged(
     if !(captions.local_random_selection && room.arena == 0) {
         paint_waiting_effect_toggle(frame, art, captions.effect);
     }
-    paint_waiting_chat_tabs(frame, art, captions.chat_channel);
+    paint_waiting_chat_tabs(frame, art, captions.chat_send_mode);
     paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
     paint_waiting_wins(frame, room, placements);
     let speed = captions.level.map_or(room.speed, |level| level.speed);
@@ -1942,8 +1949,8 @@ fn paint_waiting_toggle_group(
 
 /// Paint the four chat tabs: the exe's toggle mapper lights only the
 /// selected tab (`FUN_0048c810` with base `0x1620100e`, count 4).
-fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, channel: WaitingChatChannel) {
-    paint_waiting_toggle_group(frame, art, &WAIT_CHAT_TAB_IDS, channel.code());
+fn paint_waiting_chat_tabs(frame: &mut Frame<'_>, art: &SceneArt, mode: ChatSendMode) {
+    paint_waiting_toggle_group(frame, art, &WAIT_CHAT_TAB_IDS, mode.code());
 }
 
 /// Paint the two messenger lamps from one alert word. The exe starts

@@ -4715,7 +4715,7 @@ pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
     waiting_confirm_control_id, waiting_map_cycle, waiting_map_name, waiting_skillcount_text,
-    WaitingCaptions, WaitingChatChannel, WaitingConfirmState, WaitingEffect, WaitingLevel,
+    ChatSendMode, WaitingCaptions, WaitingConfirmState, WaitingEffect, WaitingLevel,
     WaitingMapStep, WaitingOpenCaption, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
     WaitingSong, WAITING_MAP_DEFAULT_FRAMES, WAIT_BOTTOM_EFFECT_CODE, WAIT_TOP_EFFECT_CODE,
 };
