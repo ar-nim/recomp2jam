@@ -10,10 +10,11 @@
 //! `(255,173,82)` there from stacked button sprites.
 
 use o2jam_file::data_root::{install_root, pack_skip_report, root_has_game_data};
+use o2jam_file::{AvatarItemRow, AvatarItemTable};
 use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
-use o2jam_shell::screens::side::SideScreen;
+use o2jam_shell::screens::side::{ShopPanel, SideScreen};
 use o2jam_shell::staging::{read_install_archives, stage_state, StageContext, StagedArt, State};
-use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
+use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
 /// Live chain: main.rs::run_play -> live_art::stage_live_scenes
 /// -> live_art::stage_interface_scenes -> stage_state(State::Shop)
@@ -32,6 +33,7 @@ fn shop_back_and_messenger_lamp_stay_baked_into_the_backdrop() {
 
     assert_color_near(pixel(&frame, 720, 575), [197, 194, 197], "BACK plate");
     assert_color_near(pixel(&frame, 630, 575), [197, 154, 255], "messenger lamp");
+    assert_color_near(pixel(&frame, 680, 575), [123, 178, 255], "? plate");
     assert_eq!(game.screen(), Screen::Room);
 }
 
@@ -50,6 +52,80 @@ fn baked_back_button_keeps_its_staged_hit_rect() {
             .map(|rect| (rect.x, rect.y, rect.w, rect.h)),
         Some((711, 569, 83, 24))
     );
+}
+
+/// The cart-state gate must hide BAGSORT even when its body is
+/// present. Restoring the body makes this guard fail if the gate
+/// regresses; the staged rect stays for hit testing either way.
+#[test]
+fn bagsort_plate_hides_when_the_cart_has_a_good() {
+    let Some(art) = stage_shop_art("bagsort_plate_hides_when_the_cart_has_a_good") else {
+        return;
+    };
+    let mut game = room_game();
+    let mut art = art;
+    for placed in &mut art.placements {
+        if placed.code == SHOP_BAGSORT_CODE {
+            placed.sprite = Some(SHOP_BAGSORT_SPRITE.to_owned());
+        }
+    }
+    assert!(
+        art.figures.contains_key(SHOP_BAGSORT_SPRITE),
+        "the installed archive must stage the sort body for this guard"
+    );
+    game.load_side_scene(art.placements, art.figures);
+    assert!(game.visit_side(SideScreen::Shop));
+    game.set_shop_catalog(&one_good_catalog());
+
+    let entry = paint_native(&mut game);
+    assert_eq!(game.shop_panel(), ShopPanel::MyBag);
+    assert_ne!(
+        pixel(&entry, 40, 558),
+        [148, 198, 222],
+        "the entry face shows a sort plate, not the cart face"
+    );
+
+    game.ingest_snapshot(&InputSnapshot::click_at(238, 263));
+    assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
+    assert_eq!(game.shop_cart().len(), 1);
+    let cart = paint_native(&mut game);
+    assert_color_near(
+        pixel(&cart, 65, 558),
+        [148, 198, 222],
+        "cart face covers sort plate",
+    );
+
+    game.ingest_snapshot(&InputSnapshot::click_at(41, 574));
+    assert!(game.shop_charge_confirm_open());
+    let sheet = paint_native(&mut game);
+    assert_ne!(
+        pixel(&sheet, 40, 558),
+        [247, 239, 239],
+        "the MESSAGE-sheet cart frame must not restore the sort plate"
+    );
+    assert_ne!(
+        pixel(&sheet, 630, 575),
+        [255, 173, 82],
+        "the MESSAGE-sheet cart frame must not restore the orange lamp"
+    );
+}
+
+const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
+const SHOP_BAGSORT_SPRITE: &str = "Btn_BagSort.ojs";
+
+fn one_good_catalog() -> AvatarItemTable {
+    AvatarItemTable {
+        rows: vec![AvatarItemRow {
+            item_id: 1,
+            item_type: 0,
+            price: 4500,
+            params: [0; 4],
+            flags: (0, 0),
+            name: "W8Good".to_owned(),
+            description: String::new(),
+            sprites: Vec::new(),
+        }],
+    }
 }
 
 fn room_game() -> ScreenGame {

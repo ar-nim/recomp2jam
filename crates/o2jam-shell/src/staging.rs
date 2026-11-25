@@ -975,16 +975,21 @@ fn stage_shop_master_mascot(art: &mut StagedArt) {
 }
 
 /// Shop chrome already painted inside `State_ItemShop.ojs`. The
-/// quiesced 7.55 cart frame shows the baked gray BACK plate at
-/// `(711,569)`, purple messenger lamp at `(625,569)`, blue `?` plate
-/// at `(668,569)`, and item-sort plate at `(29,546)`.
-/// Staging the matching `ControlList` bodies as a second paint covers
-/// that art with the blue button frames and the orange lamp frame.
+/// quiesced 7.55 **entry** frame shows the baked item-sort plate at
+/// `(29,546)`; the quiesced **cart** frame does not (the cart face art
+/// covers it and the exe disables the sort control). Both frames show
+/// the baked gray BACK plate at `(711,569)`, purple messenger lamp at
+/// `(625,569)`, and blue `?` plate at `(668,569)`. Staging the matching
+/// `ControlList` bodies as a second paint covered that art with blue
+/// button frames and the orange lamp frame.
 ///
-/// Statics pin: image-wide byte scans find no code use of `0x142000B6`,
-/// `0x142000B7`, or `0x142000B8` (REA 7.55 `ev_fed78af0c…`,
-/// `ev_451125410…`, `ev_0d88694a…`); `0x14200002` occurs only in
-/// BUYITEM's click dispatch (`FUN_00499760` at `0x4997b8`/`0x4997c4`,
+/// Statics pin: image-wide byte scans find no code use of `0x142000B6`
+/// or `0x142000B8` (REA 7.55 `ev_fed78af0c…`, `ev_0d88694a…`).
+/// `0x142000B7` is not absent: `FUN_004a1010` pushes it at `0x4a106d`
+/// and writes its `+0x24` enable word from `cart_count == 0`
+/// (`ev_7baf8f3c…`, store through `FUN_00409bf0` `ev_694dfc15…`), so
+/// the body hides while the cart has a good. `0x14200002` occurs only
+/// in BUYITEM's click dispatch (`FUN_00499760` at `0x4997b8`/`0x4997c4`,
 /// REA `ev_5373f4bd…`, `ev_aa237e31…`). State open `FUN_004984d0`
 /// writes `FUN_0042f5a0(3)` on both alarm controls (`0x145000B9`/`BA`
 /// at `0x4988d5`–`0x498905`, REA `ev_7bd1198a…`); case 3 sets the

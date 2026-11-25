@@ -82,12 +82,13 @@ use super::paint::{
     paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
     paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master, waiting_map_cycle,
-    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions,
-    WaitingChatMessage, WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep,
-    WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    shop_bagsort_kept, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
+    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
+    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
+    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -8737,8 +8738,13 @@ impl ScreenGame {
             let featured = self.shop_entry_catalog();
             let active_category = self.shop.category().unwrap_or(0);
             let charge_sheet_open = self.shop_charge_confirm_open;
+            // `FUN_004a1010` disables BAGSORT when the cart count is
+            // nonzero (#886); the plate then comes only from the face
+            // art, never from the control body.
+            let cart_count = self.shop.cart().len();
             let keep = |placed: &ScenePlacement| {
                 shop_panel_kept(placed, panel)
+                    && shop_bagsort_kept(placed.code, cart_count)
                     && shop_tooltip_kept(placed, shelf_hovered)
                     && shop_submenu_caption_kept(placed.code, gender)
                     && shop_extmenu_kept(placed, ext_menu_open)
