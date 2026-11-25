@@ -1070,6 +1070,132 @@ pub fn slot_position_marks(slot: u8) -> (u16, bool) {
     }
 }
 
+/// The two control ids the gender setter chooses between (file
+/// `0x13fe50`, called from the gender wire reader at file `0x140c90`).
+/// Element 0 is the zero-gender id, element 1 the nonzero-gender id.
+pub const MEMBER_GENDER_CONTROL_IDS: [u32; 2] = [0x24, 0x23];
+
+/// Pick the seat control id named by one raw gender byte.
+///
+/// The exe branches only zero against nonzero; no range gate exists
+/// on the wire byte (pin `ev b85e.5113...`).
+#[must_use]
+pub fn gender_control_id(gender: u8) -> u32 {
+    if gender == 0 {
+        MEMBER_GENDER_CONTROL_IDS[0]
+    } else {
+        MEMBER_GENDER_CONTROL_IDS[1]
+    }
+}
+
+/// Amount the team reader adds to the byte it stored at `+0x31`
+/// (helper file `0x140d40`, pin `ev ca8b.21e6...`).
+pub const MEMBER_TEAM_STORE_INCREMENT: u8 = 1;
+
+/// Team value left in the member slot after the wire reader's own
+/// increment. Values above seven have no pinned seat meaning.
+#[must_use]
+pub fn stored_team_from_wire(wire: u8) -> u8 {
+    wire.wrapping_add(MEMBER_TEAM_STORE_INCREMENT)
+}
+
+/// The five equipment control ids the member helper stages at
+/// `+0x2040`, `+0x2048`, `+0x2050`, `+0x2058`, `+0x2060` (file
+/// `0x140e40`). The first four differ for the two channel records
+/// `0x2fd`/`0x2fe`; the fifth is shared.
+#[must_use]
+pub fn default_equipment_control_ids(channel_id: u32) -> [u32; 5] {
+    if channel_id == 0x2fd || channel_id == 0x2fe {
+        [0x2f9, 0x2fa, 0x2fc, 0x2fb, 0x22]
+    } else {
+        [0x1e, 0x1f, 0x21, 0x20, 0x22]
+    }
+}
+
+/// Opcode of the 2026 premium-time row and description packet.
+pub const PREMIUM_TIME_COMMAND: u16 = 2026;
+/// Wire width of one premium-time row: `u16` song id plus five status bytes.
+pub const PREMIUM_TIME_ROW_LEN: usize = 7;
+/// Ink the 2026 handler passes to the text-queue helper (file `0x15a9a0`).
+pub const PREMIUM_TIME_TEXT_INK: u8 = 2;
+
+/// One staged premium-time row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PremiumTimeRow {
+    /// Song id read as a little-endian word.
+    pub song_id: u16,
+    /// The five status bytes that follow the song id.
+    pub status: [u8; 5],
+}
+
+/// Decode the row list of an opcode-2026 body: a little-endian `u32`
+/// count followed by fixed-width rows.
+///
+/// # Errors
+///
+/// `Error::TruncatedMessage` when the count or a row is incomplete.
+pub fn decode_premium_time_rows(body: &[u8]) -> Result<Vec<PremiumTimeRow>, Error> {
+    let mut cursor = body;
+    let count = take_le_u32(&mut cursor)?;
+    let count = usize::try_from(count).map_err(|_| Error::InvalidField {
+        field: "premium time row count",
+        reason: "count exceeds usize",
+    })?;
+    let mut rows = Vec::new();
+    for _ in 0..count {
+        if cursor.len() < PREMIUM_TIME_ROW_LEN {
+            return Err(Error::TruncatedMessage {
+                need: PREMIUM_TIME_ROW_LEN,
+                have: cursor.len(),
+            });
+        }
+        let song_id = take_le_u16(&mut cursor)?;
+        let status = [
+            take_byte(&mut cursor)?,
+            take_byte(&mut cursor)?,
+            take_byte(&mut cursor)?,
+            take_byte(&mut cursor)?,
+            take_byte(&mut cursor)?,
+        ];
+        rows.push(PremiumTimeRow { song_id, status });
+    }
+    Ok(rows)
+}
+
+/// Number of description lines the 2026 handler posts for one mode
+/// bitmask and premium flag (file `0x15a9a0`). The exact text of each
+/// line stays OPEN: the format strings are executable resources, not
+/// bytes pinned in this repository.
+#[must_use]
+pub fn premium_description_line_count(mode_bits: u32, premium_active: bool) -> usize {
+    match mode_bits {
+        0 => usize::from(premium_active) * 3,
+        0x200 => 1,
+        0x20 | 0x800 => {
+            if premium_active {
+                5
+            } else {
+                2
+            }
+        }
+        0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x080 | 0x100 => 2,
+        _ => 0,
+    }
+}
+
+/// Split one little-endian `u32` off the front of `body`.
+fn take_le_u32(body: &mut &[u8]) -> Result<u32, Error> {
+    if body.len() < 4 {
+        return Err(Error::TruncatedMessage {
+            need: 4,
+            have: body.len(),
+        });
+    }
+    let (word, rest) = body.split_at(4);
+    *body = rest;
+    Ok(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+}
+
 /// Address (VA) of a member-slot field: `base + slot * stride + offset`.
 ///
 /// # Errors
@@ -2806,5 +2932,95 @@ mod member_slot_tests {
             member_slot_address(2, MEMBER_OFF_EXTRA_DWORD),
             Ok(MEMBER_SLOT_BASE + 2 * MEMBER_SLOT_STRIDE + MEMBER_OFF_EXTRA_DWORD)
         );
+    }
+}
+
+#[cfg(test)]
+mod seat_format_tests {
+    use super::*;
+
+    #[test]
+    fn gender_byte_selects_the_paired_control_id() {
+        // Member helper file `0x140c90`, setter file `0x13fe50`:
+        // a zero gender picks 0x24, any nonzero gender picks 0x23.
+        assert_eq!(gender_control_id(0), 0x24);
+        for gender in [1, 2, 0xFF] {
+            assert_eq!(gender_control_id(gender), 0x23);
+        }
+        assert_eq!(MEMBER_GENDER_CONTROL_IDS, [0x24, 0x23]);
+    }
+
+    #[test]
+    fn wire_team_byte_lands_with_the_exe_increment() {
+        // Helper file `0x140d40`: read one byte into +0x31, then
+        // increment that same stored byte (pin ev ca8b.21e6...).
+        assert_eq!(MEMBER_TEAM_STORE_INCREMENT, 1);
+        for (wire, stored) in [(0, 1), (1, 2), (6, 7)] {
+            assert_eq!(stored_team_from_wire(wire), stored);
+        }
+        assert_ne!(stored_team_from_wire(3), 3);
+    }
+
+    #[test]
+    fn equipment_default_control_ids_follow_the_channel_id() {
+        // Helper file `0x140e40`: two channel records (0x2fd/0x2fe)
+        // receive the premium id set; every other record receives the
+        // normal set, with 0x22 as the shared fifth id.
+        let premium = default_equipment_control_ids(0x2fd);
+        let normal = default_equipment_control_ids(0x300);
+        assert_eq!(premium, [0x2f9, 0x2fa, 0x2fc, 0x2fb, 0x22]);
+        assert_eq!(normal, [0x1e, 0x1f, 0x21, 0x20, 0x22]);
+        assert_eq!(default_equipment_control_ids(0x2fe), premium);
+        assert_ne!(premium, normal);
+    }
+
+    #[test]
+    fn premium_time_rows_and_description_lines_keep_their_format() {
+        // Opcode 0x7ea (2026), helper file `0x15a9a0`: a u32 row count,
+        // a u16 song id plus five status bytes per row, and text posted
+        // with ink 2 whose line count follows the mode bitmask.
+        assert_eq!(PREMIUM_TIME_COMMAND, 2026);
+        assert_eq!(PREMIUM_TIME_ROW_LEN, 7);
+        assert_eq!(PREMIUM_TIME_TEXT_INK, 2);
+        let body = [
+            2u8, 0, 0, 0, 0x34, 0x12, 1, 2, 3, 4, 5, 0x07, 0x08, 8, 9, 10, 0, 0,
+        ];
+        let rows = decode_premium_time_rows(&body).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].song_id, 0x1234);
+        assert_eq!(rows[0].status, [1, 2, 3, 4, 5]);
+        assert_eq!(rows[1].song_id, 0x0807);
+        assert_eq!(rows[1].status, [8, 9, 10, 0, 0]);
+    }
+
+    #[test]
+    fn premium_time_bitmask_cases_stage_their_description_lines() {
+        // Every mode case observed in the 0x15a9a0 branch tree: the
+        // counts are the lines posted before the opcode-tagged message.
+        let cases = [
+            (0x000, false, 0),
+            (0x000, true, 3),
+            (0x001, false, 2),
+            (0x002, false, 2),
+            (0x004, false, 2),
+            (0x008, false, 2),
+            (0x010, false, 2),
+            (0x020, false, 2),
+            (0x020, true, 5),
+            (0x040, false, 2),
+            (0x080, false, 2),
+            (0x100, false, 2),
+            (0x200, false, 1),
+            (0x800, false, 2),
+            (0x800, true, 5),
+            (0x003, true, 0),
+        ];
+        for (bits, premium, lines) in cases {
+            assert_eq!(
+                premium_description_line_count(bits, premium),
+                lines,
+                "mode {bits:#05x}, premium {premium}"
+            );
+        }
     }
 }
