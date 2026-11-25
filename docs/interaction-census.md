@@ -87,7 +87,7 @@ rects**: **37 interactive rows** and **39 static/container rows** below, plus
 | 7 | `IDC_BUTTON_SROOM_ITEMSHOP` (`0x13200008`) | nav-edge | Enters Item Shop side (`#32`); `#178` T7 reports its browse chrome dead | `OPEN: live click plus destination guard; seam staged_room_chrome_buttons_reach_their_side_views (Tier 0)` |
 | 8 | `IDC_BUTTON_SROOM_MYROOM` (`0x13200009`) | nav-edge | Enters MyRoom side (`#32`); `#178` T8 target disputed | `OPEN: live click plus destination guard; seam staged_room_chrome_buttons_reach_their_side_views (Tier 0)` |
 | 9 | `IDC_BUTTON_SROOM_COUPON` (`0x1320000A`) | button | Web/promo chrome; label is not behavior (`#32`, `#169`) | `OPEN: REA click dispatch plus Tier 3 click; seam staged_room_control_without_a_target_records_a_labelled_noop (Tier 0)` |
-| 10 | `IDC_BUTTON_SROOM_OPTION` (`0x1320000B`) | button | Opens Options over Room (`#31`); `#314` reports inert keys/hover there | `OPEN: live click plus key-capture leg; seam click_staged_room_option_opens_options_over_room (Tier 0)` |
+| 10 | `IDC_BUTTON_SROOM_OPTION` (`0x1320000B`) | button | Opens Options over Room (`#31`); `#314` reports inert keys/hover there | `VERIFIED: Room entry plus live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3); key capture lives in the one dialog` |
 | 11 | `IDC_BUTTON_SROOM_LEFT` (`0x1320000C`) | pager | Room-list pager; untraced after `#55` | `OPEN: REA pager dispatch plus Tier 3 click/viewport; HANDLER_STEP` |
 | 12 | `IDC_BUTTON_SROOM_RIGHT` (`0x1320000D`) | pager | Room-list pager; untraced after `#55` | `OPEN: REA pager dispatch plus Tier 3 click/viewport; HANDLER_STEP` |
 | 13 | `IDC_BUTTON_SROOM_CHAT_ALL` (`0x1320100E`) | chat tab | Chat filter untraced | `OPEN: rig click plus filtered-panel frame; CHAT_TAB_STEP` |
@@ -180,7 +180,7 @@ rows:
 | Bug | Class | Census row |
 |---|---|---|
 | `#290` T1 `[W]`/`[A]` toggle | C1 | ord 2 and ord 3 (`SHOW_ALLMODE`, `SHOW_NORMALMODE`), VERIFIED by `live_room_wa_tabs_toggle_the_selection_from_boot` (Tier 3); ord 4 shares the frame painter but has no live leg |
-| `#314` T2 Options keys inert / hover blanks | C2 + C4/C3 | ord 10 (`SHOW_…OPTION`), OPEN; Options key-tab rows: state section pending (#920) |
+| `#314` T2 Options keys inert / hover blanks | C2 + C4/C3 | ord 10 (`SROOM_OPTION`) and ord 16 (`SPLANET_OPTION`) VERIFIED by both capture legs; Options key-tab rows VERIFIED by live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3), options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames (Tier 3), and options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) |
 | `#294` T3 Result BACK target | C2 | Result state section pending (#920); Room nav-edge pin stays OPEN |
 | `#294` T4 Result background source | C6 | Result state section pending (#920) |
 | `#180` T5 MyRoom STATUS dead | C1 | MyRoom state section pending (#920) |
@@ -219,7 +219,7 @@ with rects and hover behavior pinned in `docs/planet.md` and
 | 13 | `IDC_BUTTON_SPLANET_PROMOTION_RIGHT` (`0x1920000E`) | pager | Promo carousel RIGHT: wrap-step forward one banner on its pinned rect (promo #129). | OPEN: Tier 3 carousel-step leg; seam planet_promo_cells_answer_clicks_at_their_staged_rects (Tier 0) |
 | 14 | `IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP` (`0x1920C00F`) | tab / toggle | Promo PLAYSTOP: toggles the 3000 ms rotation; rest face follows the spin flag (#711). | OPEN: qualified hold-face capture (#711 residual); seam promo_stop_click_swaps_the_playstop_face_both_ways (Tier 0) |
 | 15 | `IDC_BUTTON_SPLANET_EXIT` (`0x19200010`) | button | Power disc: opens the quit-confirm sheet; OK quits, CANCEL closes the sheet. | OPEN: live boot click + quit-confirm leg; seam power_disc_opens_quit_confirm_and_ok_quits (Tier 0) |
-| 16 | `IDC_BUTTON_SPLANET_OPTION` (`0x19200011`) | button | Gear disc: opens the Options dialog over Planet; Escape closes it (#18). | OPEN: live boot click from Planet plus #314 key-capture leg; seam gear_disc_opens_options_and_escape_closes_it (Tier 0) |
+| 16 | `IDC_BUTTON_SPLANET_OPTION` (`0x19200011`) | button | Gear disc: opens the Options dialog over Planet; Escape closes it (#18). | `VERIFIED: Planet gear entry plus live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3); Escape still closes` |
 
 Input edges with no matching ControlList entry:
 
@@ -1025,44 +1025,42 @@ The ControlList defines three option sheets (`DIALOG_OPTION_KEY`,
 
 Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
 (lines 1242–1277; 26 entries / 25 rects). Ordinals are `(code & 0xFFF) - 1`.
-Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
-from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+Sheet order and tab pins: `docs/options.md`; #314 key capture, hover ink, and click dispatch are now VERIFIED from Room and Planet by Tier 3 legs.
 
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
 | -1 | `IDC_DIALOG_OPTION_KEY` (`0x25000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
 | 0 | `IDC_BACK_DOPTION_1` (`0x25100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 1 | `IDC_IMAGE_DOPTION_KEY_BACK` (`0x25500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
-| 2 | `IDC_BUTTON_DOPTION_3KEY` (`0x25201003`) | tab / toggle | Key tab 3K selector; switches the staged-code family (#18). | OPEN: live tab press from Planet and Room (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
-| 3 | `IDC_BUTTON_DOPTION_7KEY` (`0x25201004`) | tab / toggle | Key tab 7K selector; switches the staged-code family (#18). | OPEN: live tab press from Planet and Room (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
-| 4 | `IDC_BUTTON_DOPTION_KEYTEST` (`0x2520A005`) | tab / toggle | Key-test checkbox; checked state paints the key-down bodies (#845). | OPEN: checkbox press capture (#845); seam options_sheets_paint_rest_hover_and_active_frames (Tier 0) |
+| 2 | `IDC_BUTTON_DOPTION_3KEY` (`0x25201003`) | tab / toggle | Key tab 3K selector; switches the staged-code family (#18). | `VERIFIED: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) (both entries; key-test gate included)` |
+| 3 | `IDC_BUTTON_DOPTION_7KEY` (`0x25201004`) | tab / toggle | Key tab 7K selector; switches the staged-code family (#18). | `VERIFIED: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) (both entries; key-test gate included)` |
+| 4 | `IDC_BUTTON_DOPTION_KEYTEST` (`0x2520A005`) | tab / toggle | Key-test checkbox; checked state paints the key-down bodies (#845). | `VERIFIED for the on/off click gate: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3); OPEN: key-down pad lighting, no exe cue id pinned (next step: Wine cue capture)` |
 | 5 | `IDC_IMAGE_DOPTION_3KEYSELECT` (`0x25500006`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 6 | `IDC_IMAGE_DOPTION_KEYSELECT` (`0x25500007`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
-| 7 | `IDC_BUTTON_DOPTION_3KEY_1` (`0x25209008`) | tab / toggle | 3K lane 1 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 8 | `IDC_BUTTON_DOPTION_3KEY_2` (`0x25209009`) | tab / toggle | 3K lane 2 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 9 | `IDC_BUTTON_DOPTION_3KEY_3` (`0x2520900A`) | tab / toggle | 3K lane 3 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 10 | `IDC_BUTTON_DOPTION_3KEY_4` (`0x2520900B`) | tab / toggle | 3K lane 4 rebind cell; mapped press writes the 3K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 11 | `IDC_BUTTON_DOPTION_KEY1` (`0x2520900C`) | tab / toggle | 7K lane 1 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 12 | `IDC_BUTTON_DOPTION_KEY2` (`0x2520900D`) | tab / toggle | 7K lane 2 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 13 | `IDC_BUTTON_DOPTION_KEY3` (`0x2520900E`) | tab / toggle | 7K lane 3 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 14 | `IDC_BUTTON_DOPTION_KEY4` (`0x2520900F`) | tab / toggle | 7K lane 4 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 15 | `IDC_BUTTON_DOPTION_KEY5` (`0x25209010`) | tab / toggle | 7K lane 5 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 16 | `IDC_BUTTON_DOPTION_KEY6` (`0x25209011`) | tab / toggle | 7K lane 6 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
-| 17 | `IDC_BUTTON_DOPTION_KEY7` (`0x25209012`) | tab / toggle | 7K lane 7 rebind cell; mapped press writes the 7K bind table (#18). | OPEN: live raw-key capture from Planet/Room (#314); seam options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects (Tier 0) |
+| 7 | `IDC_BUTTON_DOPTION_3KEY_1` (`0x25209008`) | tab / toggle | 3K lane 1 rebind cell; mapped press writes the 3K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 8 | `IDC_BUTTON_DOPTION_3KEY_2` (`0x25209009`) | tab / toggle | 3K lane 2 rebind cell; mapped press writes the 3K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 9 | `IDC_BUTTON_DOPTION_3KEY_3` (`0x2520900A`) | tab / toggle | 3K lane 3 rebind cell; mapped press writes the 3K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 10 | `IDC_BUTTON_DOPTION_3KEY_4` (`0x2520900B`) | tab / toggle | 3K lane 4 rebind cell; mapped press writes the 3K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 11 | `IDC_BUTTON_DOPTION_KEY1` (`0x2520900C`) | tab / toggle | 7K lane 1 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 12 | `IDC_BUTTON_DOPTION_KEY2` (`0x2520900D`) | tab / toggle | 7K lane 2 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 13 | `IDC_BUTTON_DOPTION_KEY3` (`0x2520900E`) | tab / toggle | 7K lane 3 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 14 | `IDC_BUTTON_DOPTION_KEY4` (`0x2520900F`) | tab / toggle | 7K lane 4 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 15 | `IDC_BUTTON_DOPTION_KEY5` (`0x25209010`) | tab / toggle | 7K lane 5 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 16 | `IDC_BUTTON_DOPTION_KEY6` (`0x25209011`) | tab / toggle | 7K lane 6 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
+| 17 | `IDC_BUTTON_DOPTION_KEY7` (`0x25209012`) | tab / toggle | 7K lane 7 rebind cell; mapped press writes the 7K bind table (#18). | `VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) (all 3K/7K lanes; mapped DIK writes, unmapped DIK eaten)` |
 | 18 | `IDC_IMAGE_DOPTION_3KEYDOWN` (`0x25500013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 19 | `IDC_IMAGE_DOPTION_KEYDOWN` (`0x25500014`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 20 | `IDC_BUTTON_DOPTION_DEFAULT` (`0x25200015`) | button | Restores the tab defaults; SAVE rejects zero/duplicate binds (#18). | OPEN: live press + ini leg; seam options_default_restores_the_exe_defaults_per_tab (Tier 0) |
-| 21 | `IDC_BUTTON_DOPTION_SAVE` (`0x25200016`) | button | Commits option.ini beside the install root (#18). | OPEN: live press + ini leg; seam options_save_commits_beside_the_install_root (Tier 0) |
-| 22 | `IDC_BUTTON_DOPTION_EXIT` (`0x25200017`) | button | Closes without saving; Escape also closes (#18). | OPEN: live press + dialog-ownership leg (#314) |
-| 23 | `IDC_BUTTON_DOPTION_SOUNDSET` (`0x25600018`) | button | Switches to the Sound tab at the staged rect (#854). | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
-| 24 | `IDC_BUTTON_DOPTION_GAMESET` (`0x25600019`) | button | Switches to the Game tab at the staged rect (#854). | OPEN: live tab press from both entry paths (#314); seam live_boot_driven_tab_clicks_repaint_sound_and_game_sheets (Tier 3) |
+| 21 | `IDC_BUTTON_DOPTION_SAVE` (`0x25200016`) | button | Commits option.ini beside the install root (#18). | `VERIFIED for the open-dialog click: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3); OPEN: ini commit in a live boot (next step: stage a writable install root)` |
+| 22 | `IDC_BUTTON_DOPTION_EXIT` (`0x25200017`) | button | Closes without saving; Escape also closes (#18). | `VERIFIED: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) from both entries (Escape closes through the dialog owner)` |
+| 23 | `IDC_BUTTON_DOPTION_SOUNDSET` (`0x25600018`) | button | Switches to the Sound tab at the staged rect (#854). | `VERIFIED: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) from both entries` |
+| 24 | `IDC_BUTTON_DOPTION_GAMESET` (`0x25600019`) | button | Switches to the Game tab at the staged rect (#854). | `VERIFIED: options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) from both entries` |
 
 ### Options / Sound sheet
 
 Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
 (lines 1281–1308; 23 entries / 22 rects). Ordinals are `(code & 0xFFF) - 1`.
-Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
-from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+Sheet order and tab pins: `docs/options.md`; #314 key capture, hover ink, and click dispatch are now VERIFIED from Room and Planet by Tier 3 legs.
 
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
@@ -1094,8 +1092,7 @@ from Room and Planet, so key rows stay OPEN even where a seam guard passes.
 
 Source: `BOUND "Dialog_Option_*.bnd"` in the pinned `ControlList_Interface.txt`
 (lines 1611–1639; 24 entries / 23 rects). Ordinals are `(code & 0xFFF) - 1`.
-Sheet order and tab pins: `docs/options.md`; #314 reports inert keys/hover
-from Room and Planet, so key rows stay OPEN even where a seam guard passes.
+Sheet order and tab pins: `docs/options.md`; #314 key capture, hover ink, and click dispatch are now VERIFIED from Room and Planet by Tier 3 legs.
 
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
@@ -1129,8 +1126,8 @@ Input edges with no matching ControlList entry:
 
 | Edge | Exe behavior pin | Status |
 |---|---|---|
-| Options raw-key capture and focus | Mapped press writes the active bind table; unmapped keys refused; keys leak to chat/background in Room and Planet (#314). | OPEN: live raw-key leg from both entry paths (#314); seam options_key_tab_rebind_answers_on_the_new_lane (Tier 0) |
-| Options hover over key/slider cells | Hover blanks the key area in Room/Planet (#314 C4/C3); sheet rest/hover/active frames are seam-pinned only. | OPEN: off/on/off pixel trio from both entry paths; seam options_sheets_paint_rest_hover_and_active_frames (Tier 0) |
+| Options raw-key capture and focus | Mapped press writes the active bind table; unmapped keys are eaten by the dialog; no chat/state leak from either entry (#314). | VERIFIED: live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3) |
+| Options hover over key/slider cells | Key cells keep the bound DIK face under hover; the off/on/off trio restores it from both entries (#314). | VERIFIED for rebind cells and mode tabs: options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames (Tier 3); OPEN: Sound slider hover cue (next step: slider off/on/off pack) |
 
 ## Dialogs
 

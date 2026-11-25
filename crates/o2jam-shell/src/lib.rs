@@ -228,6 +228,90 @@ pub enum InputEdge {
     Menu { key: MenuKey, down: bool },
 }
 
+/// What one raw key event did at the window boundary.
+///
+/// The window and the headless live-input legs call [`route_key_event`]
+/// with the same arguments, so a route proved in a boot-driven leg is
+/// the route the winit handler uses. A captured key never reaches a
+/// text draft, the key map, or a queued edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRoute {
+    /// The game consumed the raw event (an open dialog owns keys).
+    pub captured: bool,
+    /// Text committed to the game's text input, for the capture log.
+    pub text: Option<String>,
+    /// Backspace erased one draft character, for the capture log.
+    pub erase: bool,
+    /// Discrete edges the caller queues for the next snapshot.
+    pub edges: Vec<InputEdge>,
+}
+
+/// Route one raw physical key through the game's capture arm, the text
+/// draft, and the key map. The caller queues the returned edges at the
+/// next frame boundary (ADR-0013).
+///
+/// `text` is the key's committed text, already filtered for control
+/// characters by the window. Headless live legs pass the same text a
+/// winit `KeyboardInput` would carry, so an unmapped key cannot appear
+/// to be consumed here and still leak into a lobby draft.
+#[must_use]
+pub fn route_key_event(
+    game: &mut dyn GameLoop,
+    keymap: &mut Keymap,
+    code: KeyCode,
+    down: bool,
+    text: Option<&str>,
+) -> KeyRoute {
+    // An open dialog owns the raw event before text or key-map
+    // routing (#314 static pin P1). A captured key reaches neither a
+    // chat draft nor a lane/menu edge — even when no rebind accepts it.
+    if game.capture_raw_key(code, down) {
+        return KeyRoute {
+            captured: true,
+            text: None,
+            erase: false,
+            edges: Vec::new(),
+        };
+    }
+    let clean_text = down
+        .then(|| {
+            text.unwrap_or_default()
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .collect::<String>()
+        })
+        .filter(|text| !text.is_empty());
+    let text = clean_text.filter(|_candidate| code != KeyCode::Backspace);
+    if let Some(text) = text.as_deref() {
+        game.text_input(text);
+    }
+    let erase = down && code == KeyCode::Backspace;
+    if erase {
+        game.delete_text();
+    }
+    if let Some(binds) = game.lane_bindings() {
+        keymap.set_binds(binds);
+    }
+    let lane = if down {
+        keymap.press(code)
+    } else {
+        keymap.release(&code)
+    };
+    let edges = if let Some(lane) = lane {
+        vec![InputEdge::Lane { lane, down }]
+    } else if let Some(menu) = menu_of(code) {
+        vec![InputEdge::Menu { key: menu, down }]
+    } else {
+        Vec::new()
+    };
+    KeyRoute {
+        captured: false,
+        text,
+        erase,
+        edges,
+    }
+}
+
 /// Per-frame pulled input snapshot (ADR-0013): the shell freezes one
 /// of these at each frame boundary — the latest pointer position,
 /// the button state, and the frame's drained discrete edges in

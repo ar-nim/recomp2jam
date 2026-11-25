@@ -22,23 +22,30 @@ mod live_input_leg_tests {
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
     use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
-    use o2jam_shell::screens::game::{RoomListFilter, ScreenGame};
+    use o2jam_shell::screens::game::{LobbyChat, PlanetModal, RoomListFilter, ScreenGame};
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
 
     use o2jam_shell::screens::side::{
-        MyRoomNotice, SideScreen, INFORMATION_OK_CODE, MYROOM_GOSHOP_CODE,
+        MyRoomNotice, SideScreen, INFORMATION_OK_CODE, MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET,
+        OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+        OPTION_KEY_SOUNDSET, OPTION_KEY_TEST, OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET,
+        PLANET_OPTION_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
     };
 
-    use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, Screen};
+    use o2jam_shell::{
+        route_key_event, GameLoop, InputEdge, InputSnapshot, KeyRoute, Keymap, Screen,
+    };
+    use winit::keyboard::KeyCode;
 
     use crate::{
         assemble_online_session, connect, install_root, session::OnlineSession,
         stage_channel_list_after_relay_gate, stage_online_identity, stage_online_rooms,
     };
+    use o2jam_shell::screens::side::{PlanetOptionTab, ROOM_OPTION_BUTTON_CODE};
 
     /// Live boot rows: one channel (the resident one) and one room.
     fn channel_row() -> ChannelState {
@@ -257,6 +264,241 @@ mod live_input_leg_tests {
 
     fn archives_present() -> bool {
         read_install_archives(&install_root()).interface.is_some()
+    }
+
+    /// Boot path used by `main.rs::run_play`: the session stages live
+    /// art before any frame, so dialog rects and figures are real.
+    fn boot_live_leg_with_art(port: u16, relay_down: bool) -> OnlineSession {
+        let mut session = boot_live_leg(port, relay_down);
+        session.stage_live_art();
+        session
+    }
+
+    /// One staged option control's absolute native rect. Geometry is
+    /// always read from the same `.bnd` block live boot stages.
+    fn staged_dialog_rect(dialog: Dialog, code: u32) -> Rect {
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let art = stage_dialog(&archive, dialog, StageContext::default())
+            .art
+            .expect("option sheet stages with installed bytes");
+        let (origin_x, origin_y) = dialog_origin(&art.placements);
+        let placed = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .unwrap_or_else(|| panic!("no staged rect for {code:#x}"));
+        Rect {
+            x: origin_x + placed.rect.x,
+            y: origin_y + placed.rect.y,
+            w: placed.rect.w,
+            h: placed.rect.h,
+        }
+    }
+
+    fn staged_dialog_centre(dialog: Dialog, code: u32) -> (i32, i32) {
+        rect_centre(staged_dialog_rect(dialog, code))
+    }
+
+    /// Which lobby face the Options sheet was opened from. The dialog
+    /// has no per-caller state (#314 static pin), so both entries must
+    /// land on the same capture and paint behavior.
+    #[derive(Debug, Clone, Copy)]
+    enum OptionsEntry {
+        Room,
+        Planet,
+    }
+
+    /// Boot -> splash -> entry click -> Options sheet -> Key tab, all
+    /// through pointer snapshots. No direct `switch_option_tab` call.
+    fn open_options_key_sheet(session: &mut OnlineSession, entry: OptionsEntry) {
+        let (entry_screen, code) = match entry {
+            OptionsEntry::Room => (Screen::Room, ROOM_OPTION_BUTTON_CODE),
+            OptionsEntry::Planet => (Screen::Planet, PLANET_OPTION_CODE),
+        };
+        if matches!(entry, OptionsEntry::Room) {
+            enter_room_by_clicks(session);
+        }
+        let (x, y) = staged_code_centre(session, entry_screen, code);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert_eq!(
+            session.game_mut().planet_modal(),
+            Some(PlanetModal::Options),
+            "{entry:?} entry must open the one Options dialog"
+        );
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOptionSound, OPTION_SOUND_KEYSET);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert_eq!(
+            session.game_mut().planet_option_tab(),
+            PlanetOptionTab::Key,
+            "the staged KEYSET tab must reach the Key sheet from {entry:?}"
+        );
+    }
+
+    /// Send one raw key event through the shared window/headless route
+    /// and deliver its queued edges in the next live snapshot.
+    fn route_raw_key(
+        session: &mut OnlineSession,
+        keymap: &mut Keymap,
+        code: KeyCode,
+        text: Option<&str>,
+    ) -> KeyRoute {
+        let route = route_key_event(session.game_mut(), keymap, code, true, text);
+        let mut snapshot = InputSnapshot::new();
+        for edge in &route.edges {
+            snapshot.push_edge(*edge);
+        }
+        session.ingest_snapshot(&snapshot);
+        route
+    }
+
+    /// Click one staged rebind cell and answer it with a mapped key,
+    /// both through the live input seams.
+    fn rebind_staged_lane(
+        session: &mut OnlineSession,
+        keymap: &mut Keymap,
+        cell_code: u32,
+        key: KeyCode,
+        text: &str,
+    ) {
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOption, cell_code);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        let route = route_raw_key(session, keymap, key, Some(text));
+        assert!(
+            route.captured && route.text.is_none(),
+            "the dialog must own a mapped rebind key: {route:?}"
+        );
+    }
+
+    /// Observable state around an unmapped key: screen, modal, tab,
+    /// armed lane, binds, hash, and the Room draft.
+    fn key_sheet_state(session: &mut OnlineSession) -> (String, String) {
+        let game = session.game_mut();
+        let screen = format!("{:?}", game.screen());
+        let modal = format!(
+            "{:?}|{:?}|{:?}|{:?}",
+            game.planet_modal(),
+            game.planet_option_tab(),
+            game.option_rebind_armed(),
+            game.options().lane_keys(),
+        );
+        let draft = LobbyChat::of_screen(game.screen())
+            .map(|chat| game.lobby_chat(chat).draft().to_owned())
+            .unwrap_or_default();
+        let observed = format!("{screen}|{modal}|{}|{draft}", game.state_hash());
+        (observed, draft)
+    }
+
+    /// Native pixels inside one absolute staged rect, from the same
+    /// paint call the window makes.
+    fn staged_rect_pixels(session: &mut OnlineSession, rect: Rect) -> Vec<u32> {
+        let frame = paint_frame(session);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let top = usize::try_from(rect.y).expect("rect top fits usize");
+        let left = usize::try_from(rect.x).expect("rect left fits usize");
+        let rows = usize::try_from(rect.h).expect("rect height fits usize");
+        let columns = usize::try_from(rect.w).expect("rect width fits usize");
+        (top..top + rows)
+            .flat_map(|y| (left..left + columns).map(move |x| (y, x)))
+            .map(|(y, x)| frame[y * width + x])
+            .collect()
+    }
+
+    /// Number of pixels that carry a colour other than the most common
+    /// one in a staged control rect. A blanked key face collapses to
+    /// its backdrop; a painted face keeps glyph ink.
+    fn ink_pixels(pixels: &[u32]) -> usize {
+        let mut counts = std::collections::HashMap::new();
+        for pixel in pixels {
+            *counts.entry(*pixel).or_insert(0usize) += 1;
+        }
+        let dominant = counts.values().copied().max().unwrap_or(0);
+        pixels.len().saturating_sub(dominant)
+    }
+
+    /// Sample one absolute staged rect from an already painted frame.
+    fn staged_rect_pixels_from(frame: &[u32], rect: Rect) -> Vec<u32> {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let top = usize::try_from(rect.y).expect("rect top fits usize");
+        let left = usize::try_from(rect.x).expect("rect left fits usize");
+        let rows = usize::try_from(rect.h).expect("rect height fits usize");
+        let columns = usize::try_from(rect.w).expect("rect width fits usize");
+        (top..top + rows)
+            .flat_map(|y| (left..left + columns).map(move |x| (y, x)))
+            .map(|(y, x)| frame[y * width + x])
+            .collect()
+    }
+
+    /// The exe's 37-byte DIK order (`0x438080` fill, `0x439230` search;
+    /// `docs/options.md` and the #314 static pin). A caption's staged
+    /// record is the position of its bound DIK in this table.
+    const KEY_CAPTION_DIK_ORDER: [u8; 37] = [
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1E, 0x1F, 0x20,
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32,
+        0x33, 0x34, 0x35, 0x36, 0x2A, 0x39, 0x1C,
+    ];
+
+    /// Pixels the bound caption must paint in one staged rebind cell.
+    /// The expected glyph comes from the same `.bnd`/`.opi` figures live
+    /// boot staged; the guard never invents a colour or a coordinate.
+    fn bound_caption_pixels(rect: Rect, dik: u8) -> Vec<(usize, usize, u32)> {
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let art = stage_dialog(&archive, Dialog::PlanetOption, StageContext::default())
+            .art
+            .expect("key sheet stages with installed bytes");
+        let figure = art
+            .figures
+            .get("OptionKey_Keytext.ojs")
+            .expect("key caption atlas stages");
+        let record = KEY_CAPTION_DIK_ORDER
+            .iter()
+            .position(|entry| *entry == dik)
+            .expect("bound DIK has a staged caption");
+        let layer = figure.layer(record).expect("caption record decodes");
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits usize");
+        let mut expected = vec![0u32; width * height];
+        o2jam_render::blit_rgb555(
+            &mut o2jam_render::Frame {
+                buf: &mut expected,
+                w: width,
+                h: height,
+            },
+            &layer.image.view(),
+            rect.x + 4,
+            rect.y + 4,
+            Some(layer.colorkey),
+        );
+        let rows = i32::try_from(rect.h).expect("rect height fits i32");
+        let columns = i32::try_from(rect.w).expect("rect width fits i32");
+        (rect.y..rect.y + rows)
+            .flat_map(|y| (rect.x..rect.x + columns).map(move |x| (y, x)))
+            .filter_map(|(y, x)| {
+                let word = expected[usize::try_from(y).expect("y fits usize") * width
+                    + usize::try_from(x).expect("x fits usize")];
+                (word != 0).then(|| {
+                    (
+                        usize::try_from(x).expect("x fits usize"),
+                        usize::try_from(y).expect("y fits usize"),
+                        word,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Count bound-caption pixels a frame lost or repainted with another
+    /// face. A hover that preserves the key ink leaves this number
+    /// unchanged from the rest frame.
+    fn caption_mismatches(frame: &[u32], caption: &[(usize, usize, u32)]) -> usize {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        caption
+            .iter()
+            .filter(|(x, y, word)| frame[y * width + x] != *word)
+            .count()
     }
 
     /// Splash dismissal is a Menu edge in a snapshot — the same edge
@@ -1194,5 +1436,405 @@ mod live_input_leg_tests {
         );
 
         finish(session, gateway.server);
+    }
+
+    /// #314 Tier 3: one raw key walk from a real boot, the staged
+    /// Options entry, and a staged rebind cell. The mapped DIK must
+    /// write and advance the arm; an unmapped typed key must be eaten
+    /// by the dialog with no chat draft, no state change, and no wire.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online
+    ///   -> connect::connect_and_login_with_transport -> assemble_online_session
+    ///   -> OnlineSession::stage_live_art -> GameLoop::ingest_snapshot
+    ///   -> staged Room/Planet Options entry -> ScreenGame::click_options_dialog
+    ///   -> OptionsDialog::click -> o2jam_shell::route_key_event
+    ///   -> GameLoop::capture_raw_key -> ScreenGame::capture_raw_key
+    ///   -> OptionsDialog::rebind_armed_lane.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane() {
+        assert_options_key_capture_from(OptionsEntry::Room);
+    }
+
+    /// Planet twin of the Room leg: the exe has one dialog and one
+    /// ctor for both entries (#314 static pin), so any difference here
+    /// is our focus leak, not an entry-path rule.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online
+    ///   -> connect::connect_and_login_with_transport -> assemble_online_session
+    ///   -> OnlineSession::stage_live_art -> GameLoop::ingest_snapshot
+    ///   -> staged Planet gear -> ScreenGame::click_planet_modal
+    ///   -> ScreenGame::click_options_dialog -> OptionsDialog::click
+    ///   -> o2jam_shell::route_key_event -> GameLoop::capture_raw_key
+    ///   -> ScreenGame::capture_raw_key -> OptionsDialog::rebind_armed_lane.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane() {
+        assert_options_key_capture_from(OptionsEntry::Planet);
+    }
+
+    /// All seven 7K cells answer their mapped DIK through the live
+    /// route. The DIKs are from the exe's 37-byte order table.
+    fn rebind_all_seven_key_lanes(
+        session: &mut OnlineSession,
+        keymap: &mut Keymap,
+        entry: OptionsEntry,
+    ) {
+        for (lane, key, text) in [
+            (1u32, KeyCode::KeyW, "w"),
+            (2, KeyCode::KeyE, "e"),
+            (3, KeyCode::KeyR, "r"),
+            (4, KeyCode::KeyT, "t"),
+            (5, KeyCode::KeyY, "y"),
+            (6, KeyCode::KeyU, "u"),
+        ] {
+            rebind_staged_lane(session, keymap, OPTION_KEY_LANE_FIRST + lane, key, text);
+            assert_eq!(
+                session.game_mut().options().lane_keys()[usize::try_from(lane).expect("lane fits")],
+                key,
+                "7K lane {lane} must answer its staged cell from {entry:?}"
+            );
+        }
+    }
+
+    /// The kept 3K cells write their own table; index 1 is hidden by
+    /// the exe's skipped staged rect and never armed.
+    fn rebind_all_three_key_lanes(session: &mut OnlineSession, keymap: &mut Keymap) {
+        let (x, y) = staged_dialog_centre(
+            Dialog::PlanetOption,
+            o2jam_shell::screens::side::OPTION_KEY_3KEY_MODE,
+        );
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert!(session.game_mut().options().three_key(), "3KEY selector");
+        for (lane, key, text) in [
+            (0u32, KeyCode::KeyZ, "z"),
+            (2, KeyCode::KeyX, "x"),
+            (3, KeyCode::KeyC, "c"),
+        ] {
+            rebind_staged_lane(
+                session,
+                keymap,
+                o2jam_shell::screens::side::OPTION_KEY_3KEY_FIRST + lane,
+                key,
+                text,
+            );
+            assert_eq!(
+                session.game_mut().options().three_key_dik()
+                    [usize::try_from(lane).expect("lane fits")],
+                o2jam_shell::options::dik_of_keycode(key).expect("mapped DIK"),
+                "3K lane {lane} must keep its own bind table"
+            );
+        }
+    }
+
+    fn assert_options_key_capture_from(entry: OptionsEntry) {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        open_options_key_sheet(&mut session, entry);
+
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOption, OPTION_KEY_7KEY_MODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert!(
+            !session.game_mut().options().three_key(),
+            "the staged 7KEY selector must arm the seven-key family"
+        );
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOption, OPTION_KEY_LANE_FIRST);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert_eq!(
+            session.game_mut().option_rebind_armed(),
+            Some(0),
+            "KEY1 must arm lane 0 from {entry:?}"
+        );
+        let mut keymap = Keymap::new();
+        rebind_staged_lane(
+            &mut session,
+            &mut keymap,
+            OPTION_KEY_LANE_FIRST,
+            KeyCode::KeyA,
+            "a",
+        );
+        assert_eq!(
+            session.game_mut().option_rebind_armed(),
+            Some(1),
+            "the exe advances the armed lane after a mapped press"
+        );
+        assert_eq!(
+            session.game_mut().options().lane_keys()[0],
+            KeyCode::KeyA,
+            "the mapped DIK must land in the armed lane's bind"
+        );
+
+        rebind_all_seven_key_lanes(&mut session, &mut keymap, entry);
+        rebind_all_three_key_lanes(&mut session, &mut keymap);
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOption, OPTION_KEY_7KEY_MODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        rebind_staged_lane(
+            &mut session,
+            &mut keymap,
+            OPTION_KEY_LANE_FIRST,
+            KeyCode::KeyA,
+            "a",
+        );
+
+        let (x, y) = staged_dialog_centre(Dialog::PlanetOption, OPTION_KEY_7KEY_MODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        rebind_staged_lane(
+            &mut session,
+            &mut keymap,
+            OPTION_KEY_LANE_FIRST,
+            KeyCode::KeyA,
+            "a",
+        );
+
+        // Drain any lobby poll frame before the measured key; the exe
+        // pin is that the key itself sends nothing.
+        while gateway.reports.try_recv().is_ok() {}
+        let before = key_sheet_state(&mut session);
+        let unmapped = route_raw_key(&mut session, &mut keymap, KeyCode::Digit1, Some("1"));
+        assert!(
+            unmapped.captured && unmapped.text.is_none() && unmapped.edges.is_empty(),
+            "an unmapped key must be eaten by the dialog, not typed or routed: {unmapped:?}"
+        );
+        assert_eq!(
+            key_sheet_state(&mut session),
+            before,
+            "the unmapped key must leave no chat row, bind, tab, or state change"
+        );
+        let chat_frames = observed(&gateway.reports)
+            .iter()
+            .filter(|(id, payload)| {
+                *id == Request::SendMainRoomMessage.id()
+                    || *id == Request::SendWhisper.id()
+                    || *id == Request::Announce.id()
+                    || payload == b"1"
+            })
+            .count();
+        assert_eq!(
+            chat_frames, 0,
+            "an eaten key must not appear as chat on the wire"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// #314 Tier 3: pointer off/on/off over a rebind cell and a tab
+    /// from both entries. The exe has no hover face on these cells
+    /// (static pin P3), so hover must repaint the existing ink: the on
+    /// frame differs from rest, keeps its glyph ink, and the third
+    /// frame restores the first. No blank frame may appear.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online
+    ///   -> connect::connect_and_login_with_transport -> assemble_online_session
+    ///   -> OnlineSession::stage_live_art -> GameLoop::ingest_snapshot
+    ///   -> staged Room/Planet Options entry -> ScreenGame::click_options_dialog
+    ///   -> pointer snapshot -> ScreenGame::paint_at -> paint_dialog_frame_states
+    ///   -> paint_dialog_frame_record.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        for entry in [OptionsEntry::Room, OptionsEntry::Planet] {
+            let gateway = spawn_live_leg_gateway(joined_room(0, true));
+            let mut session = boot_live_leg_with_art(gateway.port, false);
+            dismiss_splash(&mut session);
+            open_options_key_sheet(&mut session, entry);
+            let (x, y) = staged_dialog_centre(Dialog::PlanetOption, OPTION_KEY_7KEY_MODE);
+            session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+
+            // Rebind cell: the bound DIK caption must survive the hover
+            // layer. The 7K family's first lane uses the ordinary
+            // caption origin, so its rest glyph matches the staged
+            // atlas exactly (no labeled stand-in in this assertion).
+            let cell = staged_dialog_rect(Dialog::PlanetOption, OPTION_KEY_LANE_FIRST);
+            let centre = rect_centre(cell);
+            let dik = session.game_mut().options().lane_dik_for_mode(false)[0];
+            let caption = bound_caption_pixels(cell, dik);
+            session.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            let cell_off = paint_frame(&mut session);
+            session.ingest_snapshot(&InputSnapshot::motion_to(centre.0, centre.1));
+            let cell_on = paint_frame(&mut session);
+            session.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            let cell_off_again = paint_frame(&mut session);
+            let rest_mismatch = caption_mismatches(&cell_off, &caption);
+            assert_eq!(
+                rest_mismatch, 0,
+                "the rest frame must paint the bound caption"
+            );
+            assert_eq!(
+                caption_mismatches(&cell_on, &caption),
+                rest_mismatch,
+                "hover must keep the bound key face, not blank or replace its glyph"
+            );
+            assert_eq!(
+                caption_mismatches(&cell_off_again, &caption),
+                rest_mismatch,
+                "unhover restores the same bound glyph"
+            );
+            let cell_off_ink = ink_pixels(&staged_rect_pixels_from(&cell_off, cell));
+            let cell_on_ink = ink_pixels(&staged_rect_pixels_from(&cell_on, cell));
+            assert!(
+                cell_off_ink > 0 && cell_on_ink > 0,
+                "both frames keep key-area ink"
+            );
+            assert_ne!(cell_off, cell_on, "the off/on/off frames must be distinct");
+
+            // Tab: the generic hover face may change the body, but it
+            // must never reduce the staged selector to a blank plate.
+            let tab = staged_dialog_rect(Dialog::PlanetOption, OPTION_KEY_7KEY_MODE);
+            let centre = rect_centre(tab);
+            session.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            let tab_off = staged_rect_pixels(&mut session, tab);
+            session.ingest_snapshot(&InputSnapshot::motion_to(centre.0, centre.1));
+            let tab_on = staged_rect_pixels(&mut session, tab);
+            session.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+            let tab_off_again = staged_rect_pixels(&mut session, tab);
+            assert!(
+                changed_pixels(&tab_off, &tab_on) > 0,
+                "tab hover has a face"
+            );
+            assert!(ink_pixels(&tab_on) > 0, "tab hover keeps its ink");
+            assert_eq!(
+                changed_pixels(&tab_off, &tab_off_again),
+                0,
+                "unhover restores the tab rest face"
+            );
+            finish(session, gateway.server);
+        }
+    }
+    /// #314 Tier 3: every staged Key-tab click keeps the exe dispatch
+    /// from both entries. The pins (P4, click arm `0x4383d0`) give the
+    /// mode selectors, rebind cells, key-test gate, SAVE/EXIT, and the
+    /// Sound/Game footer tabs to the dialog; no per-caller rule exists.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online
+    ///   -> connect::connect_and_login_with_transport -> assemble_online_session
+    ///   -> OnlineSession::stage_live_art -> GameLoop::ingest_snapshot
+    ///   -> staged Room/Planet Options entry -> ScreenGame::click_dispatch
+    ///   -> ScreenGame::click_planet_modal -> ScreenGame::click_options_dialog
+    ///   -> OptionsDialog::click -> OptionsDialog::click_key_tab / switch_tab.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        // Staged Key-tab footer codes from exe click arm 0x4383d0.
+        const KEY_SAVE: u32 = 0x2520_0016;
+        const KEY_EXIT: u32 = 0x2520_0017;
+        for entry in [OptionsEntry::Room, OptionsEntry::Planet] {
+            let gateway = spawn_live_leg_gateway(joined_room(0, true));
+            let mut session = boot_live_leg_with_art(gateway.port, false);
+            dismiss_splash(&mut session);
+            open_options_key_sheet(&mut session, entry);
+            while gateway.reports.try_recv().is_ok() {}
+
+            let click_key = |session: &mut OnlineSession, code: u32| {
+                let (x, y) = staged_dialog_centre(Dialog::PlanetOption, code);
+                session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            };
+            let click_tab = |session: &mut OnlineSession, dialog: Dialog, code: u32| {
+                let (x, y) = staged_dialog_centre(dialog, code);
+                session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            };
+
+            click_key(&mut session, OPTION_KEY_7KEY_MODE);
+            assert!(
+                !session.game_mut().options().three_key(),
+                "7KEY from {entry:?}"
+            );
+            click_key(&mut session, OPTION_KEY_LANE_FIRST);
+            assert_eq!(session.game_mut().option_rebind_armed(), Some(0));
+            click_key(&mut session, OPTION_KEY_3KEY_MODE);
+            assert!(
+                session.game_mut().options().three_key(),
+                "3KEY from {entry:?}"
+            );
+            click_key(
+                &mut session,
+                o2jam_shell::screens::side::OPTION_KEY_3KEY_FIRST,
+            );
+            assert_eq!(session.game_mut().option_rebind_armed(), Some(0));
+            click_key(&mut session, OPTION_KEY_LANE_FIRST);
+            assert_eq!(
+                session.game_mut().option_rebind_armed(),
+                Some(0),
+                "hidden 7K cells leave the armed 3K lane alone"
+            );
+
+            click_key(&mut session, OPTION_KEY_TEST);
+            assert!(
+                session.game_mut().options().key_test(),
+                "KEYTEST toggles on"
+            );
+            click_key(&mut session, OPTION_KEY_3KEY_FIRST + 2);
+            assert_eq!(
+                session.game_mut().option_rebind_armed(),
+                Some(0),
+                "key-test refuses rebind cells and keeps the prior arm"
+            );
+            click_tab(&mut session, Dialog::PlanetOption, OPTION_KEY_SOUNDSET);
+            assert_eq!(
+                session.game_mut().planet_option_tab(),
+                PlanetOptionTab::Key,
+                "key-test refuses sheet tabs from {entry:?}"
+            );
+            click_key(&mut session, OPTION_KEY_TEST);
+            assert!(
+                !session.game_mut().options().key_test(),
+                "KEYTEST toggles off"
+            );
+
+            click_tab(&mut session, Dialog::PlanetOption, OPTION_KEY_SOUNDSET);
+            assert_eq!(
+                session.game_mut().planet_option_tab(),
+                PlanetOptionTab::Sound
+            );
+            click_tab(
+                &mut session,
+                Dialog::PlanetOptionSound,
+                OPTION_SOUND_GAMESET,
+            );
+            assert_eq!(
+                session.game_mut().planet_option_tab(),
+                PlanetOptionTab::Game
+            );
+            click_tab(&mut session, Dialog::PlanetOptionGame, OPTION_GAME_KEYSET);
+            assert_eq!(session.game_mut().planet_option_tab(), PlanetOptionTab::Key);
+
+            click_key(&mut session, KEY_SAVE);
+            assert_eq!(
+                session.game_mut().planet_modal(),
+                Some(PlanetModal::Options),
+                "SAVE commits in the open dialog"
+            );
+            click_key(&mut session, KEY_EXIT);
+            assert_eq!(
+                session.game_mut().planet_modal(),
+                None,
+                "EXIT closes the dialog from {entry:?}"
+            );
+            let chat_frames = observed(&gateway.reports)
+                .iter()
+                .filter(|(id, _)| {
+                    *id == Request::SendMainRoomMessage.id()
+                        || *id == Request::SendWhisper.id()
+                        || *id == Request::Announce.id()
+                })
+                .count();
+            assert_eq!(chat_frames, 0, "options clicks must not send chat");
+            finish(session, gateway.server);
+        }
     }
 }

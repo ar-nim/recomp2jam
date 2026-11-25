@@ -68,6 +68,26 @@ pub(super) fn paint_option_key_tab(
         return;
     };
     paint_dialog_without_captions(frame, art, captions.three_key, settings);
+    paint_key_area(frame, art, captions);
+}
+
+/// Reapply the bound key faces after the dialog's rest/hover/active
+/// pass. The exe has no hover face on a rebind cell or the mode
+/// selectors (#314 static pin P3): a generic record-0 repaint must not
+/// replace the bound DIK glyph or clear the area under the pointer.
+/// The bind table is read only; hover never writes it.
+pub(super) fn paint_key_area_after_hover(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    captions: KeyCaptions,
+) {
+    if !art.has_figures() {
+        return;
+    }
+    paint_key_area(frame, art, captions);
+}
+
+fn paint_key_area(frame: &mut Frame<'_>, art: &SceneArt, captions: KeyCaptions) {
     paint_bound_captions(frame, art, captions);
     if let Some(lane) = captions.armed_lane {
         paint_armed_stand_in(frame, art, captions.three_key, lane);
@@ -154,6 +174,13 @@ fn paint_bound_captions(frame: &mut Frame<'_>, art: &SceneArt, captions: KeyCapt
 /// not-found sentinel, which never repaints a caption).
 fn glyph_index(dik: u8) -> Option<usize> {
     DIK_ORDER.iter().position(|entry| *entry == dik)
+}
+
+/// Whether the exe's DIK-order table accepts a pressed key for a
+/// rebind. A DIK outside the table is still consumed by the dialog,
+/// but never written into a bind (#314 pin P1).
+pub(super) fn is_rebindable_dik(dik: u8) -> bool {
+    glyph_index(dik).is_some()
 }
 
 /// Exe caption origin classes (`0x439000` / `0x439780`): the three

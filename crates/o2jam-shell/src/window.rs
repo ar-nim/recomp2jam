@@ -12,7 +12,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use super::{menu_of, GameLoop, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use super::{
+    route_key_event, GameLoop, InputEdge, InputSnapshot, KeyRoute, Shell, DEFAULT_HEIGHT,
+    DEFAULT_WIDTH,
+};
 
 mod capture;
 
@@ -184,30 +187,45 @@ impl WindowHandler {
     /// Edges queue for the next freeze; nothing reaches the game
     /// here (ADR-0013). `pub(crate)`: the input-latency probe (#100)
     /// drives scripted key events through this exact path.
-    pub(crate) fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
+    pub(crate) fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) -> KeyRoute {
+        self.route_key_with_text(code, down, None)
+    }
+
+    /// Same boundary as [`route_key_event`], with the key's committed
+    /// text. The capture harness gets one line per applied text/erase
+    /// edge and one per physical key edge.
+    fn route_key_with_text(
+        &mut self,
+        code: winit::keyboard::KeyCode,
+        down: bool,
+        text: Option<&str>,
+    ) -> KeyRoute {
         // Any key edge may move game state (dismiss, rebind, strike),
         // so the frame it changed owes one repaint (ticket #138).
         self.input_dirty = true;
+        let route = route_key_event(
+            self.shell.game.as_mut(),
+            &mut self.shell.keymap,
+            code,
+            down,
+            text,
+        );
+        // Log only what the game actually received. A captured key
+        // leaves no text or erase line in the replay trace (#314).
+        if let Some(text) = &route.text {
+            for ch in text.chars() {
+                self.log_event(&format!("text {ch}"));
+            }
+        }
+        if route.erase {
+            self.log_event("erase");
+        }
         self.log_event(&format!(
             "key-{} {code:?}",
             if down { "down" } else { "up" }
         ));
-        if self.shell.game.capture_raw_key(code, down) {
-            return;
-        }
-        if let Some(binds) = self.shell.game.lane_bindings() {
-            self.shell.keymap.set_binds(binds);
-        }
-        let lane = if down {
-            self.shell.keymap.press(code)
-        } else {
-            self.shell.keymap.release(&code)
-        };
-        if let Some(lane) = lane {
-            self.pending_edges.push(InputEdge::Lane { lane, down });
-        } else if let Some(menu) = menu_of(code) {
-            self.pending_edges.push(InputEdge::Menu { key: menu, down });
-        }
+        self.pending_edges.extend(route.edges.iter().copied());
+        route
     }
 
     /// Queue a left press/release at window pixels as a native-frame
@@ -314,9 +332,7 @@ impl WindowHandler {
 
     /// Erase one draft character (Backspace press).
     fn route_erase(&mut self) {
-        self.input_dirty = true;
-        self.log_event("erase");
-        self.shell.game.delete_text();
+        self.route_key(winit::keyboard::KeyCode::Backspace, true);
     }
 
     /// Forward one applied-event line to the capture adapter (no-op
@@ -529,16 +545,10 @@ impl ApplicationHandler for WindowHandler {
                     },
                 ..
             } => {
-                // Typed characters reach the chat drafts through the
-                // key's produced text when no input method owns the
-                // key (Xvfb rigs have no XIM; real IMEs commit through
-                // `Ime::Commit` above and never double-feed here).
-                if state == ElementState::Pressed {
-                    if let Some(text) = text.filter(|text| !text.is_empty()) {
-                        self.route_text(&text);
-                    }
-                }
-                self.route_key(code, state == ElementState::Pressed);
+                // Typed characters reach the chat drafts only when no
+                // dialog captured the key first (#314). Xvfb rigs have
+                // no XIM; real IMEs commit through `Ime::Commit`.
+                self.route_key_with_text(code, state == ElementState::Pressed, text.as_deref());
             }
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
