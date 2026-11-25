@@ -34,8 +34,12 @@ bound; a mention is not a passing test).
 excluded from the denominator: those are `std::vector`/`std::string`
 template bodies with no player-visible decisions, and the Rust
 reimplementation replaces them wholesale with `std` — pinning them adds
-no behavioral value. The remaining 6 unpinned behavior-relevant
-procedures (5 unassigned, 1 render support) are the last open slice.
+no behavioral value. Final slice 2026-11-25: the last 6 are pinned in `docs/pins/final-6.md`
+(`71454ad`).
+
+**Final: 791 / 791 = 100.0% of behavior-relevant procedures pinned.**
+Total inventory 911 / 1,129 (the remainder is the excluded container
+bucket; see the ruling above).
 
 Repo pins in the other buckets: 87 library, 514 dead-or-unclassified.
 
