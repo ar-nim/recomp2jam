@@ -98,6 +98,18 @@ actor clicks BACK after a new 4018, the exe posts empty `C2S 4021` and
 returns to the Room stage." The first sentence is a contradiction with the
 checked #294 story; it is not silently substituted for it.
 
+#294 T3 correction (2026-11-25): the 7.55 statics pin the same empty
+4021 send, but the 4022 self handler installs state id 5
+(`CNormalWaiting`/`CLiveWaiting` vtables), not room state id 3
+(`ev_e13ae152…`, `ev_d6a8ea7f…`). The owner playtest agrees with the
+statics: BACK lands in Waiting. The captured Room frame was a click on a
+mid-animation panel; this is an evidence-attribution conflict, not a
+second BACK target. A settled-panel wire+frame capture with timestamps
+for the click, 4022 arrival, and any following room re-stage stays OPEN.
+The Rust client now follows the statics and playtest
+(`settled_solo_result_back_sends_4021_and_lands_in_waiting_after_4022`,
+Tier 2, plus the Tier 3 boot leg).
+
 ### S294-RESULT-MULTI-02 (wave-4 queue, not executed here)
 
 Boot pair `M = uid 1 / master`, `P = uid 2 / peer`, `O = uid 3 / channel

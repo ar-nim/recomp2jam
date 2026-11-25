@@ -4911,7 +4911,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, &o2jam_game::Score::default(), &[], None, None),
+        Screen::Result => paint_result(frame, &o2jam_game::Score::default(), &[], None),
     }
     if screen == Screen::Shop {
         paint_shop_offline_marker(frame);
@@ -5403,7 +5403,6 @@ mod paint_tests {
                     art,
                     verdict: ResultVerdict::Solo,
                     grade: None,
-                    album: None,
                     life_readout: None,
                     bottom_counter: None,
                 },
@@ -8197,7 +8196,6 @@ mod paint_tests {
                 art: &art,
                 verdict: ResultVerdict::Solo,
                 grade: None,
-                album: None,
                 life_readout: None,
                 bottom_counter: None,
             },
@@ -8346,7 +8344,6 @@ mod paint_tests {
             score,
             rows,
             None,
-            None,
         );
         buf
     }
@@ -8373,7 +8370,6 @@ mod paint_tests {
                 art,
                 verdict,
                 grade,
-                album: None,
                 life_readout: None,
                 bottom_counter: None,
             },
@@ -8538,7 +8534,6 @@ mod paint_tests {
             &full_score(),
             &[],
             None,
-            None,
         );
         assert!(!buf.contains(&result_number_ink()));
     }
@@ -8589,7 +8584,6 @@ mod paint_tests {
                 art: &art,
                 verdict: ResultVerdict::Solo,
                 grade: None,
-                album: None,
                 life_readout,
                 bottom_counter,
             },
@@ -8674,7 +8668,6 @@ mod paint_tests {
                 art: &art,
                 verdict: ResultVerdict::Solo,
                 grade: None,
-                album: None,
                 life_readout: Some(7),
                 bottom_counter: Some(52),
             },
@@ -8912,7 +8905,6 @@ mod paint_tests {
             },
             &o2jam_game::Score::default(),
             &[live_row()],
-            None,
             None,
         );
         assert!(!buf.contains(&result_number_ink()));
@@ -9390,7 +9382,6 @@ mod paint_tests {
                 },
                 &o2jam_game::Score::default(),
                 rows,
-                None,
                 slots.as_ref(),
             );
             buf
@@ -9439,7 +9430,6 @@ mod paint_tests {
                 art: &art,
                 verdict: ResultVerdict::Battle(Some(BattleVerdict::Win)),
                 grade: None,
-                album: None,
                 life_readout: None,
                 bottom_counter: None,
             },
@@ -9449,105 +9439,6 @@ mod paint_tests {
         // never comes back.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
-    }
-
-    /// Red/green 2x1 cover stand-in: the widened inks probe pixels
-    /// (5-bit channels widened by replication, so red lands (255,0,0)).
-    fn tiny_cover() -> Rgb555Image {
-        Rgb555Image {
-            w: 2,
-            h: 1,
-            words: vec![0x7C00, 0x03E0],
-        }
-    }
-
-    #[test]
-    fn album_cover_paints_into_the_music_name_box() {
-        // The OJN cover section (game-resolved) stretches opaque over
-        // the box interior ([RESULT_MUSIC_BOX]): the left half of the
-        // 2x1 cover covers the box's left columns, the right half its
-        // right column, and the frame border pixel left of the box
-        // stays card ink.
-        let mut buf = vec![0u32; 800 * 600];
-        paint_result(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &o2jam_game::Score::default(),
-            &[],
-            Some(&tiny_cover()),
-            None,
-        );
-        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(70, 304), pack_xrgb(255, 0, 0));
-        assert_eq!(at(733, 518), pack_xrgb(0, 255, 0));
-        assert_eq!(at(60, 304), pack_xrgb(0x10, 0x10, 0x08));
-    }
-
-    #[test]
-    fn missing_cover_paints_the_box_as_is() {
-        // No resolved cover: the box region keeps whatever the scene
-        // stages — the flat card here — with zero album pixels.
-        let without = {
-            let mut buf = vec![0u32; 800 * 600];
-            paint_result(
-                &mut Frame {
-                    buf: &mut buf,
-                    w: 800,
-                    h: 600,
-                },
-                &o2jam_game::Score::default(),
-                &[],
-                None,
-                None,
-            );
-            buf
-        };
-        let with = {
-            let mut buf = vec![0u32; 800 * 600];
-            paint_result(
-                &mut Frame {
-                    buf: &mut buf,
-                    w: 800,
-                    h: 600,
-                },
-                &o2jam_game::Score::default(),
-                &[],
-                Some(&tiny_cover()),
-                None,
-            );
-            buf
-        };
-        let at = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(&without, 70, 304), pack_xrgb(0x10, 0x10, 0x08));
-        assert_eq!(at(&with, 60, 304), at(&without, 60, 304));
-    }
-
-    #[test]
-    fn album_cover_scales_into_small_frames() {
-        // Non-native frames scale the box rect like the placements;
-        // the cover still fills it (the window composes at native and
-        // scales once, so this is the small-probe path only).
-        let mut buf = vec![0u32; 64 * 48];
-        paint_result(
-            &mut Frame {
-                buf: &mut buf,
-                w: 64,
-                h: 48,
-            },
-            &o2jam_game::Score::default(),
-            &[],
-            Some(&tiny_cover()),
-            None,
-        );
-        let dest = scale_rect_to_frame(&RESULT_MUSIC_BOX, 64, 48);
-        let at = |x: i32, y: i32| buf[y as usize * 64 + x as usize];
-        assert_eq!(at(dest.x, dest.y), pack_xrgb(255, 0, 0));
-        let last_x = dest.x + dest.w as i32 - 1;
-        let last_y = dest.y + dest.h as i32 - 1;
-        assert_eq!(at(last_x, last_y), pack_xrgb(0, 255, 0));
     }
 
     /// Ten-layer number font: layer `i` paints digit `i`.
@@ -15566,7 +15457,6 @@ mod paint_tests {
                 seat_byte: Some(8),
             },
         ];
-        let cover = tiny_cover();
         let flat_slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F);
         let mut flat = vec![0u32; 800 * 600];
         paint_result(
@@ -15577,7 +15467,6 @@ mod paint_tests {
             },
             &score,
             &rows,
-            Some(&cover),
             flat_slots.as_ref(),
         );
         fold_pin_pixels(&mut hash, &flat);
@@ -15597,15 +15486,16 @@ mod paint_tests {
                 art: &art,
                 verdict: ResultVerdict::Solo,
                 grade: result_grade_frame(&score, 1_000),
-                album: Some(&cover),
                 life_readout: Some(1_234),
                 bottom_counter: Some(4_321),
             },
         );
         fold_pin_pixels(&mut hash, &staged);
 
+        // #294 T4 removed the walked-OJN cover layer; the new pin
+        // certifies the OPI-only painter at the same staged inputs.
         assert_eq!(
-            hash, 0x03C9_E63D_B6B7_ECA8,
+            hash, 0x3C69_15F1_2ACB_0F03,
             "result paint generation changed; re-check the exe pins before updating"
         );
     }

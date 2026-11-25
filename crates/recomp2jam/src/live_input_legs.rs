@@ -9,12 +9,14 @@
 
 #[cfg(test)]
 mod live_input_leg_tests {
+    use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
     use std::thread::JoinHandle;
     use std::time::Duration;
 
+    use o2jam_net::frame::encode_frame;
     use o2jam_net::shop::EnterShop;
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{
@@ -106,6 +108,20 @@ mod live_input_leg_tests {
     /// 3003 write is signalled so a Waiting click never races the
     /// gateway thread's scheduling under fleet load.
     fn spawn_live_leg_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
+        spawn_leg_gateway(joined, false)
+    }
+
+    /// Same boot gateway with the two result answers: 4011 on START
+    /// and 4022 only on the second 4021 (the first is the tally
+    /// triple's entry exit, the second is the BACK click).
+    fn spawn_result_back_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
+        spawn_leg_gateway(joined, true)
+    }
+
+    fn spawn_leg_gateway(
+        joined: o2jam_net::JoinedRoom,
+        answer_result_back: bool,
+    ) -> LiveLegGateway {
         let (reported, reports) = mpsc::channel();
         let (join_written_tx, join_answer_written) = mpsc::channel();
         let (port, server) = fake_gateway(move |mut stream| {
@@ -151,7 +167,17 @@ mod live_input_leg_tests {
             // The socket stays open until the test drops the session:
             // boot staging reads large archives, so a short quiet
             // timeout here would close under the test's feet (#52).
+            let mut exit_playing_count = 0u32;
             while let Some(frame) = read_frame_until_eof(&mut stream) {
+                if answer_result_back && frame.id == Request::StartGame.id() {
+                    stream.write_all(&encode_frame(4011, &[])).unwrap();
+                }
+                if frame.id == Request::ExitPlaying.id() {
+                    exit_playing_count += 1;
+                    if answer_result_back && exit_playing_count == 2 {
+                        stream.write_all(&encode_frame(4022, &[0u8; 13])).unwrap();
+                    }
+                }
                 if frame.id == Request::JoinWaiting.id() {
                     stream
                         .write_all(
@@ -403,6 +429,93 @@ mod live_input_leg_tests {
     fn finish(session: OnlineSession, server: JoinHandle<()>) {
         drop(session);
         server.join().unwrap();
+    }
+
+    /// #294 T3 live-input leg: the settled Result BACK click must wait
+    /// for the scripted 4022 before Waiting installs, with the staged
+    /// OPI pane in place (#294 T4). The click goes through the same
+    /// pointer snapshot a window queues, and the wire is recorded by
+    /// the gateway rather than asserted at a seam.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot
+    ///   (splash, emblem, room row, join, BACK) ->
+    ///   OnlineSession::ingest_snapshot -> ScreenGame::click_result_button
+    ///   -> pending_result_back -> OnlineSession::flush_result_wire ->
+    ///   C2S 4021 -> scripted S2C 4022 -> Screen::Waiting.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_click_result_back_sends_4021_and_installs_waiting_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_result_back_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        // The host's chart fetch is not on this gateway; arm the
+        // Loading gate the way `fetch_and_stage_chart` does so the
+        // walk can reach the Result click under test.
+        session
+            .game_mut()
+            .with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        session
+            .game_mut()
+            .set_selected_music(o2jam_net::play::SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 1,
+            });
+        session
+            .game_mut()
+            .set_loading_status(o2jam_shell::screens::paint::LoadingStatus {
+                progress: 1.0,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+            });
+
+        session.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        paint_until_screen(&mut session, Screen::Loading);
+        session.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        assert_eq!(session.screen(), Screen::Playing, "the loaded gate opened");
+        session.game_mut().load_chart(vec![(0, 1000, 7)]);
+        session.game_mut().strike_at(0, 1000);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap();
+        let height = usize::try_from(NATIVE_HEIGHT).unwrap();
+        session.game_mut().paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut vec![0u32; width * height],
+                w: width,
+                h: height,
+            },
+            1_000_000,
+        );
+        assert_eq!(session.screen(), Screen::Result);
+        assert!(
+            session
+                .game_mut()
+                .scene_placements(Screen::Result)
+                .iter()
+                .any(|placed| placed.code == 0x1750_0004),
+            "the staged OPI result pane is live"
+        );
+        paint(&mut session);
+        let _ = observed(&gateway.reports);
+        let before = paint_frame(&mut session);
+
+        let (x, y) = staged_code_centre(&mut session, Screen::Result, 0x1720_0005);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        assert_eq!(session.screen(), Screen::Result, "BACK waits for 4022");
+        paint(&mut session);
+        let exit = wait_for_opcode(&gateway.reports, Request::ExitPlaying.id());
+        assert!(exit.is_empty(), "the BACK 4021 body stays empty");
+        paint_until_screen(&mut session, Screen::Waiting);
+        let after = paint_frame(&mut session);
+        assert_ne!(before, after, "the answer changed the painted scene");
+        finish(session, gateway.server);
     }
 
     /// Messenger tier-1 leg (ticket #859): the Room board's pinned

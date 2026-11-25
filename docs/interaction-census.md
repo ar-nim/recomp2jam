@@ -172,7 +172,7 @@ be written (#920).
 | `shop_unwired_browse_chrome_lands_nowhere` | Shop browse chrome lands nowhere — exactly `#178` T7 | Item Shop rows, state section pending (#920); entry edge ord 7 above stays OPEN |
 | `myroom_my_bag_tab_press_leaves_the_gift_panel_open` | MY BAG press leaves the gift panel open, citing exe3 frame `8515a7e5…` — exactly `#180` T6 | MyRoom tab, state section pending (#920) |
 | `item_shop_go_myroom_leaves_without_an_exit_send` | Shop closes with no 5007 send; never asserts the destination state — `#178` T8 | Shop GO MYROOM, state section pending (#920); Room MYROOM entry edge ord 8 stays OPEN |
-| `settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer` | `4021 → 4022 → Room` from a settled panel, contradicted by `#294` T3 | Result BACK, state section pending (#920); Room entry target depends on which state wins |
+| `settled_solo_result_back_sends_4021_and_lands_in_waiting_after_4022` | `4021 → 4022 → Waiting` from a settled panel (Tier 2), corrected for `#294` T3 from the exe's state-5 install; `live_click_result_back_sends_4021_and_installs_waiting_from_boot` repeats it through the boot input path (Tier 3) | Result BACK, ord 4 VERIFIED below; the earlier Room capture is a mid-animation click and stays OPEN as capture attribution |
 
 2026-11-25 playtest bugs (`#915`, now split as below) mapped onto census
 rows:
@@ -181,8 +181,8 @@ rows:
 |---|---|---|
 | `#290` T1 `[W]`/`[A]` toggle | C1 | ord 2 and ord 3 (`SHOW_ALLMODE`, `SHOW_NORMALMODE`), VERIFIED by `live_room_wa_tabs_toggle_the_selection_from_boot` (Tier 3); ord 4 shares the frame painter but has no live leg |
 | `#314` T2 Options keys inert / hover blanks | C2 + C4/C3 | ord 10 (`SHOW_…OPTION`), OPEN; Options key-tab rows: state section pending (#920) |
-| `#294` T3 Result BACK target | C2 | Result state section pending (#920); Room nav-edge pin stays OPEN |
-| `#294` T4 Result background source | C6 | Result state section pending (#920) |
+| `#294` T3 Result BACK target | C2 | Result state section, ord 4 VERIFIED (Tier 2 + Tier 3); Room nav-edge pin stays OPEN |
+| `#294` T4 Result background source | C6 | Result state section, ord 3 VERIFIED (Tier 3 data-varied paint guard) |
 | `#180` T5 MyRoom STATUS dead | C1 | MyRoom state section pending (#920) |
 | `#180` T6 MyRoom present-box tab one-way | C2 | MyRoom state section pending (#920); certifying guard above |
 | `#178` T7 Shop scrollbar/grid/tabs dead | C1 | Item Shop state section pending (#920); Room ITEMSHOP edge ord 7 stays OPEN |
@@ -486,11 +486,11 @@ Ordinal is `(code & 0xFFF) - 1`.
 | Ord | Control id (code) | Kind | Exe behavior pin | Status |
 |---:|---|---|---|---|
 | -1 | `IDC_STATE_RESULT` (`0x17000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
-| 0 | `IDC_BACK_SRESULT_1` (`0x17100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 0 | `IDC_BACK_SRESULT_1` (`0x17100001`) | static art | Exe Result fill fetches `State_Result.ojs` unconditionally behind the verdict and rows (`ev_531d1ded…`, `ev_7b5ddc48…`); the staged body rides the real `STATE_RESULT` scene in the Tier 3 guard, but its own pixels are not sampled. | OPEN: sample the `0x17100001` body's ink in a Tier 3 Result frame; statics source itself is pinned |
 | 1 | `IDC_IMAGE_SRESULT_RANKTAPFIELD` (`0x17600002`) | static art | Rank-table panel at the paired rect; row-0 rank digits are GDI anchors, not rects. | OPEN: statics pin plus Tier 3 live-art pin |
 | 2 | `IDC_IMAGE_SRESULT_RESULTTAPFIELD` (`0x17600003`) | static art | Score/judgement panel at the paired rect; digit anchors are exe-pinned GDI (`docs/cresult-anchors.md`). | OPEN: statics pin plus Tier 3 live-art pin |
-| 3 | `IDC_IMAGE_SRESULT_RESULTTAP` (`0x17500004`) | static art | Result tab plate; frame source from the walked Result panel. | OPEN: statics pin plus Tier 3 live-art pin |
-| 4 | `IDC_BUTTON_SRESULT_BACK` (`0x17200005`) | button | BACK: settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer (Tier 2) asserts 4021 → 4022 → Room; #294 reports Waiting — contradiction left for the exe. | OPEN: REA handler pin to arbitrate Room vs Waiting (#294), then Tier 3 nav leg |
+| 3 | `IDC_IMAGE_SRESULT_RESULTTAP` (`0x17500004`) | static art | Exe left-tab selector mounts `Result_EachResult.ojs`; no chart JPEG in the Result path (`ev_30a0db95…`, `ev_60cf3595…`). `result_music_pane_uses_staged_opi_not_the_walked_ojn_cover` walks two different OJN covers and asserts identical staged-pane ink. | VERIFIED: Tier 3 data-varied paint guard (`result_music_pane_uses_staged_opi_not_the_walked_ojn_cover`) + Tier 3 boot leg (`live_click_result_back_sends_4021_and_installs_waiting_from_boot`) |
+| 4 | `IDC_BUTTON_SRESULT_BACK` (`0x17200005`) | button | Exe posts empty 4021 and the scripted 4022 installs state id 5 = Waiting, not room state id 3 (`ev_70fafb64…`, `ev_d6a8ea7f…`). `settled_solo_result_back_sends_4021_and_lands_in_waiting_after_4022` pins the wire pair and target (Tier 2); boot leg repeats it (Tier 3). | VERIFIED: Tier 2 + Tier 3 guards above; the earlier Room frame was a mid-animation click — a settled exe wire+frame capture with timestamps stays OPEN as attribution evidence |
 | 5 | `IDC_BUTTON_SRESULT_RETRY` (`0x17202006`) | button | RETRY hands back to Waiting and posts empty StartGame 4010 (#88). | OPEN: live retry click + 4010 leg; seam staged_retry_click_returns_to_waiting (Tier 0) |
 | 6 | `IDC_IMAGE_SRESULT_RANKINGFIELD` (`0x17500007`) | static art | Win/lose banner frame selected by the result rule (`docs/result-variants.md`). | OPEN: statics pin plus Tier 3 live-art pin |
 
@@ -498,7 +498,7 @@ Input edges with no matching ControlList entry:
 
 | Edge | Exe behavior pin | Status |
 |---|---|---|
-| Result Confirm / Back key mirror | Confirm/Back mirror the staged buttons; wire shapes pinned by #87/#88. | OPEN: live key + target leg (#294); seam result_keys_mirror_the_staged_buttons (Tier 0) |
+| Result Confirm / Back key mirror | Confirm still mirrors RETRY; Back is an ours-by-design local Room shortcut (#294 T3), not the exe button's Waiting target. | OPEN: exe keyboard-Back pin or owner decision to align it with the button; seam result_keys_mirror_the_staged_buttons (Tier 0) |
 | Event-ticket web call on solo Result entry | HTTP GET to `ticket_add.php?USER_INDEX_ID=…` (file `0x24a2d0`); not a gateway frame. | OPEN: live request-line capture and value-source pin |
 
 ## MyRoom
