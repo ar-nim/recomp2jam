@@ -20,7 +20,15 @@ are provider observations, not original source names. Base commit:
 | game-reachable | 1,129 | 9.9% |
 | dead-or-unclassified | 5,107 | 44.6% |
 
-**Pinned of game-reachable: 232 / 1,129 = 20.5%.**
+**Pinned of game-reachable: 232 / 1,129 = 20.5%** at the 2026-11-25 baseline.
+
+**Re-score 2026-11-25 (post burn-down): 903 / 1,129 = 80.0%.** The
+burn-down waves pinned 556 bucket functions across `docs/pins/*.md`
+(room-waiting, planet-channel, result-playing, shops-myroom, net-a/b/c1/c2,
+ui-draw-1/2, input-msg, web-asset, misc-tail); cross-references in those
+docs pinned the rest. Same textual-scan rule as the baseline (an upper
+bound; a mention is not a passing test). The unpinned remainder (~226)
+sits mostly in the shared-container bucket, which is on-demand only.
 
 Repo pins in the other buckets: 87 library, 514 dead-or-unclassified.
 
