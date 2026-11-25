@@ -42,8 +42,10 @@ pub const MYROOM_SLOT_NAMES: [&str; MYROOM_SLOT_BUTTONS] = [
     "SHOES",
 ];
 /// MY BAG tab anchor (`IDC_IMAGE_SMYROOM_MYBAG_POS`): bnd ordinal
-/// `0x45`, rect (6,383)-(94,404). The exe3 `8515a7e5…` frame shows
-/// this press leaving the gift panel open, so it records no change.
+/// `0x45`, rect (6,383)-(94,404). The exe dispatcher (file `0xa3ee0`,
+/// EV `ev_a91d2baf…96d6030`) writes tab word `0x779924 = 0` here:
+/// the gift rows hide and the bag grid returns. The older
+/// `8515a7e5…` reading was backwards (#180).
 pub const MYROOM_BAG_TAB_CODE: u32 = 0x1560_0045;
 /// PRESENT BOX tab anchor (`IDC_IMAGE_SMYROOM_GIFTBOX_POS`): bnd
 /// ordinal `0x46`, rect (98,384)-(186,406). Its press swaps the lower
@@ -131,13 +133,20 @@ pub const MYROOM_GOSHOP_CODE: u32 = 0x1520_0003;
 /// slot locally and restages the figure; queues nothing — the vacate
 /// send shape is unpinned (OPEN, `docs/myroom.md`).
 pub const MYROOM_VACATE_CODE: u32 = 0x1520_0004;
-/// INVENTORY button (`Myroom_Inventory.ojs`): commits the
-/// selected bag cell (equip-apply). The control choice is
-/// ours-by-design — the exe send sites (`0xa4af4` shop-control,
-/// `0xa4bcb` apply, `docs/equip.md`) name no control — while the
-/// queued `EquipItem` 5004 shape and slot derivation are
-/// exe-pinned; next step: rig walk of the myroom apply gesture.
-pub const MYROOM_APPLY_CODE: u32 = 0x1520_3034;
+/// Baked STATUS badge / INVENTORY button body
+/// (`Myroom_Inventory.ojs`), bnd rect (147,307)-(207,330). The exe's
+/// case for this code reads its own face flag and flips the state
+/// face word (`FUN_004a3ee0`, file `0xa3ee0`,
+/// EV `ev_a91d2baf…96d6030`); it sends no frame. Our equip apply must
+/// not silently share this code.
+pub const MYROOM_STATUS_BADGE_CODE: u32 = 0x1520_3034;
+/// Ours-by-design control for the equip-apply action. The exe's
+/// `0x1520_3034` is the STATUS badge face flip, and no exe send site
+/// names an apply control (`0xa4af4`/`0xa4bcb`, `docs/equip.md`).
+/// This distinct code keeps the pinned 5004 shape and slot
+/// derivation reachable without serving two behaviors from one
+/// button. Next step: rig walk of the myroom apply gesture.
+pub const MYROOM_EQUIP_APPLY_CODE: u32 = 0x1520_3035;
 /// Static blue selection frame (`IDC_IMAGE_SMYROOM_MYBAGSELECT`,
 /// `Myroom_MybagSelect.oji`): archive slot 1305, 86x69 prefixed
 /// body; `.bnd` ordinal `0x33` = (0,0,86,69). The captured faces never
@@ -263,9 +272,11 @@ pub const MYROOM_USERINFO_CODE: u32 = 0x1550_0036;
 
 /// Upper-right face shown on MyRoom entry. The exe b8 capture
 /// (`1743d36d…fae0`) opens on `Inventory`; the status plate is the other
-/// face. A gesture that switches faces is not pinned by that pack
-/// (next step: qualified slot/button press capture), so this state is
-/// driven only through [`MyRoomState::show_panel`] until one is found.
+/// face. The switch gesture is the baked STATUS badge at
+/// `0x15203034` (file `0xa3ee0`, `ev_a91d2baf…96d6030`); the
+/// observed two-press round trip is pinned by the live-4 pack in
+/// `docs/myroom.md`. The writer of the badge's own face flag stays
+/// OPEN: next step, a watch on writes to that control's `+0x60`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MyRoomPanel {
     /// Equipment-slot grid plus the background's baked STATUS button.
@@ -301,7 +312,7 @@ pub fn myroom_panel_kept(placed: &ScenePlacement, panel: MyRoomPanel) -> bool {
     !matches!(
         (placed.code, panel),
         (
-            MYROOM_USERINFO_CODE | MYROOM_APPLY_CODE,
+            MYROOM_USERINFO_CODE | MYROOM_STATUS_BADGE_CODE,
             MyRoomPanel::Inventory
         )
     )
@@ -309,7 +320,8 @@ pub fn myroom_panel_kept(placed: &ScenePlacement, panel: MyRoomPanel) -> bool {
 
 /// Lower-panel tab whose rows the painter inks. The exe gift-tab
 /// frame (`6e29e51a…`) hides the bag grid and shows the gift list;
-/// the pinned MY BAG press (`8515a7e5…`) does not switch it back.
+/// the MY BAG press writes tab word 0 and switches it back
+/// (`FUN_004a3ee0`, file `0xa3ee0`, `ev_a91d2baf…96d6030`).
 /// This enum is the local image of the exe's tab word `0x779924`:
 /// `Bag` is word 0 and `Gifts` is any non-zero word. `FUN_004a8ba0`
 /// (file `0xa8ba0`, EV `ev_c1d8c405…`) enables one control set per word.
@@ -384,7 +396,8 @@ pub enum MyRoomAction {
     SelectSlot(u8),
     /// Bag pager pressed: turn the owned-item page.
     BagPage(MyRoomStep),
-    /// MY BAG tab pressed: records nothing (exe3 no-op pin).
+    /// MY BAG tab pressed: restore the bag rows and badge frame 1
+    /// (exe tab word 0, no wire).
     ShowBagTab,
     /// PRESENT BOX tab pressed: show the gift list below.
     ShowGiftTab,
@@ -397,7 +410,10 @@ pub enum MyRoomAction {
     /// Worn well pressed: index `0..16` within the well code run
     /// `0x15600013..22` (`FUN_004a49f0`, file `0xa4a26`).
     PressWornWell(u8),
-    /// INVENTORY pressed: equip the selected bag cell.
+    /// Baked STATUS badge pressed: flip the upper-right face.
+    ToggleStatusBadge,
+    /// Equip-apply pressed on our separately named control
+    /// (`MYROOM_EQUIP_APPLY_CODE`), never on the exe's STATUS badge.
     ApplyEquip,
     /// Vacate pressed: clears the selected worn slot (button ordinal =
     /// equipment slot, ours-by-design) and restages; queues nothing
@@ -457,7 +473,8 @@ pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
         MYROOM_BAG_RIGHT_CODE => Some(MyRoomAction::BagPage(MyRoomStep::Next)),
         MYROOM_GIFT_LEFT_CODE => Some(MyRoomAction::GiftPage(MyRoomStep::Previous)),
         MYROOM_GIFT_RIGHT_CODE => Some(MyRoomAction::GiftPage(MyRoomStep::Next)),
-        MYROOM_APPLY_CODE => Some(MyRoomAction::ApplyEquip),
+        MYROOM_STATUS_BADGE_CODE => Some(MyRoomAction::ToggleStatusBadge),
+        MYROOM_EQUIP_APPLY_CODE => Some(MyRoomAction::ApplyEquip),
         MYROOM_VACATE_CODE => Some(MyRoomAction::VacateSlot),
         MYROOM_BACK_CODE => Some(MyRoomAction::BackToLobby),
         MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
@@ -675,15 +692,16 @@ impl MyRoomState {
         self.lower_tab
     }
 
-    /// Switch the panel face. Seam suffices: no live input gesture is
-    /// pinned yet (qualified exe press capture OPEN), so no control
-    /// maps here; the state keeps both faces reachable for the painter.
+    /// Switch the panel face. The live click arm reaches this through
+    /// `ScreenGame::click_myroom_side`; the face flag writer in the
+    /// exe stays OPEN (next step: watch writes to the control's `+0x60`).
     pub fn show_panel(&mut self, panel: MyRoomPanel) {
         self.panel = panel;
     }
 
-    /// Show one lower-panel tab. The MY BAG press is a no-op in the
-    /// pinned exe frame, so only the gift tab has a caller today.
+    /// Show one lower-panel tab. Both tab presses reach this through
+    /// `ScreenGame::click_myroom_side` (tab word 0 for MY BAG, 1 for
+    /// PRESENT BOX).
     pub fn show_lower_tab(&mut self, tab: MyRoomLowerTab) {
         self.lower_tab = tab;
     }

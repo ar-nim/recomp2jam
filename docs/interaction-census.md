@@ -169,7 +169,7 @@ be written (#920).
 
 | Guard | What it asserts | Row it touches |
 |---|---|---|
-| `myroom_my_bag_tab_press_leaves_the_gift_panel_open` | MY BAG press leaves the gift panel open, citing exe3 frame `8515a7e5…` — exactly `#180` T6 | MyRoom tab, state section pending (#920) |
+| `my_bag_press_closes_the_present_box_and_restores_the_bag_grid_from_boot` | MY BAG and PRESENT BOX round-trip the staged rows (Tier 1 support + Tier 3 `my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot`); the old guard certified the `#180` T6 bug | MyRoom ord 68/69 and gift/bag round-trip below |
 | `item_shop_go_myroom_enters_myroom_without_an_exit_send` | Shop GO MYROOM enters MyRoom with no 5007 — `#178` T8; Tier 3 twin `live_shop_go_myroom_enters_myroom_without_an_exit_send` drives the same edge from boot | Shop GO MYROOM, row VERIFIED below; Room MYROOM entry edge ord 8 stays OPEN |
 | `settled_solo_result_back_sends_4021_and_lands_in_waiting_after_4022` | `4021 → 4022 → Waiting` from a settled panel (Tier 2), corrected for `#294` T3 from the exe's state-5 install; `live_click_result_back_sends_4021_and_installs_waiting_from_boot` repeats it through the boot input path (Tier 3) | Result BACK, ord 4 VERIFIED below; the earlier Room capture is a mid-animation click and stays OPEN as capture attribution |
 
@@ -182,8 +182,8 @@ rows:
 | `#314` T2 Options keys inert / hover blanks | C2 + C4/C3 | ord 10 (`SROOM_OPTION`) and ord 16 (`SPLANET_OPTION`) VERIFIED by both capture legs; Options key-tab rows VERIFIED by live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane / live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane (Tier 3), options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames (Tier 3), and options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries (Tier 3) |
 | `#294` T3 Result BACK target | C2 | Result state section, ord 4 VERIFIED (Tier 2 + Tier 3); Room nav-edge pin stays OPEN |
 | `#294` T4 Result background source | C6 | Result state section, ord 3 VERIFIED (Tier 3 data-varied paint guard) |
-| `#180` T5 MyRoom STATUS dead | C1 | MyRoom state section pending (#920) |
-| `#180` T6 MyRoom present-box tab one-way | C2 | MyRoom state section pending (#920); certifying guard above |
+| `#180` T5 MyRoom STATUS dead | C1 + C10 (`MYROOM_APPLY_CODE` label) | MyRoom ord 51, VERIFIED by `live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot` (Tier 3); face-flag writer/alternation OPEN |
+| `#180` T6 MyRoom present-box tab one-way | C2 + C10 (exe3 `8515a7e5…` read backwards) | MyRoom ord 68/69 and round-trip edge, VERIFIED by `my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot` (Tier 3) |
 | `#178` T7 Shop scrollbar/grid/tabs dead | C1 (our staging/hit-test) | Item Shop rows VERIFIED: `live_shop_browse_scroll_tabs_and_grid_change_goods_from_boot` (Tier 3) + `shop_browse_chrome_presses_change_scroll_tabs_and_grid` (Tier 0); exe is active, not inert. Room ITEMSHOP edge ord 7 stays OPEN |
 | `#178` T8 Shop GO MYROOM target | C2 (wrong target) | Item Shop GO MYROOM row VERIFIED: `live_shop_go_myroom_enters_myroom_without_an_exit_send` (Tier 3) + `item_shop_go_myroom_enters_myroom_without_an_exit_send` (Tier 0); exe oracle is state 4 = MyRoom, no 5007. Room MYROOM edge ord 8 stays OPEN |
 
@@ -562,7 +562,7 @@ with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
 | 48 | `IDC_IMAGE_SMYROOM_RPAGECNT_10` (`0x15500031`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 49 | `IDC_IMAGE_SMYROOM_RPAGECNT_1` (`0x15500032`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 50 | `IDC_IMAGE_SMYROOM_MYBAGSELECT` (`0x15500033`) | static art | Selection frame on the bag face; exe pins no ink at this rect (#369). | OPEN: statics pin plus Tier 3 live-art pin |
-| 51 | `IDC_BUTTON_SMYROOM_INVENTORY` (`0x15203034`) | button | At (177,318) flips the panel face: baked STATUS label ↔ Inventory button + status plate (#369, #180 T5). | OPEN: live click both directions (#180 T5); seam myroom_my_bag_tab_press_leaves_the_gift_panel_open (Tier 0) |
+| 51 | `IDC_BUTTON_SMYROOM_INVENTORY` (`0x15203034`) | button | At (177,318) flips the panel face: baked STATUS label ↔ Inventory button + status plate (#369, #180 T5); exe dispatcher case `0xa3ee0` (EV `ev_a91d2baf…96d6030`) writes the face word, no wire. Our equip-apply moved to the ours-by-design `0x15203035`. | VERIFIED: `live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot` (Tier 3) + `status_badge_press_toggles_the_status_plate_and_inventory_body` (Tier 1); OPEN: face-flag writer/alternation — next step, two-click capture plus a watch on writes to control `+0x60` |
 | 52 | `IDC_IMAGE_SMYROOM_SLOTCOVER` (`0x15500035`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 53 | `IDC_IMAGE_SMYROOM_USERINFO` (`0x15500036`) | static art | Status plate on the toggled face; default face keeps the baked STATUS label (#369). | OPEN: statics pin plus Tier 3 live-art pin |
 | 54 | `IDC_TEXT_SMYROOM_NICKNAME` (`0x15400037`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
@@ -579,8 +579,8 @@ with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
 | 65 | `IDC_TEXT_SMYROOM_FREEINFO2` (`0x15400042`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 66 | `IDC_TEXT_SMYROOM_FREEINFO3` (`0x15400043`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 67 | `IDC_TEXT_SMYROOM_FREEINFO4` (`0x15400044`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
-| 68 | `IDC_IMAGE_SMYROOM_MYBAG_POS` (`0x15600045`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
-| 69 | `IDC_IMAGE_SMYROOM_GIFTBOX_POS` (`0x15600046`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 68 | `IDC_IMAGE_SMYROOM_MYBAG_POS` (`0x15600045`) | static art | MY BAG tab: exe writes tab word `0x779924 = 0` (file `0xa3ee0`, EV `ev_a91d2baf…96d6030`), restoring bag rows and badge frame 1; no wire | VERIFIED: `my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot` (Tier 3); art frame source stays OPEN |
+| 69 | `IDC_IMAGE_SMYROOM_GIFTBOX_POS` (`0x15600046`) | static art | PRESENT BOX tab: exe writes tab word 1, hides bag rows and shows gift controls; no wire | VERIFIED: `my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot` (Tier 3); art frame source stays OPEN |
 | 70 | `IDC_IMAGE_SMYROOM_GIFTBOX_BACK` (`0x15500047`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 71 | `IDC_BUTTON_SMYROOM_GIFT_LEFT` (`0x15200048`) | pager | Pages the gift box back; count caption comes from the 5017/5018 reply. | OPEN: live gift-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
 | 72 | `IDC_BUTTON_SMYROOM_GIFT_RIGHT` (`0x15200049`) | pager | Pages the gift box forward; count caption from the wire. | OPEN: live gift-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
@@ -639,7 +639,7 @@ Input edges with no matching ControlList entry:
 | Edge | Exe behavior pin | Status |
 |---|---|---|
 | Pointer hover over MyRoom chrome | Rest desaturated / hover frame 0 / active frame 1 pattern applies, but per-control frames are not captured here. | OPEN: off/on/off pixel trio per control; seam `myroom_chrome_sweep_presses_every_staged_control` (Tier 0) |
-| Inventory ↔ gift-panel round trip | Present-box tab must return to MY BAG (#180 T6); existing guard pins the gift panel staying open. | OPEN: live two-way tab leg (#180); seam myroom_my_bag_tab_press_leaves_the_gift_panel_open (Tier 0) |
+| Inventory ↔ gift-panel round trip | Present-box tab returns to MY BAG (#180 T6); exe and story agree, the old `8515a7e5…` reading was backwards. | VERIFIED: `my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot` (Tier 3) + `my_bag_press_closes_the_present_box_and_restores_the_bag_grid_from_boot` (Tier 1) |
 
 ## Item Shop
 

@@ -9,13 +9,17 @@
 
 #[cfg(test)]
 mod live_input_leg_tests {
+    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpStream;
+    use std::rc::Rc;
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+    use std::sync::Mutex;
     use std::thread::JoinHandle;
     use std::time::Duration;
 
+    use o2jam_audio::{AudioBackend, NullBackend, PcmSamples};
     use o2jam_net::frame::encode_frame;
     use o2jam_net::shop::EnterShop;
     use o2jam_net::testing::{fake_gateway, read_frame};
@@ -29,12 +33,12 @@ mod live_input_leg_tests {
     use o2jam_shell::screens::paint::dialog_origin;
 
     use o2jam_shell::screens::side::{
-        MyRoomNotice, SideScreen, INFORMATION_OK_CODE, MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET,
-        OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
-        OPTION_KEY_SOUNDSET, OPTION_KEY_TEST, OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET,
-        PLANET_OPTION_CODE, SHOP_CATEGORY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE,
-        SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_RIGHT_CODE,
-        SHOP_SUBMENU_FIRST_CODE,
+        MyRoomLowerTab, MyRoomNotice, MyRoomPanel, SideScreen, INFORMATION_OK_CODE,
+        MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE,
+        OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_SOUNDSET, OPTION_KEY_TEST,
+        OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE, SHOP_CATEGORY_FIRST_CODE,
+        SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -2165,5 +2169,360 @@ mod live_input_leg_tests {
             assert_eq!(chat_frames, 0, "options clicks must not send chat");
             finish(session, gateway.server);
         }
+    }
+
+    /// Exe control codes for the two #180 legs. These are the pinned
+    /// dispatcher cases, kept literal here so the guard fails if a
+    /// production constant is renamed without a behavior change.
+    const MYROOM_STATUS_BADGE_CODE: u32 = 0x1520_3034;
+    const MYROOM_MY_BAG_TAB_CODE: u32 = 0x1560_0045;
+    const MYROOM_PRESENT_BOX_TAB_CODE: u32 = 0x1560_0046;
+
+    /// Pinned exe geometry from `docs/myroom.md` (#369): the baked
+    /// STATUS badge and the STATUS plate it swaps in.
+    const STATUS_BADGE_RECT: Rect = Rect {
+        x: 147,
+        y: 307,
+        w: 60,
+        h: 23,
+    };
+    const STATUS_PLATE_RECT: Rect = Rect {
+        x: 392,
+        y: 22,
+        w: 384,
+        h: 357,
+    };
+
+    /// Click the Room MYROOM tab through the same pointer snapshot a
+    /// window queues; the aim comes from the staged `.bnd` control.
+    fn enter_myroom_by_click(session: &mut OnlineSession) {
+        click_staged(session, Screen::Room, "IDC_BUTTON_SROOM_MYROOM");
+        // The windowed frame entry flushes the entry's 5006.
+        paint(session);
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::MyRoom),
+            "the staged MYROOM tab must mount the avatar room"
+        );
+    }
+
+    /// Click a staged side control by its dispatcher code. The centre
+    /// comes from the mounted `.bnd` rect, never from a test literal.
+    fn click_staged_side_code(session: &mut OnlineSession, code: u32) -> (i32, i32) {
+        let rect = session
+            .game_mut()
+            .staged_side_control_rect(code)
+            .unwrap_or_else(|| panic!("no staged MyRoom control for {code:#x}"));
+        let centre = rect_centre(rect);
+        session.ingest_snapshot(&InputSnapshot::click_at(centre.0, centre.1));
+        centre
+    }
+
+    /// Changed pixels inside one staged rectangle, so a guard proves
+    /// the repaint landed where the player sees the behavior.
+    fn changed_pixels_in_rect(before: &[u32], after: &[u32], rect: Rect) -> usize {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let left = usize::try_from(rect.x).expect("rect left fits usize");
+        let top = usize::try_from(rect.y).expect("rect top fits usize");
+        let columns = usize::try_from(rect.w).expect("rect width fits usize");
+        let rows = usize::try_from(rect.h).expect("rect height fits usize");
+        (top..top + rows)
+            .flat_map(|y| (left..left + columns).map(move |x| y * width + x))
+            .filter(|index| before[*index] != after[*index])
+            .count()
+    }
+
+    /// Paint at explicit times so a static face cannot pass on one
+    /// lucky frame (owner self-verify rule, `docs/rig-runbook.md`).
+    fn paint_at_frame(session: &mut OnlineSession, now_ms: u64) -> Vec<u32> {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits usize");
+        let mut buf = vec![0u32; width * height];
+        session.game_mut().paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            now_ms,
+        );
+        buf
+    }
+
+    /// Counts every backend emission: neither MyRoom arm owns a cue.
+    struct CueCountBackend {
+        inner: NullBackend,
+        calls: Rc<RefCell<u64>>,
+    }
+
+    impl AudioBackend for CueCountBackend {
+        fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
+            *self.calls.borrow_mut() += 1;
+            self.inner.play_pcm(pcm)
+        }
+
+        fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), o2jam_audio::AudioError> {
+            *self.calls.borrow_mut() += 1;
+            self.inner.play_key(pcm, gain)
+        }
+
+        fn set_scene_bgm(
+            &mut self,
+            pcm: Option<&PcmSamples>,
+            repeat: bool,
+        ) -> Result<(), o2jam_audio::AudioError> {
+            *self.calls.borrow_mut() += 1;
+            self.inner.set_scene_bgm(pcm, repeat)
+        }
+
+        fn samples_played(&self) -> u64 {
+            self.inner.samples_played()
+        }
+    }
+
+    /// Attach a cue counter after side entry and settle one frame so
+    /// the backend swap itself is not counted as a click effect.
+    fn attach_cue_counter(session: &mut OnlineSession) -> Rc<RefCell<u64>> {
+        let calls = Rc::new(RefCell::new(0));
+        session.game_mut().with_audio(
+            Box::new(CueCountBackend {
+                inner: NullBackend::new(),
+                calls: Rc::clone(&calls),
+            }),
+            std::collections::HashMap::new(),
+        );
+        paint(session);
+        calls
+    }
+
+    /// The two #180 legs share one fake gateway shape. Serializing
+    /// them keeps a second MyRoom gateway from racing the clock-based
+    /// Waiting/Result legs when cargo runs the whole suite in parallel.
+    static MYROOM_LIVE_LEG_LOCK: Mutex<()> = Mutex::new(());
+
+    /// #180 T5: the baked STATUS badge click flips the upper-right
+    /// face and sends nothing. Statics pin the first-click direction
+    /// and the local face write (`FUN_004a3ee0`, file `0xa3ee0`,
+    /// `ev_a91d2baf…96d6030`; face helpers `ev_6c8005bd…34ddbb36e10`,
+    /// `ev_938054dc…6a4a8301ae4ee6c58e3`,
+    /// `ev_edb8ac9c…9087870322800e94a317b0e5e8`). The face-flag writer
+    /// and the alternation rule stay OPEN: next step is a two-click
+    /// qualified capture plus a watch on writes to the control's `+0x60`.
+    /// The live-4 pack cited in `docs/myroom.md` supplies the observed
+    /// Inventory -> STATUS -> Inventory round trip.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> click_staged(Screen::Room, IDC_BUTTON_SROOM_MYROOM) -> visit_side(MyRoom)
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_myroom_side(0x15203034)
+    ///   -> MyRoomAction::ToggleStatusBadge -> ScreenGame::show_myroom_panel
+    ///   -> ScreenGame::paint_at -> paint_side -> staged status plate.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot() {
+        let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        enter_myroom_by_click(&mut session);
+        wait_for_enter_shop(&gateway.reports, "IDC_BUTTON_SROOM_MYROOM");
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+
+        assert_eq!(
+            session.game_mut().myroom().panel(),
+            MyRoomPanel::Inventory,
+            "live entry opens the exe's Inventory face"
+        );
+        let badge_rect = session
+            .game_mut()
+            .staged_side_control_rect(MYROOM_STATUS_BADGE_CODE)
+            .expect("STATE_MYROOM stages the INVENTORY control");
+        assert_eq!(badge_rect, STATUS_BADGE_RECT, "bnd rect matches the pin");
+        let plate_rect = session
+            .game_mut()
+            .staged_side_control_rect(0x1550_0036)
+            .expect("STATE_MYROOM stages the USERINFO plate");
+        assert_eq!(plate_rect, STATUS_PLATE_RECT, "bnd rect matches the pin");
+
+        let before = paint_frame(&mut session);
+        let aim = click_staged_side_code(&mut session, MYROOM_STATUS_BADGE_CODE);
+        assert_eq!(aim, (177, 318), "the logged exe click lands on the badge");
+        assert_eq!(
+            session.game_mut().myroom().panel(),
+            MyRoomPanel::Status,
+            "the badge press must flip the face"
+        );
+        assert!(
+            !session.game_mut().has_pending_equip_send(),
+            "the badge is not the equip-apply control"
+        );
+        let after = paint_frame(&mut session);
+        assert!(
+            changed_pixels_in_rect(&before, &after, STATUS_PLATE_RECT) > 0,
+            "the status plate must ink the pinned rect"
+        );
+        assert!(
+            changed_pixels_in_rect(&before, &after, STATUS_BADGE_RECT) > 0,
+            "the INVENTORY body must replace the baked badge"
+        );
+        assert!(
+            observed(&gateway.reports).is_empty(),
+            "the face flip sends no wire frame: {:?}",
+            observed(&gateway.reports)
+        );
+        assert_eq!(
+            *cue_calls.borrow(),
+            cue_baseline,
+            "the face flip queues no backend cue"
+        );
+        for now_ms in [0, 20_000, 50_000] {
+            let sampled = paint_at_frame(&mut session, now_ms);
+            assert!(
+                changed_pixels_in_rect(&before, &sampled, STATUS_PLATE_RECT) > 0,
+                "the status plate still inks its rect at {now_ms} ms"
+            );
+            assert!(
+                changed_pixels_in_rect(&before, &sampled, STATUS_BADGE_RECT) > 0,
+                "the INVENTORY body still inks its rect at {now_ms} ms"
+            );
+        }
+
+        click_staged_side_code(&mut session, MYROOM_STATUS_BADGE_CODE);
+        assert_eq!(
+            session.game_mut().myroom().panel(),
+            MyRoomPanel::Inventory,
+            "the second badge press restores the baked STATUS label"
+        );
+        let round_trip = paint_frame(&mut session);
+        assert_eq!(
+            changed_pixels_in_rect(&before, &round_trip, STATUS_PLATE_RECT),
+            0,
+            "the round trip restores the entry plate pixels"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// #180 T6: PRESENT BOX and MY BAG are a reversible local tab.
+    /// The exe dispatcher writes tab word `0x779924` (MY BAG 0, PRESENT
+    /// BOX 1) with no wire send (`FUN_004a3ee0`, file `0xa3ee0`,
+    /// `ev_a91d2baf…96d6030`); `FUN_004a8ba0` (file `0xa8ba0`,
+    /// `ev_0da46dd8…d45cd4daf7`) applies that word to the staged rows.
+    /// The old `8515a7e5…` reading was backwards (#915 story 9).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot (splash Menu edge)
+    ///   -> staged emblem click -> Screen::Channel -> staged row click -> Screen::Room
+    ///   -> click_staged(Screen::Room, IDC_BUTTON_SROOM_MYROOM) -> visit_side(MyRoom)
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_myroom_side(0x15600046)
+    ///     -> ShowGiftTab -> paint_side -> gift rows
+    ///   -> GameLoop::ingest_snapshot -> ScreenGame::click_myroom_side(0x15600045)
+    ///     -> ShowBagTab -> paint_side -> bag rows and badge frame 1.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot() {
+        let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        enter_myroom_by_click(&mut session);
+        wait_for_enter_shop(&gateway.reports, "IDC_BUTTON_SROOM_MYROOM");
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+
+        assert_eq!(
+            session.game_mut().myroom().lower_tab(),
+            MyRoomLowerTab::Bag,
+            "live entry opens MY BAG"
+        );
+        let bag_cell = session
+            .game_mut()
+            .staged_side_control_rect(0x1560_0023)
+            .expect("STATE_MYROOM stages MYBAGITEM1");
+        let gift_cell = session
+            .game_mut()
+            .staged_side_control_rect(0x1501_c04a)
+            .expect("STATE_MYROOM stages GIFTBOX_EX1");
+        let on_bag = paint_frame(&mut session);
+
+        click_staged_side_code(&mut session, MYROOM_PRESENT_BOX_TAB_CODE);
+        assert_eq!(
+            session.game_mut().myroom().lower_tab(),
+            MyRoomLowerTab::Gifts
+        );
+        let on_gift = paint_frame(&mut session);
+        assert!(
+            changed_pixels_in_rect(&on_bag, &on_gift, bag_cell) > 0,
+            "the bag grid must disappear under PRESENT BOX"
+        );
+        assert!(
+            changed_pixels_in_rect(&on_bag, &on_gift, gift_cell) > 0,
+            "the gift rows must appear under PRESENT BOX"
+        );
+
+        click_staged_side_code(&mut session, MYROOM_MY_BAG_TAB_CODE);
+        assert_eq!(
+            session.game_mut().myroom().lower_tab(),
+            MyRoomLowerTab::Bag,
+            "MY BAG must close the present box"
+        );
+        let back_on_bag = paint_frame(&mut session);
+        assert_eq!(
+            changed_pixels_in_rect(&on_bag, &back_on_bag, bag_cell),
+            0,
+            "the bag grid returns to the boot pixels"
+        );
+        assert_eq!(
+            changed_pixels_in_rect(&on_bag, &back_on_bag, gift_cell),
+            0,
+            "the gift rows are hidden again"
+        );
+
+        click_staged_side_code(&mut session, MYROOM_PRESENT_BOX_TAB_CODE);
+        assert_eq!(
+            session.game_mut().myroom().lower_tab(),
+            MyRoomLowerTab::Gifts
+        );
+        let gift_again = paint_frame(&mut session);
+        assert_eq!(
+            changed_pixels_in_rect(&on_gift, &gift_again, gift_cell),
+            0,
+            "the second PRESENT BOX press restores the gift face"
+        );
+        assert!(
+            observed(&gateway.reports).is_empty(),
+            "both tabs stay local: {:?}",
+            observed(&gateway.reports)
+        );
+        assert_eq!(
+            *cue_calls.borrow(),
+            cue_baseline,
+            "neither tab queues a backend cue"
+        );
+        for now_ms in [0, 20_000, 50_000] {
+            let sampled = paint_at_frame(&mut session, now_ms);
+            assert!(
+                changed_pixels_in_rect(&on_bag, &sampled, bag_cell) > 0,
+                "the gift face still hides the bag cell at {now_ms} ms"
+            );
+            assert!(
+                changed_pixels_in_rect(&on_bag, &sampled, gift_cell) > 0,
+                "the gift face still inks the gift cell at {now_ms} ms"
+            );
+        }
+        finish(session, gateway.server);
     }
 }
