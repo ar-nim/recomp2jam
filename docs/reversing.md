@@ -3,6 +3,20 @@
 > Rule: document behavior in your own words. Never paste disassembly or
 > decompiled original code into this repo.
 
+## Coverage priority (owner decision 2026-11-25)
+
+Pin the exe with static analysis FIRST: the goal is 100% of the
+game-reachable function inventory pinned (baseline
+`docs/exe-function-coverage.md`, 1,129 procedures; per-function backlog
+in `procedures.csv` and the #916 triage). The rig is a verification
+method, not the primary loop: a re-pair below 0.99 means the statics
+are INCOMPLETE, so the next step is always more statics, never more
+rig fishing. Burn-down order follows the backlog triage on #916
+(Room/Waiting → Planet/Channel → Playing/Result → shops/MyRoom →
+callers of net handlers → support layers; shared containers only on
+demand). The rig-side rule (no rig leg before a statics pin) lives in
+`docs/rig-runbook.md` § Statics-first rule.
+
 ## 0. Extract with Wine (no VM)
 
 Use a dedicated prefix so the installer never touches your main `~/.wine`.

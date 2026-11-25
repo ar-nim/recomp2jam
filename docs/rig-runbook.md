@@ -14,7 +14,9 @@ No re-pair, A/V-compare, or rig leg runs for a parity gap before an exe
 statics pin exists for that behavior (REA MCP evidence IDs, pinned to the
 7.55 hashes). Statics come first; the rig then confirms or refutes a named
 prediction, it never goes fishing. A re-pair wave without a prior statics
-pin is out of procedure.
+pin is out of procedure. The coverage goal behind this rule (100% of
+the game-reachable inventory pinned before the rig leads) lives in
+`docs/reversing.md` § Coverage priority.
 
 ## Scope and pairing
 
