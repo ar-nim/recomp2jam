@@ -6846,12 +6846,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn neither_role_paints_the_inactive_dress_over_the_confirm_rect() {
+    fn waiting_master_paints_no_inactive_dress_over_the_confirm_rect() {
         // The master arm frame-resets both inactive-dress overlays
         // (fetch file 0xae796/0xae7cb, reset at file 0xae7c6/0xae7fb).
-        // The guest's quiesced branch stages frame 1 (REA batch
-        // `ev_fb099d23…`), which names no body in either sprite, so
-        // neither role covers the confirm face at rest (#883).
+        // The state-3 guest branch shows both (docs/room-enums.md
+        // "Waiting master gate"), so a guest keeps the overlay over
+        // READY at rest (#883).
         for overlay in [
             "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE",
             "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE",
@@ -6864,8 +6864,8 @@ mod paint_tests {
             );
             assert_eq!(
                 waiting_role_pixel(&art, 1),
-                0,
-                "{overlay} must not cover READY at rest"
+                pack_xrgb(0, 255, 0),
+                "{overlay} stays for the state-3 guest"
             );
         }
     }
@@ -12587,6 +12587,7 @@ mod paint_tests {
             &champion_room(),
             &placements,
             true,
+            true,
         );
         assert_eq!(buf[65 * 800 + 682], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[65 * 800 + 652], 0);
@@ -13010,6 +13011,7 @@ mod paint_tests {
             &placements_stage(&placements),
             &WaitingCaptions::default(),
             true,
+            false,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -13434,6 +13436,7 @@ mod paint_tests {
             &placements_stage(&placements),
             &WaitingCaptions::default(),
             true,
+            false,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -13476,6 +13479,7 @@ mod paint_tests {
                 ..WaitingCaptions::default()
             },
             true,
+            false,
         );
         assert_eq!(
             buf[460 * 800 + 740],
@@ -13530,6 +13534,7 @@ mod paint_tests {
                 ..WaitingCaptions::default()
             },
             true,
+            false,
         );
         assert!(
             frame.buf.iter().all(|pixel| *pixel == 0),
@@ -13544,6 +13549,7 @@ mod paint_tests {
                 ..WaitingCaptions::default()
             },
             true,
+            false,
         );
         assert_eq!(
             frame.buf[575 * 800 + 675],
@@ -13601,6 +13607,7 @@ mod paint_tests {
             &art,
             &WaitingCaptions::default(),
             true,
+            false,
         );
         let mut noticed = vec![0u32; 800 * 600];
         paint_waiting_staged(
@@ -13616,6 +13623,7 @@ mod paint_tests {
                 ..Default::default()
             },
             true,
+            false,
         );
         assert_eq!(titled[13 * 800 + 270], scrim_color());
         assert_eq!(noticed[13 * 800 + 270], scrim_color());
@@ -13638,6 +13646,7 @@ mod paint_tests {
             &placements_stage(&empty),
             &WaitingCaptions::default(),
             true,
+            false,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -15374,6 +15383,7 @@ mod paint_tests {
             &placements_stage(&placements),
             &WaitingCaptions::default(),
             true,
+            false,
         );
         assert_eq!(buf[13 * 800 + 476], scrim_color(), "mapname inks");
         assert_eq!(buf[40 * 800 + 480], 0, "instname untouched");

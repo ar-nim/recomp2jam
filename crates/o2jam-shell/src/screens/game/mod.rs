@@ -843,6 +843,13 @@ pub struct ScreenGame {
     /// it: `FUN_004ad350` rejects low words >= `0x25`. Cleared only by
     /// an explicit staged local pick.
     waiting_local_selection_random: bool,
+    /// Whether a local TEAM press has armed its highlight. Both role
+    /// branches of `FUN_004ae350` frame-reset the eight team buttons
+    /// on entry (REA `ev_83890fdaf7…`), and `FUN_004b22d0` calls the
+    /// toggle mapper `FUN_0048c810` on both the gated and send paths
+    /// (REA `ev_dad8a2f721…`), with no master gate. Entry stays dark;
+    /// a press lights the selected team for master and guest alike.
+    waiting_team_highlight_armed: bool,
     /// Level ceiling the auto-pick arm applies to catalog rows (`
     /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
     /// writer of that global stays OPEN, so an unstaged cap admits
@@ -1437,6 +1444,7 @@ impl ScreenGame {
             waiting_back_armed: false,
             room_song_variant_nibble: 0,
             waiting_local_selection_random: true,
+            waiting_team_highlight_armed: false,
             auto_pick_level_cap: u16::MAX,
             selected_music: None,
             loading_status: None,
@@ -2627,6 +2635,7 @@ impl ScreenGame {
         self.waiting = Some(room);
         self.stage_venue_theme();
         self.waiting_local_selection_random = true;
+        self.waiting_team_highlight_armed = false;
         self.announced_room_master_id = None;
         self.local_download_badge_armed = false;
         self.chat.clear_waiting();
@@ -2819,6 +2828,7 @@ impl ScreenGame {
         // lights; the room mirror follows so the staged highlight
         // tracks the selection.
         self.battle_self_team = Some(team);
+        self.waiting_team_highlight_armed = true;
         if let Some(room) = self.waiting.as_mut() {
             room.team = team;
         }
@@ -9395,6 +9405,7 @@ impl ScreenGame {
             level: self.waiting_level(),
             random: self.waiting_random_song(),
             local_random_selection: self.waiting_local_selection_random,
+            team_highlight_armed: self.waiting_team_highlight_armed,
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
             room_number: self.waiting_room_number,
@@ -15299,25 +15310,33 @@ mod game_tests {
     }
 
     #[test]
-    fn guest_base_ready_hides_the_speed_inactive_overlay() {
-        // The `0x77ee86 == 3` guest branch resets `SPEEDBUTTEONINACTIVE
-        // 0x1650006f` to frame 1 (REA batch `ev_fb099d23…`); the body
-        // `Waiting_Speed_Inactive.ojs` has one record only, so no
-        // overlay ink reaches the speed row at rest.
+    fn inactive_overlay_follows_the_waiting_state_role() {
+        // The state-3 branch shows `READYBUTTEONINACTIVE` and
+        // `SPEEDBUTTEONINACTIVE`; state 2 and the master arm reset
+        // both to frame 0 (`docs/room-enums.md` "Waiting master gate",
+        // REA batch `ev_fb099d23…`). The single-record body paints
+        // only in state 3.
         let id = "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE";
         let mut figures = HashMap::new();
-        // The real `Waiting_Speed_Inactive.ojs` has one record only.
         figures.insert(format!("{id}.ojs"), solid_test_figure([0x00, 0x7C]));
         let mut game = waiting_right_column_game(
             waiting_guest_room(),
             vec![waiting_placed(id, 30, 30)],
             figures,
         );
+        game.set_waiting_member_role(MemberRole::Spectator);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[30 * 800 + 30],
+            pack_xrgb(0xFF, 0x00, 0x00),
+            "state 3 shows the inactive overlay"
+        );
+        game.set_waiting_member_role(MemberRole::Challenger);
         let frame = paint_waiting_frame(&mut game, 800, 600);
         assert_eq!(
             frame[30 * 800 + 30],
             0,
-            "no purple inactive overlay at rest"
+            "state 2 resets the inactive overlay"
         );
     }
 
@@ -15340,6 +15359,33 @@ mod game_tests {
             frame[40 * 800 + 40],
             pack_xrgb(0xFF, 0xD0, 0x20),
             "guest team button must not carry the cursor"
+        );
+    }
+
+    #[test]
+    fn guest_team_press_lights_the_selected_team_button() {
+        // `FUN_004b22d0` calls the toggle mapper on both its gated and
+        // send paths (REA `ev_dad8a2f721…`), and both role branches of
+        // `FUN_004ae350` only frame-reset the buttons on entry (REA
+        // `ev_83890fdaf7…`). A guest press must therefore light the
+        // selected team; the quiesced guest guard stays dark.
+        let id = "IDC_BUTTON_SWAIT_TEAMB";
+        let mut figures = HashMap::new();
+        figures.insert(
+            "Wait_TeamB.ojs".to_owned(),
+            waiting_record_pair(0x7C00, 0x7C00),
+        );
+        let mut placement = waiting_placed(id, 40, 40);
+        placement.sprite = Some("Wait_TeamB.ojs".to_owned());
+        let mut room = waiting_guest_room();
+        room.team = 0;
+        let mut game = waiting_right_column_game(room, vec![placement], figures);
+        game.select_team(1);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            frame[40 * 800 + 40],
+            pack_xrgb(0xFF, 0xD0, 0x20),
+            "guest press lights the pressed team button"
         );
     }
 

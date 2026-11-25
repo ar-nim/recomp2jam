@@ -222,6 +222,10 @@ pub struct WaitingCaptions<'a> {
     /// the room-song variant above: a plain 4001 song keeps this word
     /// random without turning the top-bar caption yellow.
     pub local_random_selection: bool,
+    /// Whether a local TEAM press stands. Entry frame-resets the team
+    /// buttons; the press mapper (`FUN_0048c810`) then lights the
+    /// pressed button for either role (`FUN_004b22d0`).
+    pub team_highlight_armed: bool,
     /// Pinned notice standing over the top-bar room line (the exe's
     /// notice box above the START control,
     /// `docs/music-availability.md` §4); `None` paints the room title.
@@ -586,6 +590,7 @@ pub fn paint_waiting_scene_with_confirm(
             && waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
+            && !waiting_inactive_overlay_hidden_by_role(&placed.id, member_role)
             && !waiting_header_chip_hidden(&placed.id)
             && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
             && !(member_role != MemberRole::Challenger
@@ -597,7 +602,14 @@ pub fn paint_waiting_scene_with_confirm(
     paint_waiting_seat_marks(frame, &seats, art);
     paint_waiting_stamp(frame, art, captions.wait_stamp_lit);
     if waiting_has_staged_covers(&art.placements) {
-        paint_waiting_staged(frame, room, art, captions, is_room_master);
+        paint_waiting_staged(
+            frame,
+            room,
+            art,
+            captions,
+            is_room_master,
+            captions.team_highlight_armed,
+        );
     } else {
         paint_waiting_rows(frame, room);
     }
@@ -637,7 +649,6 @@ fn waiting_paints_one_record(id: &str) -> bool {
         || WAIT_MESSENGER_LAMP_IDS.contains(&id)
         || WAIT_STAMP_IDS.contains(&id)
         || WAITING_SKILL_COVER_IDS.contains(&id)
-        || WAITING_INACTIVE_OVERLAY_IDS.contains(&id)
         || id == WAITING_BACK_ID
 }
 
@@ -965,9 +976,10 @@ const WAITING_SKILL_COVER_IDS: [&str; 3] = [
     "IDC_IMAGE_SWAIT_COVERSKILLSEL",
 ];
 
-/// The two inactive-dress overlays (`0x1650006E/6F`). The guest branch
-/// of `FUN_004ae350` stages frame 1, which names no body in
-/// `Waiting_Speed_Inactive.ojs`, so the speed row keeps its bare art.
+/// The two inactive-dress overlays (`0x1650006E/6F`). The state-3
+/// branch of the Waiting updater shows both; state 2 and the master
+/// setup reset them to frame 0 (`docs/room-enums.md` §"Waiting master
+/// gate", REA batch `ev_fb099d23…`).
 const WAITING_INACTIVE_OVERLAY_IDS: [&str; 2] = [
     "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE",
     "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE",
@@ -1501,6 +1513,7 @@ pub(crate) fn paint_waiting_staged(
     art: &SceneArt,
     captions: &WaitingCaptions<'_>,
     is_room_master: bool,
+    team_highlight_armed: bool,
 ) {
     let placements = &art.placements;
     match captions.notice {
@@ -1510,7 +1523,13 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
     paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
-    paint_waiting_team_highlight(frame, room, placements, is_room_master);
+    paint_waiting_team_highlight(
+        frame,
+        room,
+        placements,
+        is_room_master,
+        team_highlight_armed,
+    );
     paint_waiting_effect_toggle(frame, art, captions.effect);
     paint_waiting_chat_tabs(frame, art, captions.chat_channel);
     paint_waiting_messenger_lamps(frame, art, captions.messenger_lamp_lit);
@@ -1768,11 +1787,14 @@ pub(crate) fn paint_waiting_team_highlight(
     room: &JoinedRoom,
     placements: &[ScenePlacement],
     is_room_master: bool,
+    team_highlight_armed: bool,
 ) {
-    // The guest branch resets all eight team buttons and disables them
-    // (`FUN_004ae350`, REA batch `ev_fb099d23…`, files `0xaec..`), so
-    // the amber press mark cannot stand on a guest's team.
-    if !is_room_master {
+    // Entry resets all eight team buttons in both role branches
+    // (`FUN_004ae350`, REA `ev_83890fdaf7…`). A press runs the toggle
+    // mapper on both the gated and send paths (`FUN_004b22d0`, REA
+    // `ev_dad8a2f721…`) without a master gate, so a guest press lights
+    // its team too.
+    if !is_room_master && !team_highlight_armed {
         return;
     }
     let index = usize::from(room.team);
@@ -2018,6 +2040,12 @@ fn paint_waiting_one_record(frame: &mut Frame<'_>, art: &SceneArt, id: &str, rec
     paint_placement_layer(frame, placed, &art.figures, record, shares_body, None);
 }
 
+/// Whether one inactive dress overlay is reset for this role: state 2
+/// and the master setup use frame 0, while state 3 shows both overlays.
+fn waiting_inactive_overlay_hidden_by_role(id: &str, role: MemberRole) -> bool {
+    role != MemberRole::Spectator && WAITING_INACTIVE_OVERLAY_IDS.contains(&id)
+}
+
 /// Stage the guest's three skill covers after the generic art pass:
 /// the guest arm of `FUN_004ae350` sets frame 1 on each (REA batch
 /// `ev_fb099d23…`). The two inactive overlays take frame 1 too, but
@@ -2033,8 +2061,9 @@ fn paint_waiting_guest_skill_covers(frame: &mut Frame<'_>, art: &SceneArt, is_ro
     }
 }
 
-/// Paint the BACK button's rest record over its stacked pressed face.
-/// The 7.55 quiesced frame carries the dark face at bind rect 1.
+/// Paint the BACK button's dark face at bind rect 1. The record choice
+/// comes from the quiesced 7.55 pair plus the synthetic two-record
+/// figure; no static setter for the two faces is pinned yet (OPEN).
 fn paint_waiting_back_rest(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_waiting_one_record(frame, art, WAITING_BACK_ID, 0);
 }

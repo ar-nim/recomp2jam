@@ -4851,8 +4851,10 @@ mod tests {
         // The shared top-bar captions stay shared (tickets #274/#275):
         // the staged pick re-inks the `LEVEL` badge and `MUSICNAME`.
         // #883: Waiting entry starts on the exe's random local
-        // selection, so the pick also replaces the random caption; both
-        // are shared caption sources, not dialog pixels.
+        // selection, but that word only mounts the `?` cards and the
+        // `Random` map caption. A plain room song must not inherit the
+        // yellow random caption from it (REA `ev_2cb3a3c4…`); this
+        // unflagged pick leaves the shared caption unchanged.
         // A guest never stages a pick live (the `MUSELECT` click handler
         // drops non-master clicks, file `0xb2622`); this test stages one
         // on purpose.
