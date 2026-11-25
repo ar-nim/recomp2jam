@@ -49,26 +49,25 @@ use super::side::{
     music_shop_owned_slots, music_shop_page_rects, music_shop_slots, music_shop_tiled_rect,
     planet_action_for_code, planet_band_rect, planet_caption_for_code, planet_plate_clip,
     shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects,
-    wallet_amount_caption, wallet_row_caption, LankingSong, MusicShopFace, MusicShopNotice,
-    MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel,
-    WalletRow, WalletState, GEM_LABEL, INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE,
-    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-    MSHOP_BOX_FRAME_COUNT, MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE,
-    MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_CASHFILLUP_FALLBACK_CAPTION,
-    MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE, MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE,
-    MSHOP_ENTRY_FREE_SONG_IDS, MSHOP_GEM_PRICE_CODE, MSHOP_LIGHTBOARD_ENTRY_NOTICE,
-    MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE, MSHOP_MONEY_GEM_CODE,
-    MSHOP_MONEY_WON_CODE, MSHOP_OWNED_FREE_OWNER, MSHOP_OWNED_SERVICE_ENDED_OWNER,
-    MSHOP_OWNED_TIME_TEXT_CODE, MSHOP_OWNED_TITLE_TEXT_CODE, MSHOP_ROW_TEXT_CODES,
-    MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE, MSHOP_TAB_DOWN_CODE,
-    MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE, NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_BAGSORT_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE,
-    SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE,
-    SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE,
-    SHOP_O2CASH_SHORTFALL_CP949, SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS,
-    SHOP_SKILLCOUNT_FIRST_CODE,
+    wallet_amount_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
+    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletState,
+    INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
+    MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
+    MSHOP_CASHFILLUP_FALLBACK_CAPTION, MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE,
+    MSHOP_DIFF_CODE, MSHOP_DOWN_TEXT_CODE, MSHOP_ENTRY_FREE_SONG_IDS, MSHOP_GEM_PRICE_CODE,
+    MSHOP_LIGHTBOARD_ENTRY_NOTICE, MSHOP_LIGHTBOARD_FALLBACK, MSHOP_LIGHTBOARD_TOOLTIP_CODE,
+    MSHOP_MONEY_GEM_CODE, MSHOP_MONEY_WON_CODE, MSHOP_OWNED_FREE_OWNER,
+    MSHOP_OWNED_SERVICE_ENDED_OWNER, MSHOP_OWNED_TIME_TEXT_CODE, MSHOP_OWNED_TITLE_TEXT_CODE,
+    MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE,
+    MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
+    NO_RESPONSE_MESSAGE_CP949, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_BAGSORT_CODE, SHOP_CART_ITEMNAME_CODE,
+    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
+    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949,
+    SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use crate::staging::ShopPriceFonts;
@@ -1727,17 +1726,55 @@ fn paint_shop_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement], goods: 
     }
 }
 
-/// Wallet gem cell (`GEMMONEY`) plus the cash cell (`MGASH`):
-/// `--` until their wire words fold (gem via 5028/5001/5003, cash
-/// via the 5001 prefix; the `MGASH`→`o2_cash` join stays OPEN).
+/// Right inset of the last wallet digit inside its staged cell. The
+/// 7.55 crop shows the digits ending just inside the cell border
+/// (`~/scratch/side-scenes/b8-cash/artifacts/screenshots/itemshop.png`);
+/// this is a presentational bearing, not a new geometry source.
+const SHOP_WALLET_DIGIT_INSET: i32 = 2;
+
+/// One wallet cell: digits only, right-aligned over the baked `G`/`W`
+/// letter in the staged art. `FUN_0x4a21a0` -> `FUN_0x4a1d30` (files
+/// `0xa21a0`/`0xa1d30`, `ev_45b073c8…`/`ev_3cec7935…`) decomposes the
+/// folded word into one digit sprite per place; it emits no letters.
+/// An unknown or negative word paints nothing: the cell keeps its
+/// baked letter instead of inventing a placeholder format.
+fn paint_shop_wallet_cell(frame: &mut Frame<'_>, native_rect: Rect, amount: Option<i32>) {
+    let Some(amount) = amount.and_then(|amount| u32::try_from(amount).ok()) else {
+        return;
+    };
+    let digits = amount.to_string();
+    let count = shop_price_word_digit_count(&digits);
+    let right = i32::try_from(native_rect.w).unwrap_or(i32::MAX);
+    let anchor_x = native_rect
+        .x
+        .saturating_add(right)
+        .saturating_sub(SHOP_WALLET_DIGIT_INSET);
+    let left = anchor_x.saturating_sub(SHOP_PRICE_DIGIT_PITCH.saturating_mul(count - 1));
+    let span = SHOP_PRICE_DIGIT_PITCH.saturating_mul(count);
+    paint_text_left_in_cell(
+        frame,
+        Rect {
+            x: left,
+            y: native_rect.y,
+            w: u32::try_from(span).unwrap_or(u32::MAX),
+            h: native_rect.h,
+        },
+        &digits,
+        CP949_INK,
+        0,
+    );
+}
+
+/// Wallet gem cell (`GEMMONEY`) plus the cash cell (`MGASH`): digits
+/// from the folded wire words over the baked `G`/`W` letters (gem via
+/// 5028/5001/5003, cash via the 5001 prefix; the `MGASH`→`o2_cash`
+/// join stays OPEN). No caption is inked over either cell.
 fn paint_shop_wallet(frame: &mut Frame<'_>, placements: &[ScenePlacement], wallet: &WalletState) {
     if let Some(rect) = shop_template_rect(placements, SHOP_GEMMONEY_CODE) {
-        let row = WalletRow::named(GEM_LABEL, wallet.gem);
-        paint_text_into_rect(frame, rect, &wallet_row_caption(&row), CP949_INK);
+        paint_shop_wallet_cell(frame, rect, wallet.gem);
     }
     if let Some(rect) = shop_template_rect(placements, SHOP_MGASH_CODE) {
-        let row = WalletRow::named(O2_CASH_LABEL, wallet.o2_cash);
-        paint_text_into_rect(frame, rect, &wallet_row_caption(&row), CP949_INK);
+        paint_shop_wallet_cell(frame, rect, wallet.o2_cash);
     }
 }
 
@@ -5775,6 +5812,66 @@ mod paint_tests {
         assert!(lit(287, 567, 28, 17), "tot page paints");
         assert!(lit(137, 464, 149, 15), "cart row paints");
         assert!(!lit(0, 0, 100, 12), "unstaged band stays dark");
+    }
+
+    /// Seam companion to the live `the_wallet_cell_ink_follows_the_pinned_word`
+    /// guard: the two cells ink only from their folded words, right-aligned
+    /// over the baked letter; unknown words and negative words paint
+    /// nothing (no `--` placeholder, no `GEM`/`O2 CASH` caption).
+    #[test]
+    fn shop_wallet_cells_ink_digits_without_captions_or_placeholders() {
+        let placements = vec![
+            shop_placement(SHOP_GEMMONEY_CODE, 82, 288, 95, 13),
+            shop_placement(SHOP_MGASH_CODE, 82, 316, 95, 12),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        {
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            paint_shop_wallet(&mut frame, &placements, &WalletState::default());
+        }
+        assert!(
+            !has_ink_in(&buf, 800, 82, 288, 95, 13),
+            "unknown G cell stays dark"
+        );
+        assert!(
+            !has_ink_in(&buf, 800, 82, 316, 95, 12),
+            "unknown W cell stays dark"
+        );
+
+        let wallet = WalletState {
+            gem: Some(15_527),
+            o2_cash: Some(0),
+            cash_point: Some(9_999),
+            ..WalletState::default()
+        };
+        {
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            paint_shop_wallet(&mut frame, &placements, &wallet);
+        }
+        assert!(
+            !has_ink_in(&buf, 800, 82, 288, 40, 13),
+            "G cell inks no GEM caption"
+        );
+        assert!(
+            has_ink_in(&buf, 800, 140, 288, 37, 13),
+            "G digits ink on the right"
+        );
+        assert!(
+            !has_ink_in(&buf, 800, 82, 316, 40, 12),
+            "W cell inks no O2 CASH caption"
+        );
+        assert!(
+            has_ink_in(&buf, 800, 140, 316, 37, 12),
+            "W digits ink on the right"
+        );
     }
 
     #[test]
