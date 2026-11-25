@@ -1167,6 +1167,343 @@ impl WireMessage for RoomRemoved {
     }
 }
 
+/// Waiting wire bodies pinned at 7.55 VA `0x55b6d0` (opcode 2035).
+/// The result word gates the one-byte level cap: a non-zero result
+/// carries no cap byte. `docs/pins/net-b.md`, REA ev 2a4a.9653…
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreeMusicStatusAnswer {
+    /// Zero means the cap byte follows; any other code omits it.
+    pub result: i32,
+    /// Byte staged as the Waiting auto-pick level ceiling.
+    pub level_cap: Option<u8>,
+}
+
+impl WireMessage for FreeMusicStatusAnswer {
+    const COMMAND: u16 = 2035;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.result.to_le_bytes().to_vec();
+        if let Some(cap) = self.level_cap {
+            body.push(cap);
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let result = reader.read_i32()?;
+        let level_cap = if result == 0 {
+            Some(reader.read_u8()?)
+        } else {
+            None
+        };
+        reader.finish()?;
+        Ok(Self { result, level_cap })
+    }
+}
+
+/// One result word from a Waiting answer whose 7.55 handler clears or
+/// keeps the room state: 3006 (`0x55d700`) and 4011 (`0x55f630`).
+macro_rules! result_answer {
+    ($name:ident, $command:expr, $about:expr) => {
+        #[doc = $about]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name {
+            /// Zero is the success code in both handlers.
+            pub result: i32,
+        }
+
+        impl WireMessage for $name {
+            const COMMAND: u16 = $command;
+
+            fn encode_body(&self) -> Vec<u8> {
+                self.result.to_le_bytes().to_vec()
+            }
+
+            fn decode_body(body: &[u8]) -> Result<Self, Error> {
+                let mut reader = Reader::new(body);
+                let result = reader.read_i32()?;
+                reader.finish()?;
+                Ok(Self { result })
+            }
+        }
+    };
+}
+
+result_answer!(
+    ExitWaitingAnswer,
+    3006,
+    "ExitWaiting answer 3006: a result word, zero clears the Waiting room."
+);
+result_answer!(
+    StartGameAnswer,
+    4011,
+    "StartGame answer 4011: zero enters state 10; 1..4 and a state mismatch refuse."
+);
+
+/// One opcode-only Waiting notice: 3010 (`0x55e2f0`) and 3014
+/// (`0x55f210`). Both handlers read no field before posting a caption.
+macro_rules! notice_event {
+    ($name:ident, $command:expr, $about:expr) => {
+        #[doc = $about]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name;
+
+        impl WireMessage for $name {
+            const COMMAND: u16 = $command;
+
+            fn encode_body(&self) -> Vec<u8> {
+                Vec::new()
+            }
+
+            fn decode_body(body: &[u8]) -> Result<Self, Error> {
+                decode_empty(body)?;
+                Ok(Self)
+            }
+        }
+    };
+}
+
+notice_event!(
+    RoomClosedNotice,
+    3010,
+    "Room-closed event 3010: no fields, the caption choice is local."
+);
+notice_event!(
+    RoomDisappearedNotice,
+    3014,
+    "Room-disappeared event 3014: no fields, one fixed caption."
+);
+
+/// A seat byte the Waiting handler guards below eight. 4005, 4009,
+/// 4013 and 4026 all read one member byte; 4013 carries a second state
+/// byte after it.
+macro_rules! member_byte_event {
+    ($name:ident, $command:expr, $about:expr) => {
+        #[doc = $about]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name {
+            /// Seat index, 0..8.
+            pub member_id: u8,
+        }
+
+        impl WireMessage for $name {
+            const COMMAND: u16 = $command;
+
+            fn encode_body(&self) -> Vec<u8> {
+                vec![self.member_id]
+            }
+
+            fn decode_body(body: &[u8]) -> Result<Self, Error> {
+                let mut reader = Reader::new(body);
+                let member_id = reader.read_u8()?;
+                reader.finish()?;
+                if member_id >= 8 {
+                    return Err(Error::InvalidField {
+                        field: "member_id",
+                        reason: "seat index is not below eight",
+                    });
+                }
+                Ok(Self { member_id })
+            }
+        }
+    };
+}
+
+member_byte_event!(
+    SetRoomMusicEcho,
+    4005,
+    "SetRoomMusicEcho 4005: one seat id names the peer whose pick is echoed."
+);
+member_byte_event!(
+    MemberStateChanged,
+    4026,
+    "MemberStateChanged 4026: one seat id names the member whose state changed."
+);
+
+/// MusicLoaded 4013: the named seat's loaded byte (`0x55f950`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicLoaded {
+    /// Seat index, 0..8.
+    pub member_id: u8,
+    /// State byte: local seats stage it to the global, peers to the array.
+    pub state: u8,
+}
+
+impl WireMessage for MusicLoaded {
+    const COMMAND: u16 = 4013;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.member_id, self.state]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let member_id = reader.read_u8()?;
+        let state = reader.read_u8()?;
+        reader.finish()?;
+        if member_id >= 8 {
+            return Err(Error::InvalidField {
+                field: "member_id",
+                reason: "seat index is not below eight",
+            });
+        }
+        Ok(Self { member_id, state })
+    }
+}
+
+/// One counted member/value row from WaitingEvent 4029 (`0x55ff00`).
+/// A value of `1` carries one more state byte; other values do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingMemberRow {
+    /// Seat index named by the row.
+    pub member_id: u8,
+    /// Row value; `1` selects the local-record copy arm.
+    pub value: u8,
+    /// Extra byte read only by the value-1 arm.
+    pub state: Option<u8>,
+}
+
+/// WaitingEvent 4029: a wide count followed by member/value rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingMemberRows {
+    /// Rows in wire order.
+    pub rows: Vec<WaitingMemberRow>,
+}
+
+impl WireMessage for WaitingMemberRows {
+    const COMMAND: u16 = 4029;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = u32::try_from(self.rows.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes()
+            .to_vec();
+        for row in &self.rows {
+            body.extend_from_slice(&[row.member_id, row.value]);
+            if let Some(state) = row.state {
+                body.push(state);
+            }
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let count = reader.read_u32()?;
+        let mut rows = Vec::with_capacity(usize::try_from(count).unwrap_or(usize::MAX).min(64));
+        for _ in 0..count {
+            let member_id = reader.read_u8()?;
+            let value = reader.read_u8()?;
+            let state = if value == 1 {
+                Some(reader.read_u8()?)
+            } else {
+                None
+            };
+            rows.push(WaitingMemberRow {
+                member_id,
+                value,
+                state,
+            });
+        }
+        reader.finish()?;
+        Ok(Self { rows })
+    }
+}
+
+/// WaitingEvent 4028: a wide value and one member byte, no seat check
+/// in the 7.55 body (`0x560a00`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingValueMemberEvent {
+    /// Value staged as the Waiting chrome word.
+    pub value: u32,
+    /// Member byte carried with the value.
+    pub member_id: u8,
+}
+
+impl WireMessage for WaitingValueMemberEvent {
+    const COMMAND: u16 = 4028;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = self.value.to_le_bytes().to_vec();
+        body.push(self.member_id);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let value = reader.read_u32()?;
+        let member_id = reader.read_u8()?;
+        reader.finish()?;
+        Ok(Self { value, member_id })
+    }
+}
+
+/// Waiting skill list from 4024 (`0x5602a0`) or 4058 (`0x560600`):
+/// a wide item-id count, the ids, then a wide seat value and member
+/// byte. The catalog byte lookup behind each id stays OPEN; the raw
+/// ids are kept so a caller never invents catalog bytes.
+macro_rules! skill_list_event {
+    ($name:ident, $command:expr, $about:expr) => {
+        #[doc = $about]
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $name {
+            /// Raw item ids in wire order.
+            pub item_ids: Vec<u32>,
+            /// Wide value written to the seat field.
+            pub value: u32,
+            /// Seat index named by the event.
+            pub member_id: u8,
+        }
+
+        impl WireMessage for $name {
+            const COMMAND: u16 = $command;
+
+            fn encode_body(&self) -> Vec<u8> {
+                let mut body = u32::try_from(self.item_ids.len())
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes()
+                    .to_vec();
+                for id in &self.item_ids {
+                    body.extend_from_slice(&id.to_le_bytes());
+                }
+                body.extend_from_slice(&self.value.to_le_bytes());
+                body.push(self.member_id);
+                body
+            }
+
+            fn decode_body(body: &[u8]) -> Result<Self, Error> {
+                let mut reader = Reader::new(body);
+                let count = reader.read_u32()?;
+                let mut item_ids =
+                    Vec::with_capacity(usize::try_from(count).unwrap_or(usize::MAX).min(64));
+                for _ in 0..count {
+                    item_ids.push(reader.read_u32()?);
+                }
+                let value = reader.read_u32()?;
+                let member_id = reader.read_u8()?;
+                reader.finish()?;
+                Ok(Self {
+                    item_ids,
+                    value,
+                    member_id,
+                })
+            }
+        }
+    };
+}
+
+skill_list_event!(
+    WaitingSkillChanged,
+    4024,
+    "WaitingSkillChanged 4024: first skill list plus a seat value."
+);
+skill_list_event!(
+    WaitingSkillExChanged,
+    4058,
+    "WaitingSkillExChanged 4058: extended skill list plus a seat value."
+);
+
 /// Gift, shop and wallet packets live in topical modules now;
 /// re-exported here so `crate::message::…` paths keep working.
 pub use super::gift::{
@@ -1915,5 +2252,205 @@ mod tests {
             Err(Error::TrailingBytes(1))
         );
         event.title = "x".to_owned();
+    }
+}
+
+/// Codec guards for the 16 pinned Waiting handlers (`docs/pins/net-b.md`).
+/// Every guard is `seam: pure codec with no caller beyond the decode
+/// boundary`; the live caller chains belong to the session guards.
+#[cfg(test)]
+mod waiting_wire_codec_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn free_music_status_reads_the_level_cap_only_after_a_zero_result() {
+        // seam: pure codec; the 2035 handler is pinned at VA 0x55b6d0.
+        let frame = decode_frame(
+            &FreeMusicStatusAnswer {
+                result: 0,
+                level_cap: Some(42),
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            FreeMusicStatusAnswer::decode_frame(&frame),
+            Ok(FreeMusicStatusAnswer {
+                result: 0,
+                level_cap: Some(42),
+            })
+        );
+    }
+
+    #[test]
+    fn free_music_status_with_a_nonzero_result_carries_no_cap_byte() {
+        // seam: pure codec; the handler skips the byte when the word
+        // is non-zero (VA 0x55b6d0).
+        let frame = decode_frame(
+            &FreeMusicStatusAnswer {
+                result: -1,
+                level_cap: None,
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            FreeMusicStatusAnswer::decode_frame(&frame)
+                .unwrap()
+                .level_cap,
+            None
+        );
+    }
+
+    #[test]
+    fn free_music_status_rejects_a_cap_after_a_nonzero_result() {
+        // seam: pure codec; an extra byte is not part of the pinned body.
+        let mut body = (-1i32).to_le_bytes().to_vec();
+        body.push(7);
+        assert_eq!(
+            FreeMusicStatusAnswer::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn exit_waiting_answer_keeps_a_nonzero_result_without_clearing() {
+        // seam: pure codec; the 3006 handler gates its reset on zero.
+        let answer = ExitWaitingAnswer { result: 3 };
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(ExitWaitingAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn start_game_answer_decodes_each_pinned_refusal_code() {
+        // seam: pure codec; result 1..4 and a state mismatch select
+        // captions in the 4011 handler (VA 0x55f630).
+        let answer = StartGameAnswer { result: 2 };
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(StartGameAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn room_closed_and_disappeared_events_carry_no_fields() {
+        // seam: pure codec; both handlers read no body field.
+        assert_eq!(RoomClosedNotice::decode_body(&[]), Ok(RoomClosedNotice));
+        assert_eq!(
+            RoomDisappearedNotice::decode_body(&[]),
+            Ok(RoomDisappearedNotice)
+        );
+    }
+
+    #[test]
+    fn room_closed_event_rejects_an_invented_body() {
+        // seam: pure codec; no field is pinned for 3010.
+        assert_eq!(
+            RoomClosedNotice::decode_body(&[1]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn music_pick_echo_accepts_only_seats_below_eight() {
+        // seam: pure codec; the 4005 handler guards slot < 8.
+        let frame = decode_frame(&SetRoomMusicEcho { member_id: 2 }.encode()).unwrap();
+        assert_eq!(
+            SetRoomMusicEcho::decode_frame(&frame),
+            Ok(SetRoomMusicEcho { member_id: 2 })
+        );
+        assert!(SetRoomMusicEcho::decode_body(&[8]).is_err());
+    }
+
+    #[test]
+    fn music_loaded_pairs_a_seat_with_its_state_byte() {
+        // seam: pure codec; the 4013 handler reads exactly two bytes.
+        let frame = decode_frame(
+            &MusicLoaded {
+                member_id: 3,
+                state: 4,
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            MusicLoaded::decode_frame(&frame),
+            Ok(MusicLoaded {
+                member_id: 3,
+                state: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn member_state_changed_guards_the_seat_byte() {
+        // seam: pure codec; the 4026 handler names one in-range member.
+        let frame = decode_frame(&MemberStateChanged { member_id: 5 }.encode()).unwrap();
+        assert_eq!(
+            MemberStateChanged::decode_frame(&frame),
+            Ok(MemberStateChanged { member_id: 5 })
+        );
+        assert!(MemberStateChanged::decode_body(&[9]).is_err());
+    }
+
+    #[test]
+    fn counted_waiting_rows_read_an_extra_byte_only_for_value_one() {
+        // seam: pure codec; the 4029 loop reads one more byte on the
+        // value-1 arm (VA 0x55ff00).
+        let rows = WaitingMemberRows {
+            rows: vec![
+                WaitingMemberRow {
+                    member_id: 1,
+                    value: 1,
+                    state: Some(4),
+                },
+                WaitingMemberRow {
+                    member_id: 2,
+                    value: 2,
+                    state: None,
+                },
+            ],
+        };
+        let frame = decode_frame(&rows.encode()).unwrap();
+        assert_eq!(WaitingMemberRows::decode_frame(&frame), Ok(rows));
+    }
+
+    #[test]
+    fn waiting_value_member_event_keeps_an_unchecked_member_byte() {
+        // seam: pure codec; the 4028 handler has no bounds check.
+        let event = WaitingValueMemberEvent {
+            value: 0x1234_5678,
+            member_id: 6,
+        };
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(WaitingValueMemberEvent::decode_frame(&frame), Ok(event));
+    }
+
+    #[test]
+    fn skill_lists_round_trip_their_counted_ids_and_seat_value() {
+        // seam: pure codec; 4024 and 4058 share the pinned shape.
+        let first = WaitingSkillChanged {
+            item_ids: vec![0x11, 0x8000_0012],
+            value: 7,
+            member_id: 1,
+        };
+        let extended = WaitingSkillExChanged {
+            item_ids: vec![0x21],
+            value: 9,
+            member_id: 2,
+        };
+        let first_frame = decode_frame(&first.encode()).unwrap();
+        let extended_frame = decode_frame(&extended.encode()).unwrap();
+        assert_eq!(
+            WaitingSkillChanged::decode_frame(&first_frame)
+                .unwrap()
+                .item_ids,
+            first.item_ids
+        );
+        assert_eq!(
+            WaitingSkillExChanged::decode_frame(&extended_frame)
+                .unwrap()
+                .value,
+            9
+        );
     }
 }
