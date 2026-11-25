@@ -428,3 +428,73 @@ Input edges with no matching ControlList entry:
 |---|---|---|
 | Waiting chat Enter key path | One 3012 body per Enter; focus stays in the chat draft. | OPEN: live Enter + wire leg; seam confirm_sends_the_draft_and_stays_waiting (Tier 0) |
 | Waiting Esc / menu Back | No exe scene key handler for the Room transition (#735); local BACK button carries 3005. | OPEN: live Esc key leg (#735); seam live_click_waiting_back_sends_the_room_leave_from_boot (Tier 3) covers the pointer leg only |
+
+## Loading
+
+Source: no `STATE_LOADING` declaration and no `BOUND` section exist in
+the 1,979-line pinned `ControlList_Interface.txt` (all `STATE_*`
+headers walked; the declarations are CHANNEL/ROOM/SHOP/MYROOM/WAITING/
+RESULT/AVI/PLANET/MUSICSHOP/PLAYING/TUTORIAL/PAYMENT/PAYMENT2/LANKING/
+DRUM_PLAYING/EXIT). **The whole state is OPEN**: next step = REA pin of
+the `MusicLoading.ojs` overlay mount (bnd-audit 35) plus a Tier 3 live
+gate capture; `docs/parity/loading-gate.md` holds the current spec story.
+No ControlList row is invented here.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Loading Confirm / gate hold | Confirm holds in Loading until select validation, staging, decrypt, decode and clock arm pass; failures latch (`docs/parity/loading-gate.md`). | OPEN: live Wine validation of the full chain (E2); seam loading_hand_session_holds_then_arms_and_hands_off (Tier 0) |
+| Loading BACK / return to Waiting | Return edge named in `docs/parity/loading-gate.md`; no ControlList rect. | OPEN: live input + wire leg; seam loading_back_returns_to_waiting (Tier 0) |
+| Loading song-title/artist caption | Caption uses the Trebuchet 27×65 cell (`docs/loading-type.md`); no .bnd names the gate. | OPEN: live gate capture of the Arial cell arm; seam loading_caption_routes_through_the_display_cell (Tier 0) |
+
+## Playing
+
+Source: `STATE_PLAYING 0x00` at line 1011 of the pinned
+`ControlList_Interface.txt` has no braces and no `BOUND` section; the
+1,979-line file declares no Playing controls. The 7.55 UI is in
+`Playing1.opi` (`State_Playing.bnd`, 17 rects bound to EXIT…VOLUME;
+`docs/parity/playing.md`), outside this ControlList. **The whole state
+is OPEN**: next step = a dedicated Playing ControlList/bind census from
+`Playing1.opi` plus a SendInput key-up sweep on the live highway. No
+ControlList row is invented here.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Seven-lane key-down (Option.ini KEY_1..7) | Scancode→lane poster `FUN_00544b50` → INPUT_STATE; key-down judges the head (polarity pin in `docs/gameplay.md`). | OPEN: REA dispatch pin per lane plus SendInput sweep; key-up dispatch still untraced |
+| Seven-lane key-up | Second judge at `+0x864[lane]`; release rates the hold tail (Cool/Good gate at files `0x176c42`/`0x176d78`). | OPEN: SendInput key-up sweep plus REA arm completion; seam `song_clock_equivalence_replay_stays_inside_the_pinned_windows` (Tier 0) |
+| EXIT control (Playing1.opi bound run) | Tally-strip EXIT art and rect staged; pressed destination unpinned in this ControlList. | OPEN: statics pin of the Playing1.opi block plus a live click leg |
+| VOLUME readout (Playing1.opi bound run) | Staged volume readout; paint pinned in `docs/parity/playing.md`. | OPEN: statics pin plus Tier 3 live-art pin |
+
+## Result
+
+Source: the `BOUND "State_Result.bnd"` block of the pinned
+`ControlList_Interface.txt` (lines 757–771; 8 entries / 7 rects);
+digit cells stay GDI anchors, not rects (`docs/cresult-anchors.md`).
+Ordinal is `(code & 0xFFF) - 1`.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_STATE_RESULT` (`0x17000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_SRESULT_1` (`0x17100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_SRESULT_RANKTAPFIELD` (`0x17600002`) | static art | Rank-table panel at the paired rect; row-0 rank digits are GDI anchors, not rects. | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_IMAGE_SRESULT_RESULTTAPFIELD` (`0x17600003`) | static art | Score/judgement panel at the paired rect; digit anchors are exe-pinned GDI (`docs/cresult-anchors.md`). | OPEN: statics pin plus Tier 3 live-art pin |
+| 3 | `IDC_IMAGE_SRESULT_RESULTTAP` (`0x17500004`) | static art | Result tab plate; frame source from the walked Result panel. | OPEN: statics pin plus Tier 3 live-art pin |
+| 4 | `IDC_BUTTON_SRESULT_BACK` (`0x17200005`) | button | BACK: settled_solo_result_back_click_posts_4021_and_takes_the_4022_answer (Tier 2) asserts 4021 → 4022 → Room; #294 reports Waiting — contradiction left for the exe. | OPEN: REA handler pin to arbitrate Room vs Waiting (#294), then Tier 3 nav leg |
+| 5 | `IDC_BUTTON_SRESULT_RETRY` (`0x17202006`) | button | RETRY hands back to Waiting and posts empty StartGame 4010 (#88). | OPEN: live retry click + 4010 leg; seam staged_retry_click_returns_to_waiting (Tier 0) |
+| 6 | `IDC_IMAGE_SRESULT_RANKINGFIELD` (`0x17500007`) | static art | Win/lose banner frame selected by the result rule (`docs/result-variants.md`). | OPEN: statics pin plus Tier 3 live-art pin |
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Result Confirm / Back key mirror | Confirm/Back mirror the staged buttons; wire shapes pinned by #87/#88. | OPEN: live key + target leg (#294); seam result_keys_mirror_the_staged_buttons (Tier 0) |
+| Event-ticket web call on solo Result entry | HTTP GET to `ticket_add.php?USER_INDEX_ID=…` (file `0x24a2d0`); not a gateway frame. | OPEN: live request-line capture and value-source pin |
