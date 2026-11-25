@@ -17279,8 +17279,8 @@ mod game_tests {
 
     fn myroom_open_overlay() -> ScreenGame {
         use super::super::side::{
-            MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
-            MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
+            MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE,
+            MYROOM_EQUIP_APPLY_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
             MYROOM_GIFT_RIGHT_CODE, MYROOM_GIFT_TAB_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE,
             MYROOM_NICKNAME_CODE, MYROOM_RANK_CODE, MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
         };
@@ -17298,7 +17298,7 @@ mod game_tests {
             myroom_hit_placement(MYROOM_GIFT_LEFT_CODE, 300, 10),
             myroom_hit_placement(MYROOM_GIFT_RIGHT_CODE, 350, 10),
             myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
-            myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+            myroom_hit_placement(MYROOM_EQUIP_APPLY_CODE, 450, 10),
             myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
             myroom_hit_placement(MYROOM_VACATE_CODE, 10, 40),
             myroom_hit_placement(MYROOM_GOSHOP_CODE, 60, 40),
@@ -17348,7 +17348,9 @@ mod game_tests {
     /// green status plate (same rect, staged after it), blue inventory
     /// button body. The real sprites' anchors equal their `.bnd` rects.
     fn myroom_panel_overlay() -> (ScreenGame, Rect, Rect) {
-        use super::super::side::{MYROOM_APPLY_CODE, MYROOM_SLOTCOVER_CODE, MYROOM_USERINFO_CODE};
+        use super::super::side::{
+            MYROOM_SLOTCOVER_CODE, MYROOM_STATUS_BADGE_CODE, MYROOM_USERINFO_CODE,
+        };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
         let placement = |code: u32, id: &str, sprite: &str, rect: Rect| ScenePlacement {
@@ -17374,7 +17376,7 @@ mod game_tests {
             placement(MYROOM_SLOTCOVER_CODE, "SLOTCOVER", "SlotCover.ojs", panel),
             placement(MYROOM_USERINFO_CODE, "USERINFO", "Status.ojs", panel),
             placement(
-                MYROOM_APPLY_CODE,
+                MYROOM_STATUS_BADGE_CODE,
                 "INVENTORY",
                 "InventoryButton.ojs",
                 button,
@@ -17435,10 +17437,56 @@ mod game_tests {
     }
 
     #[test]
+    fn status_badge_press_toggles_the_status_plate_and_inventory_body() {
+        // Live caller chain (Tier 1; Tier 3 leg in live_input_legs.rs):
+        //   main.rs::run_play -> session -> visit_side(MyRoom)
+        //   -> ScreenGame::click_myroom_side(0x15203034)
+        //   -> MyRoomAction::ToggleStatusBadge -> show_myroom_panel
+        //   -> paint_side -> staged plate and INVENTORY body.
+        // The exe dispatcher (FUN_004a3ee0, file 0xa3ee0,
+        // ev_a91d2baf…96d6030) reads the badge's own face flag and
+        // writes the state face word; no send occurs in that arm.
+        // Statics do not pin the flag writer; the two-click alternation
+        // comes from the live-4 pack cited in docs/myroom.md.
+        let (mut game, panel, button) = myroom_panel_overlay();
+        let badge_click = (
+            button.x + i32::try_from(button.w / 2).expect("badge width fits a click"),
+            button.y + i32::try_from(button.h / 2).expect("badge height fits a click"),
+        );
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Inventory);
+        let on_entry = paint_myroom_panel(&mut game);
+        let panel_pixel = |buf: &[u32]| buf[(panel.y + 2) as usize * 800 + (panel.x + 2) as usize];
+        let button_pixel =
+            |buf: &[u32]| buf[(button.y + 2) as usize * 800 + (button.x + 2) as usize];
+        assert!(near_xrgb(panel_pixel(&on_entry), pack_xrgb(255, 0, 0)));
+        assert_eq!(button_pixel(&on_entry), 0);
+
+        game.ingest_snapshot(&InputSnapshot::click_at(badge_click.0, badge_click.1));
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Status);
+        assert!(
+            !game.has_pending_equip_send(),
+            "the badge face flip sends no equip frame"
+        );
+        let on_status = paint_myroom_panel(&mut game);
+        assert!(near_xrgb(panel_pixel(&on_status), pack_xrgb(0, 255, 0)));
+        assert!(near_xrgb(button_pixel(&on_status), pack_xrgb(0, 0, 255)));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(badge_click.0, badge_click.1));
+        assert_eq!(game.myroom().panel(), MyRoomPanel::Inventory);
+        let back_on_inventory = paint_myroom_panel(&mut game);
+        assert!(near_xrgb(
+            panel_pixel(&back_on_inventory),
+            pack_xrgb(255, 0, 0)
+        ));
+        assert_eq!(button_pixel(&back_on_inventory), 0);
+        assert!(!game.has_pending_equip_send());
+    }
+
+    #[test]
     fn myroom_status_face_restores_the_plate_and_inventory_button() {
-        // seam: no exe gesture is pinned for switching faces; this
-        // guard proves both staged faces stay reachable through the
-        // state seam that `paint_side` reads (docs/myroom.md OPEN).
+        // seam: both staged faces stay reachable through the state
+        // seam that `paint_side` reads; the live gesture is pinned by
+        // `status_badge_press_toggles_the_status_plate_and_inventory_body`.
         let (mut game, panel, button) = myroom_panel_overlay();
         game.show_myroom_panel(MyRoomPanel::Status);
         let buf = paint_myroom_panel(&mut game);
@@ -17789,7 +17837,8 @@ mod game_tests {
         //   -> ScreenGame::click_myroom_side -> ShowGiftTab
         //   -> paint_side -> paint_myroom_overlay -> paint_myroom_data.
         // Exe3 pack `6e29e51a…` swaps the lower panel to the gift list;
-        // `8515a7e5…` shows that MY BAG is not a return tab in that frame.
+        // the MY BAG return is pinned by the exe dispatcher instead
+        // (file `0xa3ee0`, `ev_a91d2baf…96d6030`).
         let (mut game, placements) = myroom_tab_overlay();
         game.ingest_snapshot(&InputSnapshot::click_at(65, 15));
         let mut buf = vec![0u32; 800 * 600];
@@ -17817,32 +17866,67 @@ mod game_tests {
     }
 
     #[test]
-    // OPEN story #180: this guard certified behavior the owner disproved.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #180.
-    fn myroom_my_bag_tab_press_leaves_the_gift_panel_open() {
-        // Live caller chain as above. The pinned exe3 `8515a7e5…`
-        // frame keeps the gift box after clicking the MY BAG tab;
-        // the story's claimed restore is contradicted by those pixels.
+    fn my_bag_press_closes_the_present_box_and_restores_the_bag_grid_from_boot() {
+        // Live caller chain (Tier 1; Tier 3 leg in live_input_legs.rs):
+        //   main.rs::run_play -> session -> visit_side(MyRoom)
+        //   -> ScreenGame::click_myroom_side(0x15600046) -> ShowGiftTab
+        //   -> paint_side -> paint_myroom_data, then
+        //   -> ScreenGame::click_myroom_side(0x15600045) -> ShowBagTab
+        //   -> paint_side -> paint_myroom_data.
+        // The exe dispatcher (FUN_004a3ee0, file 0xa3ee0,
+        // ev_a91d2baf…96d6030) writes tab word 0x779924 = 0 for
+        // MY BAG and 1 for PRESENT BOX; neither case sends a frame.
+        // The older exe3 frame `8515a7e5…` was read backwards.
         let (mut game, placements) = myroom_tab_overlay();
+        let paint_tab_rows = |game: &ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_myroom_data(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &placements,
+                &HashMap::new(),
+                game.myroom(),
+                &["BAG".to_owned()],
+                &["GIFT".to_owned()],
+                &[],
+            );
+            buf
+        };
+
+        let on_entry = paint_tab_rows(&game);
+        assert!(region_has_ink(&on_entry, 800, 10, 40, 40, 20));
+        assert!(!region_has_ink(&on_entry, 800, 60, 40, 40, 20));
+
         game.ingest_snapshot(&InputSnapshot::click_at(65, 15));
-        game.ingest_snapshot(&InputSnapshot::click_at(15, 15));
         assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
-        let mut buf = vec![0u32; 800 * 600];
-        paint_myroom_data(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &placements,
-            &HashMap::new(),
-            game.myroom(),
-            &["BAG".to_owned()],
-            &["GIFT".to_owned()],
-            &[],
+        let on_gift = paint_tab_rows(&game);
+        assert!(!region_has_ink(&on_gift, 800, 10, 40, 40, 20));
+        assert!(region_has_ink(&on_gift, 800, 60, 40, 40, 20));
+
+        game.ingest_snapshot(&InputSnapshot::click_at(15, 15));
+        assert_eq!(
+            game.myroom().lower_tab(),
+            MyRoomLowerTab::Bag,
+            "MY BAG closes the present box"
         );
-        assert!(region_has_ink(&buf, 800, 60, 40, 40, 20));
-        assert!(!region_has_ink(&buf, 800, 10, 40, 40, 20));
+        let on_bag_return = paint_tab_rows(&game);
+        assert!(
+            region_has_ink(&on_bag_return, 800, 10, 40, 40, 20),
+            "bag rows return"
+        );
+        assert!(
+            !region_has_ink(&on_bag_return, 800, 60, 40, 40, 20),
+            "gift rows are hidden"
+        );
+
+        game.ingest_snapshot(&InputSnapshot::click_at(65, 15));
+        assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
+        let on_gift_return = paint_tab_rows(&game);
+        assert!(!region_has_ink(&on_gift_return, 800, 10, 40, 40, 20));
+        assert!(region_has_ink(&on_gift_return, 800, 60, 40, 40, 20));
     }
 
     #[test]
@@ -18121,7 +18205,8 @@ mod game_tests {
         //   -> myroom_bag_rows (server order, zero/unknown skip).
         // Archives absent -> N/A (synthetic table, no install-root read).
         use super::super::side::{
-            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE,
+            MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE,
+            MYROOM_EQUIP_APPLY_CODE,
         };
         let row = |item_id: u32, item_type: u32, slot_byte: u8| o2jam_file::AvatarItemRow {
             item_id,
@@ -18149,7 +18234,7 @@ mod game_tests {
                 myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 1, 250, 10),
                 myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 2, 300, 10),
                 myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 3, 350, 10),
-                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+                myroom_hit_placement(MYROOM_EQUIP_APPLY_CODE, 450, 10),
                 myroom_hit_placement(MYROOM_BAG_LEFT_CODE, 100, 10),
                 myroom_hit_placement(MYROOM_BAG_RIGHT_CODE, 150, 10),
             ],
@@ -32818,8 +32903,8 @@ mod game_tests {
         // sends feed the fold today; the rest ride along so a future
         // fold change re-pins here.
         use super::super::side::{
-            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_TAB_CODE,
-            MYROOM_MOVE_CODE,
+            MYROOM_BAG_FIRST_CODE, MYROOM_EQUIP_APPLY_CODE, MYROOM_GIFT_FIRST_CODE,
+            MYROOM_GIFT_TAB_CODE, MYROOM_MOVE_CODE,
         };
         use MenuKey;
         let mut game = ScreenGame::new();
@@ -32862,7 +32947,7 @@ mod game_tests {
         game.load_side_scene(
             vec![
                 myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
-                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+                myroom_hit_placement(MYROOM_EQUIP_APPLY_CODE, 450, 10),
                 myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
                 myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
                 myroom_hit_placement(MYROOM_GIFT_TAB_CODE, 600, 10),
@@ -32872,9 +32957,9 @@ mod game_tests {
         assert!(game.visit_side(SideScreen::MyRoom));
         game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
         game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
-        // Gift arms: stage the pending gift, press PRESENT BOX (the
-        // MY BAG press is a pinned no-op, exe3 `8515a7e5…`, so only
-        // this direction switches), pick gift cell 0, MOVE 5023.
+        // Gift arms: stage the pending gift, press PRESENT BOX, pick
+        // gift cell 0, and queue MOVE 5023. Both tab directions are
+        // local; only this direction is needed for the send hash.
         let mut character = myroom_test_character((1..=12).collect());
         character.item_gifts.push(o2jam_net::GiftItemInfo {
             gift_id: 7,

@@ -8370,7 +8370,11 @@ mod side_tests {
             Some(MyRoomAction::GiftPage(MyRoomStep::Next))
         );
         assert_eq!(
-            myroom_action_for_code(MYROOM_APPLY_CODE),
+            myroom_action_for_code(MYROOM_STATUS_BADGE_CODE),
+            Some(MyRoomAction::ToggleStatusBadge)
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_EQUIP_APPLY_CODE),
             Some(MyRoomAction::ApplyEquip)
         );
         assert_eq!(

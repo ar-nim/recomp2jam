@@ -162,9 +162,9 @@ impl ScreenGame {
         self.myroom
     }
 
-    /// Show the other upper-right MyRoom face. Seam suffices: the exe
-    /// pack pins the default face but no switching gesture, so no
-    /// staged control maps here yet (capture OPEN in `docs/myroom.md`).
+    /// Show the other upper-right MyRoom face. The baked STATUS badge
+    /// (`0x15203034`) reaches this through `click_myroom_side`;
+    /// the exe dispatcher writes no wire frame on that arm.
     pub fn show_myroom_panel(&mut self, panel: MyRoomPanel) -> &mut Self {
         self.myroom.show_panel(panel);
         self
@@ -228,9 +228,25 @@ impl ScreenGame {
                     self.visit_side(SideScreen::Shop);
                 }
             }
+            Some(MyRoomAction::ToggleStatusBadge) => self.toggle_myroom_status_badge(),
             Some(action) => self.apply_myroom_action(action),
             None => {}
         }
+    }
+
+    /// Flip the upper-right face on the exe's baked STATUS badge.
+    /// The dispatcher case (`FUN_004a3ee0`, file `0xa3ee0`,
+    /// `ev_a91d2baf…96d6030`) writes the state face word from the
+    /// badge's own flag and sends no frame. Statics do not pin that
+    /// flag's writer; the live-4 pack in `docs/myroom.md` pins the
+    /// two-press round trip used here.
+    fn toggle_myroom_status_badge(&mut self) {
+        let next = if self.myroom.panel() == MyRoomPanel::Inventory {
+            MyRoomPanel::Status
+        } else {
+            MyRoomPanel::Inventory
+        };
+        self.show_myroom_panel(next);
     }
 
     /// Apply one avatar-room action to the selection state (BACK
@@ -242,10 +258,7 @@ impl ScreenGame {
     fn apply_myroom_action(&mut self, action: MyRoomAction) {
         match action {
             MyRoomAction::SelectSlot(slot) => self.myroom.record_slot_press(slot),
-            MyRoomAction::ShowBagTab => {
-                // Exe3 `8515a7e5…`: the MY BAG press leaves the gift
-                // panel open, so no lower-tab or panel state changes.
-            }
+            MyRoomAction::ShowBagTab => self.myroom.show_lower_tab(MyRoomLowerTab::Bag),
             MyRoomAction::ShowGiftTab => self.myroom.show_lower_tab(MyRoomLowerTab::Gifts),
             MyRoomAction::BagPage(step) => {
                 let pages = self.myroom_bag_page_count();
@@ -258,6 +271,7 @@ impl ScreenGame {
             }
             MyRoomAction::PickGiftCell(cell) => self.apply_myroom_gift_cell_pick(cell),
             MyRoomAction::PressWornWell(well) => self.apply_myroom_well_press(well),
+            MyRoomAction::ToggleStatusBadge => self.toggle_myroom_status_badge(),
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
             MyRoomAction::VacateSlot => self.apply_myroom_vacate(),

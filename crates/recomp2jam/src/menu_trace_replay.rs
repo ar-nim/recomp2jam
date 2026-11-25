@@ -38,7 +38,7 @@ use o2jam_net::{
 use o2jam_render::Rect;
 use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
 use o2jam_shell::screens::side::{
-    MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE, MYROOM_EQUIP_APPLY_CODE,
     MYROOM_GIFT_FIRST_CODE, MYROOM_MOVE_CODE, MYROOM_SLOT_FIRST_CODE, SHOP_BAG_LEFT_CODE,
     SHOP_BAG_RIGHT_CODE, SHOP_BUYITEM_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_LEFT_CODE,
     SHOP_SCROLL_RIGHT_CODE,
@@ -631,7 +631,9 @@ pub fn myroom_test_placements() -> Vec<ScenePlacement> {
     }
     place(MYROOM_BAG_LEFT_CODE, "Shop_Btn_BagLeft", cell(100, 10));
     place(MYROOM_BAG_RIGHT_CODE, "Shop_Btn_BagRight", cell(150, 10));
-    place(MYROOM_APPLY_CODE, "Myroom_Inventory", cell(450, 10));
+    // The trace's "Myroom_Inventory" press is our own apply leg:
+    // the exe code at that name is the STATUS badge face flip.
+    place(MYROOM_EQUIP_APPLY_CODE, "Myroom_Inventory", cell(450, 10));
     place(
         MYROOM_GIFT_FIRST_CODE,
         "IDC_BUTTON_SMYROOM_GIFTBOX_EX1",

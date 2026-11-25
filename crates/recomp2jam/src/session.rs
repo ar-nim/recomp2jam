@@ -6320,7 +6320,7 @@ pub(super) mod session_tests {
         game.load_side_scene(
             vec![
                 placement(o2jam_shell::screens::side::MYROOM_BAG_FIRST_CODE, 10),
-                placement(o2jam_shell::screens::side::MYROOM_APPLY_CODE, 60),
+                placement(o2jam_shell::screens::side::MYROOM_EQUIP_APPLY_CODE, 60),
             ],
             HashMap::new(),
         );
