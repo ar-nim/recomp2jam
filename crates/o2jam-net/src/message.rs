@@ -2286,7 +2286,7 @@ mod waiting_wire_codec_tests {
     #[test]
     fn free_music_status_with_a_nonzero_result_carries_no_cap_byte() {
         // seam: pure codec; the handler skips the byte when the word
-        // is non-zero (VA 0x55b6d0).
+        // is non-zero (VA 0x55b6d0, ev 2a4a.9653.505c.ecfa.56fb.762d.b6b7.1d87.fa79.a234.0ca6.88f7.13cc.a043.832f.ae3d).
         let frame = decode_frame(
             &FreeMusicStatusAnswer {
                 result: -1,
@@ -2333,7 +2333,9 @@ mod waiting_wire_codec_tests {
 
     #[test]
     fn room_closed_and_disappeared_events_carry_no_fields() {
-        // seam: pure codec; both handlers read no body field.
+        // seam: pure codec; both handlers read no body field (3010 VA
+        // 0x55e2f0 ev e910.89f5.1d6c.9591.61da.81f0.1b5c.1d6f.51f0.0bfe.10c6.9998.b962.9b65.9941.cce8;
+        // 3014 VA 0x55f210 ev 5d9c.48f9.d8fe.2788.7b34.e15b.4bc1.1ec3.13a9.527b.93b0.7a15.b70d.b96c.1786.72ee).
         assert_eq!(RoomClosedNotice::decode_body(&[]), Ok(RoomClosedNotice));
         assert_eq!(
             RoomDisappearedNotice::decode_body(&[]),
