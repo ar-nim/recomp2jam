@@ -30,6 +30,9 @@ mod live_input_leg_tests {
 
     use o2jam_shell::screens::side::{
         MyRoomNotice, SideScreen, INFORMATION_OK_CODE, MYROOM_GOSHOP_CODE,
+        SHOP_CATEGORY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE,
+        SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -1306,6 +1309,220 @@ mod live_input_leg_tests {
             "the local toggle must send no wire frame"
         );
 
+        finish(session, gateway.server);
+    }
+
+    /// Press one staged shop control by its ControlList code. The aim
+    /// comes from the mounted `.bnd` rect; the caller supplies the
+    /// exe child-origin offset only for art-less hit rects.
+    fn click_staged_shop_control(session: &mut OnlineSession, code: u32, hit_y_offset: i32) {
+        let rect = session
+            .game_mut()
+            .staged_side_control_rect(code)
+            .unwrap_or_else(|| panic!("STATE_SHOP does not stage {code:#X}"));
+        let aim = rect_centre(Rect {
+            y: rect.y.saturating_add(hit_y_offset),
+            ..rect
+        });
+        session.ingest_snapshot(&InputSnapshot::click_at(aim.0, aim.1));
+    }
+
+    /// Pixels inside the staged category tabs and the eight ITEMNAME
+    /// cells: the exe scroll and category arms repaint both faces.
+    fn shop_browse_pixels(session: &mut OnlineSession) -> Vec<u32> {
+        let codes: Vec<u32> = (0..5)
+            .map(|slot| SHOP_CATEGORY_FIRST_CODE + slot)
+            .chain((0..8).map(|slot| 0x1440_002C + slot))
+            .collect();
+        let rects: Vec<Rect> = codes
+            .iter()
+            .map(|code| {
+                session
+                    .game_mut()
+                    .staged_side_control_rect(*code)
+                    .unwrap_or_else(|| panic!("STATE_SHOP does not stage {code:#X}"))
+            })
+            .collect();
+        let frame = painted_frame(session);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a frame index");
+        let mut pixels = Vec::new();
+        for rect in rects {
+            let left = usize::try_from(rect.x).expect("rect left fits a frame index");
+            let top = usize::try_from(rect.y).expect("rect top fits a frame index");
+            let columns = usize::try_from(rect.w).expect("rect width fits a frame index");
+            let rows = usize::try_from(rect.h).expect("rect height fits a frame index");
+            for y in top..top + rows {
+                for x in left..left + columns {
+                    pixels.push(frame[y * width + x]);
+                }
+            }
+        }
+        pixels
+    }
+
+    /// Boot -> Room -> Item Shop -> staged browse presses. The exe
+    /// pins are `IDC_SCROLL_SSHOP_ITEM` notify `0x14022047`
+    /// (`ev_5eb3c20e…`, `ev_7509bf98…`), category/submenu/theme tabs in
+    /// `FUN_00498bc0` (`ev_1240440e…`, `ev_d7cb6a21…`), and the
+    /// ITEMBUY row arm (`ev_650b7cf9…`). None sends a 5000-family
+    /// frame; the old inert guard certified the opposite.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> GameLoop::ingest_snapshot ->
+    ///   ScreenGame::click_room_control -> visit_side(Shop) ->
+    ///   GameLoop::ingest_snapshot -> ScreenGame::click_side_screen ->
+    ///   ScreenGame::click_shop -> shop_action_at ->
+    ///   ShopState::apply_action -> ScreenGame::paint_side ->
+    ///   paint_shop_board / paint_side_scene_selected.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_shop_browse_scroll_tabs_and_grid_change_goods_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let itemshop = &room_top_tabs()[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        assert_eq!(session.game_mut().side(), Some(SideScreen::Shop));
+        drop(painted_frame(&mut session));
+        wait_for_enter_shop(&gateway.reports, itemshop.id);
+        while gateway.reports.try_recv().is_ok() {}
+
+        let entry_goods = session.game_mut().shop_visible_goods();
+        let entry_pixels = shop_browse_pixels(&mut session);
+
+        click_staged_shop_control(&mut session, SHOP_SCROLL_RIGHT_CODE, 0);
+        assert_eq!(
+            session.game_mut().shop_page(),
+            1,
+            "scroll RIGHT turns the grid"
+        );
+        assert_ne!(
+            session.game_mut().shop_visible_goods(),
+            entry_goods,
+            "the eight visible goods follow the scroll offset"
+        );
+        assert!(
+            changed_pixels(&entry_pixels, &shop_browse_pixels(&mut session)) > 0,
+            "scroll must repaint the name cells"
+        );
+
+        click_staged_shop_control(&mut session, SHOP_CATEGORY_FIRST_CODE + 1, 0);
+        assert_eq!(
+            session.game_mut().shop_category(),
+            Some(1),
+            "FASHION answers"
+        );
+        assert_eq!(
+            session.game_mut().shop_page(),
+            0,
+            "category rebuilds page one"
+        );
+        assert!(
+            changed_pixels(&entry_pixels, &shop_browse_pixels(&mut session)) > 0,
+            "category must move the tab highlight"
+        );
+
+        click_staged_shop_control(&mut session, SHOP_SUBMENU_FIRST_CODE + 2, 0);
+        assert_eq!(
+            session.game_mut().shop_selected_submenu(),
+            Some(SHOP_SUBMENU_FIRST_CODE + 2),
+            "SUBMENU3 writes state+0x59"
+        );
+
+        let first_buy = session.game_mut().shop_visible_goods()[0].item_id;
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        assert_eq!(
+            session.game_mut().shop_cart(),
+            vec![first_buy],
+            "ITEMBUY1 checks the visible row into the cart"
+        );
+
+        session.game_mut().stage_shop_extmenu_ready(true);
+        click_staged_shop_control(&mut session, SHOP_EXTMENU_ON_CODE, 0);
+        click_staged_shop_control(&mut session, SHOP_EXTMENU_FIRST_CODE + 2, 0);
+        assert_eq!(
+            session.game_mut().shop_theme(),
+            Some(2),
+            "the ext-menu theme tab writes state+0x5C"
+        );
+
+        // One more live paint flushes the outbox the same way the
+        // window does; silence then means the arms queued nothing.
+        drop(painted_frame(&mut session));
+        assert_eq!(session.game_mut().take_exit_shop(), None);
+        assert_eq!(session.game_mut().take_shop_buy(), None);
+        assert!(
+            matches!(
+                gateway.reports.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "browse chrome must send no 5000-family frame"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// Boot -> Room -> Item Shop -> staged GO MYROOM press. The exe
+    /// case `0x14200003` requests state 4, which installs CStateMyroom
+    /// (`ev_541e0dc4…`, `ev_bf900e2a…`, `ev_fcb252ad…`); its neighbor
+    /// BACK alone sends 5007 (`ev_58236c4d…`).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> GameLoop::ingest_snapshot ->
+    ///   ScreenGame::click_room_control -> visit_side(Shop) ->
+    ///   GameLoop::ingest_snapshot -> ScreenGame::click_side_screen ->
+    ///   ScreenGame::click_shop(GoMyRoom) -> ScreenGame::switch_side ->
+    ///   ScreenGame::visit_side(MyRoom) -> mount_staged_side_art.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_shop_go_myroom_enters_myroom_without_an_exit_send() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let itemshop = &room_top_tabs()[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        drop(painted_frame(&mut session));
+        wait_for_enter_shop(&gateway.reports, itemshop.id);
+        while gateway.reports.try_recv().is_ok() {}
+
+        click_staged_shop_control(&mut session, SHOP_GOMYROOM_CODE, 0);
+
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::MyRoom),
+            "state 4 installs MyRoom"
+        );
+        assert!(
+            session
+                .game_mut()
+                .staged_side_control_rect(MYROOM_GOSHOP_CODE)
+                .is_some(),
+            "the MyRoom panel is staged from State_MyRoom.bnd"
+        );
+        drop(painted_frame(&mut session));
+        assert_eq!(session.game_mut().take_exit_shop(), None);
+        assert!(
+            matches!(
+                gateway.reports.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "GO MYROOM must not queue a wire frame"
+        );
         finish(session, gateway.server);
     }
 }

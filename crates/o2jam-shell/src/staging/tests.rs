@@ -6,10 +6,10 @@ use crate::avatar::{
     PLAYING_BACKDROP_CODE,
 };
 use crate::screens::side::{
-    cash_charge_close_hit, shop_action_at, ShopAction, CASH_CHARGE_WEB_CODE,
-    SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
-    SHOP_ITEMWON_FIRST_CODE, TUTORIAL_RECEPTOR_SPRITES,
+    cash_charge_close_hit, shop_action_at, shop_action_at_on_board, ShopAction,
+    CASH_CHARGE_WEB_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE,
+    SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMPRE_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, TUTORIAL_RECEPTOR_SPRITES,
 };
 
 #[test]
@@ -398,10 +398,13 @@ fn live_shop_bnd_stages_the_audit_visible_row_and_price_origin() {
         Some(ShopAction::ToggleRow(0)),
         "the exe row-pick pixel reaches the first staged buy control"
     );
+    // The twelve ext-menu theme tabs overlap the raw row art but are
+    // hidden until EXTMENU_ON (`shop_extmenu_kept`, #178 T7). A closed
+    // board must let the click fall through to the figure.
     assert_eq!(
-        shop_action_at(&art.placements, 260, 195),
+        shop_action_at_on_board(&art.placements, 260, 195, false),
         None,
-        "the raw BND center stays on the figure"
+        "the raw BND center stays on the figure while filters are hidden"
     );
     let won = art
         .placements

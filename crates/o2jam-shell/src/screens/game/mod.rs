@@ -99,20 +99,20 @@ use super::side::{
     paint_side_scene_live, paint_side_scene_selected, paint_tutorial_scene, password_action_at,
     planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
     select_index_matches, select_music_rows, select_music_songs_with_labels,
-    select_row_column_text, select_row_hit, shop_action_at, shop_category_index, shop_extmenu_kept,
-    shop_panel_kept, shop_shop_frame_for, shop_submenu_caption_kept, shop_tooltip_kept,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
-    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
-    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand,
-    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
-    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
-    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
-    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
-    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
-    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE,
-    MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
+    select_row_column_text, select_row_hit, shop_action_at_on_board, shop_category_index,
+    shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for, shop_submenu_caption_kept,
+    shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
+    MusicShopGenreFilter, MusicShopMessengerState, MusicShopNotice, MusicShopRow,
+    MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction,
+    PasswordForm, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
+    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
+    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
+    TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow, WalletState,
+    CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE,
+    MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
     ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
     SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
     SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
@@ -4126,9 +4126,11 @@ impl ScreenGame {
     /// Replaces four separate public queries (#258).
     #[must_use]
     pub fn press_kind_at(&self, x: i32, y: i32) -> PressKind {
-        // An open sheet owns the pointer: a click under it never
-        // reaches a Room row (the exe's dialog manager consumes it).
-        if self.dialog_owns_input() {
+        // An open sheet or side screen owns the pointer: a click over
+        // its board never reaches a Room row underneath. The session
+        // bridge used to queue a room join from a shop tab at the same
+        // canvas point, swallowing the click before the side router.
+        if self.dialog_owns_input() || self.side.is_some() {
             return PressKind::Local;
         }
         match self.flow.current() {
@@ -7246,6 +7248,28 @@ impl ScreenGame {
         true
     }
 
+    /// Switch an open side screen to another side without returning
+    /// to the lobby flow. `visit_side` refuses a visit while a side is
+    /// open, so the Shop GO MYROOM arm closes its own side first and
+    /// re-enters from the stored lobby origin. No exit opcode is
+    /// queued: exe `FUN_00499760` case `0x14200003` requests state 4
+    /// (`ev_541e0dc4…`) and installs CStateMyroom (`ev_fcb252ad…`);
+    /// only the neighboring BACK arm sends 5007 (`ev_58236c4d…`).
+    /// A disallowed return or visit leaves the current side untouched.
+    pub fn switch_side(&mut self, target: SideScreen) -> bool {
+        let (Some(current), Some(origin)) = (self.side, self.side_origin) else {
+            return false;
+        };
+        if !can_return_side(current, origin) || !can_visit_side(origin, target) {
+            return false;
+        }
+        if !self.leave_side() {
+            return false;
+        }
+        self.side_origin = Some(origin);
+        self.visit_side(target)
+    }
+
     /// Stage the lanking board catalog (`OJNList.dat` order, owned
     /// copies so the board outlives the parse borrow; mirrors
     /// [`Self::set_song_catalog`]). Resets sort and pages.
@@ -7356,6 +7380,14 @@ impl ScreenGame {
     /// frame is claimed (#391).
     pub fn shop_category(&self) -> Option<usize> {
         self.shop.category()
+    }
+
+    /// Selected ext-menu theme tab (0..=11, `None` before a press).
+    /// The exe writes this word at `state+0x5C` in tab handler
+    /// `FUN_00498bc0` (`0x499399`); no wire frame belongs to the arm.
+    #[must_use]
+    pub fn shop_theme(&self) -> Option<usize> {
+        self.shop.theme()
     }
 
     /// Whether the live state-3 landing mounted the four set-item
@@ -7854,7 +7886,7 @@ impl ScreenGame {
     }
 
     /// Item-shop click through the control-code dispatch
-    /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
+    /// ([`shop_action_at_on_board`]): row toggles check the cart, `BUYITEM`
     /// opens the local web-purchase surface without a game opcode,
     /// both pagers step and hold at the ends, `ITEMPRE` previews the row
     /// good in the avatar pane, `ITEMBACK` reverts to the equipped
@@ -7865,7 +7897,9 @@ impl ScreenGame {
         if self.side != Some(SideScreen::Shop) {
             return;
         }
-        let Some(action) = shop_action_at(&self.side_placements, x, y) else {
+        let Some(action) =
+            shop_action_at_on_board(&self.side_placements, x, y, self.shop.ext_menu_open())
+        else {
             return;
         };
         let owned = self.shop.bag_goods(self.shop_inventory());
@@ -7879,11 +7913,12 @@ impl ScreenGame {
                 }
             }
             ShopAction::GoMyRoom => {
-                // Static arm `0x14200003` (`ev_f3ad15be…`): screen
-                // change only. The session outbox stays untouched —
-                // no 5007 and no invented opcode on this arm. The
-                // tapped destination frame is the OPEN next step.
-                let _ = self.leave_side();
+                // Exe arm `0x14200003` requests state 4 = CStateMyroom
+                // (`ev_541e0dc4…`, `ev_bf900e2a…`, `ev_fcb252ad…`).
+                // Switch Shop -> MyRoom from the stored lobby origin;
+                // the outbox stays untouched (no 5007, no invented
+                // opcode). One tapped wire frame remains OPEN.
+                let _ = self.switch_side(SideScreen::MyRoom);
             }
             ShopAction::OpenCashCharge => {
                 // The charge plate leaves the shop board and opens
@@ -10426,11 +10461,10 @@ mod game_tests {
         SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
         SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
         SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
-        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_GROUP_CODES, SHOP_EXTMENU_ON_CODE,
-        SHOP_EXTMENU_SIDE_CODES, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE, SHOP_GIRL_CODE,
-        SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
-        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_EXTMENU_FIRST_CODE,
+        SHOP_EXTMENU_GROUP_CODES, SHOP_EXTMENU_ON_CODE, SHOP_EXTMENU_SIDE_CODES,
+        SHOP_GEMMONEY_CODE, SHOP_GIRL_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBACK_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE,
         SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
         SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
         SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_STATIC_BACK_CODE, SHOP_SUBMENU_BUTTONS,
@@ -27209,8 +27243,9 @@ mod game_tests {
             placements.push(area(SHOP_ITEMWON_FIRST_CODE + slot, 247, 169, 38, 13));
         }
         placements.push(area(SHOP_SCROLL_CODE, 221, 374, 545, 18));
-        placements.push(area(SHOP_SCROLL_LEFT_CODE, 0, 0, 18, 18));
-        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 527, 0, 18, 18));
+        // Same absolute arrow rects the shipped `.bnd` stages.
+        placements.push(area(SHOP_SCROLL_LEFT_CODE, 221, 374, 18, 18));
+        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 748, 374, 18, 18));
         placements.push(area(SHOP_BUYITEM_CODE, 17, 563, 49, 23));
         placements.push(area(SHOP_CART_LEFT_CODE, 198, 564, 47, 22));
         placements.push(area(SHOP_CART_RIGHT_CODE, 317, 564, 47, 22));
@@ -27709,73 +27744,78 @@ mod game_tests {
     }
 
     #[test]
-    // OPEN story #178: this guard certified behavior the owner disproved.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #178.
-    fn shop_unwired_browse_chrome_lands_nowhere() {
-        // Live caller chain: same catalog staging as the preview
-        // guard, then click_shop on ControlList-named chrome the live
-        // dump never stages (gender, submenu, ext-menu, planet
-        // pager, per-row gifts, gift commit), plus
-        // the music-shop TOP100 arm (#181: music-shop-only — the item
-        // shop owns no TOP100 control), plus the paint-target codes
-        // (icons, comment, gem cells, cart totals). Every one lands
-        // nowhere: no cart check, no page turn, no preview, no send.
-        let mut game = open_shop_board(10);
-        let mut codes = vec![
-            SHOP_GIRL_CODE,
-            SHOP_BOY_CODE,
-            SHOP_PLANET_UP_CODE,
-            SHOP_PLANET_DOWN_CODE,
-            SHOP_GIFTITEM_CODE,
-            SHOP_EXTMENU_ON_CODE,
-            SHOP_ITEMSHOW_FIRST_CODE,
-            SHOP_MYBAGITEM_FIRST_CODE,
-            SHOP_ITEMCOMMENT_CODE,
-            SHOP_CART_CHECKGEM_CODE,
-            SHOP_CART_CHECKMONEY_CODE,
-            SHOP_ITEMGEM_FIRST_CODE,
-            MSHOP_TOP100_CODE,
-        ];
-        for slot in 0..SHOP_CATEGORY_BUTTONS as u32 {
-            codes.push(SHOP_CATEGORY_FIRST_CODE + slot);
+    fn shop_browse_chrome_presses_change_scroll_tabs_and_grid() {
+        // Live caller chain:
+        //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
+        //   click_shop(SCROLL_RIGHT/category/submenu/theme/ITEMBUY/ITEMPRE/
+        //   ITEMBACK) -> shop_action_at -> ShopState::apply_action ->
+        //   paint_side -> paint_shop_board.
+        // Exe pins: scrollbar notify `0x14022047` (`ev_5eb3c20e…`,
+        // `ev_7509bf98…`), tab handler `FUN_00498bc0` (`ev_1240440e…`),
+        // and the ITEMBUY/ITEMPRE/ITEMBACK arms of `FUN_00499760`
+        // (`ev_650b7cf9…`). Every arm is local: no 5000-family send.
+        // Synthetic catalog and rects: no install-root data.
+        let mut game = open_shop_board(20);
+        let entry_goods = game.shop_visible_goods();
+        let mut landed_nowhere = Vec::new();
+
+        // The shipped `State_ItemShop.bnd` stages the scroll arrows at
+        // absolute canvas rects, not relative to the scroll parent.
+        game.click_shop(752, 382);
+        if game.shop_page() != 1 || game.shop_visible_goods() == entry_goods {
+            landed_nowhere.push("SCROLL_RIGHT");
         }
-        for slot in 0..SHOP_SUBMENU_BUTTONS as u32 {
-            codes.push(SHOP_SUBMENU_FIRST_CODE + slot);
+
+        stage_shop_control(&mut game, SHOP_CATEGORY_FIRST_CODE + 1, 700);
+        game.click_shop(705, 40);
+        if game.shop_category() != Some(1)
+            || game.shop_page() != 0
+            || game.shop_panel() != ShopPanel::MyBag
+            || game.shop_selected_submenu().is_some()
+        {
+            landed_nowhere.push("FASHION category");
         }
-        for slot in 0..8u32 {
-            codes.push(SHOP_ITEMGIFT_FIRST_CODE + slot);
+
+        stage_shop_control(&mut game, SHOP_SUBMENU_FIRST_CODE + 2, 730);
+        game.click_shop(735, 40);
+        if game.shop_selected_submenu() != Some(SHOP_SUBMENU_FIRST_CODE + 2) {
+            landed_nowhere.push("SUBMENU3");
         }
-        for slot in 0..SHOP_EXTMENU_BUTTONS as u32 {
-            codes.push(SHOP_EXTMENU_FIRST_CODE + slot);
+
+        game.click_shop(221, 188);
+        if game.shop_cart() != vec![1] || game.shop_panel() != ShopPanel::ShoppingBag {
+            landed_nowhere.push("ITEMBUY1");
         }
-        let area = |code: u32, index: usize| ScenePlacement {
-            role: PlacementRole::Single,
-            id: String::new(),
-            code,
-            sprite: None,
-            rect: Rect {
-                x: 10 + (index as i32) * 15,
-                y: 30,
-                w: 10,
-                h: 10,
-            },
-        };
-        for (index, code) in codes.iter().enumerate() {
-            game.side_placements.push(area(*code, index));
+        game.click_shop(446, 215);
+        if game.shop_preview().is_none_or(|good| good.item_id != 2) {
+            landed_nowhere.push("ITEMPRE2");
         }
-        for (index, _) in codes.iter().enumerate() {
-            game.click_shop(10 + (index as i32) * 15 + 5, 35);
+        game.click_shop(126, 248);
+        if game.shop_preview().is_some() {
+            landed_nowhere.push("ITEMBACK");
         }
-        assert!(game.shop_cart().is_empty());
-        assert_eq!(game.shop_page(), 0);
-        assert_eq!(game.shop_cart_page(), 0);
-        assert_eq!(game.shop_bag_page(), 0);
-        assert_eq!(game.shop_preview(), None);
-        assert_eq!(game.take_shop_buy(), None);
-        assert_eq!(
-            game.take_refresh_bag(),
-            None,
-            "BAGSORT owns the static 5038, not this no-op family"
+
+        // The twelve theme tabs stage hidden; EXTMENU_ON opens their
+        // face before the theme press, as the live leg does.
+        stage_shop_control(&mut game, SHOP_EXTMENU_ON_CODE, 755);
+        game.stage_shop_extmenu_ready(true);
+        game.click_shop(760, 40);
+        stage_shop_control(&mut game, SHOP_EXTMENU_FIRST_CODE + 2, 790);
+        game.click_shop(795, 40);
+        if game.shop_theme() != Some(2) {
+            landed_nowhere.push("EXTMENU_AQUA");
+        }
+
+        if game.take_shop_buy().is_some()
+            || game.take_exit_shop().is_some()
+            || game.take_refresh_bag().is_some()
+            || game.take_start_payment().is_some()
+        {
+            landed_nowhere.push("5000-family send");
+        }
+        assert!(
+            landed_nowhere.is_empty(),
+            "browse chrome landed nowhere: {landed_nowhere:?}"
         );
         assert_eq!(game.side(), Some(SideScreen::Shop));
     }
@@ -28488,15 +28528,15 @@ mod game_tests {
     }
 
     #[test]
-    // OPEN story #178: this guard certified behavior the owner disproved.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #178.
-    fn item_shop_go_myroom_leaves_without_an_exit_send() {
-        // Live caller chain (once the control stages):
+    fn item_shop_go_myroom_enters_myroom_without_an_exit_send() {
+        // Live caller chain:
         //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
-        //   click_shop(GOMYROOM 0x14200003) -> leave_side (screen change
-        //   only). Static pin `FUN_00499760` arm `0x14200003` emits no
-        //   virtual send, unlike the 5007 on BACK `0x14200002`.
-        //   OPEN (next step): one tapped GO MYROOM frame + wire tap.
+        //   click_shop(GOMYROOM `0x14200003`) -> switch_side(MyRoom) ->
+        //   leave_side -> visit_side(MyRoom) -> mount_staged_side_art.
+        // Exe pin: `FUN_00499760` case `0x14200003` calls
+        // `FUN_00478c50(4)` (`ev_541e0dc4…`, `ev_bf900e2a…`), and state 4
+        // installs CStateMyroom (`ev_d6a8ea7f…`, `ev_fcb252ad…`). The
+        // neighboring BACK arm alone sends 5007 (`ev_58236c4d…`).
         // Synthetic placement: no install-root data (hidden-arm safe).
         let mut game = open_shop_board(10);
         game.side_placements.push(ScenePlacement {
@@ -28514,7 +28554,11 @@ mod game_tests {
 
         game.click_shop(510, 40);
 
-        assert_eq!(game.side(), None, "GOMYROOM changes the screen");
+        assert_eq!(
+            game.side(),
+            Some(SideScreen::MyRoom),
+            "GOMYROOM enters state 4 = MyRoom, not the lobby"
+        );
         assert_eq!(
             game.take_exit_shop(),
             None,
