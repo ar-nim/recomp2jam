@@ -66,25 +66,26 @@ use super::paint::{
     information_cancel_fallback_rect, information_ok_fallback_rect, list_row_hit,
     myroom_notice_board_frame, myroom_page_number_frame, myroom_pc_room_mark_frame,
     myroom_pc_room_mark_kept, paint_avi_scene, paint_billing_failure_notice,
-    paint_cash_charge_frame, paint_channel_chat, paint_dialog_frame_record,
-    paint_dialog_frame_record_at_anchor_of, paint_dialog_scene, paint_dialog_scene_filtered,
-    paint_information_message, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_cashfillup_notice, paint_music_shop_face,
-    paint_music_shop_genre_frames, paint_music_shop_lightboard_entry_notice,
-    paint_music_shop_notice, paint_music_shop_owned_rows, paint_music_shop_progress,
-    paint_music_shop_row_selection, paint_music_shop_search, paint_music_shop_tooltip,
-    paint_music_shop_top100_chrome, paint_music_shop_wallet, paint_myroom_confirm,
-    paint_myroom_figure, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_relay_down_dialog, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_no_response_dialog,
-    paint_room_scene_with_selection, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
-    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
+    paint_cash_charge_frame, paint_channel_button_pair, paint_channel_chat,
+    paint_dialog_frame_record, paint_dialog_frame_record_at_anchor_of, paint_dialog_scene,
+    paint_dialog_scene_filtered, paint_information_message, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart,
+    paint_music_shop_cashfillup_notice, paint_music_shop_face, paint_music_shop_genre_frames,
+    paint_music_shop_lightboard_entry_notice, paint_music_shop_notice, paint_music_shop_owned_rows,
+    paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
+    paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
+    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_list, paint_room_member_word,
+    paint_room_no_response_dialog, paint_room_scene_with_selection, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
+    paint_shop_item_icons, paint_shop_notice_text, paint_shop_preview, paint_shop_scene,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    seat_figure_is_male, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
     waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
     PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
     StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
@@ -133,7 +134,9 @@ use o2jam_file::{
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::ClaimGift;
+use o2jam_net::message::RoomUserListEntry;
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
+use o2jam_net::relay::default_equipment_control_ids;
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -918,6 +921,11 @@ pub struct ScreenGame {
     /// of its 32-bit id; our wire id is a `u16`, so the same nibble is
     /// bits 12..15 here.
     room_song_variant_nibble: u8,
+    /// Full 32-bit member word keyed by room number. The 2023 handler
+    /// ORs the shifted high nibble into the row word at `+0x24`
+    /// (`0x55c790`, REA `ev dce9.1ea8…`); the wire row keeps only the
+    /// low twelve bits (#990).
+    room_member_words: HashMap<i32, u32>,
     /// Local effect selection on Waiting entry. `FUN_004aac80` (file
     /// `0xaac80`) seeds `DAT_007789dc` from `FUN_004bb2c0` whenever
     /// that local word is zero; the helper always sets bit 31 (falling
@@ -1462,7 +1470,17 @@ fn stage_seat_figures(
         return;
     };
     if let Some(character) = character.as_ref() {
-        let male = character.gender == Gender::Male;
+        // #951: the local seat also follows its 3003 gender byte when
+        // the snapshot names that seat; the fetched 2001 gender is the
+        // fallback for a room staged without a local member row.
+        let male = room
+            .slots
+            .iter()
+            .find(|slot| slot.index == room.member_id)
+            .and_then(|slot| slot.member.as_ref())
+            .map_or(character.gender == Gender::Male, |member| {
+                seat_figure_is_male(member.gender)
+            });
         let figure = load_worn_figure(archive, table, &character.equipment, male);
         if !figure.is_empty() {
             figures[0] = Some(figure);
@@ -1472,7 +1490,11 @@ fn stage_seat_figures(
         let Some(member) = slot.member.as_ref() else {
             continue;
         };
-        let male = Gender::from_byte(member.gender) == Some(Gender::Male);
+        // #951: the exe's gender reader picks its paired control id on
+        // zero vs nonzero, not only on the binary male byte. The paint
+        // helper consumes that codec choice so a byte such as 2 still
+        // stages the male figure.
+        let male = seat_figure_is_male(member.gender);
         let figure = load_worn_figure(archive, table, &member.equipment, male);
         if !figure.is_empty() {
             figures[offset + 1] = Some(figure);
@@ -1516,6 +1538,7 @@ impl ScreenGame {
             waiting_start_armed: false,
             waiting_back_armed: false,
             room_song_variant_nibble: 0,
+            room_member_words: HashMap::new(),
             waiting_local_selection_random: true,
             waiting_team_highlight_armed: false,
             auto_pick_level_cap: u16::MAX,
@@ -2717,6 +2740,59 @@ impl ScreenGame {
     pub fn set_waiting_channel_number(&mut self, channel_id: u16) -> &mut Self {
         self.waiting_channel_number = Some(channel_id);
         self
+    }
+
+    /// Default equipment control ids the exe stages from the resident
+    /// channel record (`0x540e40`, file `0x140e40`; REA
+    /// `ev 00bb.3bfc…`). `None` until a 1003 channel id lands, so no
+    /// pair is invented on an offline boot (#959).
+    #[must_use]
+    pub fn channel_button_pair_ids(&self) -> Option<[u32; 5]> {
+        self.waiting_channel_number
+            .map(u32::from)
+            .map(default_equipment_control_ids)
+    }
+
+    /// Stage the named rows of a decoded 2011 answer (#970). Web
+    /// content stays out of this client; only wire names are shown.
+    pub fn set_room_user_sheet(&mut self, users: &[RoomUserListEntry]) -> &mut Self {
+        self.chat.set_room_user_sheet(users);
+        self
+    }
+
+    /// Named rows currently staged for the Room user sheet.
+    #[must_use]
+    pub fn room_user_sheet(&self) -> &[RoomUserListEntry] {
+        self.chat.room_user_sheet()
+    }
+
+    /// Stage the exe's zero-ink 2018 refusal line (#973). The drain's
+    /// delivery arm keeps its `<<` row; this is the named-failure arm.
+    pub fn push_whisper_refusal(&mut self, chat: LobbyChat, name: &str) -> &mut Self {
+        self.chat.push_whisper_refusal(chat, name);
+        self
+    }
+
+    /// OR the shifted high nibble of one 2023 parameter into the row's
+    /// 32-bit member word, keeping the low twelve bits the wire row
+    /// already stages (#990).
+    pub fn stage_room_member_word(&mut self, number: i32, parameter: u16) -> u32 {
+        let low = u32::from(parameter & 0x0FFF);
+        // The high nibble moves four bits up into the 32-bit word,
+        // matching the room-row map at `docs/room-enums.md` (`+0x86`
+        // u16, low twelve kept, high nibble shifted into `+0x88`).
+        let shifted_high = u32::from(parameter & 0xF000) << 4;
+        let word = low
+            | shifted_high
+            | (self.room_member_words.get(&number).copied().unwrap_or(0) & 0xFFFF_0000);
+        self.room_member_words.insert(number, word);
+        word
+    }
+
+    /// Full staged member word of one room, when a 2023 event named it.
+    #[must_use]
+    pub fn room_member_word(&self, number: i32) -> Option<u32> {
+        self.room_member_words.get(&number).copied()
     }
 
     /// Stage the accepted room number for the waiting header wells.
@@ -9583,6 +9659,19 @@ impl ScreenGame {
                 self.hovered_room_panel(),
                 Some(self.room_filter.tab_code()),
             );
+            // #959: the channel-keyed default control ids and the
+            // #990 member word paint through the same staged panel as
+            // the live rows. Both stay dark when no wire value staged.
+            if let Some(ids) = self.channel_button_pair_ids() {
+                paint_channel_button_pair(frame, &art.placements, ids);
+            }
+            if let Some(word) = self
+                .rooms
+                .get(self.room_highlight)
+                .and_then(|room| self.room_member_word(room.number))
+            {
+                paint_room_member_word(frame, &art.placements, word);
+            }
         } else if self.rooms.is_empty() {
             paint_screen(frame, Screen::Room);
         } else {
@@ -9624,6 +9713,19 @@ impl ScreenGame {
                         &rect,
                         o2jam_render::pack_xrgb(0x1A, 0x1A, 0x2E),
                     );
+                    // #970: wire names only — the exe's web view itself
+                    // stays outside this client. Each row occupies one
+                    // 8 px line inside the staged DESC well.
+                    for (offset, user) in self.chat.room_user_sheet().iter().take(3).enumerate() {
+                        let step = i32::try_from(offset).unwrap_or(i32::MAX);
+                        draw_text(
+                            frame,
+                            rect.x,
+                            rect.y + step.saturating_mul(8),
+                            &format!("{} ({}) L{}", user.username, user.nickname, user.level),
+                            o2jam_render::pack_xrgb(0xE6, 0xE6, 0xE6),
+                        );
+                    }
                 }
             }
         }
@@ -35565,8 +35667,10 @@ mod game_tests {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
         }
+        // #973: `ChannelChatMessage` now carries the zero-ink refusal
+        // kind, so the debug-form hash includes that flag.
         assert_eq!(
-            hash, 0x03C2_0C45_BBE7_220F,
+            hash, 0x5247_4CAE_149E_ADF1,
             "chat outputs drifted: {observed}"
         );
     }

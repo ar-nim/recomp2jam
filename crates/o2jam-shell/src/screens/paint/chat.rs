@@ -136,6 +136,17 @@ pub(crate) fn chat_row_ink(admin: bool) -> u32 {
     }
 }
 
+/// Ink of one display row: the 2018 refusal kind carries the exe's
+/// zero value, so it paints no glyphs even though the row is staged.
+#[must_use]
+pub fn chat_row_ink_for(message: &ChannelChatMessage) -> u32 {
+    if message.zero_ink {
+        0
+    } else {
+        chat_row_ink(message.admin)
+    }
+}
+
 /// Frame y of history row `offset`: the list origin plus
 /// [`WAITING_CHAT_ROW_H`] steps (photo-pinned pitch).
 #[must_use]
@@ -240,6 +251,10 @@ pub struct ChannelChatMessage {
     pub admin: bool,
     /// Whisper addressee for 2019 rows (`None` for channel lines).
     pub whisper_recipient: Option<String>,
+    /// True for the exe's 2018 refusal arm, which posts its failure
+    /// name with zero ink (`0x55c190`, file `0x15c190`; REA
+    /// `ev 4abe.96c9…`). All other row kinds keep their coloured ink.
+    pub zero_ink: bool,
 }
 
 impl ChannelChatMessage {
@@ -251,6 +266,7 @@ impl ChannelChatMessage {
             text: text.to_owned(),
             admin: false,
             whisper_recipient: None,
+            zero_ink: false,
         }
     }
 
@@ -262,6 +278,7 @@ impl ChannelChatMessage {
             text: text.to_owned(),
             admin: true,
             whisper_recipient: None,
+            zero_ink: false,
         }
     }
 
@@ -274,6 +291,7 @@ impl ChannelChatMessage {
             text: text.to_owned(),
             admin: false,
             whisper_recipient: Some(recipient.to_owned()),
+            zero_ink: false,
         }
     }
 
@@ -289,6 +307,20 @@ impl ChannelChatMessage {
             text: text.to_owned(),
             admin: true,
             whisper_recipient: None,
+            zero_ink: false,
+        }
+    }
+
+    /// 2018 refusal row: the exe reads one name and posts it with a
+    /// zero ink value, so the row paints no glyphs at all (#973).
+    #[must_use]
+    pub fn refusal(name: &str) -> Self {
+        Self {
+            sender: String::new(),
+            text: name.to_owned(),
+            admin: false,
+            whisper_recipient: None,
+            zero_ink: true,
         }
     }
 
@@ -305,6 +337,7 @@ impl ChannelChatMessage {
             text: rank_notice_board_text(nickname, song_title, ranking),
             admin: true,
             whisper_recipient: None,
+            zero_ink: false,
         }
     }
 }
@@ -367,7 +400,7 @@ pub fn paint_channel_chat(
             frame.w as i32 / 4,
             y,
             &channel_chat_row_text(message),
-            chat_row_ink(message.admin),
+            chat_row_ink_for(message),
         );
     }
 }
@@ -419,7 +452,7 @@ pub fn paint_room_chat(
                 list.x,
                 list.y.saturating_add(step.saturating_mul(ROOM_CHAT_ROW_H)),
                 &channel_chat_row_text(message),
-                chat_row_ink(message.admin),
+                chat_row_ink_for(message),
             );
         }
     }

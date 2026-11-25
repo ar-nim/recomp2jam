@@ -6,7 +6,7 @@ pub use super::super::paint::ChatSendMode;
 use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
 use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
 use crate::screen::Screen;
-use o2jam_net::message::KeyMode;
+use o2jam_net::message::{KeyMode, RoomUserListEntry};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
     RoomListEntry, RoomState, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -442,6 +442,9 @@ pub(super) struct ChatState {
     room_join_refusal: Option<RoomJoinRefusal>,
     whisper_delivery: Option<WhisperDelivery>,
     room_user_sheet_open: bool,
+    /// Named rows of a decoded 2011 sheet. Web content stays outside
+    /// this client; these are the wire names the local stand-in shows.
+    room_user_sheet: Vec<RoomUserListEntry>,
     room_user_sheet_gift_on: bool,
     room_user_sheet_url_gift_on: bool,
     waiting_draft: String,
@@ -850,6 +853,24 @@ impl ChatState {
             self.panel_mut(LobbyChat::Channel).push_row(row.clone());
             self.panel_mut(LobbyChat::Room).push_row(row);
         }
+    }
+
+    /// Stage the named rows of one 2011 answer. A later answer
+    /// replaces the sheet; an empty answer clears it (#970).
+    pub(super) fn set_room_user_sheet(&mut self, users: &[RoomUserListEntry]) {
+        self.room_user_sheet = users.to_vec();
+    }
+
+    /// Named rows currently staged for the Room user sheet.
+    pub(super) fn room_user_sheet(&self) -> &[RoomUserListEntry] {
+        &self.room_user_sheet
+    }
+
+    /// Stage one 2018 refusal: the exe posts the named failure with
+    /// zero ink and no echoed text (`0x55c190`, REA `ev 4abe.96c9…`).
+    pub(super) fn push_whisper_refusal(&mut self, chat: LobbyChat, name: &str) {
+        let row = ChannelChatMessage::refusal(name);
+        self.panel_mut(chat).push_row(row);
     }
 
     /// Mount the local stand-in for the exe's web user-list sheet.

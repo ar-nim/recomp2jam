@@ -5,6 +5,29 @@
 //! existing scenario guards stay unchanged (#139 paint split).
 
 use super::*;
+use o2jam_net::relay::{gender_control_id, stored_team_from_wire, MEMBER_GENDER_CONTROL_IDS};
+
+/// Whether one raw member gender byte picks the nonzero-gender seat
+/// control id (and therefore the male worn figure). The exe branches
+/// zero against nonzero only (`0x540c90`, file `0x140c90`; REA
+/// `ev b85e.5113…`), so bytes such as 2 and 0xFF take the same paired
+/// id as byte 1. The codec names the pair; this is the painter's use
+/// of that choice (#951).
+#[must_use]
+pub fn seat_figure_is_male(gender: u8) -> bool {
+    gender_control_id(gender) == MEMBER_GENDER_CONTROL_IDS[1]
+}
+
+/// Team byte the local seat paints from a raw wire team. The exe's
+/// direct team setter (`0x5400d0`, file `0x1400d0`; REA
+/// `ev 4e62.b1ac…`) stores the derived byte at `+0x31`; the wire
+/// reader increments the same slot (`0x540d40`, file `0x140d40`).
+/// This keeps the wire byte on the staged member while the local
+/// mark consumes its derived value (#955).
+#[must_use]
+pub fn staged_derived_team(wire_team: u8) -> u8 {
+    stored_team_from_wire(wire_team)
+}
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
 pub(crate) const WAITING_SEATS: usize = 8;
@@ -101,8 +124,10 @@ fn peer_seat(slot: &RoomSlot) -> WaitingSeat {
 /// Eight seat views: our seat first, then the wire slots, padded empty.
 ///
 /// Wire slot `i` owns cover `i`; the local member owns cover
-/// `member_id` when the 3003 snapshot has no row for it. Peers are no
-/// longer shifted by one, and self is no longer forced to cover 0.
+/// `member_id` when the 3003 snapshot has no row for it. Peers keep
+/// their raw wire team; the local seat takes the derived team byte the
+/// direct setter stores (#955). Peers are no longer shifted by one,
+/// and self is no longer forced to cover 0.
 #[must_use]
 pub(crate) fn waiting_seats(room: &JoinedRoom) -> Vec<WaitingSeat> {
     let mut seats: Vec<WaitingSeat> = (0..WAITING_SEATS).map(|_| empty_seat()).collect();
@@ -112,6 +137,11 @@ pub(crate) fn waiting_seats(room: &JoinedRoom) -> Vec<WaitingSeat> {
         }
     }
     let own = usize::from(room.member_id);
+    if let Some(seat) = seats.get_mut(own) {
+        if matches!(seat.kind, SeatKind::Occupied { .. }) {
+            seat.team = staged_derived_team(seat.team);
+        }
+    }
     if seats
         .get(own)
         .is_some_and(|seat| matches!(seat.kind, SeatKind::Empty))
@@ -1345,6 +1375,9 @@ pub(crate) fn staged_seats(
             continue;
         };
         *seat = staged_slot_seat(slot);
+        if slot.index == room.member_id {
+            seat.team = staged_derived_team(seat.team);
+        }
     }
     if seats.get(own).is_some_and(|seat| !seat.present) {
         let own_slot = room
@@ -1355,7 +1388,7 @@ pub(crate) fn staged_seats(
         seats[own] = StagedSeat {
             name: local_name.unwrap_or("YOU").to_owned(),
             level: own_slot.map(|member| member.level),
-            team: own_slot.map_or(room.team, |member| member.team),
+            team: own_slot.map_or(room.team, |member| staged_derived_team(member.team)),
             ready: own_slot.is_some_and(|member| member.ready),
             present: true,
             locked: false,
