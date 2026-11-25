@@ -2,7 +2,7 @@
 //! Declared `#[cfg(test)]` by `session.rs`, so `use super::*;` reaches the
 //! crate-private session items the drain paths live on.
 
-use super::session_tests::{joined_snapshot, joined_waiting_session, paint_until};
+use super::session_tests::{joined_snapshot, joined_waiting_session, member_on_team, paint_until};
 
 /// #994: the 3010 room-removal event picks one of the two pinned
 /// captions from LOCAL seat state (`0x4bb700`; CP949 strings at
@@ -17,9 +17,12 @@ mod removal_notice {
     /// One scripted 3010 through the real session drain with the
     /// staged own-seat state word set to `state`. The caption is read
     /// from the same shell accessor the painter uses.
-    fn caption_for_own_seat_state(state: i32) -> Option<String> {
+    fn caption_for_own_seat_state(state: u8) -> Option<String> {
         let mut room = joined_snapshot();
-        room.slots[0].state_code = state;
+        let mut member = member_on_team("HOST", true, 0);
+        member.music_state = state;
+        room.slots[0].state_code = 1;
+        room.slots[0].member = Some(member);
         let (mut session, server) = joined_waiting_session(room, move |mut stream| {
             stream.write_all(&encode_frame(3010, &[])).unwrap();
         });

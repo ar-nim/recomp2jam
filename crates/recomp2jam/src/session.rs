@@ -4067,10 +4067,14 @@ impl OnlineSession {
         let Some(room) = self.joined_room.as_ref() else {
             return 0;
         };
+        // The exe reads the own-seat music word (+0x217c mirror): zero
+        // is plain removal, nonzero (NoMusic/NoAccess/Downloading) is
+        // the missing-song caption (`0x55e2f0` addendum).
         room.slots
             .iter()
             .find(|slot| slot.index == room.member_id)
-            .map_or(0, |slot| slot.state_code)
+            .and_then(|slot| slot.member.as_ref())
+            .map_or(0, |member| i32::from(member.music_state))
     }
 
     /// 3014 clears the same seats and posts its one fixed caption.
@@ -4618,6 +4622,7 @@ impl OnlineSession {
             return;
         };
         self.game.track_room_user_list_reply();
+        self.game.set_room_user_sheet(&users.users);
         tracing::debug!(count = users.users.len(), "room user list decoded");
     }
 
@@ -4642,6 +4647,10 @@ impl OnlineSession {
         self.rewrite_room_row(change.number, |room| {
             room.music_id = change.parameter & 0x0FFF;
         });
+        // The exe ORs the shifted high nibble into the row's 32-bit
+        // member word at `+0x24` (#990, pin `0x55c790`).
+        self.game
+            .stage_room_member_word(change.number, change.parameter);
     }
 
     /// 2025: the exe clears the row's skill list and reads the frame's
@@ -4663,6 +4672,12 @@ impl OnlineSession {
             tracing::debug!(id = frame.id, "dropping undecodable whisper answer");
             return;
         };
+        if answer.invalid {
+            // The exe's refusal branch stages a zero-ink row naming the
+            // undelivered recipient (#973, pin `0x55c190`).
+            self.game.push_whisper_refusal(chat, &answer.recipient);
+            return;
+        }
         let mut text = answer.recipient;
         if let Some(content) = answer.content {
             text.push_str(": ");
@@ -4742,6 +4757,11 @@ impl OnlineSession {
                 match session.gateway.next_frame() {
                     Ok(frame) if frame.id == Response::GetUserList as u16 => {
                         session.game.track_room_user_list_reply();
+                        // A 2011 answer populates the Room user sheet
+                        // whichever drain reads it (#970, pin `0x55bec0`).
+                        if let Ok(users) = RoomUserList::decode_frame(&frame) {
+                            session.game.set_room_user_sheet(&users.users);
+                        }
                         break;
                     }
                     Ok(frame) if Generic::from_id(frame.id).is_some() => {}
@@ -5373,7 +5393,7 @@ pub(super) mod session_tests {
     /// with more than one member always spans distinct teams — which is
     /// exactly what the exe's team-balance gate (VA `0x4b5560`) needs to
     /// pass. Both members on one team is a shape the server never sends.
-    fn member_on_team(nickname: &str, ready: bool, team: u8) -> o2jam_net::RoomMember {
+    pub(super) fn member_on_team(nickname: &str, ready: bool, team: u8) -> o2jam_net::RoomMember {
         o2jam_net::RoomMember {
             nickname: nickname.to_owned(),
             level: 1,

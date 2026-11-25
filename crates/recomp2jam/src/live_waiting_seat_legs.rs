@@ -579,23 +579,19 @@ fn live_waiting_ready_answer_clears_the_4039_progress_and_opens_start() {
 ///   -> ScreenGame::waiting_notice -> paint_waiting_scene_with_confirm
 ///   -> paint_waiting_staged (notice over the room name plate).
 ///
-/// BLOCKED: the 3010 caption arm does not exist, so both causes leave
-/// the same pixels. Ignored until the senior re-slices the
-/// shell/session caption path; run with `--ignored` to see the red.
 #[test]
-#[ignore = "#994: shell/session 3010 removal-caption arm outside this lane's files"]
 fn live_waiting_removal_cause_captures_different_notice_pixels() {
     if !archives_present() {
         println!("skip: missing install-root interface archive");
         return;
     }
+    // The 3010 body is empty in the exe; the caption derives from the
+    // own-seat music word (`0x55e2f0`, `docs/pins/net-b.md` addendum).
     let mut captions = Vec::new();
-    for cause in [0u8, 1u8] {
-        let gateway = spawn_seat_gateway(
-            scripted_room(0, 1),
-            Vec::new(),
-            vec![encode_frame(3010, &[cause])],
-        );
+    for own_music_state in [0u8, 4] {
+        let mut room = scripted_room(0, 1);
+        room.slots[0].member.as_mut().unwrap().music_state = own_music_state;
+        let gateway = spawn_seat_gateway(room, Vec::new(), vec![encode_frame(3010, &[])]);
         let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
         dismiss_splash(&mut session);
         enter_room_by_clicks(&mut session);
@@ -612,6 +608,6 @@ fn live_waiting_removal_cause_captures_different_notice_pixels() {
     }
     assert_ne!(
         captions[0], captions[1],
-        "the two 3010 causes must paint different removal captions"
+        "own-seat state 0 and nonzero must paint different removal captions"
     );
 }

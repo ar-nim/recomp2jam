@@ -465,3 +465,90 @@ fn painting_a_gateway_room_list_uses_the_session_paint_not_a_staged_shell_list()
     server.join().unwrap();
     assert_ne!(before, after, "the 2003 frame changed the painted board");
 }
+
+#[test]
+fn scripted_2011_user_list_populates_the_staged_user_sheet() {
+    // #970 wiring. Live caller chain: main.rs::run_play ->
+    // OnlineSession::paint -> poll_wire -> poll_lobby_chat ->
+    // apply_lobby_frame -> note_room_user_list ->
+    // ScreenGame::set_room_user_sheet.
+    let users = RoomUserList {
+        users: vec![
+            RoomUserListEntry {
+                id: 1,
+                username: "host".to_owned(),
+                nickname: "Host".to_owned(),
+                level: 12,
+            },
+            RoomUserListEntry {
+                id: 2,
+                username: "peer".to_owned(),
+                nickname: "Peer".to_owned(),
+                level: 30,
+            },
+        ],
+    };
+    let (mut session, server) = room_session(move |mut stream| {
+        stream.write_all(&users.encode()).unwrap();
+    });
+    session.game_mut().set_room_no_response_relay_down(true);
+    assert!(session.game_mut().track_room_user_list_send());
+    paint_until(&mut session, |session| {
+        session.game.room_user_sheet().len() == 2
+    });
+    server.join().unwrap();
+    let sheet = session.game.room_user_sheet();
+    assert_eq!(sheet[0].nickname, "Host");
+    assert_eq!(sheet[1].level, 30);
+}
+
+#[test]
+fn scripted_2018_refusal_stages_the_zero_ink_row() {
+    // #973 wiring. Live caller chain: main.rs::run_play ->
+    // OnlineSession::paint -> poll_wire -> poll_lobby_chat ->
+    // apply_lobby_frame -> apply_whisper_answer ->
+    // ScreenGame::push_whisper_refusal -> ChatState zero-ink row.
+    let refusal = o2jam_net::rooms::SendWhisperResponse {
+        invalid: true,
+        recipient: "Ghost".to_owned(),
+        content: None,
+    };
+    let (mut session, server) = room_session(move |mut stream| {
+        stream.write_all(&refusal.encode()).unwrap();
+    });
+    paint_until(&mut session, |session| {
+        session.game.room_chat().iter().any(|row| row.zero_ink)
+    });
+    server.join().unwrap();
+    let refusal_row = session
+        .game
+        .room_chat()
+        .iter()
+        .find(|row| row.zero_ink)
+        .expect("one refusal row");
+    assert!(refusal_row.text.contains("Ghost"));
+}
+
+#[test]
+fn scripted_2023_parameter_stages_the_member_word_high_nibble() {
+    // #990 wiring. Live caller chain: main.rs::run_play ->
+    // OnlineSession::paint -> poll_wire -> poll_lobby_chat ->
+    // apply_lobby_frame -> apply_room_parameter ->
+    // ScreenGame::stage_room_member_word.
+    let change = RoomParameterChanged {
+        number: 3,
+        parameter: 0x8123,
+        descriptor_a: 0,
+        descriptor_b: 0,
+    };
+    let (mut session, server) = room_session(move |mut stream| {
+        stream.write_all(&change.encode()).unwrap();
+    });
+    session.game_mut().set_rooms(vec![listed_row(3, "Jam")]);
+    paint_until(&mut session, |session| {
+        session.game.room_member_word(3) == Some(0x0008_0123)
+    });
+    server.join().unwrap();
+    assert_eq!(session.game.room_member_word(3), Some(0x0008_0123));
+    assert_eq!(session.game.listed_rooms()[0].music_id, 0x123);
+}
