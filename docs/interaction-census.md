@@ -498,3 +498,492 @@ Input edges with no matching ControlList entry:
 |---|---|---|
 | Result Confirm / Back key mirror | Confirm/Back mirror the staged buttons; wire shapes pinned by #87/#88. | OPEN: live key + target leg (#294); seam result_keys_mirror_the_staged_buttons (Tier 0) |
 | Event-ticket web call on solo Result entry | HTTP GET to `ticket_add.php?USER_INDEX_ID=…` (file `0x24a2d0`); not a gateway frame. | OPEN: live request-line capture and value-source pin |
+
+## MyRoom
+
+Source: the `BOUND "State_Myroom.bnd"` block of the pinned
+`ControlList_Interface.txt` (lines 436–583; 112 entries / 111 rects),
+with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
+`(code & 0xFFF) - 1`.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_STATE_MYROOM` (`0x15000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_SMYROOM_1` (`0x15100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_SMYROOM_BACK` (`0x15200002`) | button | Returns to the lobby side; #178 T8 disputes side-destination pins generally. | OPEN: live Back + destination leg; seam item_shop_go_myroom_leaves_without_an_exit_send (Tier 0) |
+| 2 | `IDC_BUTTON_SMYROOM_GOSHOP` (`0x15200003`) | button | Goes to Item Shop side; send shape unpinned (P0 in `docs/myroom.md`). | OPEN: REA dispatch plus Tier 3 click/destination leg |
+| 3 | `IDC_BUTTON_SMYROOM_ITEMSELL` (`0x15200004`) | button | Vacates the worn slot locally; send shape OPEN (#532). | OPEN: REA vacate opcode trace plus Tier 3 click (#532) |
+| 4 | `IDC_BUTTON_SMYROOM_INSTRUMENT` (`0x15200005`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 5 | `IDC_BUTTON_SMYROOM_HAIR` (`0x15200006`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 6 | `IDC_BUTTON_SMYROOM_ARTICLE` (`0x15200007`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 7 | `IDC_BUTTON_SMYROOM_GLOVES` (`0x15200008`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 8 | `IDC_BUTTON_SMYROOM_NECKLACE` (`0x15200009`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 9 | `IDC_BUTTON_SMYROOM_JACKET` (`0x1520000A`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 10 | `IDC_BUTTON_SMYROOM_PANTS` (`0x1520000B`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 11 | `IDC_BUTTON_SMYROOM_GLASSES` (`0x1520000C`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 12 | `IDC_BUTTON_SMYROOM_EARRING` (`0x1520000D`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 13 | `IDC_BUTTON_SMYROOM_CLOTHINGART` (`0x1520000E`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 14 | `IDC_BUTTON_SMYROOM_SHOES` (`0x1520000F`) | button | Equip-slot selector; 5004 slot derivation is exe-pinned, slot-selection semantics stay OPEN (#530). | OPEN: rig slot-filter capture (#530) + live equip leg; seam myroom_record_slot_byte_selects_the_well_not_the_equipment_ordinal (Tier 0) |
+| 15 | `IDC_TEXT_SMYROOM_O2MONEY` (`0x15400010`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 16 | `IDC_TEXT_SMYROOM_CHARGEMONEY` (`0x15400011`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 17 | `IDC_IMAGE_SMYROOM_AVATAR` (`0x15700012`) | static art | Worn figure; body 30 + face 35/36 when no body item is worn (#243). | OPEN: statics pin plus Tier 3 live-art pin |
+| 18 | `IDC_IMAGE_SMYROOM_INSTRUMENT` (`0x15600013`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 19 | `IDC_IMAGE_SMYROOM_HAIR` (`0x15600014`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 20 | `IDC_IMAGE_SMYROOM_ARTICLE` (`0x15600015`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 21 | `IDC_IMAGE_SMYROOM_GLOVES` (`0x15600016`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 22 | `IDC_IMAGE_SMYROOM_NECKLACE` (`0x15600017`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 23 | `IDC_IMAGE_SMYROOM_JACKET` (`0x15600018`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 24 | `IDC_IMAGE_SMYROOM_PANTS` (`0x15600019`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 25 | `IDC_IMAGE_SMYROOM_GLASSES` (`0x1560001A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 26 | `IDC_IMAGE_SMYROOM_EARRING` (`0x1560001B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 27 | `IDC_IMAGE_SMYROOM_CLOTHINGART` (`0x1560001C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 28 | `IDC_IMAGE_SMYROOM_SHOES` (`0x1560001D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 29 | `IDC_IMAGE_SMYROOM_WING` (`0x1560001E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 30 | `IDC_IMAGE_SMYROOM_INSTARTICLE` (`0x1560001F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 31 | `IDC_IMAGE_SMYROOM_PET` (`0x15600020`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 32 | `IDC_IMAGE_SMYROOM_ARTICLE_F` (`0x15600021`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 33 | `IDC_IMAGE_SMYROOM_CUSTUME` (`0x15600022`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 34 | `IDC_IMAGE_SMYROOM_MYBAGITEM1` (`0x15600023`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 35 | `IDC_IMAGE_SMYROOM_MYBAGITEM2` (`0x15600024`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 36 | `IDC_IMAGE_SMYROOM_MYBAGITEM3` (`0x15600025`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 37 | `IDC_IMAGE_SMYROOM_MYBAGITEM4` (`0x15600026`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 38 | `IDC_IMAGE_SMYROOM_MYBAGITEM5` (`0x15600027`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 39 | `IDC_IMAGE_SMYROOM_MYBAGITEM6` (`0x15600028`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 40 | `IDC_IMAGE_SMYROOM_MYBAGITEM7` (`0x15600029`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 41 | `IDC_IMAGE_SMYROOM_MYBAGITEM8` (`0x1560002A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 42 | `IDC_IMAGE_SMYROOM_MYBAGITEM9` (`0x1560002B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 43 | `IDC_IMAGE_SMYROOM_MYBAGITEM10` (`0x1560002C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 44 | `IDC_BUTTON_SMYROOM_BAGLEFT` (`0x1520002D`) | pager | Pages the owned-inventory face back; ten cells per page. | OPEN: live bag-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
+| 45 | `IDC_BUTTON_SMYROOM_BAGRIGHT` (`0x1520002E`) | pager | Pages the owned-inventory face forward; ten cells per page. | OPEN: live bag-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
+| 46 | `IDC_IMAGE_SMYROOM_LPAGECNT_10` (`0x1550002F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 47 | `IDC_IMAGE_SMYROOM_LPAGECNT_1` (`0x15500030`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 48 | `IDC_IMAGE_SMYROOM_RPAGECNT_10` (`0x15500031`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 49 | `IDC_IMAGE_SMYROOM_RPAGECNT_1` (`0x15500032`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 50 | `IDC_IMAGE_SMYROOM_MYBAGSELECT` (`0x15500033`) | static art | Selection frame on the bag face; exe pins no ink at this rect (#369). | OPEN: statics pin plus Tier 3 live-art pin |
+| 51 | `IDC_BUTTON_SMYROOM_INVENTORY` (`0x15203034`) | button | At (177,318) flips the panel face: baked STATUS label ↔ Inventory button + status plate (#369, #180 T5). | OPEN: live click both directions (#180 T5); seam myroom_my_bag_tab_press_leaves_the_gift_panel_open (Tier 0) |
+| 52 | `IDC_IMAGE_SMYROOM_SLOTCOVER` (`0x15500035`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 53 | `IDC_IMAGE_SMYROOM_USERINFO` (`0x15500036`) | static art | Status plate on the toggled face; default face keeps the baked STATUS label (#369). | OPEN: statics pin plus Tier 3 live-art pin |
+| 54 | `IDC_TEXT_SMYROOM_NICKNAME` (`0x15400037`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 55 | `IDC_TEXT_SMYROOM_LEVEL` (`0x15400038`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 56 | `IDC_TEXT_SMYROOM_BONUSPOINT` (`0x15400039`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 57 | `IDC_TEXT_SMYROOM_EXP` (`0x1540003A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 58 | `IDC_TEXT_SMYROOM_NEXTUPEXP` (`0x1540003B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 59 | `IDC_TEXT_SMYROOM_WINRATION` (`0x1540003C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 60 | `IDC_TEXT_SMYROOM_RANK` (`0x1540003D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 61 | `IDC_TEXT_SMYROOM_GUILD` (`0x1540003E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 62 | `IDC_TEXT_SMYROOM_MGAME_MONEY` (`0x1540003F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 63 | `IDC_TEXT_SMYROOM_O2JAM_MONEY` (`0x15400040`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 64 | `IDC_TEXT_SMYROOM_FREEINFO1` (`0x15400041`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 65 | `IDC_TEXT_SMYROOM_FREEINFO2` (`0x15400042`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 66 | `IDC_TEXT_SMYROOM_FREEINFO3` (`0x15400043`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 67 | `IDC_TEXT_SMYROOM_FREEINFO4` (`0x15400044`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 68 | `IDC_IMAGE_SMYROOM_MYBAG_POS` (`0x15600045`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 69 | `IDC_IMAGE_SMYROOM_GIFTBOX_POS` (`0x15600046`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 70 | `IDC_IMAGE_SMYROOM_GIFTBOX_BACK` (`0x15500047`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 71 | `IDC_BUTTON_SMYROOM_GIFT_LEFT` (`0x15200048`) | pager | Pages the gift box back; count caption comes from the 5017/5018 reply. | OPEN: live gift-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
+| 72 | `IDC_BUTTON_SMYROOM_GIFT_RIGHT` (`0x15200049`) | pager | Pages the gift box forward; count caption from the wire. | OPEN: live gift-page leg; seam myroom_hand_session_walks_slots_bag_and_gifts (Tier 0) |
+| 73 | `IDC_BUTTON_SMYROOM_GIFTBOX_EX1` (`0x1501C04A`) | row panel (SET parent) | Gift cell 1; gift-row chrome hidden on the empty MY BAG face (#878). | OPEN: qualified gift-row capture with a populated 5018 reply |
+| 74 | `IDC_BUTTON_SMYROOM_GIFTBOX_EX2` (`0x1501C04B`) | row panel (SET parent) | Gift cell 2; gift-row chrome hidden on the empty MY BAG face (#878). | OPEN: qualified gift-row capture with a populated 5018 reply |
+| 75 | `IDC_BUTTON_SMYROOM_GIFTBOX_EX3` (`0x1501C04C`) | row panel (SET parent) | Gift cell 3; gift-row chrome hidden on the empty MY BAG face (#878). | OPEN: qualified gift-row capture with a populated 5018 reply |
+| 76 | `IDC_BUTTON_SMYROOM_GIFTBOX_EX4` (`0x1501C04D`) | row panel (SET parent) | Gift cell 4; gift-row chrome hidden on the empty MY BAG face (#878). | OPEN: qualified gift-row capture with a populated 5018 reply |
+| 77 | `IDC_BUTTON_SMYROOM_GIFTBOX_EX5` (`0x1501C04E`) | row panel (SET parent) | Gift cell 5; gift-row chrome hidden on the empty MY BAG face (#878). | OPEN: qualified gift-row capture with a populated 5018 reply |
+| 78 | `IDC_TEXT_GIFT_NUM` (`0x1540004F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 79 | `IDC_IMAGE_GIFT_TYPE` (`0x15500050`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 80 | `IDC_TEXT_GIFT_ITEMNAME` (`0x15400051`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 81 | `IDC_TEXT_GIFT_SENDER` (`0x15400052`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 82 | `IDC_IMAGE_GIFT_MOVE` (`0x15500053`) | static art | ClaimGift 5023 on the picked gift row; verdict byte ignored like the exe (#422). | OPEN: qualified gift-claim click + gateway replay (#422) |
+| 83 | `IDC_IMAGE_SMYROOM_GIFT_CUR_P01` (`0x15500054`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 84 | `IDC_IMAGE_SMYROOM_GIFT_CUR_P10` (`0x15500055`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 85 | `IDC_IMAGE_SMYROOM_GIFT_TOT_P01` (`0x15500056`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 86 | `IDC_IMAGE_SMYROOM_GIFT_TOT_P10` (`0x15500057`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 87 | `IDC_BUTTON_SMYROOM_WEBABATAR` (`0x15200058`) | button | Web avatar chrome; P0, sends nothing (`docs/myroom.md`). | OPEN: REA dispatch plus Tier 3 click (P0 silence check) |
+| 88 | `IDC_TEXT_SMYROOM_O2CASH` (`0x15400059`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 89 | `IDC_TEXT_SMYROOM_MUSICCASH` (`0x1540005A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 90 | `IDC_TEXT_SMYROOM_ITEMCASH` (`0x1540005B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 91 | `IDC_TEXT_SMYROOM_SKILLCOUNT1` (`0x1540005C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 92 | `IDC_TEXT_SMYROOM_SKILLCOUNT2` (`0x1540005D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 93 | `IDC_TEXT_SMYROOM_SKILLCOUNT3` (`0x1540005E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 94 | `IDC_TEXT_SMYROOM_SKILLCOUNT4` (`0x1540005F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 95 | `IDC_TEXT_SMYROOM_SKILLCOUNT5` (`0x15400060`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 96 | `IDC_TEXT_SMYROOM_SKILLCOUNT6` (`0x15400061`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 97 | `IDC_TEXT_SMYROOM_SKILLCOUNT7` (`0x15400062`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 98 | `IDC_TEXT_SMYROOM_SKILLCOUNT8` (`0x15400063`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 99 | `IDC_TEXT_SMYROOM_SKILLCOUNT9` (`0x15400064`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 100 | `IDC_TEXT_SMYROOM_SKILLCOUNT10` (`0x15400065`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 101 | `IDC_TEXT_SMYROOM_PENALTYCOUNT` (`0x15400066`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 102 | `IDC_TEXT_SMYROOM_PENALTYLEVEL` (`0x15400067`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 103 | `IDC_IMAGE_SMYROOM_NOTICE_TEXT` (`0x15500068`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 104 | `IDC_IMAGE_SMYROOM_NOTICEBOARD` (`0x15500069`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 105 | `IDC_IMAGE_SMYROOM_PCROOMMARK` (`0x1550006A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 106 | `IDC_BUTTON_SMYROOM_CONFERENCE` (`0x1520006B`) | button | Conference chrome; P0, sends nothing. | OPEN: REA dispatch plus Tier 3 click (P0 silence check) |
+| 107 | `IDC_BUTTON_SMYROOM_BAGSORT` (`0x1520006C`) | button | Bag-sort chrome; P0, sends nothing. | OPEN: REA dispatch plus Tier 3 click (P0 silence check) |
+| 108 | `IDC_BUTTON_SMYROOM_MESSENGER` (`0x1520006D`) | button | Messenger chrome on the MyRoom board; another liveness host stays N-HOST (#648/#650/#652). | OPEN: REA host routing pin then Tier 3 click leg |
+| 109 | `IDC_IMAGE_SMYROOM_MESSENGER_ALRAM` (`0x1550006E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 110 | `IDC_IMAGE_SMYROOM_MESSENGER_ALRAM1` (`0x1550006F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Pointer hover over MyRoom chrome | Rest desaturated / hover frame 0 / active frame 1 pattern applies, but per-control frames are not captured here. | OPEN: off/on/off pixel trio per control; seam `myroom_chrome_sweep_presses_every_staged_control` (Tier 0) |
+| Inventory ↔ gift-panel round trip | Present-box tab must return to MY BAG (#180 T6); existing guard pins the gift panel staying open. | OPEN: live two-way tab leg (#180); seam myroom_my_bag_tab_press_leaves_the_gift_panel_open (Tier 0) |
+
+## Item Shop
+
+Source: the `BOUND "State_ItemShop.bnd"` block of the pinned
+`ControlList_Interface.txt` (lines 179–431; 187 entries / 186 rects);
+BUYITEM and browse-grid pins are in `docs/shop.md` and
+`docs/parity/shop.md`. Ordinal is `(code & 0xFFF) - 1`.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_STATE_SHOP` (`0x14000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_SSHOP_1` (`0x14100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_BUTTON_SSHOP_BACK` (`0x14200002`) | button | BACK leaves the shop; no 5007 body pinned for this press (#399 wire arm OPEN). | OPEN: qualified BACK tap + wire leg (#399); seam item_shop_back_sends_the_empty_5007_exit (Tier 0) |
+| 2 | `IDC_BUTTON_SSHOP_GOMYROOM` (`0x14200003`) | button | GO MYROOM leaves the shop with no exit send; #178 T8 says the target is Room, not MyRoom — contradiction OPEN. | OPEN: REA target pin + Tier 3 destination leg (#178 T8); seam item_shop_go_myroom_leaves_without_an_exit_send (Tier 0) |
+| 3 | `IDC_BUTTON_SSHOP_CHARGEMONEY` (`0x14200004`) | button | Charge plate / O2CASH-shortfall host for the BUYITEM MESSAGE sheet (#867). | OPEN: live charge-view capture with game TCP and HTTP taps (#867) |
+| 4 | `IDC_BUTTON_SSHOP_ITEMVACATE` (`0x14200005`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 5 | `IDC_BUTTON_SSHOP_GIRL` (`0x14202006`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 6 | `IDC_BUTTON_SSHOP_BOY` (`0x14202007`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 7 | `IDC_BUTTON_SSHOP_PLANET_UP` (`0x14200008`) | button | Theme chrome; no live destination pinned. | OPEN: REA dispatch plus Tier 3 click; no handler pinned |
+| 8 | `IDC_BUTTON_SSHOP_PLANET_DOWN` (`0x14200009`) | button | Theme chrome; no live destination pinned. | OPEN: REA dispatch plus Tier 3 click; no handler pinned |
+| 9 | `IDC_BUTTON_SSHOP_SET` (`0x1420100A`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA category dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 10 | `IDC_BUTTON_SSHOP_FASHION` (`0x1420100B`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA category dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 11 | `IDC_BUTTON_SSHOP_ACCESSORY` (`0x1420100C`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA category dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 12 | `IDC_BUTTON_SSHOP_BEAUTY` (`0x1420100D`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA category dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 13 | `IDC_BUTTON_SSHOP_INSTRUMENT` (`0x1420100E`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA category dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 14 | `IDC_IMAGE_SSHOP_RESERVE1` (`0x1450000F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 15 | `IDC_IMAGE_SSHOP_RESERVE2` (`0x14500010`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 16 | `IDC_IMAGE_SSHOP_RESERVE3` (`0x14500011`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 17 | `IDC_BUTTON_SSHOP_SUBMENU1` (`0x14208012`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 18 | `IDC_BUTTON_SSHOP_SUBMENU2` (`0x14208013`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 19 | `IDC_BUTTON_SSHOP_SUBMENU3` (`0x14208014`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 20 | `IDC_BUTTON_SSHOP_SUBMENU4` (`0x14208015`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 21 | `IDC_BUTTON_SSHOP_SUBMENU5` (`0x14208016`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 22 | `IDC_BUTTON_SSHOP_SUBMENU6` (`0x14208017`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA submenu dispatch plus Tier 3 filtered-grid leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 23 | `IDC_BUTTON_SSHOP_ITEMBUY1` (`0x14200018`) | button | Item row 1 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 24 | `IDC_BUTTON_SSHOP_ITEMBUY2` (`0x14200019`) | button | Item row 2 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 25 | `IDC_BUTTON_SSHOP_ITEMBUY3` (`0x1420001A`) | button | Item row 3 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 26 | `IDC_BUTTON_SSHOP_ITEMBUY4` (`0x1420001B`) | button | Item row 4 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 27 | `IDC_BUTTON_SSHOP_ITEMBUY5` (`0x1420001C`) | button | Item row 5 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 28 | `IDC_BUTTON_SSHOP_ITEMBUY6` (`0x1420001D`) | button | Item row 6 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 29 | `IDC_BUTTON_SSHOP_ITEMBUY7` (`0x1420001E`) | button | Item row 7 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 30 | `IDC_BUTTON_SSHOP_ITEMBUY8` (`0x1420001F`) | button | Item row 8 buy cell: checks the cart and opens the SHOPPING BAG face (#867). | OPEN: live row-click + cart leg; seam shop_row_toggle_checks_the_cart_and_buy_posts_the_native_sheet (Tier 0) |
+| 31 | `IDC_BUTTON_SSHOP_ITEMGIFT1` (`0x14200020`) | button | Item row 1 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 32 | `IDC_BUTTON_SSHOP_ITEMGIFT2` (`0x14200021`) | button | Item row 2 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 33 | `IDC_BUTTON_SSHOP_ITEMGIFT3` (`0x14200022`) | button | Item row 3 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 34 | `IDC_BUTTON_SSHOP_ITEMGIFT4` (`0x14200023`) | button | Item row 4 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 35 | `IDC_BUTTON_SSHOP_ITEMGIFT5` (`0x14200024`) | button | Item row 5 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 36 | `IDC_BUTTON_SSHOP_ITEMGIFT6` (`0x14200025`) | button | Item row 6 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 37 | `IDC_BUTTON_SSHOP_ITEMGIFT7` (`0x14200026`) | button | Item row 7 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 38 | `IDC_BUTTON_SSHOP_ITEMGIFT8` (`0x14200027`) | button | Item row 8 gift cell; send shape unpinned. | OPEN: REA gift dispatch plus Tier 3 click; seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 39 | `IDC_TEXT_SSHOP_GEMMONEY` (`0x14400028`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 40 | `IDC_TEXT_SSHOP_MGASH` (`0x14400029`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 41 | `IDC_TEXT_SSHOP_NICKNAME` (`0x1440002A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 42 | `IDC_IMAGE_SSHOP_PLANET` (`0x1450002B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 43 | `IDC_TEXT_SSHOP_ITEMNAME1` (`0x1440002C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 44 | `IDC_TEXT_SSHOP_ITEMNAME2` (`0x1440002D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 45 | `IDC_TEXT_SSHOP_ITEMNAME3` (`0x1440002E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 46 | `IDC_TEXT_SSHOP_ITEMNAME4` (`0x1440002F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 47 | `IDC_TEXT_SSHOP_ITEMNAME5` (`0x14400030`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 48 | `IDC_TEXT_SSHOP_ITEMNAME6` (`0x14400031`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 49 | `IDC_TEXT_SSHOP_ITEMNAME7` (`0x14400032`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 50 | `IDC_TEXT_SSHOP_ITEMNAME8` (`0x14400033`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 51 | `IDC_IMAGE_SSHOP_AVATAR` (`0x14700034`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 52 | `IDC_IMAGE_SSHOP_ITEMSHOW1` (`0x14600035`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 53 | `IDC_IMAGE_SSHOP_ITEMSHOW2` (`0x14600036`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 54 | `IDC_IMAGE_SSHOP_ITEMSHOW3` (`0x14600037`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 55 | `IDC_IMAGE_SSHOP_ITEMSHOW4` (`0x14600038`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 56 | `IDC_IMAGE_SSHOP_ITEMSHOW5` (`0x14600039`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 57 | `IDC_IMAGE_SSHOP_ITEMSHOW6` (`0x1460003A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 58 | `IDC_IMAGE_SSHOP_ITEMSHOW7` (`0x1460003B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 59 | `IDC_IMAGE_SSHOP_ITEMSHOW8` (`0x1460003C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 60 | `IDC_IMAGE_SSHOP_MYBAGITEM1` (`0x1460003D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 61 | `IDC_IMAGE_SSHOP_MYBAGITEM2` (`0x1460003E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 62 | `IDC_IMAGE_SSHOP_MYBAGITEM3` (`0x1460003F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 63 | `IDC_IMAGE_SSHOP_MYBAGITEM4` (`0x14600040`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 64 | `IDC_IMAGE_SSHOP_MYBAGITEM5` (`0x14600041`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 65 | `IDC_IMAGE_SSHOP_MYBAGITEM6` (`0x14600042`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 66 | `IDC_IMAGE_SSHOP_MYBAGITEM7` (`0x14600043`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 67 | `IDC_IMAGE_SSHOP_MYBAGITEM8` (`0x14600044`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 68 | `IDC_IMAGE_SSHOP_MYBAGITEM9` (`0x14600045`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 69 | `IDC_IMAGE_SSHOP_MYBAGITEM10` (`0x14600046`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 70 | `IDC_SCROLL_SSHOP_ITEM` (`0x14022047`) | scrollbar | Item-grid scrollbar; #178 T7 reports browse scroll dead. | OPEN: Tier 3 drag/click browse leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 71 | `IDC_BUTTON_SSHOP_SITEMLEFT` (`0x14200048`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: Tier 3 scroll leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 72 | `IDC_BUTTON_SSHOP_SITEMRIGHT` (`0x14200049`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: Tier 3 scroll leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 73 | `IDC_BUTTON_SSHOP_SITEMBAR` (`0x1420004A`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: Tier 3 scroll leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 74 | `IDC_BUTTON_SSHOP_SITEMRANGE` (`0x1420004B`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: Tier 3 scroll leg (#178 T7); seam shop_unwired_browse_chrome_lands_nowhere (Tier 0) |
+| 75 | `IDC_BUTTON_SSHOP_BAGLEFT` (`0x1420004C`) | pager | Pages the staged owned-inventory face back (ten cells per page). | OPEN: live bag-page leg; seam shop_bag_pager_turns_over_staged_owned_inventory (Tier 0) |
+| 76 | `IDC_BUTTON_SSHOP_BAGRIGHT` (`0x1420004D`) | pager | Pages the staged owned-inventory face forward. | OPEN: live bag-page leg; seam shop_bag_pager_turns_over_staged_owned_inventory (Tier 0) |
+| 77 | `IDC_IMAGE_SSHOP_LPAGECNT_10` (`0x1450004E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 78 | `IDC_IMAGE_SSHOP_LPAGECNT_1` (`0x1450004F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 79 | `IDC_IMAGE_SSHOP_RPAGECNT_10` (`0x14500050`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 80 | `IDC_IMAGE_SSHOP_RPAGECNT_1` (`0x14500051`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 81 | `IDC_IMAGE_SSHOP_MYBAGSELECT` (`0x14500052`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 82 | `IDC_IMAGE_SSHOP_SHOPMASTER` (`0x14600053`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 83 | `IDC_TEXT_SSHOP_ITEMWON1` (`0x14400054`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 84 | `IDC_TEXT_SSHOP_ITEMWON2` (`0x14400055`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 85 | `IDC_TEXT_SSHOP_ITEMWON3` (`0x14400056`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 86 | `IDC_TEXT_SSHOP_ITEMWON4` (`0x14400057`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 87 | `IDC_TEXT_SSHOP_ITEMWON5` (`0x14400058`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 88 | `IDC_TEXT_SSHOP_ITEMWON6` (`0x14400059`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 89 | `IDC_TEXT_SSHOP_ITEMWON7` (`0x1440005A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 90 | `IDC_TEXT_SSHOP_ITEMWON8` (`0x1440005B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 91 | `IDC_TEXT_SSHOP_ITEMGEM1` (`0x1440005C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 92 | `IDC_TEXT_SSHOP_ITEMGEM2` (`0x1440005D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 93 | `IDC_TEXT_SSHOP_ITEMGEM3` (`0x1440005E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 94 | `IDC_TEXT_SSHOP_ITEMGEM4` (`0x1440005F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 95 | `IDC_TEXT_SSHOP_ITEMGEM5` (`0x14400060`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 96 | `IDC_TEXT_SSHOP_ITEMGEM6` (`0x14400061`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 97 | `IDC_TEXT_SSHOP_ITEMGEM7` (`0x14400062`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 98 | `IDC_TEXT_SSHOP_ITEMGEM8` (`0x14400063`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 99 | `IDC_BUTTON_SSHOP_ITEMPRE1` (`0x14200064`) | button | Item row 1 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 100 | `IDC_BUTTON_SSHOP_ITEMPRE2` (`0x14200065`) | button | Item row 2 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 101 | `IDC_BUTTON_SSHOP_ITEMPRE3` (`0x14200066`) | button | Item row 3 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 102 | `IDC_BUTTON_SSHOP_ITEMPRE4` (`0x14200067`) | button | Item row 4 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 103 | `IDC_BUTTON_SSHOP_ITEMPRE5` (`0x14200068`) | button | Item row 5 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 104 | `IDC_BUTTON_SSHOP_ITEMPRE6` (`0x14200069`) | button | Item row 6 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 105 | `IDC_BUTTON_SSHOP_ITEMPRE7` (`0x1420006A`) | button | Item row 7 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 106 | `IDC_BUTTON_SSHOP_ITEMPRE8` (`0x1420006B`) | button | Item row 8 preview: selects/clears preview, queues nothing (#178). | OPEN: live preview click + frame leg; seam shop_preview_selects_row_and_back_clears (Tier 0) |
+| 107 | `IDC_BUTTON_SSHOP_ITEMBACK` (`0x1420006C`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 108 | `IDC_IMAGE_SSHOP_MYBACK_POS` (`0x1460006D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 109 | `IDC_IMAGE_SSHOP_MYCART_POS` (`0x1460006E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 110 | `IDC_IMAGE_SSHOP_MYCART_BACK` (`0x1450006F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 111 | `IDC_BUTTON_SSHOP_BUYITEM` (`0x14200070`) | button | Cart BUYITEM posts the native type-2 MESSAGE sheet (Dialog_Question1) and sends no buy opcode (#867). | VERIFIED: live_boot_cart_row_buy_paints_the_native_message_sheet (Tier 3) — boot → row click → BUYITEM → sheet; wire stays OPEN |
+| 112 | `IDC_BUTTON_SSHOP_GIFTITEM` (`0x14200071`) | button | Gift chrome; P0 silence in `docs/myroom.md`, shop-side send unpinned. | OPEN: REA dispatch plus Tier 3 click; gift wire unpinned (#178) |
+| 113 | `IDC_BUTTON_SSHOP_MYCART_LEFT` (`0x14200072`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 114 | `IDC_BUTTON_SSHOP_MYCART_RIGHT` (`0x14200073`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 115 | `IDC_TEXT_SSHOP_CART_CHECKGEM` (`0x14400074`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 116 | `IDC_TEXT_SSHOP_CART_CHECKMONEY` (`0x14400075`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 117 | `IDC_BUTTON_SSHOP_CART_EX1` (`0x1401B076`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 118 | `IDC_BUTTON_SSHOP_CART_EX2` (`0x1401B077`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 119 | `IDC_BUTTON_SSHOP_CART_EX3` (`0x1401B078`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 120 | `IDC_BUTTON_SSHOP_CART_EX4` (`0x1401B079`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 121 | `IDC_BUTTON_SSHOP_CART_EX5` (`0x1401B07A`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 122 | `IDC_TEXT_CART_NUM` (`0x1440007B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 123 | `IDC_IMAGE_CART_TYPE` (`0x1450007C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 124 | `IDC_TEXT_CART_ITEMNAME` (`0x1440007D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 125 | `IDC_TEXT_CART_PRICE` (`0x1440007E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 126 | `IDC_IMAGE_CART_DELETE` (`0x1450007F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 127 | `IDC_IMAGE_SSHOP_CART_CUR_P01` (`0x14500080`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 128 | `IDC_IMAGE_SSHOP_CART_CUR_P10` (`0x14500081`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 129 | `IDC_IMAGE_SSHOP_CART_TOT_P01` (`0x14500082`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 130 | `IDC_IMAGE_SSHOP_CART_TOT_P10` (`0x14500083`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 131 | `IDC_IMAGE_SSHOP_ITEMTOOLTIP` (`0x14500084`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 132 | `IDC_TEXT_SSHOP_ITEMCOMMENT` (`0x14400085`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 133 | `IDC_IMAGE_SSHOP_LUCKYBAG` (`0x14600086`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 134 | `IDC_IMAGE_SSHOP_SETBACK` (`0x14500087`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 135 | `IDC_BUTTON_SSHOP_SETITEM_EX1` (`0x1401D088`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 136 | `IDC_BUTTON_SSHOP_SETITEM_EX2` (`0x1401D089`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 137 | `IDC_BUTTON_SSHOP_SETITEM_EX3` (`0x1401D08A`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 138 | `IDC_BUTTON_SSHOP_SETITEM_EX4` (`0x1401D08B`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 139 | `IDC_IMAGE_SSHOP_SET_BACK` (`0x1450008C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 140 | `IDC_IMAGE_SSHOP_SET_AVATAR` (`0x1470008D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 141 | `IDC_TEXT_SSHOP_SET_TITLE` (`0x1440008E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 142 | `IDC_TEXT_SSHOP_SET_TYPE1` (`0x1440008F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 143 | `IDC_TEXT_SSHOP_SET_TYPE2` (`0x14400090`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 144 | `IDC_TEXT_SSHOP_SET_TYPE3` (`0x14400091`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 145 | `IDC_TEXT_SSHOP_SET_TYPE4` (`0x14400092`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 146 | `IDC_TEXT_SSHOP_SET_TYPE5` (`0x14400093`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 147 | `IDC_TEXT_SSHOP_SET_PRICE` (`0x14400094`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 148 | `IDC_IMAGE_SSHOP_SET_BTN_BUY` (`0x14500095`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 149 | `IDC_IMAGE_SSHOP_SET_BTN_WAER` (`0x14500096`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 150 | `IDC_IMAGE_SSHOP_SET_RESERVE` (`0x14500097`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 151 | `IDC_IMAGE_SSHOP_SET_RESERVE2` (`0x14500098`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 152 | `IDC_BUTTON_SSHOP_EXTMENU_ON` (`0x14200099`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 153 | `IDC_IMAGE_SSHOP_EXTMENU_BACK` (`0x1450009A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 154 | `IDC_BUTTON_SSHOP_EXTMENU_ALL` (`0x1420109B`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 155 | `IDC_BUTTON_SSHOP_EXTMENU_NORMAL` (`0x1420109C`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 156 | `IDC_BUTTON_SSHOP_EXTMENU_AQUA` (`0x1420109D`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 157 | `IDC_BUTTON_SSHOP_EXTMENU_ELETEN` (`0x1420109E`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 158 | `IDC_BUTTON_SSHOP_EXTMENU_GRAFFITI` (`0x1420109F`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 159 | `IDC_BUTTON_SSHOP_EXTMENU_BIKINI` (`0x142010A0`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 160 | `IDC_BUTTON_SSHOP_EXTMENU_CRUSH` (`0x142010A1`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 161 | `IDC_BUTTON_SSHOP_EXTMENU_WONDERLAND` (`0x142010A2`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 162 | `IDC_BUTTON_SSHOP_EXTMENU_MEGANUT` (`0x142010A3`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 163 | `IDC_BUTTON_SSHOP_EXTMENU_CRYSTAL` (`0x142010A4`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 164 | `IDC_BUTTON_SSHOP_EXTMENU_DRACONIC` (`0x142010A5`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 165 | `IDC_BUTTON_SSHOP_EXTMENU_EVENT` (`0x142010A6`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA chrome dispatch plus Tier 3 click (#178 T7); seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| 166 | `IDC_TEXT_SSHOP_SKILLCOUNT1` (`0x144010A7`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 167 | `IDC_TEXT_SSHOP_SKILLCOUNT2` (`0x144010A8`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 168 | `IDC_TEXT_SSHOP_SKILLCOUNT3` (`0x144010A9`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 169 | `IDC_TEXT_SSHOP_SKILLCOUNT4` (`0x144010AA`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 170 | `IDC_TEXT_SSHOP_SKILLCOUNT5` (`0x144010AB`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 171 | `IDC_TEXT_SSHOP_SKILLCOUNT6` (`0x144010AC`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 172 | `IDC_TEXT_SSHOP_SKILLCOUNT7` (`0x144010AD`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 173 | `IDC_TEXT_SSHOP_SKILLCOUNT8` (`0x144010AE`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 174 | `IDC_TEXT_SSHOP_SKILLCOUNT9` (`0x144010AF`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 175 | `IDC_TEXT_SSHOP_SKILLCOUNT10` (`0x144010B0`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 176 | `IDC_IMAGE_SSHOP_ITEMTOOLTIP2` (`0x145000B1`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 177 | `IDC_TEXT_SSHOP_ITEMCOMMENT2` (`0x144000B2`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 178 | `IDC_IMAGE_SSHOP_NOTICE_TEXT` (`0x145000B3`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 179 | `IDC_IMAGE_SSHOP_NOTICEBOARD` (`0x145000B4`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 180 | `IDC_IMAGE_SSHOP_PCROOMMARK` (`0x145000B5`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 181 | `IDC_BUTTON_SSHOP_CONFERENCE` (`0x142000B6`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dispatch plus Tier 3 click; web/P0 chrome sends nothing |
+| 182 | `IDC_BUTTON_SSHOP_BAGSORT` (`0x142000B7`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dispatch plus Tier 3 click; web/P0 chrome sends nothing |
+| 183 | `IDC_BUTTON_SSHOP_MESSENGER` (`0x142000B8`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA dispatch plus Tier 3 click; web/P0 chrome sends nothing |
+| 184 | `IDC_IMAGE_SSHOP_MESSENGER_ALRAM` (`0x145000B9`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 185 | `IDC_IMAGE_SSHOP_MESSENGER_ALRAM1` (`0x145000BA`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Shop browse chrome hover / clicks | `#178` T7 reports scrollbar, grid and tabs dead live; seam sweep asserts staged presses only. | OPEN: SendInput sweep on the live shop; seam shop_chrome_sweep_presses_every_staged_control (Tier 0) |
+| BUYITEM purchase wire | OK/CANCEL choice is local; no qualified OK tap has pinned a 5000-series send (#867). | OPEN: qualified OK tap with game TCP and HTTP(S) taps plus gateway answer |
+
+## Music Shop
+
+Source: the `BOUND "State_MShop.bnd"` block of the pinned
+`ControlList_Interface.txt` (lines 810–1007; 139 entries / 138 rects);
+row/cart pins in `docs/musicshop.md` and `docs/parity/musicshop.md`.
+Ordinal is `(code & 0xFFF) - 1`.
+
+| Ord | Control id (code) | Kind | Exe behavior pin | Status |
+|---:|---|---|---|---|
+| -1 | `IDC_STATE_MSHOP` (`0x1A000000`) | container | Block self; zero low word, all-zero rect on miss; never placed | OPEN: statics pin of the container code; no input row |
+| 0 | `IDC_BACK_MSHP_1` (`0x1A100001`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 1 | `IDC_IMAGE_MSHOP_FRONT_BG` (`0x1A500002`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 2 | `IDC_BUTTON_MSHOP_OPENVIEW` (`0x1A200003`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 3 | `IDC_IMAGE_MSHOP_LEFTBOXLINE_LEFT` (`0x1A500004`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 4 | `IDC_IMAGE_MSHOP_LEFTBOXLINE_RIGHT` (`0x1A500005`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 5 | `IDC_IMAGE_MSHOP_LEFTBOXLINE_TOP` (`0x1A500006`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 6 | `IDC_IMAGE_MSHOP_LEFTBOXLINE_BOTTOM` (`0x1A500007`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 7 | `IDC_BUTTON_MSHOP_EXIT` (`0x1A200008`) | button | Leaves the music-shop side locally; no 5007 body pinned (#399). | OPEN: qualified BACK tap + wire leg (#399); seam music_shop_hand_session_sorts_pages_and_buys (Tier 0) |
+| 8 | `IDC_BUTTON_MSHOP_CASHFILLUP` (`0x1A200009`) | button | Cash-charge view; #867 keeps it separate from the BUYITEM MESSAGE sheet. | OPEN: live charge-view capture with TCP + HTTP taps (#867) |
+| 9 | `IDC_BUTTON_MSHOP_MSALL_LEFT` (`0x1A20000A`) | pager | Song-list pager back; pairings/directions ASSUMED (`docs/parity/musicshop.md`). | OPEN: live pager + direction leg; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 10 | `IDC_BUTTON_MSHOP_MSALL_RIGHT` (`0x1A20000B`) | pager | Song-list pager forward; pairings/directions ASSUMED. | OPEN: live pager + direction leg; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 11 | `IDC_BUTTON_MSHOP_MYALL_LEFT` (`0x1A20000C`) | pager | Owned-list pager back; pairings/directions ASSUMED. | OPEN: live pager + direction leg; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 12 | `IDC_BUTTON_MSHOP_MYALL_RIGHT` (`0x1A20000D`) | pager | Owned-list pager forward; pairings/directions ASSUMED. | OPEN: live pager + direction leg; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 13 | `IDC_BUTTON_MSHOP_DOWN_START` (`0x1A20000E`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 14 | `IDC_BUTTON_MSHOP_DOWN_CANCEL` (`0x1A20000F`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 15 | `IDC_BUTTON_MSHOP_MS_NEW` (`0x1A201010`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 16 | `IDC_BUTTON_MSHOP_MS_GOLD` (`0x1A201011`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 17 | `IDC_BUTTON_MSHOP_MS_BLACK` (`0x1A201012`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 18 | `IDC_BUTTON_MSHOP_MS_BLUE` (`0x1A201013`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 19 | `IDC_BUTTON_MSHOP_MS_RED` (`0x1A201014`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 20 | `IDC_BUTTON_MSHOP_MS_SILVER` (`0x1A201015`) | tab / toggle | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 21 | `IDC_BUTTON_MSHOP_MY_TITLE` (`0x1A200016`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live sort-direction leg; seam music_shop_my_title_sort_toggles_direction_on_the_second_press (Tier 0) |
+| 22 | `IDC_BUTTON_MSHOP_MY_PLAYTIME` (`0x1A200017`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live sort-direction leg; seam music_shop_my_title_sort_toggles_direction_on_the_second_press (Tier 0) |
+| 23 | `IDC_BUTTON_MSHOP_MY_DOWNSTATUS` (`0x1A200018`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: live sort-direction leg; seam music_shop_my_title_sort_toggles_direction_on_the_second_press (Tier 0) |
+| 24 | `IDC_TEXT_MSHOP_MGAME_MONEY` (`0x1A400019`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 25 | `IDC_TEXT_MSHOP_O2JAM_MONEY` (`0x1A40001A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 26 | `IDC_TEXT_MSHOP_DN_CURRENTMUSIC` (`0x1A40001B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 27 | `IDC_TEXT_MSHOP_DN_SPEED` (`0x1A40001C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 28 | `IDC_TEXT_MSHOP_DN_LEFTTIME` (`0x1A40001D`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 29 | `IDC_TEXT_MSHOP_DN_TOTALSTATUS` (`0x1A40001E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 30 | `IDC_TEXT_MSHOP_DN_TOTALLEFTTIME` (`0x1A40001F`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 31 | `IDC_TEXT_MSHOP_DN_TOTAL_SIZE` (`0x1A400020`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 32 | `IDC_TEXT_MSHOP_DN_STATUS` (`0x1A400021`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 33 | `IDC_IMAGE_MSHOP_DN_CUR_PROGRESS` (`0x1A500022`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 34 | `IDC_IMAGE_MSHOP_DN_TOTAL_PROGRESS` (`0x1A500023`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 35 | `IDC_IMAGE_MSHOP_DN_PROG_ANI` (`0x1A500024`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 36 | `IDC_IMAGE_MSHOP_MS_ALL_LPAGECNT_10` (`0x1A500025`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 37 | `IDC_IMAGE_MSHOP_MS_ALL_LPAGECNT_1` (`0x1A500026`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 38 | `IDC_IMAGE_MSHOP_MS_ALL_RPAGECNT_10` (`0x1A500027`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 39 | `IDC_IMAGE_MSHOP_MS_ALL_RPAGECNT_1` (`0x1A500028`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 40 | `IDC_IMAGE_MSHOP_MY_ALL_LPAGECNT_10` (`0x1A500029`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 41 | `IDC_IMAGE_MSHOP_MY_ALL_LPAGECNT_1` (`0x1A50002A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 42 | `IDC_IMAGE_MSHOP_MY_ALL_RPAGECNT_10` (`0x1A50002B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 43 | `IDC_IMAGE_MSHOP_MY_ALL_RPAGECNT_1` (`0x1A50002C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 44 | `IDC_BUTTON_MS_EX_1` (`0x1A01802D`) | row panel (SET parent) | Song row 1 hit area; stages the cart row, no buy wire on the pick. | OPEN: live row-click + cart leg; seam music_shop_row_pick_feedback_stages_cart_without_a_buy_wire (Tier 0) |
+| 45 | `IDC_BUTTON_MS_EX_2` (`0x1A01802E`) | row panel (SET parent) | Song row 2 hit area; stages the cart row, no buy wire on the pick. | OPEN: live row-click + cart leg; seam music_shop_row_pick_feedback_stages_cart_without_a_buy_wire (Tier 0) |
+| 46 | `IDC_BUTTON_MS_EX_3` (`0x1A01802F`) | row panel (SET parent) | Song row 3 hit area; stages the cart row, no buy wire on the pick. | OPEN: live row-click + cart leg; seam music_shop_row_pick_feedback_stages_cart_without_a_buy_wire (Tier 0) |
+| 47 | `IDC_BUTTON_MS_EX_4` (`0x1A018030`) | row panel (SET parent) | Song row 4 hit area; stages the cart row, no buy wire on the pick. | OPEN: live row-click + cart leg; seam music_shop_row_pick_feedback_stages_cart_without_a_buy_wire (Tier 0) |
+| 48 | `IDC_BUTTON_MS_EX_5` (`0x1A018031`) | row panel (SET parent) | Song row 5 hit area; stages the cart row, no buy wire on the pick. | OPEN: live row-click + cart leg; seam music_shop_row_pick_feedback_stages_cart_without_a_buy_wire (Tier 0) |
+| 49 | `IDC_IMAGE_MMS_BACK` (`0x1A500032`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 50 | `IDC_IMAGE_MMS_IMAGE` (`0x1A500033`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 51 | `IDC_IMAGE_MMS_NEW` (`0x1A500034`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 52 | `IDC_IMAGE_MMS_COLOR` (`0x1A500035`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 53 | `IDC_TEXT_MMS_TITLE` (`0x1A400036`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 54 | `IDC_TEXT_MMS_ISBUY` (`0x1A400037`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 55 | `IDC_TEXT_MMS_ARTIST` (`0x1A400038`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 56 | `IDC_TEXT_MMS_EDITOR` (`0x1A400039`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 57 | `IDC_TEXT_MMS_GENRE` (`0x1A40003A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 58 | `IDC_TEXT_MMS_BPM` (`0x1A40003B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 59 | `IDC_TEXT_MMS_DIFF` (`0x1A40003C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 60 | `IDC_IMAGE_MMS_GEM` (`0x1A50003D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 61 | `IDC_TEXT_MMS_RATE_GEMPRICE` (`0x1A40003E`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 62 | `IDC_IMAGE_MMS_GEMARROW` (`0x1A50003F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 63 | `IDC_TEXT_MMS_GEM_PRICE` (`0x1A400040`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 64 | `IDC_IMAGE_MMS_GEM_BUY` (`0x1A200041`) | static art | Per-row buy control (family 0x200); row-local clone queue 5010. | OPEN: live row-buy + gateway leg; seam music_shop_buy_buttons_tile_per_row_slot (Tier 0) |
+| 65 | `IDC_IMAGE_MMS_WON` (`0x1A500042`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 66 | `IDC_TEXT_MMS_RATE_WONPRICE` (`0x1A400043`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 67 | `IDC_IMAGE_MMS_WONARROW` (`0x1A500044`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 68 | `IDC_TEXT_MMS_WON_PRICE` (`0x1A400045`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 69 | `IDC_IMAGE_MMS_WON_BUY` (`0x1A200046`) | static art | Per-row buy control (family 0x200); row-local clone queue 5010. | OPEN: live row-buy + gateway leg; seam music_shop_buy_buttons_tile_per_row_slot (Tier 0) |
+| 70 | `IDC_BUTTON_MY_EX1` (`0x1A019047`) | row panel (SET parent) | Owned row 1 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 71 | `IDC_BUTTON_MY_EX2` (`0x1A019048`) | row panel (SET parent) | Owned row 2 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 72 | `IDC_BUTTON_MY_EX3` (`0x1A019049`) | row panel (SET parent) | Owned row 3 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 73 | `IDC_BUTTON_MY_EX4` (`0x1A01904A`) | row panel (SET parent) | Owned row 4 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 74 | `IDC_BUTTON_MY_EX5` (`0x1A01904B`) | row panel (SET parent) | Owned row 5 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 75 | `IDC_BUTTON_MY_EX6` (`0x1A01904C`) | row panel (SET parent) | Owned row 6 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 76 | `IDC_BUTTON_MY_EX7` (`0x1A01904D`) | row panel (SET parent) | Owned row 7 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 77 | `IDC_BUTTON_MY_EX8` (`0x1A01904E`) | row panel (SET parent) | Owned row 8 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 78 | `IDC_BUTTON_MY_EX9` (`0x1A01904F`) | row panel (SET parent) | Owned row 9 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 79 | `IDC_BUTTON_MY_EX10` (`0x1A019050`) | row panel (SET parent) | Owned row 10 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 80 | `IDC_BUTTON_MY_EX11` (`0x1A019051`) | row panel (SET parent) | Owned row 11 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 81 | `IDC_BUTTON_MY_EX12` (`0x1A019052`) | row panel (SET parent) | Owned row 12 hit area; CHECK/COLOR/TITLE/TIME/DOWNSTATUS clones expand per row. | OPEN: live owned-row click leg; seam music_shop_my_title_sort_orders_owned_rows_and_clears_marks (Tier 0) |
+| 82 | `IDC_IMAGE_MMY_CHECK` (`0x1A500053`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 83 | `IDC_IMAGE_MMY_COLOR` (`0x1A500054`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 84 | `IDC_TEXT_MMY_TITLE` (`0x1A400055`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 85 | `IDC_TEXT_MMY_TIME` (`0x1A400056`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 86 | `IDC_IMAGE_MMY_DOWNSTATUS` (`0x1A500057`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 87 | `IDC_IMAGE_MSHOP_MYCART_POS` (`0x1A600058`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 88 | `IDC_IMAGE_MSHOP_DOWN_POS` (`0x1A600059`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 89 | `IDC_IMAGE_NSHOP_MYCART_BACK` (`0x1A50005A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 90 | `IDC_TEXT_MSHOP_CART_GEMMONEY` (`0x1A50005B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 91 | `IDC_TEXT_MSHOP_CART_MCASH` (`0x1A50005C`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 92 | `IDC_BUTTON_MSHOP_BUYITEM` (`0x1A20005D`) | button | Cart buy queues the pinned empty SyncMusicPurchase 5010; wire ride ASSUMED behind the stub seam. | OPEN: gateway replay of 5010 + destination; seam music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010 (Tier 0) |
+| 93 | `IDC_BUTTON_MSHOP_MYCART_LEFT` (`0x1A20005E`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 94 | `IDC_BUTTON_MSHOP_MYCART_RIGHT` (`0x1A20005F`) | pager | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 95 | `IDC_BUTTON_MSHOP_CART_EX1` (`0x1A01B060`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 96 | `IDC_BUTTON_MSHOP_CART_EX2` (`0x1A01B061`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 97 | `IDC_BUTTON_MSHOP_CART_EX3` (`0x1A01B062`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 98 | `IDC_BUTTON_MSHOP_CART_EX4` (`0x1A01B063`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 99 | `IDC_BUTTON_MSHOP_CART_EX5` (`0x1A01B064`) | row panel (SET parent) | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 100 | `IDC_TEXT_MSHOP_CART_NUM` (`0x1A400065`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 101 | `IDC_IMAGE_MSHOP_CART_TYPE` (`0x1A500066`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 102 | `IDC_TEXT_MSHOP_CART_ITEMNAME` (`0x1A400067`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 103 | `IDC_TEXT_MSHOP_CART_PRICE` (`0x1A400068`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 104 | `IDC_IMAGE_MSHOP_CART_DELETE` (`0x1A500069`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 105 | `IDC_IMAGE_MSHOP_CART_CUR_P10` (`0x1A50006A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 106 | `IDC_IMAGE_MSHOP_CART_CUR_P1` (`0x1A50006B`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 107 | `IDC_IMAGE_MSHOP_CART_TOT_P10` (`0x1A50006C`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 108 | `IDC_IMAGE_MSHOP_CART_TOT_P1` (`0x1A50006D`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 109 | `IDC_IMAGE_MSHOP_LIGHTBOARD` (`0x1A50006E`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 110 | `IDC_IMAGE_MSHOP_TOOLTIP` (`0x1A50006F`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 111 | `IDC_TEXT_MSHOP_TOOLTIP` (`0x1A400070`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 112 | `IDC_TEXT_MSHOP_NOTBUY_TOTAL` (`0x1A400071`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 113 | `IDC_TEXT_MSHOP_BUY_TOTAL` (`0x1A400072`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
+| 114 | `IDC_BUTTON_MSHOP_GIFTITEM` (`0x1A200073`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 115 | `IDC_BUTTON_MSHOP_SHOWALL` (`0x1A502074`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 116 | `IDC_BUTTON_MSHOP_SHOWNOTBUY` (`0x1A502075`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 117 | `IDC_IMAGE_MSHOP_TABDOWN` (`0x1A600076`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 118 | `IDC_IMAGE_MSHOP_TABDELETE` (`0x1A600077`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 119 | `IDC_IMAGE_MSHOP_TABDELETE_BACK` (`0x1A500078`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 120 | `IDC_IMAGE_MSHOP_MUSICDELETE_BASE` (`0x1A500079`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 121 | `IDC_BUTTON_MSHOP_MUSICDELETE` (`0x1A20007A`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 122 | `IDC_EDIT_MSHOP_SEARCH` (`0x1A30007B`) | edit / key-path | Search draft; no live search handler pinned. | OPEN: live typing + result capture (`docs/parity/musicshop.md` search OPEN) |
+| 123 | `IDC_BUTTON_MSHOP_SEARCH` (`0x1A20007C`) | button | Search press; no live search result pinned. | OPEN: REA search dispatch plus Tier 3 click/result leg |
+| 124 | `IDC_BUTTON_MSHOP_TOP100` (`0x1A20007D`) | button | Opens the TOP100 arm; eight staged rects answer presses, standings unpinned (#179). | OPEN: live standings capture; seam music_shop_top100_arm_stages_eight_rects_and_answer_each_press (Tier 0) |
+| 125 | `IDC_BUTTON_MSHOP_MS_3KEY` (`0x1A20007E`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 126 | `IDC_BUTTON_MSHOP_MS_7KEY` (`0x1A20007F`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 127 | `IDC_BUTTON_MSHOP_MS_TITLE` (`0x1A200080`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 128 | `IDC_BUTTON_MSHOP_MS_DIFF` (`0x1A200081`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 129 | `IDC_BUTTON_MSHOP_MS_BPM` (`0x1A200082`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 130 | `IDC_BUTTON_MSHOP_MS_PRICE` (`0x1A200083`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA sort/filter dispatch plus Tier 3 press; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| 131 | `IDC_BUTTON_MSHOP_SELECTALL` (`0x1A200084`) | button | Select-all chrome; no exe selection rule pinned. | OPEN: REA dispatch plus Tier 3 press + row-selection frame leg |
+| 132 | `IDC_IMAGE_MSHOP_NOTICE_TEXT` (`0x1A500085`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 133 | `IDC_IMAGE_MSHOP_NOTICEBOARD` (`0x1A500086`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 134 | `IDC_BUTTON_MSHOP_CONFERENCE` (`0x1A200087`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 135 | `IDC_BUTTON_MSHOP_MESSENGER` (`0x1A200088`) | button | Press behavior unpinned beyond the ControlList entry and paired rect | OPEN: REA click dispatch plus Tier 3 click from boot; rig capture if no handler |
+| 136 | `IDC_IMAGE_MSHOP_MESSENGER_ALRAM` (`0x1A500089`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+| 137 | `IDC_IMAGE_MSHOP_MESSENGER_ALRAM1` (`0x1A50008A`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
+
+Input edges with no matching ControlList entry:
+
+| Edge | Exe behavior pin | Status |
+|---|---|---|
+| Music-shop sort direction and pager pairing | Directions/pairings ASSUMED in `docs/parity/musicshop.md`. | OPEN: SendInput sweep + gateway replay; seam music_shop_sort_and_pager_answer_their_staged_buttons (Tier 0) |
+| TOP100 standings contents | Eight chrome rects answer presses; standings unpinned (#179). | OPEN: capture with a 5011 rank reply; seam music_shop_top100_arm_stages_eight_rects_and_answer_each_press (Tier 0) |
