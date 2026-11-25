@@ -4791,7 +4791,7 @@ pub use self::chat::{
 // keep that seam test-only so the library build has no unused re-export.
 #[cfg(test)]
 pub(crate) use self::chat::{
-    chat_admin_ink, chat_row_ink, chat_user_ink, waiting_chat_edit_origin,
+    chat_admin_ink, chat_row_ink, chat_row_ink_for, chat_user_ink, waiting_chat_edit_origin,
     waiting_chat_list_origin, waiting_chat_row_y, CHANNEL_CHAT_ROW_H, CHANNEL_CHAT_VISIBLE_ROWS,
     ROOM_CHAT_CARET_INSET, ROOM_CHAT_EDIT_CODE, ROOM_CHAT_LIST_CODE, ROOM_CHAT_ROW_H,
     WAITING_CHAT_CARET_INSET, WAITING_CHAT_CARET_SIZE, WAITING_CHAT_EDIT_RECT,
@@ -4808,20 +4808,22 @@ pub use self::result::{
 };
 pub(crate) use self::room::*;
 pub use self::room::{
-    paint_room_scene, paint_room_scene_with_hover, paint_room_scene_with_selection,
-    paint_room_user_panel, ROOM_HOVER_SPRITE, ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE,
-    ROOM_PASSWORD_SPRITE, ROOM_STATE_SPRITE,
+    paint_channel_button_pair, paint_room_member_word, paint_room_scene,
+    paint_room_scene_with_hover, paint_room_scene_with_selection, paint_room_user_panel,
+    ROOM_HOVER_SPRITE, ROOM_MODE_SPRITE, ROOM_MUSIC_FLOOR, ROOM_OM_SPRITE, ROOM_PASSWORD_SPRITE,
+    ROOM_STATE_SPRITE,
 };
 pub(crate) use self::waiting::{
     paint_waiting_members, waiting_bnd_origin, waiting_local_is_master,
 };
 pub use self::waiting::{
     paint_waiting_scene, paint_waiting_scene_with_confirm, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, waiting_bpm_caption,
-    waiting_confirm_control_id, waiting_map_cycle, waiting_map_name, waiting_skillcount_text,
-    ChatSendMode, WaitingCaptions, WaitingConfirmState, WaitingEffect, WaitingLevel,
-    WaitingMapStep, WaitingOpenCaption, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, WAITING_MAP_DEFAULT_FRAMES, WAIT_BOTTOM_EFFECT_CODE, WAIT_TOP_EFFECT_CODE,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, seat_figure_is_male,
+    staged_derived_team, waiting_bpm_caption, waiting_confirm_control_id, waiting_map_cycle,
+    waiting_map_name, waiting_skillcount_text, ChatSendMode, WaitingCaptions, WaitingConfirmState,
+    WaitingEffect, WaitingLevel, WaitingMapStep, WaitingOpenCaption, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, WAITING_MAP_DEFAULT_FRAMES,
+    WAIT_BOTTOM_EFFECT_CODE, WAIT_TOP_EFFECT_CODE,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
@@ -6920,8 +6922,10 @@ mod paint_tests {
 
     #[test]
     fn waiting_row_text_shows_name_team_and_ready() {
+        // #955: the local seat shows the derived team byte (wire 0
+        // plus the exe's one-step increment), not the raw wire byte.
         let seats = waiting_seats(&waiting_room());
-        assert_eq!(waiting_row_text(0, &seats[0]), "0 A host R");
+        assert_eq!(waiting_row_text(0, &seats[0]), "0 B host R");
         assert_eq!(waiting_row_text(1, &seats[1]), "1 - ---");
         assert_eq!(waiting_row_text(2, &seats[2]), "2 - LOCK");
     }
@@ -15947,11 +15951,12 @@ mod paint_tests {
             ChannelChatMessage::whisper("host", "me", "psst"),
             ChannelChatMessage::announcement("notice"),
             ChannelChatMessage::rank("host", "M757", 1),
+            ChannelChatMessage::refusal("ghost"),
         ];
         for row in &channel_rows {
             fold_pin_text(&mut hash, &channel_chat_row_text(row));
             fold_pin_word(&mut hash, u64::from(row.admin));
-            fold_pin_word(&mut hash, u64::from(chat_row_ink(row.admin)));
+            fold_pin_word(&mut hash, u64::from(chat_row_ink_for(row)));
         }
         fold_pin_text(&mut hash, &rank_notice_board_text("host", "M757", 1));
 
@@ -16097,8 +16102,10 @@ mod paint_tests {
         );
         fold_pin_pixels(&mut hash, &room_pixels);
 
+        // #973 folds the zero-ink refusal kind into the ink pin; the
+        // delivery/admin/user geometry and ink contracts are unchanged.
         assert_eq!(
-            hash, 0x0ADA_B313_1DE3_E861,
+            hash, 0xCCD3_C6B7_E4A4_5D37,
             "chat box generation changed; re-check the exe pins before updating"
         );
     }
@@ -16355,8 +16362,9 @@ mod paint_tests {
         // #883 second pass also leaves the arena-0 MAPNAME cell at the
         // sheet's baked `Random`, inks BPM bare, and keeps the bright
         // speed-arrow record. Named guards + quiesced pairs carry it.
+        // #955 re-pins the local team plate to the derived byte.
         assert_eq!(
-            hash, 0x283B_C1B8_F2A8_B058,
+            hash, 0x9CD9_5D55_C32D_C0C0,
             "waiting paint generation changed; re-check the exe pins before updating"
         );
     }
@@ -17079,5 +17087,33 @@ mod dialog_paint_tests {
                 "{line} notice line must paint inside the message rect"
             );
         }
+    }
+
+    /// #951. seam: the paired control id is a pure codec choice with
+    /// no runtime caller beyond this painter; the booted 3003 leg
+    /// proves the staged figure follows it.
+    #[test]
+    fn gender_control_id_pair_selects_the_seat_figure() {
+        assert!(!seat_figure_is_male(0), "zero gender keeps the 0x24 pair");
+        for gender in [1, 2, 0xFF] {
+            assert!(
+                seat_figure_is_male(gender),
+                "every nonzero gender takes the 0x23 pair"
+            );
+        }
+    }
+
+    /// #955. seam: the derived team byte is pure member-slot math; the
+    /// booted 3003 leg proves the local team plate consumes it while
+    /// the wire byte stays on the staged member.
+    #[test]
+    fn local_seat_team_uses_the_derived_slot_byte() {
+        assert_eq!(staged_derived_team(0), 1);
+        assert_eq!(staged_derived_team(3), 4);
+        assert_ne!(
+            staged_derived_team(3),
+            3,
+            "the raw wire byte is not the mark"
+        );
     }
 }

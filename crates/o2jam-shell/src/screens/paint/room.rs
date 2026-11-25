@@ -1155,6 +1155,45 @@ pub fn paint_room_user_panel(
     }
 }
 
+/// Paint the first two default equipment control ids into the staged
+/// MODE/OM button pair of the first room panel (#959). The ids come
+/// from the codec's channel-keyed sets (`0x540e40`); without a staged
+/// panel nothing is painted. Both labels are id readouts: no exe glyph
+/// mapping for these ids is pinned, so the painter invents no art.
+pub fn paint_channel_button_pair(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    ids: [u32; 5],
+) {
+    let ink = caption_ink(art_title_ink());
+    for (id, control) in ids.iter().zip([
+        "IDC_BUTTON_SROOM_SHOW_NORMALMODE",
+        "IDC_BUTTON_SROOM_SHOW_BATTLEMODE",
+    ]) {
+        let Some(rect) = staged_field_rect(placements, control) else {
+            continue;
+        };
+        paint_text_into_rect(frame, rect, &format!("{id:#x}"), ink);
+    }
+}
+
+/// Paint the full 32-bit member word a 2023 event staged into the
+/// selected-song well of the first room panel (#990). The low twelve
+/// bits ride the normal music label; the shifted high nibble is shown
+/// as the hex word so the OR is visible without inventing an exe
+/// caption.
+pub fn paint_room_member_word(frame: &mut Frame<'_>, placements: &[ScenePlacement], word: u32) {
+    let Some(rect) = staged_field_rect(placements, ROOM_DETAIL_MUSIC_ID) else {
+        return;
+    };
+    paint_text_into_rect(
+        frame,
+        rect,
+        &format!("W{word:#x}"),
+        caption_ink(art_title_ink()),
+    );
+}
+
 /// One integer into its staged well.
 pub(crate) fn paint_room_panel_number(
     frame: &mut Frame<'_>,
