@@ -377,7 +377,7 @@ impl WindowHandler {
     pub(crate) fn deliver_snapshot(&mut self) -> InputSnapshot {
         let pointer = self.cursor.and_then(|(cursor_x, cursor_y)| {
             let (window_w, window_h) = self.surface_size?;
-            window_to_native(window_w, window_h, cursor_x, cursor_y)
+            pointer_sample_for_tracking(window_w, window_h, cursor_x, cursor_y)
         });
         let mut snapshot = InputSnapshot::new();
         snapshot.set_pointer(pointer);
@@ -509,6 +509,21 @@ pub fn window_to_native(
         return None;
     }
     Some((local_x.floor() as i32, local_y.floor() as i32))
+}
+
+/// One sampled pointer position on its way to the shared tracker
+/// (`0x432020`, file `0x32020`): the window sample becomes a native
+/// point before the frame freeze sends it to the game. The stored
+/// image helper is not present in this client, so its arm stays OPEN
+/// and is not claimed by this guard.
+#[must_use]
+pub fn pointer_sample_for_tracking(
+    window_w: u32,
+    window_h: u32,
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(i32, i32)> {
+    window_to_native(window_w, window_h, cursor_x, cursor_y)
 }
 
 /// Whether a backbuffer holds exactly one native frame.
@@ -1021,6 +1036,20 @@ mod tests {
             ],
             "both edges still reach the game"
         );
+    }
+
+    #[test]
+    // Tier 1 window-input seam: `WindowHandler::window_event`
+    // `CursorMoved` arm -> `track_motion` -> `deliver_snapshot` ->
+    // `GameLoop::ingest_snapshot`. The exe's image-helper hop is not
+    // in this client; Tier 3 hover capture stays OPEN.
+    fn pointer_sample_reaches_the_tracker_and_the_game_snapshot() {
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(10.0, 20.0);
+        let snapshot = handler.deliver_snapshot();
+        assert_eq!(snapshot.pointer(), Some((10, 20)));
+        assert_eq!(probe.borrow().pointers, vec![Some((10, 20))]);
     }
 
     #[test]

@@ -1265,13 +1265,125 @@ fn combo_glow_sprite_name(stage: u16) -> String {
     format!("Note_Combo{stage}.ojt")
 }
 
+/// Copy path the exe chooses from the staged image kind (`0x417770`,
+/// file `0x17770`): kind 1 uploads pixel rows, kind 2 uploads a packed
+/// run list. Other kinds name no Playing skin copy path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinCopyPath {
+    /// Kind 1: row-wise 16-bit pixel copy (`0x416100`).
+    PixelRows,
+    /// Kind 2: packed-run pixel copy (`0x416250`).
+    PackedRuns,
+}
+
+/// The pixel-copy path for one staged image kind.
+pub const fn skin_copy_path(kind: u16) -> Option<SkinCopyPath> {
+    match kind {
+        1 => Some(SkinCopyPath::PixelRows),
+        2 => Some(SkinCopyPath::PackedRuns),
+        _ => None,
+    }
+}
+
+/// Face branch chosen by the image/cursor mode switch (`0x430130`,
+/// file `0x30130`). The two names stand for the two vftable arms; no
+/// pixel shape is claimed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFaceBranch {
+    /// The arm taken by a mode-1 request.
+    ModeOne,
+    /// The arm taken by a mode-2 request.
+    ModeTwo,
+}
+
+/// Store the requested mode and name its face branch. A mode-1 request
+/// can be promoted to mode 2 by the exe's global mode query before the
+/// mode-1 face runs; the caller supplies that observed promotion.
+pub const fn image_mode_switch(requested: u16, promoted_to_two: bool) -> (u16, ImageFaceBranch) {
+    if requested == 2 {
+        (2, ImageFaceBranch::ModeTwo)
+    } else if promoted_to_two {
+        (2, ImageFaceBranch::ModeOne)
+    } else {
+        (requested, ImageFaceBranch::ModeOne)
+    }
+}
+
+/// Whether staged art reaches the frame: both the exe's enable word
+/// (`0x42f560`, file `0x2f560`) and a staged figure are required.
+pub const fn staged_art_enabled(enable_word: u16, has_figures: bool) -> bool {
+    enable_word != 0 && has_figures
+}
+
+/// Sentinel frame the exe primes for stepped animation modes 5..7
+/// (`0x42f7c0`, file `0x2f7c0`), or `None` for other modes.
+pub const fn restart_sentinel(mode: u16, frame_count: usize) -> Option<usize> {
+    if mode > 4 && mode < 8 {
+        Some(frame_count.saturating_add(1))
+    } else {
+        None
+    }
+}
+
+/// Rest frame stored by `0x42f910` (file `0x2f910`): an all-ones
+/// request selects the frame count, otherwise the supplied frame.
+pub fn rest_frame(requested: u16, frame_count: usize) -> usize {
+    if requested == u16::MAX {
+        frame_count
+    } else {
+        usize::from(requested)
+    }
+}
+
+/// Frame the exe's current-frame getter (`0x42f990`, file `0x2f990`)
+/// reads at this clock, clamped to the staged frames.
+pub fn frame_at_clock(clock: u16, frame_count: usize) -> usize {
+    usize::from(clock).min(frame_count.saturating_sub(1))
+}
+
+/// Manual step of `0x42f9b0` (file `0x2f9b0`): add the delta, then
+/// clamp between the rest frame and the last staged frame instead of
+/// wrapping.
+pub fn clamped_frame_step(current: usize, delta: i32, rest: usize, count: usize) -> usize {
+    let start = i64::try_from(current).unwrap_or(i64::MAX);
+    let raw = start.saturating_add(i64::from(delta));
+    let lower = i64::try_from(rest).unwrap_or(i64::MAX);
+    let upper = i64::try_from(count).unwrap_or(i64::MAX);
+    let bounded = raw.clamp(lower, upper.max(lower)).max(0);
+    usize::try_from(bounded).unwrap_or(usize::MAX)
+}
+
+/// Width the exe's label measurer (`0x48c970`, file `0x8c970`) sees.
+/// A zero length asks for the whole string; a positive length names a
+/// byte span.
+pub fn measured_label_width(text: &str, length: usize) -> usize {
+    if length == 0 {
+        return text_width(text);
+    }
+    text.get(..length.min(text.len())).map_or(0, text_width)
+}
+
+/// Longest prefix of `text` whose measured width fits the cell.
+pub fn shorten_label_to_cell(text: &str, cell_width: usize) -> String {
+    if measured_label_width(text, 0) <= cell_width {
+        return text.to_owned();
+    }
+    let mut fitted = 0;
+    for (index, character) in text.char_indices() {
+        let end = index + character.len_utf8();
+        if measured_label_width(&text[..end], end) > cell_width {
+            break;
+        }
+        fitted = end;
+    }
+    text[..fitted].to_owned()
+}
+
 /// Frame index for a flash age: one step per [`RECEPTOR_FRAME_MS`],
 /// clamped to the last frame.
 fn stepped_frame(count: usize, age_ms: u64) -> usize {
-    let last = count.saturating_sub(1);
-    usize::try_from(age_ms / RECEPTOR_FRAME_MS)
-        .unwrap_or(last)
-        .min(last)
+    let delta = i32::try_from(age_ms / RECEPTOR_FRAME_MS).unwrap_or(i32::MAX);
+    clamped_frame_step(0, delta, 0, count.saturating_sub(1))
 }
 
 /// One archive entry body by stored size (never the reserved stride;
@@ -3742,7 +3854,7 @@ impl AvatarScene {
         if text.is_empty() {
             return;
         }
-        let text_w = i32::try_from(text_width(text)).unwrap_or(i32::MAX);
+        let text_w = i32::try_from(measured_label_width(text, 0)).unwrap_or(i32::MAX);
         let scrim_w = u32::try_from(text_w.saturating_add(8)).unwrap_or(u32::MAX);
         fill_rect(
             frame,
@@ -6797,6 +6909,105 @@ mod highway_tests {
         );
         assert!(buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
         assert!(!buf.contains(&solid_ink(0x7C00)));
+    }
+}
+
+#[cfg(test)]
+mod pinned_image_state_tests {
+    use super::*;
+
+    #[test]
+    // seam: pure image-kind branch; this client decodes staged frames and has no exe kind word at runtime
+    fn image_copy_path_distinguishes_the_two_pinned_kinds() {
+        assert_eq!(skin_copy_path(1), Some(SkinCopyPath::PixelRows));
+        assert_eq!(skin_copy_path(2), Some(SkinCopyPath::PackedRuns));
+        assert_eq!(skin_copy_path(3), None, "unlisted kinds copy no skin");
+    }
+
+    #[test]
+    // seam: the mode word and its two face arms are the pinned contract; this client has no vftable to call
+    fn image_mode_switch_promotes_mode_one_before_the_mode_one_face() {
+        assert_eq!(image_mode_switch(2, false), (2, ImageFaceBranch::ModeTwo));
+        assert_eq!(image_mode_switch(1, false), (1, ImageFaceBranch::ModeOne));
+        assert_eq!(
+            image_mode_switch(1, true),
+            (2, ImageFaceBranch::ModeOne),
+            "promotion changes the stored word, not the chosen face"
+        );
+    }
+
+    #[test]
+    // seam: enable-word gate is a pure contract; the painter consumes staged figures only
+    fn staged_art_requires_both_the_enable_word_and_a_figure() {
+        assert!(staged_art_enabled(1, true));
+        assert!(!staged_art_enabled(0, true));
+        assert!(!staged_art_enabled(1, false));
+    }
+
+    #[test]
+    // seam: sentinel arithmetic has no live caller; our clock starts flashes at age zero
+    fn restart_sentinel_primes_only_modes_five_through_seven() {
+        assert_eq!(restart_sentinel(5, 8), Some(9));
+        assert_eq!(restart_sentinel(6, 8), Some(9));
+        assert_eq!(restart_sentinel(7, 8), Some(9));
+        assert_eq!(restart_sentinel(4, 8), None);
+        assert_eq!(restart_sentinel(8, 8), None);
+    }
+
+    #[test]
+    // seam: rest-frame field semantics with no live setter in this client
+    fn rest_frame_uses_the_frame_count_for_an_all_ones_request() {
+        assert_eq!(rest_frame(3, 8), 3);
+        assert_eq!(rest_frame(u16::MAX, 8), 8);
+    }
+
+    #[test]
+    // seam: current-frame getter semantics; live painting uses an explicit `paint_at` clock
+    fn frame_clock_never_paints_past_the_staged_frames() {
+        assert_eq!(frame_at_clock(0, 4), 0);
+        assert_eq!(frame_at_clock(2, 4), 2);
+        assert_eq!(
+            frame_at_clock(9, 4),
+            3,
+            "the clock clamps to the last frame"
+        );
+        assert_eq!(frame_at_clock(9, 0), 0);
+    }
+
+    #[test]
+    // Live chain: `main.rs::run_play` -> `ScreenGame::paint_at` -> `LivePlay::paint` -> `PlaySkin::lane_beam_frame` -> `stepped_frame` -> `clamped_frame_step`
+    fn manual_frame_steps_clamp_instead_of_wrapping() {
+        assert_eq!(clamped_frame_step(2, 1, 1, 4), 3);
+        assert_eq!(clamped_frame_step(3, 1, 1, 4), 4, "the top step stays put");
+        assert_eq!(
+            clamped_frame_step(1, -3, 1, 4),
+            1,
+            "a low step hits the rest frame"
+        );
+        assert_eq!(
+            clamped_frame_step(1, 40, 1, 4),
+            4,
+            "a large step cannot wrap"
+        );
+    }
+
+    #[test]
+    // Live chain: `main.rs::run_play` -> `ScreenGame::paint_at` -> `ScreenGame::paint_playing` -> `AvatarScene::paint_avatar_scene_with_placements` -> `paint_caption_line` -> `measured_label_width`
+    fn label_measurement_uses_the_full_text_for_a_zero_length_request() {
+        assert_eq!(
+            measured_label_width("Lv 99 Robo", 0),
+            text_width("Lv 99 Robo")
+        );
+        assert_eq!(measured_label_width("Lv 99 Robo", 4), text_width("Lv 9"));
+    }
+
+    #[test]
+    // seam: shortening helper has no live painter caller yet; Tier 3 label capture stays OPEN
+    fn long_label_shrinks_to_the_measured_cell_width() {
+        let cell = text_width("Lv 9");
+        let fitted = shorten_label_to_cell("Lv 99 Robo", cell);
+        assert_eq!(fitted, "Lv 9");
+        assert!(measured_label_width(&fitted, 0) <= cell);
     }
 }
 
