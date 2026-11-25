@@ -2259,11 +2259,11 @@ fn rect_union(first: Rect, second: Rect) -> Rect {
 // (`0x83`) and 3KEY/7KEY filter semantics, MYALL owned-list pager,
 // search, cart rows, gift, and download stay display-only OPEN
 // (next step: SendInput sweep on the live board per the
-// `~/scratch/planet-verify/` recipe). Per-row
-// GEM_BUY/WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and
-// the cart BUYITEM (`0x5D`) queue the pinned empty
-// `SyncMusicPurchase` 5010 send; the 5011 answer shape is untraced,
-// so the wire ride stays ASSUMED behind the take-seam.
+// `~/scratch/planet-verify/` recipe). Per-row GEM_BUY/WON_BUY
+// (`0x41`/`0x46`, row-local, tiled per slot) only stage the bag;
+// the cart BUYITEM (`0x5D`) sends one empty 5015 after the exe
+// gates (P2 pin). The two 5010 exe constants are a reply case and
+// a web/event queue, never a click send; the 5011 shape stays OPEN.
 
 /// First song-row hit area (`IDC_BUTTON_MS_EX_1`); five run
 /// contiguously through `+4` (block walk + staged dump).
@@ -2801,8 +2801,9 @@ pub const MSHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1A50_006A;
 pub const MSHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1A50_006B;
 pub const MSHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1A50_006C;
 pub const MSHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1A50_006D;
-/// Cart buy (`IDC_BUTTON_MSHOP_BUYITEM`): queues the pinned empty
-/// `SyncMusicPurchase` 5010 send (the cart join stays ASSUMED).
+/// Cart buy (`IDC_BUTTON_MSHOP_BUYITEM`): one empty 5015 after the
+/// web-busy, bag-count, cash and gem gates (P2 pin, VA `0x4c8505` /
+/// file `0xc8505`); no 5010 is queued on this press.
 pub const MSHOP_CART_BUY_CODE: u32 = 0x1A20_005D;
 /// Shop-list page-number IMAGEs (staged absolute,
 /// `MShop_PageNumber.ojs`): current tens/ones plus total tens/ones
@@ -2969,7 +2970,7 @@ pub enum MusicShopAction {
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Cart `GIFTITEM` (`0x1A200073`) runs the shared payment ladder
-    /// with mode 2; no 5010 is queued for the gift arm (#834).
+    /// with mode 2; neither payment arm queues 5010 (#834, P2 pin).
     CartGift,
     /// Cart-list pager stepped back.
     CartPrev,

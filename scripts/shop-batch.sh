@@ -280,7 +280,7 @@ run_row music-shop-browse-buy
 R2_FAIL=0
 run_guard_leg music-shop-browse-buy o2jam-shell "--lib" music_shop_board_paints_catalog_cells_and_pager_at_staged_rects || R2_FAIL=1
 run_guard_leg music-shop-browse-buy o2jam-shell "--lib" music_shop_board_paints_owned_marks_at_staged_rects || R2_FAIL=1
-run_guard_leg music-shop-browse-buy o2jam-shell "--lib" music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010 || R2_FAIL=1
+run_guard_leg music-shop-browse-buy o2jam-shell "--lib" music_shop_row_pick_stages_the_cart_and_cart_buy_sends_one_empty_5015 || R2_FAIL=1
 
 # Row 3: MyRoom enter -> equip (+ gift claim on the same overlay).
 run_row myroom-enter-equip

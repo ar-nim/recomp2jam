@@ -82,11 +82,13 @@ Guard: `music_shop_chrome_sweep_presses_every_staged_control`.
 
 | control | outcome | evidence/stand-in |
 |---|---|---|
-| `MS_EX` ×5 row picks | stage the cart in pick order | pinned 5010 send arm |
-| Tiled `GEM_BUY` / `WON_BUY` row buttons | each queues one 5010 send, seam drains once | staged slot-origin tiling |
-| `TITLE` / `DIFF` / `BPM` sorts | resort and reset the page | `from_code` dispatch arm |
-| `MSALL` pager | turns and holds at both ends | staged pager |
-| Cart `BUYITEM`, cart pager | commit queues 5010; pager turns over a full cart, holds | pinned 5010 send |
+| `MS_EX` ×5 row picks | stage the cart in pick order, no wire | P2 pin: no click-side 5010 |
+| Tiled `GEM_BUY` / `WON_BUY` row buttons | stage one bag entry and the BUYITEM marker, no wire | P2 pin: row buy invokes cart pager `0x5F`, sends nothing |
+| `TITLE` / `DIFF` / `BPM` sorts | flip one rank-header direction word each press, then resort/reset | P1 pin: `+0x194 + index*4`; no wire |
+| `MY_TITLE` / `MY_PLAYTIME` / `MY_DOWNSTATUS` sorts | flip one owned direction word each press, then resort/clear marks | P1 pin: `+0x370 + index*4`; no wire |
+| `MSALL` pager | left wraps, right clamps; no wire | P1 pin: cases `0x0A`/`0x0B` |
+| `MYALL` pager | left wraps, right clamps behind the owned-row and download gates; no wire | P1 pin: cases `0x0C`/`0x0D` |
+| Cart `BUYITEM`, cart pager | BUYITEM sends one empty 5015 after gates; pager turns over a full cart, holds | P2 pin: VA `0x4c8505` / file `0xc8505` |
 | Page digits | land nowhere | display-only, no-op guard |
 | `PRICE` | unstaged in the fixture; display-only with no price source | OPEN |
 

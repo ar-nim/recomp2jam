@@ -40,16 +40,16 @@ Evidence: screen path `waiting → shop → waiting` /
 `b88d86a046d514ae` (web surface opened); music
 `ecba3f591475a287` (song shop open) → `16b70ed241ae880f`
 (TITLE sorted) → `54ff53a04fe97fce` (page 1) →
-`b65513055311b344` (song 757 staged) → `f668ca3d6ba933eb`
-(5010 queued). Guards: `shops_hand_session_browses_and_buys`,
-`music_shop_hand_session_sorts_pages_and_buys` (plus
+`b65513055311b344` (song staged) → `f668ca3d6ba933eb`
+(state after the row buy; no purchase opcode). Guards: `shops_hand_session_browses_and_buys`,
+`music_shop_hand_session_sorts_pages_and_stages_the_cart` (plus
 `shop_row_toggle_checks_the_cart_and_buy_opens_the_web_surface`,
 `shop_buyitem_without_cart_queues_nothing`,
 `shop_pager_turns_eight_row_pages`,
 `shop_wallet_gem_caption_waits_for_wire_data`,
 `shop_unstaged_clicks_land_nowhere`,
-`music_shop_sorts_pages_and_buys`,
-`music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010`,
+`music_shop_sorts_pages_and_row_buys_without_a_wire`,
+`music_shop_row_pick_stages_the_cart_and_cart_buy_sends_one_empty_5015`,
 `music_shop_unstaged_clicks_land_nowhere` and the `side_tests`
 dispatch/slot guards and the two `paint_tests` board guards).
 

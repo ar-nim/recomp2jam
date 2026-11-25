@@ -6280,6 +6280,14 @@ impl ScreenGame {
             .collect()
     }
 
+    /// Mounted side placements, for live-input guards that must pick
+    /// a hit point resolving to one action instead of assuming a
+    /// control's centre is not overlapped by an earlier rect.
+    #[must_use]
+    pub fn staged_side_placements(&self) -> &[ScenePlacement] {
+        &self.side_placements
+    }
+
     /// Planet board click through the control-code → action
     /// dispatch table ([`planet_action_at`]): lit-emblem presses
     /// record the family pick and open the channel dialog through
@@ -8394,6 +8402,14 @@ impl ScreenGame {
         self.music_shop.owned_sort_descending()
     }
 
+    /// Direction word of one TOP100 rank header (`0x1A20007E..83`).
+    /// The exe flips it on every press; the config-sourced initial
+    /// value stays OPEN.
+    #[must_use]
+    pub fn music_shop_rank_header_descending(&self, code: u32) -> bool {
+        self.music_shop.rank_header_descending(code)
+    }
+
     /// Owned/download face selected by the two tab images (#820).
     #[must_use]
     pub fn music_shop_face(&self) -> MusicShopFace {
@@ -8564,10 +8580,20 @@ impl ScreenGame {
         self.music_shop.visible_rows()
     }
 
-    /// Queued song buy for the session bridge, if any (5010). One
-    /// body per row or cart commit; the seam drains it.
+    /// Queued song-buy reply probe for the session bridge, if any
+    /// (5010). No Music Shop click queues it: the exe's 5010
+    /// constants are a reply case and a web/event queue (P2 pin).
+    /// The seam drains it after a scripted gateway replay stages one.
     pub fn take_music_buy(&mut self) -> Option<SyncMusicPurchase> {
         self.outbox.take_music_buy()
+    }
+
+    /// Stage one empty 5010 reply probe for scripted gateway legs.
+    /// This is a test-side reply seam, not a player click arm: the
+    /// 5010/5011 read-side fold stays covered without reinstating the
+    /// wrong opcode on a Music Shop press.
+    pub fn stage_music_buy_reply_probe(&mut self) {
+        self.outbox.pending_music_buy = Some(SyncMusicPurchase);
     }
 
     /// Post the native notice for a refused 5011 (#405). The session
@@ -8600,13 +8626,19 @@ impl ScreenGame {
 
     /// Song-shop click through the control-code dispatch
     /// ([`music_shop_action_at`]): row picks stage the cart, row
-    /// buy buttons and the cart `BUYITEM` queue the pinned 5010
-    /// send, sorts resort and reset the page, and the pager steps
-    /// and holds at the ends. Staged placements only — unstaged
-    /// clicks land nowhere. Only answers on the open song-shop
-    /// side screen.
+    /// buy buttons stage the bag and invoke the BUYITEM marker, and
+    /// the cart `BUYITEM` runs the checkout ladder's empty 5015.
+    /// Sorts flip their direction words, and the pager wraps left
+    /// and clamps right. Staged placements only — unstaged clicks
+    /// land nowhere. Only answers on the open song-shop side screen.
     pub fn click_music_shop(&mut self, x: i32, y: i32) {
         if self.side != Some(SideScreen::MusicShop) {
+            return;
+        }
+        if self.billing_failure_notice_open() {
+            // Same dismissal contract as `click_side_screen`: a native
+            // notice owns the next press, regardless of the hit rect.
+            self.dismiss_billing_failure_notice();
             return;
         }
         let Some(action) = music_shop_action_at(&self.side_placements, x, y) else {
@@ -8644,10 +8676,6 @@ impl ScreenGame {
             _ => None,
         };
         match self.music_shop.apply_action(action) {
-            MusicShopEffect::Buy => {
-                self.billing_failure_notice = false;
-                self.outbox.pending_music_buy = Some(SyncMusicPurchase);
-            }
             MusicShopEffect::StartDownloads(song_ids) => {
                 for song_id in song_ids {
                     self.begin_music_download(song_id);
@@ -8662,8 +8690,9 @@ impl ScreenGame {
     }
 
     /// Run the BUYITEM/GIFTITEM ladder and queue its static 5015 send
-    /// when every staged gate passes. The existing 5010 music-buy arm
-    /// and the scripted 5011 answer stay untouched (#834).
+    /// when every staged gate passes. The 5010 reply probe and the
+    /// scripted 5011 answer stay separate from this click arm (#834,
+    /// P2 pin).
     fn run_music_shop_checkout(&mut self, mode: super::side::CheckoutMode) {
         if self.music_shop.approve_checkout(mode, &self.wallet) {
             self.outbox.pending_start_payment = Some(StartPayment);
@@ -29942,10 +29971,10 @@ mod game_tests {
     }
 
     #[test]
-    fn music_shop_sorts_pages_and_buys_5010() {
-        // Seven songs over five slots: TITLE sorts, the MSALL pager
-        // turns and holds, and the row GEM_BUY queues the pinned
-        // empty 5010 send through the seam exactly once.
+    fn music_shop_sorts_pages_and_row_buys_without_a_wire() {
+        // Seven songs over five slots: TITLE flips its rank-header
+        // word, the MSALL pager wraps left and clamps right, and the
+        // row GEM_BUY stages the bag without a purchase frame (P1/P2).
         let mut game = open_music_shop_board(7);
         assert_eq!(game.music_shop_visible_rows().len(), 5);
         game.click_music_shop(134, 85);
@@ -29959,8 +29988,9 @@ mod game_tests {
         game.click_music_shop(199, 533);
         assert_eq!(game.music_shop_page(), 0);
         game.click_music_shop(341, 156);
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
-        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        assert_eq!(game.take_music_buy(), None, "row buy is not a wire arm");
+        assert_eq!(game.take_start_payment(), None, "no ladder ran");
     }
 
     /// Synthetic owned list with two pages and its MYALL pager.
@@ -30034,6 +30064,8 @@ mod game_tests {
     /// Press one of the three owned-header sort codes through the
     /// staged click seam.
     fn press_owned_sort(game: &mut ScreenGame, code: u32) {
+        game.side_placements
+            .retain(|placed| placed.rect.x != 500 || placed.rect.y != 20);
         game.side_placements.push(ScenePlacement {
             role: PlacementRole::Single,
             id: String::new(),
@@ -30054,6 +30086,8 @@ mod game_tests {
         // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
         // -> ScreenGame::click_music_shop -> music_shop_action_at
         // -> MusicShopState::apply_action(OwnedSort) -> owned_rows.
+        // P1 pin: the first press flips the config-sourced word, so a
+        // fresh profile starts high-to-low.
         let mut game = open_music_shop_owned_board_with_titles(&["Zulu", "Alpha", "Mike"]);
         game.click_music_shop(20, 30);
         assert!(game.music_shop_owned_rows()[0].marked);
@@ -30064,7 +30098,7 @@ mod game_tests {
             .iter()
             .map(|row| row.title.clone())
             .collect();
-        assert_eq!(titles, vec!["Alpha", "Mike", "Zulu"]);
+        assert_eq!(titles, vec!["Zulu", "Mike", "Alpha"]);
         assert!(
             game.music_shop_owned_rows().iter().all(|row| !row.marked),
             "a sort clears stale row marks"
@@ -30077,15 +30111,62 @@ mod game_tests {
         // (`state+0x370 + index*4`, FUN_004d2660).
         let mut game = open_music_shop_owned_board_with_titles(&["Zulu", "Alpha", "Mike"]);
         press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
-        assert!(!game.music_shop_owned_sort_descending());
-        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
         assert!(game.music_shop_owned_sort_descending());
+        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
+        assert!(!game.music_shop_owned_sort_descending());
         let titles: Vec<String> = game
             .music_shop_owned_rows()
             .iter()
             .map(|row| row.title.clone())
             .collect();
-        assert_eq!(titles, vec!["Zulu", "Mike", "Alpha"]);
+        assert_eq!(titles, vec!["Alpha", "Mike", "Zulu"]);
+    }
+
+    #[test]
+    fn music_shop_owned_header_flips_the_new_keys_direction_word() {
+        // P1 pin: FUN_004d2660 flips one word at state+0x370+index*4
+        // on every owned-header press, including when the pressed key
+        // changes. Repeated presses of one key alternate the order.
+        let mut game = open_music_shop_owned_board_with_titles(&["Zulu", "Alpha", "Mike"]);
+        press_owned_sort(&mut game, MSHOP_OWNED_TITLE_SORT_CODE);
+        press_owned_sort(&mut game, MSHOP_OWNED_PLAYTIME_SORT_CODE);
+        assert!(
+            game.music_shop_owned_sort_descending(),
+            "PLAYTIME starts from its flipped direction word"
+        );
+        press_owned_sort(&mut game, MSHOP_OWNED_PLAYTIME_SORT_CODE);
+        assert!(
+            !game.music_shop_owned_sort_descending(),
+            "a second PLAYTIME press flips the word back"
+        );
+        assert_eq!(game.take_music_buy(), None, "sort sends no 5010");
+        assert_eq!(game.take_start_payment(), None, "sort sends no 5015");
+    }
+
+    #[test]
+    fn music_shop_rank_header_flips_its_direction_word_on_repeat() {
+        // P1 pin: the six header keys call FUN_004d66b0, which flips
+        // state+0x194+index*4 each press. TITLE is also the catalog
+        // sort, so the visible order must reverse on the second press.
+        let mut game = open_music_shop_board(3);
+        game.click_music_shop(134, 85);
+        assert!(game.music_shop_rank_header_descending(MSHOP_TITLE_SORT_CODE));
+        let first_order: Vec<u32> = game
+            .music_shop_visible_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(first_order, vec![759, 758, 757]);
+        game.click_music_shop(134, 85);
+        assert!(!game.music_shop_rank_header_descending(MSHOP_TITLE_SORT_CODE));
+        let second_order: Vec<u32> = game
+            .music_shop_visible_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(second_order, vec![757, 758, 759]);
+        assert_eq!(game.take_music_buy(), None, "header sends no 5010");
+        assert_eq!(game.take_start_payment(), None, "header sends no 5015");
     }
 
     #[test]
@@ -30447,17 +30528,18 @@ mod game_tests {
     #[test]
     fn music_shop_row_pick_feedback_stages_cart_without_a_buy_wire() {
         // Seam proof for the client half of #412: the routed row
-        // press shows its cart feedback but must not send 5010;
-        // only the cart BUYITEM commit does. The exe's own press
-        // frames and 5010 tap stay OPEN (`E-T`/`E-W-5010`).
-        use o2jam_net::shop::SyncMusicPurchase;
+        // press shows its cart feedback but must not send a frame;
+        // an empty bag also gates the cart BUYITEM. The exe's own
+        // press frames and 5015 tap stay OPEN (`E-T`/`E-W-5015`).
         let mut game = open_music_shop_board(7);
         game.ingest_snapshot(&InputSnapshot::click_at(19, 105));
         assert_eq!(game.music_shop_cart(), vec![757]);
         assert_eq!(game.take_music_buy(), None, "a row pick is not a buy");
         game.ingest_snapshot(&InputSnapshot::click_at(424, 529));
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
-        assert_eq!(game.take_music_buy(), None);
+        // A row pick does not fill the exe bag, so BUYITEM stops at
+        // the nonempty-bag gate before the 5015 send.
+        assert_eq!(game.take_start_payment(), None);
+        assert_eq!(game.take_music_buy(), None, "BUYITEM never queues 5010");
     }
 
     /// Ticket #526 client half: a routed row pick must ink its own
@@ -30503,15 +30585,44 @@ mod game_tests {
     }
 
     #[test]
-    fn music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010() {
-        // The MS_EX row stages the song into the cart; the cart
-        // BUYITEM commits it through the same pinned 5010 send.
-        let mut game = open_music_shop_board(7);
+    fn music_shop_row_pick_stages_the_cart_and_cart_buy_sends_one_empty_5015() {
+        // Live caller chain: main.rs::run_play -> GameLoop::ingest_snapshot
+        // -> ScreenGame::click_music_shop(BuyRow, CartBuy)
+        // -> MusicShopState::approve_checkout -> PendingOutbox
+        // -> OnlineSession::poll_wire -> flush_start_payment -> one empty 5015.
+        // P2 pin: FUN_004c7f70 case 0x1A20005D sends 0x1397 through
+        // vtable +0x5C (VA 0x4c8505 / file 0xc8505). The 5010 constants
+        // are a reply case and a web/event queue, never this click.
+        let mut game = open_funded_music_checkout();
         game.click_music_shop(19, 105);
         assert_eq!(game.music_shop_cart(), vec![757]);
+        // Row buy is the exe's bag producer; stage its price marker
+        // at the seam so the BUYITEM ladder sees a nonempty bag.
+        game.music_shop_bag_push(757, true);
         game.click_music_shop(424, 529);
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
-        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.take_start_payment(), Some(StartPayment));
+        assert_eq!(game.take_start_payment(), None, "one BUYITEM send");
+        assert_eq!(
+            game.take_music_buy(),
+            None,
+            "BUYITEM must not queue the wrong opcode 5010"
+        );
+    }
+
+    #[test]
+    fn music_shop_msall_left_wraps_and_right_clamps_without_a_wire() {
+        // P1 pin: FUN_004c7f70 cases 0x1A20000A/0x0B write page index
+        // +0x27 with modulo wrap left and a clamp right. The four
+        // pager arms end in list rebuild / repaint helpers; no session
+        // send rides them (negative byte sweep in findings-lanking.md).
+        let mut game = open_music_shop_board(7);
+        assert_eq!(game.music_shop_page(), 0);
+        game.click_music_shop(199, 533);
+        assert_eq!(game.music_shop_page(), 1, "left wraps from page 0");
+        game.click_music_shop(318, 533);
+        assert_eq!(game.music_shop_page(), 1, "right clamps at the last");
+        assert_eq!(game.take_music_buy(), None, "pager sends no 5010");
+        assert_eq!(game.take_start_payment(), None, "pager sends no 5015");
     }
 
     #[test]
@@ -30522,7 +30633,8 @@ mod game_tests {
         let mut game = open_music_shop_board(7);
         game.click_music_shop(19, 105);
         game.click_music_shop(424, 529);
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_eq!(game.take_music_buy(), None, "no click-side 5010");
+        assert_eq!(game.take_start_payment(), None, "empty bag gates 5015");
 
         game.post_music_purchase_failure_notice();
         let band = super::super::paint::BILLING_FAILURE_NOTICE_RECT;
@@ -30586,9 +30698,9 @@ mod game_tests {
         // Live caller chain:
         //   main.rs::run_play -> setup_online -> stage_online_identity
         //   -> ScreenGame::set_song_catalog (the catalog fans out to
-        //   the select table and both boards) -> ScreenGame::click_music_shop
-        //   (the cart BUYITEM queues the pinned 5010)
-        //   -> OnlineSession::paint -> flush_music_buy (5010 send)
+        //   the select table and both boards) -> staged 5010 reply
+        //   probe -> ScreenGame::click_music_shop is not the reply arm
+        //   -> OnlineSession::paint -> flush_music_buy (5010 replay)
         //   -> poll_music_buy -> drain_music_buy (5011)
         //   -> ScreenGame::apply_music_purchase_response
         //   -> MusicShopState::fold_purchased_songs (board)
@@ -30654,8 +30766,7 @@ mod game_tests {
         // visit_side(MusicShop) -> GameLoop::mouse_click ->
         // click_music_shop -> music_shop_action_at -> music_shop_buy_slot
         // (the two tiled row buy rect arrays) -> MusicShopState::apply_action
-        // (BuyRow) -> click_music_shop's MusicShopEffect::Buy ->
-        // outbox.pending_music_buy (5010). Exe FUN_004c7f70 indexes the
+        // (BuyRow) -> staged bag marker only (no wire). Exe FUN_004c7f70 indexes the
         // catalog by page*5+row, refuses at ten bag entries with VA
         // 0x64a5f0, posts VA 0x6486a4 on a duplicate, and invokes the
         // BUYITEM control on success (ev_26ac6479..., ticket #833).
@@ -30668,7 +30779,8 @@ mod game_tests {
             game.music_shop_buyitem_invoked(),
             Some(MSHOP_BUYITEM_INVOKE_CODE)
         );
-        assert!(game.take_music_buy().is_some(), "the buy queues 5010");
+        assert_eq!(game.take_music_buy(), None, "row buy queues no 5010");
+        assert_eq!(game.take_start_payment(), None, "row buy queues no 5015");
 
         game.click_music_shop(350, 160);
         assert_eq!(
@@ -30688,8 +30800,7 @@ mod game_tests {
             "page*5+row picks the catalog songs"
         );
         assert_eq!(game.music_shop_bag_item_code(763), Some(MSHOP_BAG_WON_CODE));
-        assert_eq!(game.take_music_buy().map(|_| 1), Some(1), "two buys queued");
-        game.take_music_buy();
+        assert_eq!(game.take_music_buy(), None, "row buys queue no wire");
 
         for song_id in [758, 759, 760, 761, 764, 765, 766] {
             game.music_shop_bag_push(song_id, true);
@@ -31902,10 +32013,10 @@ mod game_tests {
     }
 
     #[test]
-    fn music_shop_hand_session_sorts_pages_and_buys() {
-        // Song-board half of the offline session: TITLE sorts, the
-        // MSALL pager turns, a row pick stages the cart, and the
-        // row GEM_BUY queues the pinned 5010 send through the seam.
+    fn music_shop_hand_session_sorts_pages_and_stages_the_cart() {
+        // Song-board half of the offline session: TITLE flips its
+        // direction word, the MSALL pager wraps left and clamps right,
+        // and row picks plus row buys stage the cart with no wire.
         let mut game = open_music_shop_board(7);
         let entered = game.state_hash();
         game.click_music_shop(134, 85);
@@ -31919,15 +32030,16 @@ mod game_tests {
         game.click_music_shop(199, 533);
         game.click_music_shop(19, 105);
         let picked = game.state_hash();
-        assert_eq!(game.music_shop_cart(), vec![757]);
+        // The flipped TITLE word puts the last catalog song first.
+        assert_eq!(game.music_shop_cart(), vec![763]);
         assert_ne!(picked, paged, "row pick changed nothing");
         game.click_music_shop(341, 156);
-        let bought = game.state_hash();
-        use o2jam_net::shop::SyncMusicPurchase;
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
-        assert_ne!(bought, picked, "buy click changed nothing");
+        let staged = game.state_hash();
+        assert_eq!(game.take_music_buy(), None, "no purchase frame");
+        assert_eq!(game.take_start_payment(), None, "no payment frame");
+        assert_ne!(staged, picked, "row buy changed nothing");
         assert!(game.leave_side(), "song shop returns to Waiting");
-        println!("music shop hand session: {entered:016x} -> {sorted:016x} -> {paged:016x} -> {picked:016x} -> {bought:016x}");
+        println!("music shop hand session: {entered:016x} -> {sorted:016x} -> {paged:016x} -> {picked:016x} -> {staged:016x}");
     }
 
     #[test]
@@ -32263,11 +32375,11 @@ mod game_tests {
         // Ticket #163 (music-shop leg, CLICK): press+release through
         // the routed gesture on every staged control — all five MS_EX
         // rows stage the cart, the MSALL pager turns and holds, each
-        // sort resorts and resets the page, the tiled row buys and the
-        // cart BUYITEM queue the pinned 5010 send, the cart pager turns
-        // over a full cart, and the page digits land nowhere. PRICE
+        // sort flips its direction word, the tiled row buys only stage
+        // the bag, the cart BUYITEM waits behind its gates, the cart
+        // pager turns over a full cart, and the page digits land
+        // nowhere. PRICE
         // stays display-only with no price source (OPEN).
-        use o2jam_net::shop::SyncMusicPurchase;
         let mut game = open_music_shop_board(7);
         for (slot, song_id) in [757, 758, 759, 760, 761].iter().enumerate() {
             // Slot centers: the staged slots tile edge-to-edge, so
@@ -32294,21 +32406,16 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(260, 90));
         assert_eq!(game.music_shop_sort(), Some(LankingSort::Bpm));
         game.ingest_snapshot(&InputSnapshot::click_at(341, 156));
-        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
-        assert_eq!(game.take_music_buy(), None, "the seam drains once");
+        assert_eq!(game.take_music_buy(), None, "row buy queues no wire");
         game.ingest_snapshot(&InputSnapshot::click_at(350, 263));
-        assert_eq!(
-            game.take_music_buy(),
-            Some(SyncMusicPurchase),
-            "tiled WON buy on the next row queues 5010"
-        );
+        assert_eq!(game.take_music_buy(), None, "tiled WON buy queues no 5010");
         game.ingest_snapshot(&InputSnapshot::click_at(440, 535));
         assert_eq!(
-            game.take_music_buy(),
-            Some(SyncMusicPurchase),
-            "cart BUYITEM queues 5010"
+            game.take_start_payment(),
+            None,
+            "an unfunded cart BUYITEM stops at the bag/wallet gates"
         );
-        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.take_music_buy(), None, "BUYITEM never queues 5010");
         assert_eq!(game.music_shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(680, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 1);
@@ -33469,6 +33576,7 @@ mod game_tests {
         assert_eq!(game.music_shop_cart().len(), 7);
         game.click_music_shop(662, 530);
         game.click_music_shop(424, 529);
+        game.stage_music_buy_reply_probe();
         assert!(game.leave_side());
 
         // Lanking arm (#139 cluster 2): the catalog + TITLE sort +
@@ -33666,8 +33774,10 @@ mod game_tests {
         // 5000 probe word; BUYITEM now posts the native MESSAGE sheet
         // instead of opening that surface. The OK/CANCEL outcome word
         // folds only once a choice is made (this walk makes none).
+        // P2 re-pin: BUYITEM no longer queues 5010; the reply probe
+        // is staged explicitly to keep every outbox arm populated.
         assert_eq!(
-            populated, 0x6996_8636_6FA1_9803,
+            populated, 0xDD17_F139_C3A2_C463,
             "outbox+lanking+shop+musicshop+planet population must not move the observable hash"
         );
 

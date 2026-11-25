@@ -90,18 +90,21 @@ format ours-by-design, values DATA). GEM_PRICE/WON_PRICE cells
 or level→cell source is pinned (next step: gateway replay
 pinning the price words plus a rig capture of the DIFF cell at a
 known song). TITLE/DIFF/BPM sorts (`0x80..0x82`) reuse the
-catalog sort keys with ASSUMED ascending directions (same named
-next step as lanking). The TOP100 arm (`0x7D..0x84`) stages its
+catalog sort keys; P1 pins a per-key direction word flipped on every
+press (`+0x194 + index*4`), so repeated presses alternate the order.
+The config-sourced initial value stays OPEN. The TOP100 arm (`0x7D..0x84`) stages its
 chrome and records its pressed control (#408 below); ranking
 contents stay OPEN. PRICE (`0x83`) semantics, 3KEY/7KEY filters,
 MYALL owned-list pager, search, gift, and download stay
 display-only OPEN (next step: SendInput sweep on the live board
 per the `~/scratch/planet-verify/` recipe). Per-row GEM_BUY/
 WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and the cart
-BUYITEM (`0x5D`) queue the pinned empty `SyncMusicPurchase`
-5010 send (send-switch file `0xa4df0` index 8); the 5011 answer
-shape is untraced, so the wire ride stays ASSUMED behind the
-take-seam.
+BUYITEM (`0x5D`) do **not** queue a purchase frame: P2 pins one empty
+5015 on the BUYITEM press, after the web-busy, bag-count, cash and gem
+gates; the row-buy arm only stages the bag and invokes the BUYITEM
+marker. The 5010 constants are a reply case and a separate web/event
+queue (`ev_afd43052942e55fb28ba7a0f007464e2ca9544255c9b75ccc40f1b9cf88cf319`);
+the 5011 answer shape stays untraced.
 
 ## Row-pick chrome (#526, 2026-11-20)
 
@@ -170,16 +173,17 @@ Guard: `music_shop_conference_and_messenger_post_their_pinned_notices`.
 
 The two tiled row buy rect arrays (`0x41`/`0x46`) now index the catalog
 by page `+0x27` × five plus row, add that song with the bag item code
-for its won/gem price (`0x43`/`0x47`), and invoke the BUYITEM control on
-success, queueing the one 5010. A full ten-entry bag and a duplicate
+for its won/gem price (`0x43`/`0x47`), and invoke the BUYITEM marker on
+success with no purchase frame. A full ten-entry bag and a duplicate
 song post the pinned VA `0x64a5f0` / `0x6486a4` words and buy nothing.
 Guard: `music_shop_row_buy_adds_the_catalog_song_and_invokes_buyitem`.
 Source conflict, not silently resolved: the ticket names the vtable BUYITEM
 code `0x1A20005F`, while the block-walk table groups `0x1A20005D..5F`
 as BUYITEM plus the cart pagers and our hit-tested cart BUYITEM remains
 `0x5D`. The ticket code is recorded as a vtable-invocation marker only,
-never as a hit-tested control. OPEN: one tapped row-buy leg with a wire
-tap.
+never as a hit-tested control. P2 pins that the row-buy arm invokes
+`0x5F` (a cart pager) and sends no 5010; OPEN: one tapped row-buy leg
+with a wire tap.
 
 ### BUYITEM/GIFTITEM checkout ladder (#834)
 
@@ -209,10 +213,19 @@ The two item-validity checks that precede the comparisons
 modeled: both name item properties, not songs. The gem shortfall also
 calls `FUN_0053acd0` to clear the exe bag; our bag stays intact so the
 notice and its staged price source can be inspected. Both gaps stay OPEN.
-CONTRADICTION preserved: the qualified live shop taps emitted no
-5000-family opcode, so the existing 5010 row/cart buy arm is kept and
-the 5015 send is staged behind the ladder, with a scripted-gateway wire
-leg but no tapped payment frame.
+CONTRADICTION preserved, not silently resolved: the qualified live
+shop taps emitted no 5000-family opcode, while the statics pin an
+explicit 5015 push on this click. The shell now sends one empty 5015
+behind the ladder and keeps no 5010 click arm; the earlier live-tap
+OPEN stays live until a qualified payment wire replay settles it.
+P2 pins (7.55, `83a04541…72c823b`): indirect send at VA `0x4c8505` /
+file `0xc8505` (`ev_916fda97f713efdb96d1196b49d9d8170b99bd65ba1e4eb0d809bb28e16850fe`,
+`ev_8a435fbc980c19cd04440490ec5de55581e68fc7b6116bd529d25d48443995a2`);
+push enumeration `ev_2a5436aa44d3088e9230d1ddd02bacb9e21300f93a72fcbce19d1ede93dbadaf`;
+5010 is only the reply case at VA `0x490A50`/file `0x90A50`
+(`ev_2f6c3231e1f15f28a72403c92b3179c5693d904dd4cf7033c164884b86b55989`)
+or the web/event queue at VA `0x562FEA`/file `0x162FEA`
+(`ev_17a9e6ea600cb2bce975f2fc04f1cc5426dcc2165a9e35f659cc88f76fedca2a`).
 
 Guards:
 `a_music_shop_buy_press_writes_mode_one_and_queues_the_5015`,
@@ -223,9 +236,13 @@ Guards:
 `music_shop_cash_needs_all_three_wallet_words_to_be_short`,
 `an_unstaged_music_bag_price_keeps_the_checkout_unpinned`,
 `an_empty_music_bag_makes_the_checkout_silent`,
-`a_music_shop_cart_buy_sends_one_empty_5015_after_the_checkout_ladder`.
-OPEN next step: one tapped failed/successful payment leg with the 5015
-frame and 5011 answer; the 5011 verdict stays untraced.
+`music_shop_row_pick_stages_the_cart_and_cart_buy_sends_one_empty_5015`,
+`a_music_shop_cart_buy_sends_one_empty_5015_after_the_checkout_ladder`,
+Tier 3 `live_music_shop_buy_sends_one_5015_and_sort_pager_stay_wire_quiet`
+(boot → Room Music Shop tab → staged BUYITEM → one empty 5015 on the
+recording gateway; sort/pager clicks stay wire-quiet). OPEN next step:
+one qualified exe payment tap with the 5015 frame and 5011 answer; the
+5011 verdict stays untraced.
 
 ## OPEN
 
@@ -233,14 +250,16 @@ TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/d
 
 1. Rect contents → placements — DONE (138 rects, ordinal pairing).
 2. Album-art source + GEM/WON buy semantics — PARTIAL: per-row
-   and cart buys queue the pinned 5010 send (ASSUMED wire-side);
-   `jsBuyMusic`/Payment web bridge unpinned.
+   and cart buys carry no 5010 wire; BUYITEM sends the pinned empty
+   5015 (P2); `jsBuyMusic`/Payment web bridge unpinned.
 3. Preview, download progress, select, cart, gift, delete flows —
    PARTIAL: `MS_EX` picks stage the cart, cart pagers step and
    hold; preview/download/gift/delete unevidenced.
-4. Search/sort/filter/pager behavior — PARTIAL: TITLE/DIFF/BPM
-   sorts and the MSALL pager answer (directions + pairing
-   ASSUMED); PRICE sort, filters, search unevidenced.
+4. Search/sort/filter/pager behavior — VERIFIED for P1 pins:
+   TITLE/DIFF/BPM and the three owned headers flip their own
+   direction word each press; MSALL/MYALL left wraps and right
+   clamps with no wire. PRICE sort, filters, search and the initial
+   config-sourced direction word stay OPEN.
    Caption/money sources: ISBUY from 4031 flags; bottom G/W money
    texts from the shared 5029 wallet and row GEM/WON prices from
    `OJNList.dat` table 3 (commit 9bbca9d).
@@ -280,17 +299,31 @@ is not a Music Shop pixel.
 The right-panel buttons `0x1A200016..18` stage, but the one captured
 곡명 press left the rank list and `01/47` readout unchanged; no pager
 press frame exists. Guard `music_shop_rank_buttons_stay_inert_until_a_press_pairs_them`
-pins that state. Song-board sort directions and rank-page pairings
-stay ASSUMED until the interaction sweep (`E-T`) names them.
+pins that state. P1 pins both sort families: `FUN_004d2660` (VA `0x4d2660`,
+file `0xd2660`) flips one of three owned words at `+0x370+index*4`
+on every header press; `FUN_004d66b0`/`FUN_004d5720` flip one of six
+rank words at `+0x194+index*4`. MSALL left wraps/right clamps;
+MYALL does the same behind the `+0x112` download gate and owned-row
+vector. No wire frame rides these presses (negative sweep in P1).
+Guards: `music_shop_my_title_sort_toggles_direction_on_the_second_press`,
+`music_shop_owned_header_flips_the_new_keys_direction_word`,
+`music_shop_rank_header_flips_its_direction_word_on_repeat`,
+`music_shop_msall_left_wraps_and_right_clamps_without_a_wire`,
+`music_shop_myall_left_wraps_and_right_clamps_across_owned_pages`.
+OPEN: initial direction word per fresh profile (`FUN_004d6930(0)`
+not decoded); no board-visible press frame pairs the rank rows.
 
 ## Row pick / cart buy (#412)
 
 `music_shop_row_pick_feedback_stages_cart_without_a_buy_wire` pins
 the client half of the loop through the routed click seam: an `MS_EX`
-row stages the cart and queues no 5010; `BUYITEM` queues exactly one
-5010 send. No exe row-pick or BUYITEM press frame exists yet (the
-pinned BUYITEM rect showed no visible button), so the exe feedback
-arm stays OPEN (`E-T`/`E-W-5010`).
+row stages the cart and queues no frame; `BUYITEM` with an empty
+bag stops at the bag-count gate and queues no frame either. The
+certifying guard `music_shop_row_pick_stages_the_cart_and_cart_buy_sends_one_empty_5015`
+uses a staged bag entry and asserts one 5015 with no 5010. No exe
+row-pick or BUYITEM press frame exists yet (the pinned BUYITEM rect
+showed no visible button), so the exe feedback arm stays OPEN
+(`E-T`/`E-W-5015`).
 
 ## Entry face and caption anchors (#878, 2026-11-23)
 
