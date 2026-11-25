@@ -6917,6 +6917,7 @@ mod pinned_image_state_tests {
     use super::*;
 
     #[test]
+    // seam: pure image-kind branch; this client decodes staged frames and has no exe kind word at runtime
     fn image_copy_path_distinguishes_the_two_pinned_kinds() {
         assert_eq!(skin_copy_path(1), Some(SkinCopyPath::PixelRows));
         assert_eq!(skin_copy_path(2), Some(SkinCopyPath::PackedRuns));
@@ -6924,6 +6925,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // seam: the mode word and its two face arms are the pinned contract; this client has no vftable to call
     fn image_mode_switch_promotes_mode_one_before_the_mode_one_face() {
         assert_eq!(image_mode_switch(2, false), (2, ImageFaceBranch::ModeTwo));
         assert_eq!(image_mode_switch(1, false), (1, ImageFaceBranch::ModeOne));
@@ -6935,6 +6937,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // seam: enable-word gate is a pure contract; the painter consumes staged figures only
     fn staged_art_requires_both_the_enable_word_and_a_figure() {
         assert!(staged_art_enabled(1, true));
         assert!(!staged_art_enabled(0, true));
@@ -6942,6 +6945,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // seam: sentinel arithmetic has no live caller; our clock starts flashes at age zero
     fn restart_sentinel_primes_only_modes_five_through_seven() {
         assert_eq!(restart_sentinel(5, 8), Some(9));
         assert_eq!(restart_sentinel(6, 8), Some(9));
@@ -6951,12 +6955,14 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // seam: rest-frame field semantics with no live setter in this client
     fn rest_frame_uses_the_frame_count_for_an_all_ones_request() {
         assert_eq!(rest_frame(3, 8), 3);
         assert_eq!(rest_frame(u16::MAX, 8), 8);
     }
 
     #[test]
+    // seam: current-frame getter semantics; live painting uses an explicit `paint_at` clock
     fn frame_clock_never_paints_past_the_staged_frames() {
         assert_eq!(frame_at_clock(0, 4), 0);
         assert_eq!(frame_at_clock(2, 4), 2);
@@ -6969,6 +6975,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // Live chain: `main.rs::run_play` -> `ScreenGame::paint_at` -> `LivePlay::paint` -> `PlaySkin::lane_beam_frame` -> `stepped_frame` -> `clamped_frame_step`
     fn manual_frame_steps_clamp_instead_of_wrapping() {
         assert_eq!(clamped_frame_step(2, 1, 1, 4), 3);
         assert_eq!(clamped_frame_step(3, 1, 1, 4), 4, "the top step stays put");
@@ -6985,6 +6992,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // Live chain: `main.rs::run_play` -> `ScreenGame::paint_at` -> `ScreenGame::paint_playing` -> `AvatarScene::paint_avatar_scene_with_placements` -> `paint_caption_line` -> `measured_label_width`
     fn label_measurement_uses_the_full_text_for_a_zero_length_request() {
         assert_eq!(
             measured_label_width("Lv 99 Robo", 0),
@@ -6994,6 +7002,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
+    // seam: shortening helper has no live painter caller yet; Tier 3 label capture stays OPEN
     fn long_label_shrinks_to_the_measured_cell_width() {
         let cell = text_width("Lv 9");
         let fitted = shorten_label_to_cell("Lv 99 Robo", cell);

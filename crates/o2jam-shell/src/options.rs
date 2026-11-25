@@ -1386,6 +1386,7 @@ mod tests {
     }
 
     #[test]
+    // seam: the two mode-vftable arms are the pinned contract; this client keeps no cursor vftable
     fn cursor_mode_switch_names_both_vftable_arms() {
         assert_eq!(cursor_mode_face(2, false), (2, ImageFaceBranch::ModeTwo));
         assert_eq!(cursor_mode_face(1, false), (1, ImageFaceBranch::ModeOne));
@@ -1397,6 +1398,7 @@ mod tests {
     }
 
     #[test]
+    // seam: OS-cursor arm decision is the whole behavior until a live handle is installed; Tier 3 pointer capture OPEN
     fn custom_cursor_arm_hides_or_selects_one_of_two_handles() {
         assert_eq!(
             custom_cursor_arm(MouseCursorMode::Windows, 1),
@@ -1417,6 +1419,7 @@ mod tests {
     }
 
     #[test]
+    // seam: flag-reset contract has no live writer hook; Tier 1 pointer leg stays OPEN
     fn custom_cursor_flag_change_resets_the_pointer_to_the_origin() {
         assert_eq!(
             pointer_reset_on_cursor_flag_change(
