@@ -6568,6 +6568,13 @@ impl WalletState {
         self.cash_point = Some(response.cash_point);
     }
 
+    /// Fold the 5014 point-sync word into the distribution-point cell
+    /// (exe slot `0x768b4c`). The session gate that posts the matching
+    /// UI event lives in `OnlineSession`; this seam only stages ink.
+    pub fn apply_point_sync_word(&mut self, word: i32) {
+        self.point = Some(word);
+    }
+
     /// Fold a 5003 sell refund into the wallet: the success gem word
     /// shares the gem slot the 5029/5001 words update. Error verdicts
     /// carry no gem word, so the balance stays untouched.
@@ -8839,6 +8846,39 @@ mod side_tests {
         assert_eq!(caption_text(&captions, MYROOM_LEVEL_CODE), Some(" 12"));
         assert_eq!(caption_text(&captions, MYROOM_EXP_CODE), Some(" 3450"));
         assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), None);
+    }
+
+    #[test]
+    fn player_info_starts_with_exe_cleared_defaults() {
+        // seam: the pure default constructor owns this behavior; no
+        // archive, wire frame or window is involved. Exe VA `0x53f9e0`
+        // (file `0x13f9e0`) clears two words then 29 pairs through
+        // `0x2128`. Our staged player info starts with zeroed scalar
+        // words, an empty equipment array and empty row vectors, so no
+        // word from a previous screen reaches the STATUS plate. The
+        // field-by-field mapping of the exe's 58-word block stays OPEN.
+        let info = CharacterInfo::default();
+        assert_eq!(info.gem, 0);
+        assert_eq!(info.point, 0);
+        assert_eq!(info.o2_cash, 0);
+        assert_eq!(info.cash_point, 0);
+        assert_eq!(info.level, 0);
+        assert_eq!(info.battles, 0);
+        assert_eq!(info.wins, 0);
+        assert_eq!(info.losses, 0);
+        assert_eq!(info.experience, 0);
+        assert_eq!(info.bonus_point, 0);
+        assert_eq!(info.unread_gifts, 0);
+        assert_eq!(info.music_cash, 0);
+        assert_eq!(info.item_cash, 0);
+        assert_eq!(info.penalty_count, 0);
+        assert_eq!(info.penalty_level, 0);
+        assert!(info.equipment.iter().all(|word| *word == 0));
+        assert!(info.inventory.is_empty());
+        assert!(info.item_gifts.is_empty());
+        assert!(info.music_gifts.is_empty());
+        assert!(info.attributive_items.is_empty());
+        assert!(info.nickname.is_empty());
     }
 
     #[test]

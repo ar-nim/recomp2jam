@@ -97,29 +97,30 @@ use super::side::{
     can_return_side, can_visit_side, cart_pager_digits, cash_charge_close_hit,
     create_room_action_at, default_room_title, lanking_action_at, music_shop_action_at,
     music_shop_page_digit, music_shop_scene_kept, music_shop_tooltip_hovered,
-    myroom_bag_page_digit, myroom_equip_slot, myroom_panel_kept, myroom_record_slot,
-    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_side_scene_selected,
-    paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
-    select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
-    select_music_songs_with_labels, select_row_column_text, select_row_hit,
-    shop_action_at_on_board, shop_cart_face_controls_kept, shop_cart_page_digit_kept,
-    shop_category_index, shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for,
-    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
-    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
-    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
-    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
-    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
-    WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
-    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
-    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
-    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
+    myroom_bag_page_digit, myroom_equip_slot, myroom_gift_rows_from_messages, myroom_panel_kept,
+    myroom_record_slot, myroom_tab_kept, paint_side_scene, paint_side_scene_live,
+    paint_side_scene_selected, paint_tutorial_scene, password_action_at, planet_action_at,
+    select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
+    select_index_matches, select_music_rows, select_music_songs_with_labels,
+    select_row_column_text, select_row_hit, shop_action_at_on_board, shop_cart_face_controls_kept,
+    shop_cart_page_digit_kept, shop_category_index, shop_extmenu_kept, shop_panel_kept,
+    shop_shop_frame_for, shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot,
+    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
+    LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
+    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
+    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
+    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
+    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE,
+    MYROOM_ALARM_POPUP_CODE, MYROOM_BAG_CAPACITY_SLOTS, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
+    ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
+    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
+    TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -132,7 +133,7 @@ use o2jam_file::{
     AvatarItemTable, ChartMask, InstalledMusic, OjnListEntry, OjnMidParamEntry, OjnMidTagEntry,
 };
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
-use o2jam_net::gift::ClaimGift;
+use o2jam_net::gift::{ClaimGift, GiftMessage};
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
@@ -143,14 +144,14 @@ use o2jam_net::shop::{
     ChangeName, EnterShop, EquipItem, RefreshBag, SellItem, SyncItemPurchase, SyncMusicPurchase,
     SyncMusicPurchaseResponse,
 };
-use o2jam_net::wallet::{StartPayment, SyncCashPointResponse};
+use o2jam_net::wallet::{StartPayment, SyncCashPointResponse, UserFreePassInfo};
 
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, ExitWaiting, GameMode,
     GameSpeed, Gender, JoinRoom, JoinedRoom, KeyMode, MemberRole, Ready, RoomListEntry,
     RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
-use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
+use o2jam_render::{draw_text, fill_rect, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
 
 /// Loading-gate phase capacity (lifecycle section 9, steps 2-5):
@@ -758,6 +759,52 @@ pub enum AutoPickOutcome {
     Missed,
 }
 
+/// Captions the 7.55 Waiting wire handlers post through their control
+/// parent. Each copy is the CP949 string at the named VA, decoded in
+/// `docs/pins/net-b.md`; no text beyond these bytes is staged here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingWireCaption {
+    /// 3009 kick, VA `0x64da3c`. The exe formats a nickname into `%s`;
+    /// the painter takes a static string, so the template is staged
+    /// verbatim and interpolation stays OPEN.
+    PlayerKickedTemplate,
+    /// 3010 missing-song removal, VA `0x64da60`.
+    RemovedForMissingSong,
+    /// 3010 plain removal, VA `0x64da88`.
+    RemovedPlain,
+    /// 3014, VA `0x64daa4`.
+    RoomDisappeared,
+    /// 4011 result 1, VA `0x64db58`.
+    StartNotReady,
+    /// 4011 result 2, VA `0x64db44`.
+    StartTeamMismatch,
+    /// 4011 result 3, VA `0x64db18`.
+    StartVsSolo,
+    /// 4011 result 4, VA `0x64daec`.
+    StartServerInfo,
+    /// 4011 local room-song mismatch, VA `0x64dac0`. Its wire
+    /// condition is OPEN; the caption bytes are pinned.
+    StartConfigError,
+}
+
+impl WaitingWireCaption {
+    /// Pinned caption bytes as UTF-8, in the painter's static form.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::PlayerKickedTemplate => "[정보] %s님이 강퇴 당하셨습니다.",
+            Self::RemovedForMissingSong => "곡을 가지고 있지 않아 퇴장되었습니다.",
+            Self::RemovedPlain => "당신은 퇴장 당하셨습니다.",
+            Self::RoomDisappeared => "공연대기실이 사라졌습니다.",
+            Self::StartNotReady => "레디를 하지 않은 사람이 있습니다.",
+            Self::StartTeamMismatch => "팀이 맞지 않습니다.",
+            Self::StartVsSolo => "VS모드에서는 혼자 게임을 할 수 없습니다.",
+            Self::StartServerInfo => "서버에서 중요 정보를 얻어오지 못했습니다.",
+            Self::StartConfigError => "게임설정 조작 오류로 게임을 중단합니다..",
+        }
+    }
+}
+
 /// Notice for one gate verdict (`None` while the verdict has no box
 /// arm: the exe sends `4034` for a missing song and shows nothing).
 #[must_use]
@@ -1146,6 +1193,10 @@ pub struct ScreenGame {
     /// (`E-W-5011`, `E-PAYMENT2-5024`). Cleared on dismissal, a fresh
     /// buy, and side exit. No wire state lives here.
     billing_failure_notice: bool,
+    /// Art-only stand-in for the bare 5016 UI event. The exe posts
+    /// `(0x12, 5016, 0, 0)` with no caption and no body fields; its
+    /// consumer is OPEN, so no text is invented for this band.
+    start_payment_answer_notice: bool,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1224,6 +1275,10 @@ pub struct ScreenGame {
     side_figures: HashMap<String, AvatarFigure>,
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
     myroom: MyRoomState,
+    /// Bag size after a successful 5037 answer (exe `after - 30`
+    /// caption input). Kept outside `MyRoomState` so the staged
+    /// selection debug used by pin hashes stays unchanged.
+    staged_bag_capacity: usize,
     /// Staged avatar-item table (`Itemdata_Korea.dat`): bag, equip
     /// and gift name source (`None` until staged — rows and captions
     /// then stay unpainted).
@@ -1572,6 +1627,7 @@ impl ScreenGame {
             myroom_confirm: None,
             myroom_counts: [0; 17],
 
+            staged_bag_capacity: MYROOM_BAG_CAPACITY_SLOTS,
             myroom_pass: MyRoomPassInfo::default(),
             myroom_rank_word: None,
 
@@ -1585,6 +1641,7 @@ impl ScreenGame {
             shop_charge_confirm_open: false,
             shop_charge_confirm_outcome: None,
             billing_failure_notice: false,
+            start_payment_answer_notice: false,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -4027,6 +4084,14 @@ impl ScreenGame {
     /// start attempt succeeds).
     pub fn clear_waiting_notice(&mut self) -> &mut Self {
         self.waiting_notice = None;
+        self
+    }
+
+    /// Stage one CP949 caption posted by a Waiting wire handler. The
+    /// strings are pinned above; this seam does not choose a cause or
+    /// emit a frame, it only owns the notice line the painter reads.
+    pub fn stage_waiting_wire_caption(&mut self, caption: WaitingWireCaption) -> &mut Self {
+        self.waiting_notice = Some(caption.text());
         self
     }
 
@@ -8061,6 +8126,94 @@ impl ScreenGame {
         self.wallet.apply_cash_point(response);
     }
 
+    /// Stage the 5014 point-sync word (exe slot `0x768b4c`) in the one
+    /// wallet the shop and MyRoom readouts share. The session owns the
+    /// flag that decides whether the UI event is posted.
+    pub fn apply_point_sync_word(&mut self, word: i32) -> &mut Self {
+        self.wallet.apply_point_sync_word(word);
+        self
+    }
+
+    /// Raise the art-only notice for a 5016 start-payment answer. The
+    /// exe reads no body bytes; extra server words cannot change this
+    /// notice. The event's consumer is OPEN, so no caption is staged.
+    pub fn note_start_payment_answer(&mut self) -> &mut Self {
+        self.start_payment_answer_notice = true;
+        self
+    }
+
+    /// Whether the bare 5016 notice currently owns the board.
+    #[must_use]
+    pub const fn start_payment_answer_notice(&self) -> bool {
+        self.start_payment_answer_notice
+    }
+
+    /// Clear the bare 5016 notice without a send.
+    pub fn dismiss_start_payment_answer(&mut self) -> &mut Self {
+        self.start_payment_answer_notice = false;
+        self
+    }
+
+    /// Fold the 5026 snapshot into the staged FREEINFO lines. Result
+    /// zero keeps the externally staged pass word and refreshes its
+    /// date; every other result clears the lines. The pass word's wire
+    /// writer at `0x768b34` stays OPEN.
+    pub fn apply_free_pass_answer(&mut self, snapshot: Option<&UserFreePassInfo>) -> &mut Self {
+        match snapshot {
+            Some(info) => self.myroom_pass.until.clone_from(&info.duration),
+            None => self.myroom_pass = MyRoomPassInfo::default(),
+        }
+        self
+    }
+
+    /// Stage the gift-box rows decoded from a 5018 list. The exe
+    /// appends its `0x168`-stride rows to the present box; new message
+    /// ids join the staged character and existing rows stay put.
+    pub fn apply_gift_message_list(&mut self, messages: &[GiftMessage]) -> &mut Self {
+        let (items, songs) = myroom_gift_rows_from_messages(messages);
+        let Some(character) = self.myroom_character.as_mut() else {
+            return self;
+        };
+        for row in items {
+            if !character
+                .item_gifts
+                .iter()
+                .any(|staged| staged.gift_id == row.gift_id)
+            {
+                character.item_gifts.push(row);
+            }
+        }
+        for row in songs {
+            if !character
+                .music_gifts
+                .iter()
+                .any(|staged| staged.gift_id == row.gift_id)
+            {
+                character.music_gifts.push(row);
+            }
+        }
+        self
+    }
+
+    /// Grow the staged bag to the after-value named by a 5037 success
+    /// and zero-fill the new slots. Returns the after-value the pinned
+    /// `after - 30 -> after` caption interpolates.
+    pub fn grow_myroom_bag(&mut self, after: i32) -> i32 {
+        let after = usize::try_from(after).unwrap_or(0);
+        if let Some(character) = self.myroom_character.as_mut() {
+            let width = character.inventory.len().max(after);
+            character.inventory.resize(width, 0);
+        }
+        self.staged_bag_capacity = after;
+        i32::try_from(after).unwrap_or(i32::MAX)
+    }
+
+    /// Bag size staged by a 5037 success.
+    #[must_use]
+    pub const fn staged_bag_capacity(&self) -> usize {
+        self.staged_bag_capacity
+    }
+
     /// Fold a 5003 sell refund into the shop wallet.
     pub fn apply_shop_sell(&mut self, response: &o2jam_net::shop::SellItemResponse) {
         self.wallet.apply_sell_response(response);
@@ -8800,6 +8953,7 @@ impl ScreenGame {
     /// untouched.
     pub fn dismiss_billing_failure_notice(&mut self) {
         self.billing_failure_notice = false;
+        self.start_payment_answer_notice = false;
     }
 
     /// Song-shop click through the control-code dispatch
@@ -9012,6 +9166,7 @@ impl ScreenGame {
             // screen). The side overlay owns the paint (`paint_side`).
             Screen::MusicShop => {}
         }
+        self.paint_start_payment_answer_band(frame);
         self.paint_dialog_frame_states(frame);
         // The cursor stays on a toggle after the click, so the hover
         // repaint above would cover its selected face. Selection is the
@@ -9056,6 +9211,19 @@ impl ScreenGame {
     /// (billing notice, lanking, shop, song-shop, my room). Each
     /// overlay inks into staged TEXT rects; without staged rows or
     /// goods it paints nothing (art-only).
+    /// ASSUMED stand-in for the bare 5016 UI event: no 7.55 caption
+    /// or art is pinned, so only a notice band inks. The archived
+    /// payment page supplies its geometry and tone; no exe pixel
+    /// parity is claimed.
+    fn paint_start_payment_answer_band(&self, frame: &mut Frame<'_>) {
+        if !self.start_payment_answer_notice {
+            return;
+        }
+        let band =
+            scale_rect_to_frame(&super::paint::BILLING_FAILURE_NOTICE_RECT, frame.w, frame.h);
+        fill_rect(frame, &band, 0x0067_BAF0);
+    }
+
     fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.side == Some(SideScreen::MyRoom) {
             let panel = self.myroom.panel();
@@ -9376,6 +9544,7 @@ impl ScreenGame {
             );
             self.paint_myroom_overlay(frame, &self.side_placements, &self.side_figures);
         }
+        self.paint_start_payment_answer_band(frame);
         if self.billing_failure_notice_open() {
             paint_billing_failure_notice(frame);
         }
@@ -18727,6 +18896,23 @@ mod game_tests {
         // Outside every staged placement the selection holds.
         game.ingest_snapshot(&InputSnapshot::click_at(0, 500));
         assert_eq!(game.myroom().selected_slot(), 3);
+    }
+
+    #[test]
+    fn successful_5037_growth_resizes_the_staged_bag_and_records_capacity() {
+        // seam: the slot-growth seam is the whole wire effect here;
+        // the one-OK caption derives its before value from `after - 30`.
+        let mut game = ScreenGame::new();
+        game.set_myroom_character(CharacterInfo::default());
+        assert_eq!(game.grow_myroom_bag(30), 30);
+        assert_eq!(game.staged_bag_capacity(), 30);
+        assert_eq!(
+            game.myroom_character()
+                .expect("staged character")
+                .inventory
+                .len(),
+            30
+        );
     }
 
     #[test]
@@ -36035,6 +36221,20 @@ mod game_tests {
         peer.master = false;
         peer.team = 0;
         peer
+    }
+
+    #[test]
+    fn wire_waiting_captions_ink_the_staged_notice_line() {
+        // seam: the caption setter is the whole staging contract; the
+        // painter reads `waiting_notice` from the same staged state.
+        let mut game = ScreenGame::new();
+        game.stage_waiting_wire_caption(WaitingWireCaption::RemovedForMissingSong);
+        assert_eq!(
+            game.waiting_notice(),
+            Some("곡을 가지고 있지 않아 퇴장되었습니다.")
+        );
+        game.stage_waiting_wire_caption(WaitingWireCaption::RemovedPlain);
+        assert_eq!(game.waiting_notice(), Some("당신은 퇴장 당하셨습니다."));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use super::{
     WalletState,
 };
 use o2jam_file::{AvatarItemRow, AvatarItemTable};
+use o2jam_net::gift::{GiftMessage, GiftType};
 use o2jam_net::{CharacterInfo, GiftItemInfo, GiftMusicInfo};
 
 // --- Avatar-room (MyRoom) interaction ---
@@ -783,6 +784,33 @@ impl MyRoomState {
             self.gift_cell = cell;
         }
     }
+}
+
+/// Gift-box rows staged from 5018 messages. The exe reads a 4-byte
+/// id, a type byte and four strings per row (`0x562eb0`); no item or
+/// song resource id is read, so the resource slots stay zero instead
+/// of inventing one. Title and content have no staged cell yet.
+#[must_use]
+pub fn myroom_gift_rows_from_messages(
+    messages: &[GiftMessage],
+) -> (Vec<GiftItemInfo>, Vec<GiftMusicInfo>) {
+    let mut items = Vec::new();
+    let mut songs = Vec::new();
+    for message in messages {
+        match message.gift_type {
+            GiftType::Item => items.push(GiftItemInfo {
+                gift_id: message.message_id,
+                item_id: 0,
+                sender: message.sender.clone(),
+            }),
+            GiftType::Music => songs.push(GiftMusicInfo {
+                gift_id: message.message_id,
+                music_id: 0,
+                sender: message.sender.clone(),
+            }),
+        }
+    }
+    (items, songs)
 }
 
 /// Bag pages over owned rows: at least page 0 paints, so an empty

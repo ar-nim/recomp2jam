@@ -15,7 +15,7 @@ use o2jam_net::wallet::SyncFreePassResponse;
 use o2jam_net::HEADER_LEN;
 use o2jam_render::Rect;
 use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
-use o2jam_shell::screens::side::{MyRoomNotice, MyRoomPanel, SideScreen};
+use o2jam_shell::screens::side::{MyRoomNotice, MyRoomPanel, MyRoomPassInfo, SideScreen};
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::thread;
@@ -181,6 +181,25 @@ fn payment_frame_after(incoming: Vec<(u16, Vec<u8>)>) -> Vec<u32> {
     frame
 }
 
+/// Paint a 5026 answer over one staged FREEINFO rect and pass word.
+fn freeinfo_frame_after(reply: SyncFreePassResponse) -> Vec<u32> {
+    let (port, server) = payment_gateway(vec![(5026, reply.encode_body())]);
+    let mut game = freeinfo_game();
+    // The exe's pass-word writer at `0x768b34` stays OPEN; staging it
+    // lets the wire result decide whether the pinned lines ink.
+    game.set_myroom_pass(MyRoomPassInfo {
+        word: Some(1),
+        until: "2026-12-31".to_owned(),
+        skills: Vec::new(),
+    });
+    let mut session = payment_session(game, port);
+    settle_payment(&mut session);
+    let frame = painted_payment_frame(&mut session);
+    drop(session);
+    server.join().unwrap();
+    frame
+}
+
 /// A status face with one staged FREEINFO rect and no pass word.
 fn freeinfo_game() -> ScreenGame {
     let mut game = payment_game();
@@ -270,14 +289,13 @@ fn claim_with_validity(validity: i32) -> (OnlineSession, thread::JoinHandle<()>)
 }
 
 #[test]
-#[ignore = "BLOCKED #977: no 5014 receive arm in OnlineSession::poll_wire_at"]
 fn point_sync_5014_word_repaints_the_wallet_only_with_a_live_session_flag() {
     // Live caller chain (story 977, pin ev_8a79ece0…, VA 0x562e40):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5014 receive arm> -> ScreenGame::wallet -> wallet repaint.
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::apply_point_sync_word -> wallet repaint.
     // The exe stages the word at 0x768b4c only when its session flag at
-    // 0x762b44 is set; the off arm must consume the word without a post.
-    // BLOCKED: no 5014 receive arm exists yet, so neither arm can run.
+    // 0x762b44 is set; the off arm consumes the word without a post.
     let (port, server) = payment_gateway(vec![(5014, 4242i32.to_le_bytes().to_vec())]);
     let mut session = payment_session(payment_game(), port);
     settle_payment(&mut session);
@@ -292,13 +310,35 @@ fn point_sync_5014_word_repaints_the_wallet_only_with_a_live_session_flag() {
 }
 
 #[test]
-#[ignore = "BLOCKED #978: no 5016 receive arm in OnlineSession::poll_wire_at"]
+fn point_sync_5014_word_is_consumed_without_a_live_session_flag() {
+    // Live caller chain (story 977, pin ev_8a79ece0…, VA 0x562e40):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::wallet -> wallet repaint.
+    // The exe consumes the word but posts no event with its session
+    // flag at 0x762b44 cleared.
+    let (port, server) = payment_gateway(vec![(5014, 4242i32.to_le_bytes().to_vec())]);
+    let mut session = payment_session(payment_game(), port);
+    let before = session.game.wallet().point;
+    session.set_session_active(false);
+    settle_payment(&mut session);
+
+    assert_eq!(
+        session.game.wallet().point,
+        before,
+        "a stale 5014 word must not repaint the wallet"
+    );
+    drop(session);
+    server.join().unwrap();
+}
+
+#[test]
 fn start_payment_5016_empty_and_padded_bodies_raise_one_equal_notice() {
     // Live caller chain (story 978, pin ev_6e8a569a…, VA 0x562e90):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5016 receive arm> -> UI event 5016 -> MyRoom repaint.
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::note_start_payment_answer -> paint_at notice band.
     // The exe reads no body bytes; the padded arm must not invent ink.
-    // BLOCKED: no 5016 receive arm exists yet.
     let baseline = payment_frame_after(Vec::new());
     let empty_frame = payment_frame_after(vec![(5016, Vec::new())]);
     let padded_frame = payment_frame_after(vec![(
@@ -318,14 +358,13 @@ fn start_payment_5016_empty_and_padded_bodies_raise_one_equal_notice() {
 }
 
 #[test]
-#[ignore = "BLOCKED #979: no 5018 receive arm or gift-row staging seam"]
 fn gift_list_5018_zero_flag_rows_stage_the_present_box() {
     // Live caller chain (story 979, pin ev_865e1b28…, VA 0x562eb0):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5018 receive arm> -> 0x168-stride row staging -> gift paint.
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::apply_gift_message_list -> MyRoom gift paint.
     // The exe skips the row loop on a nonzero flag but still posts the
     // list notice; the box must match the rows the exe reads.
-    // BLOCKED: no 5018 receive arm or row staging seam exists yet.
     let messages = vec![
         GiftMessage {
             message_id: 7,
@@ -403,15 +442,14 @@ fn nonzero_validity_5024_with_verdict_four_posts_the_gift_failure_caption() {
 }
 
 #[test]
-#[ignore = "BLOCKED #981: no 5026 receive arm; pass-word writer is OPEN"]
 fn free_pass_5026_result_inks_the_staged_freeinfo_lines() {
     // Live caller chain (story 981, pin ev_ffda.e60e…, VA 0x5631b0):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5026 receive arm> -> ScreenGame::set_myroom_pass ->
-    //   paint_myroom_data -> FREEINFO captions.
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::apply_free_pass_answer -> paint_myroom_data.
     // Result -0x5e posts the event with no lines; result zero writes
-    // one to four lines from the pass word at 0x768b34.
-    // BLOCKED: no 5026 receive arm, so the wire writer stays OPEN.
+    // one to four lines from the externally staged pass word; the
+    // writer at 0x768b34 itself stays OPEN.
     let pass_reply = SyncFreePassResponse {
         result_code: 0,
         info: Some(o2jam_net::wallet::UserFreePassInfo {
@@ -426,26 +464,16 @@ fn free_pass_5026_result_inks_the_staged_freeinfo_lines() {
             expiry_secs: 3600,
         }),
     };
-    let (port, server) = payment_gateway(vec![(5026, pass_reply.encode_body())]);
-    let mut session = payment_session(freeinfo_game(), port);
-    settle_payment(&mut session);
-
-    let frame = painted_payment_frame(&mut session);
+    let frame = freeinfo_frame_after(pass_reply);
     assert!(
         (100..120).any(|y| (200..240).any(|x| frame[y * 800 + x] != 0)),
         "a zero 5026 result must ink the pass line selected by its pass word"
     );
-    drop(session);
-    server.join().unwrap();
 
-    let no_pass = payment_frame_after(vec![(
-        5026,
-        SyncFreePassResponse {
-            result_code: 0xFFFF_FFA2,
-            info: None,
-        }
-        .encode_body(),
-    )]);
+    let no_pass = freeinfo_frame_after(SyncFreePassResponse {
+        result_code: 0xFFFF_FFA2,
+        info: None,
+    });
     assert!(
         !(100..120).any(|y| (200..240).any(|x| no_pass[y * 800 + x] != 0)),
         "result -0x5e posts the notice without pass lines"
@@ -453,14 +481,13 @@ fn free_pass_5026_result_inks_the_staged_freeinfo_lines() {
 }
 
 #[test]
-#[ignore = "BLOCKED #982: OnlineSession::poll_myroom_replies has no 5035 arm"]
 fn penalty_reset_5035_code_opens_the_pinned_one_ok_sheet() {
     // Live caller chain (story 982, pin ev_6d7f.6b6d…, VA 0x563a20):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5035 receive arm> -> ScreenGame::apply_myroom_notice ->
-    //   MyRoomNotice::PenaltyCleared / PenaltyRetry -> one-OK sheet.
-    // BLOCKED: poll_myroom_replies only drains expected request replies;
-    // an unprompted 5035 has no arm.
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::apply_myroom_notice -> MyRoomNotice::PenaltyCleared
+    //   / PenaltyRetry -> one-OK sheet. The frame also reaches the
+    //   payment arm from `drain_myroom_reply` when a short leg stands.
     let (port, server) = payment_gateway(vec![(5035, 0i32.to_le_bytes().to_vec())]);
     let mut game = payment_game();
     assert!(game.visit_side(SideScreen::MyRoom));
@@ -477,16 +504,14 @@ fn penalty_reset_5035_code_opens_the_pinned_one_ok_sheet() {
 }
 
 #[test]
-#[ignore = "BLOCKED #983: no 5037 receive arm or bag slot-growth seam"]
 fn bag_expansion_5037_success_grows_the_bag_and_inks_the_caption() {
     // Live caller chain (story 983, pin ev_52c1.26fb…, VA 0x563a60):
     //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
-    //   <5037 receive arm> -> bag slot growth ->
+    //   apply_waiting_frame -> apply_payment_frame ->
+    //   ScreenGame::grow_myroom_bag ->
     //   MyRoomNotice::BagExpanded { after } -> one-OK sheet.
     // The exe reads a result word then the slot count; error codes
     // only post the retry caption.
-    // BLOCKED: the 5037 receive arm and the shell slot-growth seam are
-    // both absent.
     let body = [0i32.to_le_bytes(), 30i32.to_le_bytes()].concat();
     let (port, server) = payment_gateway(vec![(5037, body)]);
     let mut game = payment_game();

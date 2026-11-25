@@ -177,9 +177,10 @@ use o2jam_net::{
 };
 use o2jam_shell::screens::game::{
     AutoPickOutcome, ChatSendMode, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict,
-    StartRequest,
+    StartRequest, WaitingWireCaption,
 };
 use o2jam_shell::screens::paint::WaitingSkillItem;
+use o2jam_shell::screens::side::MyRoomNotice;
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -675,6 +676,10 @@ pub struct OnlineSession {
     /// one; the shell exposes no selection read-back).
     last_selection: Option<SetRoomMusic>,
     local_user: String,
+    /// Live session flag (exe `0x762b44`): a 5014 word stages in the
+    /// wallet only while it is set. A session starts with a gateway,
+    /// so `new` opens it; the seam setter can close it for stale frames.
+    session_active: bool,
     /// `true` once a Room Confirm join staged a snapshot: Waiting
     /// Confirm then means START/READY instead of the offline walk.
     joined_waiting: bool,
@@ -763,6 +768,7 @@ impl OnlineSession {
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
+            session_active: true,
             joined_waiting: false,
             joined_room: None,
             guest_ready: false,
@@ -797,6 +803,16 @@ impl OnlineSession {
     /// sender.
     pub fn set_local_user(&mut self, name: &str) -> &mut Self {
         self.local_user = name.to_owned();
+        self
+    }
+
+    /// Open or close the session flag that gates the 5014 UI post.
+    /// The word is consumed either way; only the wallet repaint stops.
+    /// Only the scripted stale-frame guard closes it today; a live
+    /// caller is not pinned, so the seam is test-only.
+    #[cfg(test)]
+    pub fn set_session_active(&mut self, active: bool) -> &mut Self {
+        self.session_active = active;
         self
     }
 
@@ -3222,6 +3238,7 @@ impl OnlineSession {
                     self.game.apply_myroom_reply(frame.id);
                     return None;
                 }
+                Ok(frame) if self.apply_payment_frame(&frame) => {}
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping frame in myroom reply drain");
@@ -3321,6 +3338,7 @@ impl OnlineSession {
                     }
                     return None;
                 }
+                Ok(frame) if self.apply_payment_frame(&frame) => {}
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(
@@ -3650,9 +3668,94 @@ impl OnlineSession {
                 self.apply_auto_pick_after_seat_change(id);
                 self.announce_music_state();
             }
+            _ if self.apply_payment_frame(&frame) => {}
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain"),
         }
+    }
+
+    /// Fold one payment-family answer that owns no pending attempt.
+    /// `true` means this frame was consumed, so a drain must not skip
+    /// or defer it. The codecs are the ones already pinned in
+    /// `o2jam-net`; the session flag and pass-word writer keep their
+    /// own pinned or OPEN sources (VA `0x562e40` / `0x768b34`).
+    fn apply_payment_frame(&mut self, frame: &Frame) -> bool {
+        match frame.id {
+            5014 => {
+                if let Some(word) = Self::decode_i32_word(&frame.payload) {
+                    // The exe consumes the word even when its session
+                    // flag is clear; only the UI post is gated.
+                    if self.session_active {
+                        self.game.apply_point_sync_word(word);
+                    }
+                } else {
+                    tracing::debug!(id = frame.id, "dropping undecodable 5014 word");
+                }
+                true
+            }
+            5016 => {
+                // Body-ignored: an empty and a padded frame raise the
+                // same bare UI notice (VA `0x562e90`).
+                self.game.note_start_payment_answer();
+                true
+            }
+            5018 => {
+                match o2jam_net::gift::GetGiftMessageListResponse::decode_body(&frame.payload) {
+                    Ok(reply) if !reply.invalid => {
+                        self.game.apply_gift_message_list(&reply.messages);
+                    }
+                    Ok(_) => tracing::debug!("5018 flag set; no rows staged"),
+                    Err(_) => tracing::debug!(id = frame.id, "dropping undecodable 5018 list"),
+                }
+                true
+            }
+            5026 => {
+                match o2jam_net::wallet::SyncFreePassResponse::decode_body(&frame.payload) {
+                    Ok(reply) => {
+                        let snapshot = (reply.result_code == 0).then_some(reply.info).flatten();
+                        self.game.apply_free_pass_answer(snapshot.as_ref());
+                    }
+                    Err(_) => tracing::debug!(id = frame.id, "dropping undecodable 5026 answer"),
+                }
+                true
+            }
+            5035 => {
+                match Self::decode_i32_word(&frame.payload) {
+                    Some(0) => self.game.apply_myroom_notice(MyRoomNotice::PenaltyCleared),
+                    Some(-98) => self.game.apply_myroom_notice(MyRoomNotice::PenaltyRetry),
+                    Some(code) => tracing::debug!(code, "5035 result has no pinned caption"),
+                    None => tracing::debug!(id = frame.id, "dropping undecodable 5035 code"),
+                }
+                true
+            }
+            5037 => {
+                let payload = &frame.payload;
+                let (result, count) = (
+                    Self::decode_i32_word(payload),
+                    payload.get(4..8).and_then(Self::decode_i32_word),
+                );
+                match (result, count) {
+                    (Some(0), Some(count)) => {
+                        let after = self.game.grow_myroom_bag(count);
+                        self.game
+                            .apply_myroom_notice(MyRoomNotice::BagExpanded { after });
+                    }
+                    (Some(result), _) => {
+                        tracing::debug!(result, "5037 refused; bag retry caption");
+                        self.game.apply_myroom_notice(MyRoomNotice::BagRetry);
+                    }
+                    _ => tracing::debug!(id = frame.id, "dropping undecodable 5037 pair"),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// One little-endian wire word, or `None` for a short body.
+    fn decode_i32_word(payload: &[u8]) -> Option<i32> {
+        let bytes = payload.get(..4)?;
+        Some(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
     /// Report each promoted chart the shell finished this frame: `4038`
@@ -3939,18 +4042,55 @@ impl OnlineSession {
         }
     }
 
-    /// 3010 clears the seats before choosing its pinned caption. The
-    /// caption choice needs a shell setter that is not in this lane's
-    /// scope; the seat reset is staged here and the caption is a
-    /// hand-off.
+    /// 3010 reads no wire body. The exe derives its cause from LOCAL
+    /// state: with a live room and an occupied channel slot it reads
+    /// the own-seat panel's state word; otherwise the cause is zero.
+    /// Cause 0 posts the plain removal caption, nonzero posts the
+    /// missing-song caption (VA `0x55e2f0`, helper `0x4bb700`). All
+    /// Waiting seats reset after the choice.
     fn apply_room_closed_notice(&mut self) {
+        let cause = self.room_closed_removal_cause();
+        let caption = if cause == 0 {
+            WaitingWireCaption::RemovedPlain
+        } else {
+            WaitingWireCaption::RemovedForMissingSong
+        };
         self.clear_waiting_seats();
+        self.game.stage_waiting_wire_caption(caption);
     }
 
-    /// 3014 clears the same seats and posts one fixed caption. The
-    /// caption hand-off is tracked outside this lane.
+    /// Own-seat state word behind the 3010 caption choice. A staged
+    /// joined room is our counterpart of the exe's room-state and
+    /// channel-slot gate; the local member's slot `state_code` is the
+    /// state getter's value (`0x16015022 + seat`, `0x52adf0`).
+    fn room_closed_removal_cause(&self) -> i32 {
+        let Some(room) = self.joined_room.as_ref() else {
+            return 0;
+        };
+        room.slots
+            .iter()
+            .find(|slot| slot.index == room.member_id)
+            .map_or(0, |slot| slot.state_code)
+    }
+
+    /// 3014 clears the same seats and posts its one fixed caption.
     fn apply_room_disappeared_notice(&mut self) {
         self.clear_waiting_seats();
+        self.game
+            .stage_waiting_wire_caption(WaitingWireCaption::RoomDisappeared);
+    }
+
+    /// Map a 4011 refusal word to the caption at the VA pinned for
+    /// that code. The exe's fifth caption needs a local room-song
+    /// mismatch flag with no pinned wire source, so it stays OPEN.
+    fn start_refusal_caption(result: i32) -> Option<WaitingWireCaption> {
+        match result {
+            1 => Some(WaitingWireCaption::StartNotReady),
+            2 => Some(WaitingWireCaption::StartTeamMismatch),
+            3 => Some(WaitingWireCaption::StartVsSolo),
+            4 => Some(WaitingWireCaption::StartServerInfo),
+            _ => None,
+        }
     }
 
     /// A 4005 echo names the peer whose song pick changed.
@@ -3967,9 +4107,9 @@ impl OnlineSession {
     }
 
     /// Fold one 4011 answer into the start transition. A zero result
-    /// arms the existing Loading walk (`poll_start_at`); refusal codes
-    /// keep the room in Waiting. Their pinned CP949 captions need a
-    /// shell setter outside this lane.
+    /// arms the existing Loading walk (`poll_start_at`); the four
+    /// pinned refusal codes post their CP949 captions and keep the
+    /// room in Waiting (VA `0x55f630`).
     fn apply_start_game_answer(&mut self, frame: &Frame) {
         // The rigs send a bare 4011 with no result word; that shape is
         // the success broadcast the existing `apply_start_broadcast`
@@ -3988,10 +4128,12 @@ impl OnlineSession {
         if result == 0 {
             self.game.clear_waiting_notice();
             self.start_announced = true;
+        } else if let Some(caption) = Self::start_refusal_caption(result) {
+            self.game.stage_waiting_wire_caption(caption);
+            tracing::info!(result, "START refused; waiting remains");
         } else {
-            // The refusal word is the server's "a member still lacks
-            // the song" answer. Keep the pinned download notice the
-            // bare-broadcast arm already posted for this verdict.
+            // Unnamed result words keep the older download notice;
+            // the exe's config-error arm needs a pinned state source.
             self.game.note_waiting_download();
             tracing::info!(result, "START refused; waiting remains");
         }
@@ -4098,7 +4240,14 @@ impl OnlineSession {
             tracing::debug!(id = frame.id, "dropping undecodable slot update");
             return;
         };
-        self.slot_actions[usize::from(update.index)] = update.action();
+        let action = update.action();
+        if action == Some(RoomSlotAction::PlayerKicked) {
+            // VA `0x64da3c`: the exe formats the evicted nickname into
+            // this caption before clearing the seat.
+            self.game
+                .stage_waiting_wire_caption(WaitingWireCaption::PlayerKickedTemplate);
+        }
+        self.slot_actions[usize::from(update.index)] = action;
     }
 
     /// Fold one 4009 frame into the ready mirror and the staged seat.
