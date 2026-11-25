@@ -708,14 +708,12 @@ pub const SHOP_EQUIPPED_BLOCK_BYTES: usize = 0x2190;
 pub const SHOP_ITEMCOMMENT_CODE: u32 = 0x1440_0085;
 /// Owned bag cells per page (ten staged `MYBAGITEM` icons).
 pub const SHOP_BAG_CELLS: usize = 10;
-/// Cart gem total (`IDC_TEXT_SSHOP_CART_CHECKGEM`): no gem-price
-/// source is pinned (same OPEN as the `ITEMGEM` cells), so the cell
-/// stays `--` (never an invented sum).
+/// Cart gem total (`IDC_TEXT_SSHOP_CART_CHECKGEM`): the local cart
+/// vector's gem sum (`FUN_0x53c050`, `ev_14b6e27c…`), inked with
+/// `FUN_0x4a21a0` (`ev_4a226a16…`); zero prints as `0`.
 pub const SHOP_CART_CHECKGEM_CODE: u32 = 0x1440_0074;
-/// Cart cash total (`IDC_TEXT_SSHOP_CART_CHECKMONEY`): the checked
-/// cart's summed `ITEMWON` prices (ours-by-design — the only
-/// client-side total consistent with the row cells; the exe total
-/// rule stays OPEN).
+/// Cart cash total (`IDC_TEXT_SSHOP_CART_CHECKMONEY`): the local
+/// cart vector's won sum, same writer as `CHECKGEM`.
 pub const SHOP_CART_CHECKMONEY_CODE: u32 = 0x1440_0075;
 /// Avatar-pane figure slot (`IDC_IMAGE_SSHOP_AVATAR`, art-less →
 /// staged figure, ticket #196): the equipped (or preview) worn
@@ -1163,6 +1161,9 @@ pub const SHOP_CART_ROWS: usize = 5;
 /// Cart-row TEXT templates (row-local, tiled over the staged
 /// `CART_EX` slots like the lanking templates).
 pub const SHOP_CART_NUM_CODE: u32 = 0x1440_007B;
+/// Cart type icon (`IMAGE_CART_TYPE`): child 1 of the five pinned
+/// row cells (`FUN_0x5299b0`, file `0xa299b0`, `ev_33c2d34d…`).
+pub const SHOP_CART_TYPE_CODE: u32 = 0x1450_007C;
 /// Cart delete icon (`IMAGE_CART_DELETE`): its class byte differs
 /// from the three neighbouring cart-row TEXT templates.
 pub const SHOP_CART_DELETE_CODE: u32 = 0x1450_007F;
@@ -1233,6 +1234,167 @@ pub struct ShopGood {
     /// Jam-money bonus percent from the item row's exe-pinned word
     /// `+0x28`; inks the card's `잼머니` line.
     pub jam_money_bonus_percent: u32,
+}
+
+/// Width of the right-aligned price field in cart child 3
+/// (`"%8d W"` / `"%8d G"`, `FUN_0x5299b0`).
+const CART_PRICE_FIELD_WIDTH: usize = 8;
+
+/// Currency byte of the 7.55 0x118-byte cart record (`+2`): the
+/// row price picks the won (`C`) or gem (`G`) word, and the totals
+/// writer sums each currency separately (`FUN_0x53c050`, file
+/// `0x53c050`, `ev_14b6e27c…`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CartCurrency {
+    Won,
+    Gem,
+}
+
+/// The cart record fields the row painter and totals writer read.
+/// Offsets are the pinned 7.55 record (`FUN_0x5299b0`): kind `+0`,
+/// currency `+2`, won `+0xc`, gem `+0x10`, name `+0x14`. Our data is
+/// a checked catalog good; no wire field is read at paint time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CartRecord {
+    pub kind: u16,
+    pub currency: CartCurrency,
+    pub won_price: u32,
+    pub gem_price: u32,
+    pub name: String,
+}
+
+impl CartRecord {
+    /// Map one checked catalog good into the pinned record fields.
+    /// Parsed catalog rows carry only a won price; an explicitly
+    /// staged gem price is the only local source for the `G` flag.
+    /// Kind 0 (normal item) is our catalog's only staged kind; a
+    /// set-item kind needs an entry-frame capture (OPEN).
+    #[must_use]
+    pub fn from_good(good: &ShopGood) -> Self {
+        Self {
+            kind: 0,
+            currency: if good.gem_price.is_some() {
+                CartCurrency::Gem
+            } else {
+                CartCurrency::Won
+            },
+            won_price: good.price,
+            gem_price: good.gem_price.unwrap_or(0),
+            name: good.name.clone(),
+        }
+    }
+
+    /// Row price cell text: right-aligned to eight places, then the
+    /// currency letter (`FUN_0x5299b0` child 3).
+    #[must_use]
+    pub fn price_cell(&self) -> String {
+        let (word, letter) = match self.currency {
+            CartCurrency::Won => (self.won_price, 'W'),
+            CartCurrency::Gem => (self.gem_price, 'G'),
+        };
+        format!("{word:>width$} {letter}", width = CART_PRICE_FIELD_WIDTH)
+    }
+
+    /// Frame in the pinned type-icon cell: 1/2/3 for kind 0/1/2.
+    #[must_use]
+    pub const fn type_frame(&self) -> u8 {
+        match self.kind {
+            0 => 1,
+            1 => 2,
+            2 => 3,
+            _ => 0,
+        }
+    }
+}
+
+/// One occupied cart row's five child cells, in control ordinal order.
+/// The exe never writes child 4 in the occupied-row path, so its
+/// frame stays `None` (staged delete art).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CartRowCells {
+    pub number: String,
+    pub type_frame: u8,
+    pub name: String,
+    pub price: String,
+    pub delete_frame: Option<u8>,
+}
+
+/// Map one pinned cart record to its five row cells.
+#[must_use]
+pub fn cart_row_cells(record: &CartRecord, row_number: usize) -> CartRowCells {
+    CartRowCells {
+        number: row_number.to_string(),
+        type_frame: record.type_frame(),
+        name: record.name.clone(),
+        price: record.price_cell(),
+        delete_frame: None,
+    }
+}
+
+/// Local cart-vector sums behind the W and G total cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CartTotals {
+    pub won: u32,
+    pub gem: u32,
+}
+
+impl CartTotals {
+    /// Sum the cart records by currency; an empty vector yields two
+    /// zeroes (the exe prints the computed gem integer, never `--`).
+    #[must_use]
+    pub fn from_goods(goods: &[ShopGood]) -> Self {
+        goods.iter().fold(Self::default(), |sum, good| {
+            let record = CartRecord::from_good(good);
+            let (won, gem) = match record.currency {
+                CartCurrency::Won => (sum.won.saturating_add(record.won_price), sum.gem),
+                CartCurrency::Gem => (sum.won, sum.gem.saturating_add(record.gem_price)),
+            };
+            Self { won, gem }
+        })
+    }
+}
+
+/// Four digit frames of the cart pager (`FUN_0x4a1b10`, file
+/// `0xa1b10`, `ev_f9176ad5…`). `None` blanks one cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CartPagerDigits {
+    pub current_tens: Option<char>,
+    pub current_ones: Option<char>,
+    pub total_tens: Option<char>,
+    pub total_ones: Option<char>,
+}
+
+/// Page digits from the local cart-vector length and page index.
+#[must_use]
+pub fn cart_pager_digits(cart_len: usize, page: usize) -> CartPagerDigits {
+    if cart_len == 0 {
+        return CartPagerDigits::default();
+    }
+    let current = page.saturating_add(1);
+    let total = cart_len.div_ceil(SHOP_CART_ROWS);
+    let digit =
+        |value: usize| char::from_digit(u32::try_from(value % 10).unwrap_or(0), 10).unwrap_or('0');
+    let tens = |value: usize| (value >= 10).then(|| digit(value / 10));
+    CartPagerDigits {
+        current_tens: tens(current),
+        current_ones: Some(digit(current)),
+        total_tens: tens(total),
+        total_ones: Some(digit(total)),
+    }
+}
+
+/// Which cart-face controls the exe's gate enables (`FUN_0x4a1010`,
+/// file `0xa1010`, `ev_d9bda480…`). BAGSORT follows the inverse of
+/// `state+0x2334`; BUYITEM/GIFTITEM and both pager arrows follow the
+/// flag itself. The plate face is staged `.bnd` art, never a frame
+/// switch: this only decides whether the control answers.
+#[must_use]
+pub const fn shop_cart_face_controls_kept(code: u32, cart_face_open: bool) -> bool {
+    if code == SHOP_BAGSORT_CODE {
+        return !cart_face_open;
+    }
+    let buy_plate = code >= SHOP_BUYITEM_CODE && code <= SHOP_CART_RIGHT_CODE;
+    !buy_plate || cart_face_open
 }
 
 /// Try-on gate fields the exe reads from a staged item record:
@@ -1339,8 +1501,6 @@ impl CheckoutMode {
 /// it (the live tap emitted no opcode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckoutNotice {
-    /// Empty cart (string VA `0x648cc8`).
-    EmptyCart,
     /// Cart list blocked (string VA `0x648c48`).
     CartBlocked,
     /// No bag space at all (string VA `0x648c24`).
@@ -1422,8 +1582,10 @@ pub fn shop_checkout_decision(
     if gate.web_busy {
         return CheckoutDecision::Silent;
     }
+    // FUN_0x499760 (file `0x99760`, `ev_e9af897d…`) refreshes the
+    // rows and then ends on cart length zero: no notice and no send.
     if cart.is_empty() {
-        return CheckoutDecision::Notice(CheckoutNotice::EmptyCart);
+        return CheckoutDecision::Silent;
     }
     if mode == CheckoutMode::Buy {
         let Some(slots) = gate.bag_slots else {
@@ -1647,6 +1809,7 @@ pub fn shop_panel_kept(placed: &ScenePlacement, panel: ShopPanel) -> bool {
         || in_run(SHOP_CART_CHECKGEM_CODE, 2)
         || in_run(SHOP_CART_TOGGLE_FIRST_CODE, SHOP_CART_ROWS as u32)
         || in_run(SHOP_CART_NUM_CODE, 4)
+        || placed.code == SHOP_CART_TYPE_CODE
         || placed.code == SHOP_CART_DELETE_CODE
         || in_run(SHOP_CART_PAGE_CUR_ONES_CODE, 4);
     let bag = in_run(SHOP_MYBAGITEM_FIRST_CODE, SHOP_BAG_CELLS as u32)
@@ -1996,6 +2159,43 @@ pub fn shop_cart_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect
         rect_union(cur_tens, cur_ones),
         rect_union(tot_tens, tot_ones),
     ))
+}
+
+/// One pager digit rect per code, in `CartPagerDigits` field order:
+/// current tens, current units, total tens, total units.
+#[must_use]
+pub fn shop_cart_page_digit_rects(placements: &[ScenePlacement]) -> Option<[Rect; 4]> {
+    let digit = |code| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    };
+    Some([
+        digit(SHOP_CART_PAGE_CUR_TENS_CODE)?,
+        digit(SHOP_CART_PAGE_CUR_ONES_CODE)?,
+        digit(SHOP_CART_PAGE_TOT_TENS_CODE)?,
+        digit(SHOP_CART_PAGE_TOT_ONES_CODE)?,
+    ])
+}
+
+/// Whether one staged pager digit mounts. A blank digit has no body
+/// in the exe (`FUN_0x42f5a0` case 1), so its staged art is hidden
+/// instead of inked with a zero.
+#[must_use]
+pub const fn shop_cart_page_digit_kept(code: u32, digits: CartPagerDigits) -> bool {
+    let shown = if code == SHOP_CART_PAGE_CUR_TENS_CODE {
+        digits.current_tens
+    } else if code == SHOP_CART_PAGE_CUR_ONES_CODE {
+        digits.current_ones
+    } else if code == SHOP_CART_PAGE_TOT_TENS_CODE {
+        digits.total_tens
+    } else if code == SHOP_CART_PAGE_TOT_ONES_CODE {
+        digits.total_ones
+    } else {
+        return true;
+    };
+    shown.is_some()
 }
 
 /// Bag page-number rects: current-page tens+ones union, then total
@@ -10395,6 +10595,114 @@ mod side_tests {
             &HashMap::new(),
         );
         assert_eq!(buf, vec![0x123456u32; 8 * 8]);
+    }
+}
+
+#[cfg(test)]
+mod cart_cell_mapping_tests {
+    use super::*;
+
+    fn good(price: u32, gem_price: Option<u32>) -> ShopGood {
+        ShopGood {
+            item_id: 1,
+            name: "Hair".to_owned(),
+            price,
+            gem_price,
+            experience_bonus_percent: 0,
+            jam_money_bonus_percent: 0,
+        }
+    }
+
+    #[test]
+    fn cart_row_cells_follow_pinned_child_ordinals_and_record_offsets() {
+        // Live chain: ScreenGame::paint_side -> paint_shop_board ->
+        // paint_shop_cart -> CartRecord::from_good -> cart_row_cells.
+        // Statics: FUN_0x5299b0 child 0..4 (ev_33c2d34d…), record
+        // kind +0, currency +2, won +0xc, gem +0x10, name +0x14.
+        let record = CartRecord {
+            kind: 2,
+            currency: CartCurrency::Won,
+            won_price: 4500,
+            gem_price: 900,
+            name: "Set".to_owned(),
+        };
+        let cells = cart_row_cells(&record, 3);
+        assert_eq!(cells.number, "3", "child 0 inks the 1-based row number");
+        assert_eq!(cells.type_frame, 3, "child 1 maps set kind 2 to frame 3");
+        assert_eq!(cells.name, "Set", "child 2 inks record +0x14");
+        assert_eq!(
+            cells.price, "    4500 W",
+            "child 3 formats record +0xc as right-aligned won"
+        );
+        assert_eq!(cells.delete_frame, None, "child 4 is never written");
+    }
+
+    #[test]
+    fn cart_totals_sum_the_local_vector_by_currency_including_zero() {
+        // Live chain: ScreenGame::paint_side -> paint_shop_board ->
+        // paint_shop_cart_totals -> CartTotals::from_goods.
+        // Statics: FUN_0x53c050 sums +0xc into W on 'C' and +0x10
+        // into G on 'G' (ev_14b6e27c…); empty cart prints zeroes.
+        let cart = [good(4500, None), good(200, Some(3000))];
+        assert_eq!(
+            CartTotals::from_goods(&cart),
+            CartTotals {
+                won: 4500,
+                gem: 3000
+            },
+            "W and G come from the cart vector's currency bytes"
+        );
+        assert_eq!(
+            CartTotals::from_goods(&[]),
+            CartTotals::default(),
+            "an empty vector prints zero, never a placeholder"
+        );
+    }
+
+    #[test]
+    fn cart_pager_digits_blank_tens_and_empty_units_from_the_vector() {
+        // Live chain: ScreenGame::paint_side -> paint_shop_board ->
+        // paint_shop_cart -> cart_pager_digits -> staged 0x14500080..83.
+        // Statics: FUN_0x4a1b10 blanks tens below ten and blanks
+        // units when the vector is empty (ev_f9176ad5…).
+        let one = cart_pager_digits(1, 0);
+        assert_eq!(one.current_tens, None, "page 1 has no tens digit");
+        assert_eq!(one.current_ones, Some('1'), "page 1 units");
+        assert_eq!(one.total_tens, None, "one page has no tens digit");
+        assert_eq!(one.total_ones, Some('1'), "one total page");
+        let two_pages = cart_pager_digits(6, 1);
+        assert_eq!(two_pages.current_ones, Some('2'), "second page");
+        assert_eq!(two_pages.total_ones, Some('2'), "ceil(6/5) pages");
+        let empty = cart_pager_digits(0, 0);
+        assert_eq!(empty.total_ones, None, "an empty cart blanks units");
+    }
+
+    #[test]
+    fn cart_face_flag_gates_the_buy_plate_without_using_a_cart_count() {
+        // Live chain: main.rs::run_play -> ... -> ScreenGame::paint_side
+        // -> shop_cart_face_controls_kept -> staged 0x14200070..73/b7.
+        // Statics: FUN_0x4a1010 writes the four BUYITEM codes from the
+        // cart-face flag +0x2334 and BAGSORT from its inverse.
+        assert!(
+            !shop_cart_face_controls_kept(SHOP_BAGSORT_CODE, true),
+            "face open hides BAGSORT"
+        );
+        assert!(
+            shop_cart_face_controls_kept(SHOP_BAGSORT_CODE, false),
+            "MY BAG keeps BAGSORT"
+        );
+        assert!(
+            shop_cart_face_controls_kept(SHOP_BUYITEM_CODE, true),
+            "face open enables BUYITEM"
+        );
+        assert!(
+            !shop_cart_face_controls_kept(SHOP_BUYITEM_CODE, false),
+            "MY BAG disables BUYITEM"
+        );
+        assert!(
+            !shop_cart_face_controls_kept(SHOP_CART_RIGHT_CODE, false),
+            "MY BAG disables the pager"
+        );
     }
 }
 

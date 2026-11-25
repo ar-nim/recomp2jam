@@ -3,15 +3,15 @@
 
 use super::super::side::{
     exe_new_arrivals_goods, lanking_page_window, shop_checkout_decision, shop_goods,
-    shop_next_planet_index, shop_page_count, shop_try_on_decision, CheckoutDecision, CheckoutGate,
-    CheckoutMode, CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice, ShopGender,
-    ShopGood, ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh, ShopRefreshContext,
-    TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS, SHOP_CART_ROWS,
-    SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_ITEM_ROWS, SHOP_LEVEL_CAPTION_PREFIX,
-    SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX,
-    SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS,
-    SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS, SHOP_SUBMENU_BUTTONS,
-    SHOP_SUBMENU_FIRST_CODE,
+    shop_next_planet_index, shop_page_count, shop_try_on_decision, CartTotals, CheckoutDecision,
+    CheckoutGate, CheckoutMode, CheckoutNotice, ShopAction, ShopBagNotice, ShopChromeNotice,
+    ShopGender, ShopGood, ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh,
+    ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS,
+    SHOP_CART_ROWS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_ITEM_ROWS,
+    SHOP_LEVEL_CAPTION_PREFIX, SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE,
+    SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX,
+    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
+    SHOP_SKILLCOUNT_CELLS, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -237,6 +237,16 @@ impl ShopState {
         self.shop_cart_page
     }
 
+    /// Refresh the five cart rows by clamping the page index to the
+    /// local vector's page count (`FUN_0x4a1580`, file `0xa1580`,
+    /// `ev_c15c056e…`).
+    fn refresh_cart_rows(&mut self) {
+        let pages = self.cart_pages();
+        if self.shop_cart_page >= pages {
+            self.shop_cart_page = pages.saturating_sub(1);
+        }
+    }
+
     /// Cart flag (exe object `+0x8cd`): only the SHOPPING BAG face
     /// answers MYCART_LEFT/RIGHT. MYBACK clears it, MYCART_POS sets
     /// it, and a row check enters the face (`ev_f3ad15be…`).
@@ -410,18 +420,33 @@ impl ShopState {
                 self.checkout_notice = Some(notice);
                 false
             }
-            CheckoutDecision::Silent | CheckoutDecision::Unpinned => false,
+            CheckoutDecision::Silent | CheckoutDecision::Unpinned => {
+                self.checkout_notice = None;
+                false
+            }
         }
     }
 
-    /// Summed `ITEMWON` prices over the checked cart (saturating;
-    /// unknown ids drop out like the cart rows do).
-    pub(crate) fn cart_total(&self) -> u32 {
-        self.shop_cart
+    /// Local cart-vector totals by currency (saturating; unknown ids
+    /// drop out like the cart rows do).
+    fn cart_totals(&self) -> CartTotals {
+        let goods: Vec<ShopGood> = self
+            .shop_cart
             .iter()
             .filter_map(|item_id| self.shop_goods.iter().find(|good| good.item_id == *item_id))
-            .map(|good| good.price)
-            .fold(0u32, |total, price| total.saturating_add(price))
+            .cloned()
+            .collect();
+        CartTotals::from_goods(&goods)
+    }
+
+    /// Summed won prices over the checked cart.
+    pub(crate) fn cart_total(&self) -> u32 {
+        self.cart_totals().won
+    }
+
+    /// Summed gem prices over the checked cart.
+    pub(crate) fn cart_gem_total(&self) -> u32 {
+        self.cart_totals().gem
     }
 
     /// Previewed catalog item id (`None`: equipped avatar shows).
@@ -920,7 +945,13 @@ impl ShopState {
                 }
                 false
             }
-            ShopAction::CartBuy => !self.shop_cart.is_empty(),
+            ShopAction::CartBuy => {
+                // The BUYITEM arm refreshes the five rows from the
+                // local vector first; on an empty vector it ends
+                // silently (no notice, no send).
+                self.refresh_cart_rows();
+                !self.shop_cart.is_empty()
+            }
             ShopAction::ItemPrev => {
                 self.shop_page = self.shop_page.saturating_sub(1);
                 false

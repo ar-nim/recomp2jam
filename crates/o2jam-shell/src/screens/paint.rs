@@ -43,14 +43,15 @@ use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use super::game::OwnedRow;
 use super::side::{
-    lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
-    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
-    music_shop_caption_rect, music_shop_cart_page_rects, music_shop_cart_slots,
-    music_shop_owned_slots, music_shop_page_rects, music_shop_slots, music_shop_tiled_rect,
-    planet_action_for_code, planet_band_rect, planet_caption_for_code, planet_plate_clip,
-    shop_bag_page_rects, shop_cart_page_rects, shop_cart_slots, shop_cart_total_rects,
-    wallet_amount_caption, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow, PlanetAction,
-    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletState,
+    cart_pager_digits, cart_row_cells, lanking_bpm_caption, lanking_diff_caption,
+    lanking_genre_caption, lanking_lview_slots, lanking_rank_cells, lanking_rview_slots,
+    lanking_tiled_rect, music_shop_buy_caption, music_shop_caption_rect,
+    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
+    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
+    planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
+    shop_cart_page_digit_rects, shop_cart_slots, shop_cart_total_rects, wallet_amount_caption,
+    CartRecord, CartTotals, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow,
+    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletState,
     INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
     MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
@@ -62,12 +63,12 @@ use super::side::{
     MSHOP_ROW_TEXT_CODES, MSHOP_SEARCH_EDIT_CODE, MSHOP_SEARCH_HINT, MSHOP_TAB_DELETE_CODE,
     MSHOP_TAB_DOWN_CODE, MSHOP_TOTAL_PROGRESS_CODE, MSHOP_WON_PRICE_CODE,
     NO_RESPONSE_MESSAGE_CP949, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
-    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_BAGSORT_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_GEM_UNPRICED_WORD, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE, SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949,
-    SHOP_PLAYER_LEVEL_CAPTION_CODE, SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_GEM_UNPRICED_WORD,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
+    SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949, SHOP_PLAYER_LEVEL_CAPTION_CODE,
+    SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
 use crate::options::OptionsSettings;
 use crate::staging::ShopPriceFonts;
@@ -1336,18 +1337,9 @@ pub struct ShopBoard<'a> {
     pub cart: &'a [ShopGood],
     /// Current cart page (zero-based).
     pub cart_page: usize,
-    /// Cart page count (at least one).
+    /// Cart page count (at least one). Kept for board callers; the
+    /// pager itself derives its digits from the cart vector length.
     pub cart_pages: usize,
-}
-
-/// Whether the item-sort plate paints. `FUN_004a1010` writes the
-/// control's `+0x24` enable word from `cart_count == 0`: the code push
-/// at `0x4a106d`, `SETZ` at `0x4a1088`, and store through
-/// `FUN_00409bf0` (REA 7.55 `ev_7baf8f3c…`, `ev_694dfc15…`). A
-/// checked cart hides the control; its `.bnd` rect stays as geometry.
-#[must_use]
-pub const fn shop_bagsort_kept(code: u32, cart_count: usize) -> bool {
-    code != SHOP_BAGSORT_CODE || cart_count == 0
 }
 
 /// Item-shop board overlay over the staged side art: the visible
@@ -1379,13 +1371,7 @@ pub fn paint_shop_board(
     // The entry face is MY BAG (audit D4); cart ink only rides the
     // face the row pick opens. Both faces share the stage geometry.
     if board.panel == ShopPanel::ShoppingBag {
-        paint_shop_cart(
-            frame,
-            placements,
-            board.cart,
-            board.cart_page,
-            board.cart_pages,
-        );
+        paint_shop_cart(frame, placements, board.cart, board.cart_page);
     }
 }
 
@@ -1778,53 +1764,80 @@ fn paint_shop_wallet(frame: &mut Frame<'_>, placements: &[ScenePlacement], walle
     }
 }
 
-/// Checked cart rows into the staged row-local `CART` templates
-/// riding the staged `CART_EX` slot origins (position, name, price;
-/// unstaged slots or templates: no rows), plus the cart pager
-/// readout (`cur/tot` into the staged digit-pair unions).
+/// Checked cart rows, local-vector totals, and the four pager
+/// digits. Every cell reads a staged rect: the row-local TEXT
+/// templates tiled over `CART_EX` origins, the CHECKMONEY/CHECKGEM
+/// cells, and the four `0x14500080..83` digit frames.
 fn paint_shop_cart(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     cart: &[ShopGood],
     cart_page: usize,
-    cart_pages: usize,
 ) {
     // Totals ride their own TEXT rects, never the row templates:
     // they ink even when no cart row stages.
     paint_shop_cart_totals(frame, placements, cart);
-    let slots = shop_cart_slots(placements);
-    let num = shop_template_rect(placements, SHOP_CART_NUM_CODE);
-    let name = shop_template_rect(placements, SHOP_CART_ITEMNAME_CODE);
-    let price = shop_template_rect(placements, SHOP_CART_PRICE_CODE);
-    let (Some(num), Some(name), Some(price)) = (num, name, price) else {
+    paint_shop_cart_rows(frame, placements, cart, cart_page);
+    let digits = cart_pager_digits(cart.len(), cart_page);
+    let Some(rects) = shop_cart_page_digit_rects(placements) else {
         return;
     };
-    if slots.is_empty() {
-        return;
+    let cells = [
+        digits.current_tens,
+        digits.current_ones,
+        digits.total_tens,
+        digits.total_ones,
+    ];
+    for (rect, digit) in rects.into_iter().zip(cells) {
+        if let Some(digit) = digit {
+            paint_text_into_rect(frame, rect, &digit.to_string(), CP949_INK);
+        }
     }
+}
+
+/// Occupied cart rows: child 0/2/3 from the pinned record mapping,
+/// tiled over each staged `CART_EX` origin. Child 1 (type frame) and
+/// child 4 (delete icon) keep their staged art; the 7.55 painter
+/// writes no frame to either in the occupied-row path.
+fn paint_shop_cart_rows(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    cart: &[ShopGood],
+    cart_page: usize,
+) {
+    let slots = shop_cart_slots(placements);
+    let Some(num) = shop_template_rect(placements, SHOP_CART_NUM_CODE) else {
+        return;
+    };
+    let Some(name) = shop_template_rect(placements, SHOP_CART_ITEMNAME_CODE) else {
+        return;
+    };
+    let Some(price) = shop_template_rect(placements, SHOP_CART_PRICE_CODE) else {
+        return;
+    };
     for (index, (slot, good)) in slots.iter().zip(cart.iter()).enumerate() {
+        let cells = cart_row_cells(
+            &CartRecord::from_good(good),
+            cart_page.saturating_mul(SHOP_CART_ROWS) + index + 1,
+        );
         paint_text_into_rect(
             frame,
             music_shop_tiled_rect(num, slot),
-            &shop_cart_position(cart_page, index),
+            &cells.number,
             CP949_INK,
         );
         paint_text_into_rect(
             frame,
             music_shop_tiled_rect(name, slot),
-            &good.name,
+            &cells.name,
             CP949_INK,
         );
         paint_text_into_rect(
             frame,
             music_shop_tiled_rect(price, slot),
-            &good.price.to_string(),
+            &cells.price,
             CP949_INK,
         );
-    }
-    if let Some((cur, tot)) = shop_cart_page_rects(placements) {
-        paint_text_into_rect(frame, cur, &(cart_page + 1).to_string(), CP949_INK);
-        paint_text_into_rect(frame, tot, &cart_pages.to_string(), CP949_INK);
     }
 }
 
@@ -1907,26 +1920,29 @@ pub fn paint_shop_identity_captions(
     }
 }
 
-/// Cart checkout totals: the summed `ITEMWON` prices into
-/// `CHECKMONEY`, `--` into `CHECKGEM` (no gem-price source is
-/// pinned — same OPEN as the `ITEMGEM` row cells).
-///
-/// `FUN_004a1010` (`ev_ec83763a…`) enables these cells only when the
-/// cart-count word `+0x2334` is non-zero, so an empty cart leaves both
-/// staged cells dark. The exe's own total-ink writer stays OPEN.
+/// Cart checkout totals from the local cart vector. `FUN_0x4a21a0`
+/// (file `0xa21a0`, `ev_4a226a16…`) inks the W and G sums from the
+/// cart object's `+0x14`/`+0x18` on the cart face; both are computed,
+/// so even an empty vector prints `0`, never a placeholder.
 fn paint_shop_cart_totals(frame: &mut Frame<'_>, placements: &[ScenePlacement], cart: &[ShopGood]) {
-    if cart.is_empty() {
-        return;
-    }
     let Some((gem_cell, money_cell)) = shop_cart_total_rects(placements) else {
         return;
     };
-    paint_text_into_rect(frame, gem_cell, super::side::UNKNOWN_AMOUNT, CP949_INK);
-    let total = cart
-        .iter()
-        .map(|good| good.price)
-        .fold(0u32, |total, price| total.saturating_add(price));
-    paint_text_into_rect(frame, money_cell, &total.to_string(), CP949_INK);
+    let totals = CartTotals::from_goods(cart);
+    paint_caption_in_cell(
+        frame,
+        gem_cell,
+        &totals.gem.to_string(),
+        CP949_INK,
+        CaptionAlignment::Right,
+    );
+    paint_caption_in_cell(
+        frame,
+        money_cell,
+        &totals.won.to_string(),
+        CP949_INK,
+        CaptionAlignment::Right,
+    );
 }
 
 /// Item-shop avatar pane over the staged side art: the equipped (or
@@ -2017,16 +2033,6 @@ pub fn paint_shop_featured_icons(
             parent.y + offset_y - layer.dy,
         );
     }
-}
-
-/// Cart-row position caption (`NUM` cell): the 1-based row order
-/// across cart pages, never the good id.
-fn shop_cart_position(cart_page: usize, index: usize) -> String {
-    (cart_page
-        .saturating_mul(SHOP_CART_ROWS)
-        .saturating_add(index)
-        .saturating_add(1))
-    .to_string()
 }
 
 /// Native rect of one staged shop template (`None` unstaged).
@@ -5959,8 +5965,8 @@ mod paint_tests {
     fn shop_board_paints_won_balance_and_cart_totals_at_staged_rects() {
         // Ticket #196: the `MGASH` cash cell and the cart checkout
         // totals ink at their staged rects — the cash word from the
-        // 5001 prefix, the money total summed from the row prices,
-        // `--` for the gem total (no gem-price source is pinned).
+        // 5001 prefix and the W/G totals summed from the local cart
+        // vector.
         let placements = vec![
             shop_placement(SHOP_MGASH_CODE, 200, 288, 95, 13),
             shop_placement(SHOP_CART_CHECKGEM_CODE, 82, 320, 95, 13),
@@ -6004,16 +6010,15 @@ mod paint_tests {
     }
 
     #[test]
-    fn cart_total_cells_ink_only_when_the_cart_count_gate_is_open() {
+    fn cart_total_cells_ink_vector_sums_including_an_empty_cart() {
         // Live caller chain:
         //   main.rs::run_play -> OnlineSession::paint ->
-        //   ScreenGame::paint_shop -> paint_shop_board ->
+        //   ScreenGame::paint_side -> paint_shop_board ->
         //   paint_shop_cart_totals -> staged CHECKMONEY/CHECKGEM rects.
-        // Static pins: FUN_004a1010 (ev_ec83763a…) enables the total
-        // cells by cart-count `+0x2334`; FUN_004a0660
-        // (ev_3e020a4a…) stages their rects into object `+0x247c`/
-        // `+0x248c`. The exe's own total-ink writer stays OPEN; our
-        // staged-price sum remains the labeled source.
+        // Statics: FUN_0x4a21a0 (ev_4a226a16…) inks W/G from the local
+        // cart object's `+0x14`/`+0x18` on the cart face; FUN_0x53c050
+        // (ev_14b6e27c…) sums the records by currency. An empty vector
+        // still prints zeroes.
         let placements = vec![
             shop_placement(SHOP_CART_CHECKGEM_CODE, 82, 320, 95, 13),
             shop_placement(SHOP_CART_CHECKMONEY_CODE, 200, 320, 95, 13),
@@ -6054,13 +6059,13 @@ mod paint_tests {
 
         assert_eq!(
             cells_ink(&[]),
-            (false, false),
-            "an empty cart leaves both cells dark"
+            (true, true),
+            "an empty cart prints two zeroes"
         );
         assert_eq!(
             cells_ink(std::slice::from_ref(&good)),
             (true, true),
-            "the staged-price writer inks both cells"
+            "the vector sum inks both cells"
         );
     }
 
