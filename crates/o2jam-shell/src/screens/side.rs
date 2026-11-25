@@ -1158,6 +1158,9 @@ pub const SHOP_CART_RIGHT_CODE: u32 = 0x1420_0073;
 pub const SHOP_CART_TOGGLE_FIRST_CODE: u32 = 0x1401_B076;
 /// Visible cart rows per page (five staged `CART_EX` hit areas).
 pub const SHOP_CART_ROWS: usize = 5;
+/// Ten kind-0 records is the exe's cart-add cap (`FUN_0x53bd70 < 10`,
+/// `ev_b965d39…`). Kind-2 sets use a separate count.
+pub const SHOP_KIND0_CART_LIMIT: usize = 10;
 /// Cart-row TEXT templates (row-local, tiled over the staged
 /// `CART_EX` slots like the lanking templates).
 pub const SHOP_CART_NUM_CODE: u32 = 0x1440_007B;
@@ -1365,13 +1368,28 @@ pub struct CartPagerDigits {
 }
 
 /// Page digits from the local cart-vector length and page index.
+/// The total uses `ceil(len / 5)`, never the visible row slice.
 #[must_use]
 pub fn cart_pager_digits(cart_len: usize, page: usize) -> CartPagerDigits {
-    if cart_len == 0 {
+    let total_pages = cart_len.div_ceil(SHOP_CART_ROWS);
+    cart_pager_digits_from_pages(total_pages, page, cart_len == 0)
+}
+
+/// Page digits from the staged cart page count (`shop +0x233c`) and
+/// the current page (`shop +0x2338`, `FUN_0x4a1b10`). The empty flag
+/// keeps the exe's blank-cell rule: a zero-length vector inks no units
+/// even though its page count is one.
+#[must_use]
+pub fn cart_pager_digits_from_pages(
+    total_pages: usize,
+    page: usize,
+    cart_is_empty: bool,
+) -> CartPagerDigits {
+    if cart_is_empty {
         return CartPagerDigits::default();
     }
     let current = page.saturating_add(1);
-    let total = cart_len.div_ceil(SHOP_CART_ROWS);
+    let total = total_pages.max(1);
     let digit =
         |value: usize| char::from_digit(u32::try_from(value % 10).unwrap_or(0), 10).unwrap_or('0');
     let tens = |value: usize| (value >= 10).then(|| digit(value / 10));

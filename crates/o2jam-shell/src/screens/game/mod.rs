@@ -7579,6 +7579,13 @@ impl ScreenGame {
     }
 
     /// Stage the gate word that allows an ext-menu toggle.
+    /// Stage a kind-2 set record and the component ids its cart dup
+    /// check reads. No exe file→component map is pinned, so this seam
+    /// is the only local source (findings-cart-residuals.md).
+    pub fn stage_shop_cart_set(&mut self, set_item_id: u32, components: &[u32]) {
+        self.shop.stage_cart_set(set_item_id, components);
+    }
+
     pub fn stage_shop_extmenu_ready(&mut self, ready: bool) {
         self.shop.stage_ext_menu_ready(ready);
     }
@@ -7981,6 +7988,14 @@ impl ScreenGame {
     #[must_use]
     pub const fn shop_charge_confirm_open(&self) -> bool {
         self.shop_charge_confirm_open
+    }
+
+    /// Exe gate `shop +0x25a0` (`FUN_0x498ab0`, ev_f2aff40b…): while
+    /// any modal MESSAGE entry is up, `FUN_0x4a21a0` skips both wallet
+    /// digit calls and the baked `G`/`W` letters stay bare.
+    #[must_use]
+    pub fn shop_message_sheet_up(&self) -> bool {
+        self.shop_charge_confirm_open || self.dialog_owns_input()
     }
 
     /// Last OK/CANCEL choice on the native sheet, if dismissed.
@@ -9063,6 +9078,7 @@ impl ScreenGame {
                 frame,
                 &self.side_placements,
                 ShopBoard {
+                    message_sheet_up: self.shop_message_sheet_up(),
                     featured_cards: featured,
                     panel,
                     goods: &self.shop_visible_goods(),
@@ -27627,7 +27643,7 @@ mod game_tests {
         assert_eq!(game.shop_cart(), vec![1]);
         assert_eq!(game.shop_panel(), ShopPanel::ShoppingBag);
         game.click_shop(221, 188);
-        assert!(game.shop_cart().is_empty());
+        assert_eq!(game.shop_cart(), vec![1, 1], "a repeat appends");
         game.click_shop(221, 188);
         game.click_shop(18, 564);
         assert!(
@@ -27640,6 +27656,171 @@ mod game_tests {
             "the sheet carries the O2CASH-shortfall caption"
         );
         assert_eq!(game.take_shop_buy(), None, "no invented 5000 buy send");
+    }
+
+    #[test]
+    fn the_wallet_cells_show_bare_letters_while_the_message_sheet_is_up() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        // connect::connect_and_login_with_transport ->
+        // assemble_online_session -> GameLoop::ingest_snapshot ->
+        // ScreenGame::click_shop -> ShopAction::ToggleRow/CartBuy ->
+        // shop_charge_confirm_open -> ScreenGame::paint_at ->
+        // ScreenGame::paint_side -> paint_shop_board -> paint_shop_wallet.
+        // Statics: FUN_0x498ab0 (ev_f2aff40b…) sets shop +0x25a0 while a
+        // MESSAGE entry is up; FUN_0x4a21a0 (ev_8c9dfd4d…) then skips
+        // both wallet digit calls, leaving the baked G/W letters.
+        let mut game = open_shop_board(10);
+        stage_shop_control(&mut game, super::super::side::SHOP_MGASH_CODE, 200);
+        game.wallet.gem = Some(15_527);
+        game.wallet.o2_cash = Some(3_333);
+        let cells = [
+            (
+                "GEM",
+                game.staged_side_control_rect(SHOP_GEMMONEY_CODE)
+                    .expect("synthetic board stages GEMMONEY"),
+            ),
+            (
+                "W",
+                game.staged_side_control_rect(super::super::side::SHOP_MGASH_CODE)
+                    .expect("synthetic board stages MGASH"),
+            ),
+        ];
+        let painted = |game: &mut ScreenGame, now_ms: u64| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            buf
+        };
+        let goods = game.shop_visible_goods();
+        let cart = game.shop_visible_cart();
+        let board_frame = |game: &ScreenGame, sheet_up: bool| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_shop_board(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &game.side_placements,
+                ShopBoard {
+                    message_sheet_up: sheet_up,
+                    featured_cards: false,
+                    panel: game.shop_panel(),
+                    goods: &goods,
+                    wallet: &game.wallet,
+                    cart: &cart,
+                    cart_page: game.shop_cart_page(),
+                    cart_pages: game.shop_cart_pages(),
+                },
+            );
+            buf
+        };
+        let ink_in = |frame: &[u32], rect: Rect| -> usize {
+            let left = usize::try_from(rect.x).unwrap_or(0);
+            let top = usize::try_from(rect.y).unwrap_or(0);
+            let width = usize::try_from(rect.w).unwrap_or(0);
+            let height = usize::try_from(rect.h).unwrap_or(0);
+            (top..top + height)
+                .flat_map(|row| (left..left + width).map(move |col| row * 800 + col))
+                .filter(|index| {
+                    let pixel = frame[*index];
+                    (pixel & 0xff >= 180)
+                        && ((pixel >> 8) & 0xff >= 180)
+                        && ((pixel >> 16) & 0xff >= 180)
+                })
+                .count()
+        };
+
+        let before = board_frame(&game, false);
+        let gated = board_frame(&game, true);
+        for (label, cell) in cells {
+            assert!(
+                ink_in(&before, cell) > 0,
+                "the {label} wallet word inks a digit"
+            );
+            assert_eq!(
+                ink_in(&gated, cell),
+                0,
+                "the +0x25a0 gate leaves only the baked {label} letter"
+            );
+        }
+
+        game.click_shop(221, 188);
+        game.click_shop(18, 564);
+        assert!(
+            game.shop_charge_confirm_open(),
+            "BUYITEM must post the MESSAGE sheet"
+        );
+        assert!(game.shop_message_sheet_up(), "the +0x25a0 gate is set");
+        for now_ms in [0, 20_000, 50_000] {
+            let frame = painted(&mut game, now_ms);
+            for (label, cell) in cells {
+                assert_eq!(
+                    ink_in(&frame, cell),
+                    0,
+                    "the {label} cell stays bare at {now_ms} ms"
+                );
+            }
+        }
+
+        game.commit_shop_charge_confirm();
+        assert!(
+            !game.shop_message_sheet_up(),
+            "dismissal clears the gate word"
+        );
+        let after = board_frame(&game, false);
+        for (label, cell) in cells {
+            assert!(
+                ink_in(&after, cell) > 0,
+                "closing the sheet restores the {label} digit painter"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_row_pick_appends_a_fresh_cart_record() {
+        // Live chain: main.rs::run_play -> GameLoop::ingest_snapshot ->
+        // ScreenGame::click_shop -> ShopState::apply_action ->
+        // ShopState::toggle_row. Statics: FUN_0x53dff0 appends a fresh
+        // 0x118 record; FUN_0x499760 has no same-id remove arm
+        // (ev_650b7cf9…/ev_de12588e…).
+        let mut game = open_shop_board(12);
+        for _ in 0..3 {
+            game.click_shop(221, 188);
+        }
+        assert_eq!(
+            game.shop_cart(),
+            vec![1, 1, 1],
+            "each ordinary pick appends its own cart record"
+        );
+
+        // seam: our catalog stages no set kind, so the set-component
+        // refusal is tested through the explicit staged set record.
+        // OPEN: the exe's file→component map has no pin; next step is
+        // one stopped-state read of a kind-2 cart record's components.
+        game.stage_shop_cart_set(99, &[2]);
+        game.click_shop(362, 188);
+        assert_eq!(
+            game.shop_cart(),
+            vec![1, 1, 1, 99],
+            "a set component pick is refused"
+        );
+        for _ in 0..10 {
+            game.click_shop(221, 188);
+        }
+        let kind0 = game.shop_cart().iter().filter(|id| **id != 99).count();
+        assert_eq!(kind0, 10, "ordinary picks stop at ten kind-0 records");
+        assert_eq!(
+            game.shop_cart().len(),
+            11,
+            "the kind-2 set stays outside the ten-item cap"
+        );
     }
 
     /// W-a NULL pin (#397) plus #867: the cart-row buy leg is local.
@@ -29742,7 +29923,7 @@ mod game_tests {
         game.click_shop(362, 188);
         assert_eq!(game.shop_cart_money_total(), 300);
         game.click_shop(221, 188);
-        assert_eq!(game.shop_cart_money_total(), 200);
+        assert_eq!(game.shop_cart_money_total(), 400, "the repeat adds 100");
     }
 
     fn open_music_shop_board(song_count: usize) -> ScreenGame {
@@ -32272,8 +32453,8 @@ mod game_tests {
     fn shop_chrome_sweep_presses_every_staged_control() {
         // Ticket #163 (shop leg, CLICK): press+release through the
         // routed gesture on every staged control — the empty cart
-        // commits nothing, all eight ITEMBUY toggles check and uncheck,
-        // the scroll pager turns and holds, BUYITEM posts the native
+        // commits nothing, all eight ITEMBUY picks append (a repeat
+        // appends too), the scroll pager turns and holds, BUYITEM posts the native
         // MESSAGE sheet with no game opcode, the cart pager turns over a
         // full cart, the #195
         // browse tools answer (ITEMPRE previews, ITEMBACK clears, the
@@ -32291,11 +32472,19 @@ mod game_tests {
         }
         assert_eq!(game.shop_cart(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
         game.ingest_snapshot(&InputSnapshot::click_at(261, 196));
-        assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            game.shop_cart(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 1],
+            "row one appends a ninth record"
+        );
         game.ingest_snapshot(&InputSnapshot::click_at(753, 379));
         assert_eq!(game.shop_page(), 1);
         game.ingest_snapshot(&InputSnapshot::click_at(261, 196));
-        assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(
+            game.shop_cart(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 1, 9],
+            "the tenth kind-0 record still appends"
+        );
         game.ingest_snapshot(&InputSnapshot::click_at(753, 379));
         assert_eq!(game.shop_page(), 1, "scroll NEXT holds past the end");
         game.ingest_snapshot(&InputSnapshot::click_at(226, 379));
@@ -32315,9 +32504,13 @@ mod game_tests {
         );
         assert_eq!(game.shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
-        assert_eq!(game.shop_visible_cart().len(), 3);
+        assert_eq!(
+            game.shop_visible_cart().len(),
+            5,
+            "ten records make two full cart pages"
+        );
         game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
-        assert_eq!(game.shop_visible_cart().len(), 3, "cart NEXT holds");
+        assert_eq!(game.shop_visible_cart().len(), 5, "cart NEXT holds");
         game.ingest_snapshot(&InputSnapshot::click_at(220, 575));
         assert_eq!(game.shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(220, 575));

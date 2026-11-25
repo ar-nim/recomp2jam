@@ -8,10 +8,10 @@ use super::super::side::{
     ShopGender, ShopGood, ShopMessengerNotice, ShopMessengerState, ShopPanel, ShopRefresh,
     ShopRefreshContext, TryOnDecision, TryOnGate, TryOnNotice, WalletState, SHOP_BAG_CELLS,
     SHOP_CART_ROWS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS, SHOP_ITEM_ROWS,
-    SHOP_LEVEL_CAPTION_PREFIX, SHOP_LUCKYBAG_CATEGORY_CODE, SHOP_LUCKYBAG_GENDER_BYTE,
-    SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE, SHOP_PLANET_FIRST_INDEX,
-    SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX, SHOP_PLANET_LAYOUT_FLAGS,
-    SHOP_SKILLCOUNT_CELLS, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
+    SHOP_KIND0_CART_LIMIT, SHOP_LEVEL_CAPTION_PREFIX, SHOP_LUCKYBAG_CATEGORY_CODE,
+    SHOP_LUCKYBAG_GENDER_BYTE, SHOP_LUCKYBAG_PLANET_INDEX, SHOP_LUCKYBAG_SUBMENU_CODE,
+    SHOP_PLANET_FIRST_INDEX, SHOP_PLANET_GRID_CELLS, SHOP_PLANET_LAST_INDEX,
+    SHOP_PLANET_LAYOUT_FLAGS, SHOP_SKILLCOUNT_CELLS, SHOP_SUBMENU_BUTTONS, SHOP_SUBMENU_FIRST_CODE,
 };
 use o2jam_net::{CharacterInfo, EQUIPMENT_SLOTS};
 use std::collections::HashMap;
@@ -66,9 +66,14 @@ pub(crate) struct ShopState {
     /// Item-list page (eight rows per page, the staged `ITEMBUY`
     /// hit areas).
     pub(crate) shop_page: usize,
-    /// Checked cart item ids in toggle order (the `ITEMBUY`
-    /// selection behind the cart `BUYITEM` commit).
+    /// Cart record item ids in append order. A repeated ordinary
+    /// pick pushes another id; it never removes or merges
+    /// (`FUN_0x53dff0`, ev_de12588e…).
     pub(crate) shop_cart: Vec<u32>,
+    /// Component ids of the kind-2 sets in `shop_cart`. The exe
+    /// reads these from its 0x118 set records; no file→set map is
+    /// pinned for our catalog, so callers stage them explicitly.
+    cart_set_components: HashMap<u32, Vec<u32>>,
     /// Previewed catalog item id (`ITEMPRE` try-on, ticket #196):
     /// paints in the avatar pane without touching the equipped set
     /// or queueing wire. `None` shows the equipped avatar.
@@ -741,16 +746,49 @@ impl ShopState {
         shop_page_count(self.shop_goods.len(), SHOP_ITEM_ROWS)
     }
 
-    /// Row toggle through the control-code dispatch: checks the
-    /// good into the cart, unchecks a held one. Never commits.
-    pub(crate) fn toggle_row(&mut self, slot: usize) {
-        if let Some(good) = self.visible_goods().get(slot).cloned() {
-            if let Some(held) = self.shop_cart.iter().position(|id| *id == good.item_id) {
-                self.shop_cart.remove(held);
-            } else {
-                self.shop_cart.push(good.item_id);
-            }
+    /// Stage a kind-2 set record and the component ids its dup check
+    /// reads (`FUN_0x53bf30`, ev_b965d39…). Our parsed catalog has no
+    /// set kind, so this is the only local source; the exe's
+    /// file→component map stays OPEN.
+    pub(crate) fn stage_cart_set(&mut self, set_item_id: u32, components: &[u32]) {
+        if self
+            .cart_set_components
+            .insert(set_item_id, components.to_vec())
+            .is_none()
+        {
+            self.shop_cart.push(set_item_id);
         }
+    }
+
+    /// Whether the picked id is already a component of a staged set.
+    fn is_cart_set_component(&self, item_id: u32) -> bool {
+        self.cart_set_components
+            .values()
+            .any(|components| components.contains(&item_id))
+    }
+
+    /// Count only the kind-0 records; the exe's ten-item cap does not
+    /// count kind-2 sets (`FUN_0x53bd70`, ev_b965d39…).
+    fn kind0_cart_records(&self) -> usize {
+        self.shop_cart
+            .iter()
+            .filter(|id| !self.cart_set_components.contains_key(*id))
+            .count()
+    }
+
+    /// Row pick through the control-code dispatch: append a fresh
+    /// cart record. Only a set-component pick is refused, and ten
+    /// kind-0 records cap ordinary picks. Never commits.
+    pub(crate) fn toggle_row(&mut self, slot: usize) {
+        let Some(good) = self.visible_goods().get(slot).cloned() else {
+            return;
+        };
+        if self.is_cart_set_component(good.item_id)
+            || self.kind0_cart_records() >= SHOP_KIND0_CART_LIMIT
+        {
+            return;
+        }
+        self.shop_cart.push(good.item_id);
     }
 
     /// Board action through the control-code dispatch: row toggles

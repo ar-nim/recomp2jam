@@ -45,8 +45,8 @@ mod live_input_leg_tests {
         SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
         SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PRICE_CODE,
         SHOP_CART_RIGHT_CODE, SHOP_CART_TOGGLE_FIRST_CODE, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE,
+        SHOP_GOMYROOM_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
         SHOP_SET_PRICE_CODE, SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
@@ -3999,21 +3999,31 @@ mod live_input_leg_tests {
             SHOP_ITEMBUY_FIRST_CODE + 1,
             SHOP_CHILD_ORIGIN_Y,
         );
-        let cart_ids = session.game_mut().shop_cart();
+        let second_slot = live_shop_rect(&mut session, SHOP_CART_TOGGLE_FIRST_CODE + 1);
+        let second_price_rect = music_shop_tiled_rect(template, &second_slot);
+        let cart_ids = session.game_mut().shop_cart().to_vec();
         assert_eq!(cart_ids.len(), 2);
         assert_ne!(cart_ids[1], first_id, "the second row is a different good");
-        // Unchecking row 1 promotes row 2 into the staged first-row
-        // cell, so the crop must repaint with that good's price.
+        // A repeated ordinary pick appends another record; the first
+        // row keeps its good. The second cart row now inks the second
+        // good's price (ev_de12588e… append, no toggle-off arm).
         click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
-        assert_eq!(session.game_mut().shop_cart(), vec![cart_ids[1]]);
-        let promoted = paint_at_frame(&mut session, 50_000);
+        assert_eq!(
+            session.game_mut().shop_cart(),
+            vec![first_id, cart_ids[1], first_id]
+        );
+        let appended = paint_at_frame(&mut session, 50_000);
         assert!(
-            changed_pixels_in_rect(&one_row, &promoted, name_rect) > 0,
-            "a different first cart row must repaint the name cell at 50_000 ms"
+            changed_pixels_in_rect(&one_row, &appended, second_price_rect) > 0,
+            "the appended second cart row inks at 50_000 ms"
         );
         assert!(
-            white_ink_in_rect(&promoted, price_rect) > 0,
-            "the promoted row still inks its mapped price at 50_000 ms"
+            white_ink_in_rect(&appended, price_rect) > 0,
+            "the first row keeps its mapped price after a repeat pick"
+        );
+        assert!(
+            white_ink_in_rect(&appended, name_rect) > 0,
+            "the first row keeps its mapped name after a repeat pick"
         );
         finish(session, gateway.server);
     }
@@ -4091,9 +4101,9 @@ mod live_input_leg_tests {
         finish(session, gateway.server);
     }
 
-    /// #942 BUYITEM gate. Boot -> Room -> Item Shop -> row pick ->
-    /// uncheck -> BUYITEM, with `paint_at` crops of the staged BUYITEM
-    /// and BAGSORT rects. `FUN_0x4a1010` gates both from the cart-face
+    /// #942 BUYITEM gate. Boot -> Room -> Item Shop -> BUYITEM on the
+    /// empty cart -> row pick, with `paint_at` crops of the staged
+    /// BUYITEM and BAGSORT rects. `FUN_0x4a1010` gates both from the cart-face
     /// flag (`ev_d9bda480…`); `FUN_0x499760` ends an empty-cart click
     /// after the row refresh with no notice and no send
     /// (`ev_e9af897d…`).
@@ -4102,8 +4112,8 @@ mod live_input_leg_tests {
     ///   main.rs::run_play -> setup_online ->
     ///   connect::connect_and_login_with_transport ->
     ///   assemble_online_session -> OnlineSession::stage_live_art ->
-    ///   GameLoop::ingest_snapshot (splash, room, ITEMSHOP, ITEMBUY1,
-    ///   ITEMBUY1 again, BUYITEM) -> ScreenGame::click_shop ->
+    ///   GameLoop::ingest_snapshot (splash, room, ITEMSHOP, BUYITEM on
+    ///   the empty cart, then ITEMBUY1) -> ScreenGame::click_shop ->
     ///   ShopAction::CartBuy -> ShopState::approve_checkout ->
     ///   shop_checkout_decision -> ScreenGame::paint_at ->
     ///   ScreenGame::paint_side -> shop_cart_face_controls_kept.
@@ -4119,24 +4129,8 @@ mod live_input_leg_tests {
         let bagsort = live_shop_rect(&mut session, SHOP_BAGSORT_CODE);
         let entry = paint_at_frame(&mut session, 0);
 
-        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
-        assert_eq!(session.game_mut().shop_panel(), ShopPanel::ShoppingBag);
-        let cart_face = paint_at_frame(&mut session, 20_000);
-        assert!(
-            changed_pixels_in_rect(&entry, &cart_face, buy) > 0,
-            "the face flag must mount the BUY plate"
-        );
-        assert!(
-            changed_pixels_in_rect(&entry, &cart_face, bagsort) > 0,
-            "the face flag must hide BAGSORT"
-        );
-
-        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
-        assert!(session.game_mut().shop_cart().is_empty());
-        assert_eq!(session.game_mut().shop_panel(), ShopPanel::ShoppingBag);
-        let empty_face = paint_at_frame(&mut session, 50_000);
-
-        // The shop-entry answer is a boot frame, not a BUYITEM send.
+        // The empty cart is now tested before any pick: repeated picks
+        // append, so there is no live uncheck arm to empty it again.
         while gateway.reports.try_recv().is_ok() {}
         click_staged_shop_control(&mut session, SHOP_BUYITEM_CODE, 0);
         assert_eq!(
@@ -4153,11 +4147,24 @@ mod live_input_leg_tests {
             observed(&gateway.reports).is_empty(),
             "an empty cart BUYITEM sends no wire frame"
         );
-        let silent = paint_at_frame(&mut session, 80_000);
+        let silent = paint_at_frame(&mut session, 20_000);
         assert_eq!(
-            changed_pixels_in_rect(&empty_face, &silent, buy),
+            changed_pixels_in_rect(&entry, &silent, buy),
             0,
-            "the silent click leaves the BUY plate at its face flag face"
+            "the silent click leaves the entry BUY plate alone"
+        );
+
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        assert_eq!(session.game_mut().shop_cart().len(), 1);
+        assert_eq!(session.game_mut().shop_panel(), ShopPanel::ShoppingBag);
+        let cart_face = paint_at_frame(&mut session, 50_000);
+        assert!(
+            changed_pixels_in_rect(&silent, &cart_face, buy) > 0,
+            "the face flag must mount the BUY plate"
+        );
+        assert!(
+            changed_pixels_in_rect(&silent, &cart_face, bagsort) > 0,
+            "the face flag must hide BAGSORT"
         );
         finish(session, gateway.server);
     }
@@ -4355,6 +4362,242 @@ mod live_input_leg_tests {
             "BUYITEM never queues the 5010 reply opcode"
         );
         assert_eq!(*cue_calls.borrow(), cue_baseline, "no invented audio cue");
+        finish(session, gateway.server);
+    }
+
+    /// #886 S1/Tier 3: the MESSAGE sheet gate hides both wallet digit
+    /// writers and dismissal restores them. The visible sheet scrim
+    /// also covers the cells, so the decisive digit-ink assertion is
+    /// the seam guard; this leg proves the live state reaches the
+    /// gate from a real boot and a staged OK click.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> OnlineSession::stage_live_art ->
+    ///   GameLoop::ingest_snapshot (splash, room, ITEMSHOP, ITEMBUY,
+    ///   BUYITEM, Dialog_Question1 OK) -> ScreenGame::click_shop ->
+    ///   ScreenGame::shop_message_sheet_up -> ScreenGame::paint_at ->
+    ///   ScreenGame::paint_side -> paint_shop_board ->
+    ///   paint_shop_wallet gate (shop +0x25a0).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_wallet_digits_yield_to_the_message_sheet_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (gateway, wallet_answer_written) = spawn_wallet_leg_gateway(
+            joined_room(0, true),
+            vec![(15_527, 0), (626, 0)],
+            [1_111, 2_222, 3_333, 4_444],
+        );
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let shop_aim = room_top_tabs()[1].aim;
+        enter_item_shop_from_room(&mut session, shop_aim);
+        leave_item_shop_by_back(&mut session);
+        wait_for_wallet_answer(&wallet_answer_written, "wallet refresh");
+        paint_until_wallet(
+            &mut session,
+            |wallet| wallet.gem == Some(15_527) && wallet.cash_point == Some(0),
+            "wallet refresh",
+        );
+        enter_item_shop_from_room(&mut session, shop_aim);
+        // The 5029 refresh carries gem and cash-point only. The W
+        // cell needs the pinned 5001 prefix; the reply probe is the
+        // same seam the wallet-ink leg uses.
+        session.game_mut().queue_shop_buy_for_reply_probe();
+        paint_until_wallet(
+            &mut session,
+            |wallet| wallet.o2_cash == Some(3_333),
+            "5001 prefix",
+        );
+
+        let gem_rect = live_shop_rect(&mut session, SHOP_GEMMONEY_CODE);
+        let cells = [
+            gem_rect,
+            live_shop_rect(&mut session, o2jam_shell::screens::side::SHOP_MGASH_CODE),
+        ];
+        let digit_rect = |rect: Rect| Rect {
+            x: rect.x + 45,
+            w: rect.w.saturating_sub(45),
+            ..rect
+        };
+        let digits = cells.map(digit_rect);
+        let inked = |frame: &[u32]| -> Vec<usize> {
+            digits
+                .iter()
+                .map(|rect| white_ink_in_rect(frame, *rect))
+                .collect()
+        };
+        let before = inked(&paint_at_frame(&mut session, 0));
+        assert!(
+            before.iter().all(|ink| *ink > 0),
+            "both folded wallet words ink digits before the sheet"
+        );
+
+        while gateway.reports.try_recv().is_ok() {}
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        click_staged_shop_control(&mut session, SHOP_BUYITEM_CODE, 0);
+        assert!(session.game_mut().shop_charge_confirm_open());
+        assert!(
+            session.game_mut().shop_message_sheet_up(),
+            "the staged sheet sets the +0x25a0 gate"
+        );
+        for now_ms in [0, 20_000, 50_000] {
+            let frame = paint_at_frame(&mut session, now_ms);
+            assert!(
+                inked(&frame).iter().all(|ink| *ink == 0),
+                "no wallet digit ink under the sheet at {now_ms} ms"
+            );
+        }
+        assert!(
+            observed(&gateway.reports).is_empty(),
+            "the BUYITEM sheet sends no wire frame"
+        );
+
+        let ok = rect_centre(message_button_rects(&mut session)[0]);
+        session.ingest_snapshot(&InputSnapshot::click_at(ok.0, ok.1));
+        assert!(
+            !session.game_mut().shop_charge_confirm_open(),
+            "the staged OK dismisses the sheet"
+        );
+        assert!(
+            !session.game_mut().shop_message_sheet_up(),
+            "OK clears the +0x25a0 gate"
+        );
+        let restored = inked(&paint_at_frame(&mut session, 80_000));
+        assert!(
+            restored.iter().all(|ink| *ink > 0),
+            "both wallet digits return after dismissal"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// #886 S6/Tier 3: the total pager half reads the full cart
+    /// vector's page count from boot. Six picks make two pages; the
+    /// five-row visible slice alone would still ink `01`.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> OnlineSession::stage_live_art ->
+    ///   GameLoop::ingest_snapshot (splash, room, ITEMSHOP, six
+    ///   ITEMBUY picks, CART_RIGHT) -> ScreenGame::click_shop ->
+    ///   ShopState::apply_action -> ScreenGame::paint_at ->
+    ///   ScreenGame::paint_side -> ShopBoard.cart_pages ->
+    ///   paint_shop_cart -> cart_pager_digits_from_pages.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_cart_pager_total_uses_the_full_vector_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (mut session, gateway) = boot_live_item_shop();
+        let total_ones = live_shop_rect(&mut session, SHOP_CART_PAGE_TOT_ONES_CODE);
+        let current_ones = live_shop_rect(&mut session, SHOP_CART_PAGE_CUR_ONES_CODE);
+        let one_page = paint_at_frame(&mut session, 0);
+
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        assert_eq!(session.game_mut().shop_cart().len(), 1);
+        let one_digit = paint_at_frame(&mut session, 20_000);
+        assert!(
+            changed_pixels_in_rect(&one_page, &one_digit, total_ones) > 0,
+            "the total cell inks its first page"
+        );
+
+        for slot in 1..6 {
+            click_staged_shop_control(
+                &mut session,
+                SHOP_ITEMBUY_FIRST_CODE + slot,
+                SHOP_CHILD_ORIGIN_Y,
+            );
+        }
+        assert_eq!(session.game_mut().shop_cart().len(), 6);
+        assert_eq!(session.game_mut().shop_cart_pages(), 2);
+        let two_pages = paint_at_frame(&mut session, 50_000);
+        assert!(
+            changed_pixels_in_rect(&one_digit, &two_pages, total_ones) > 0,
+            "the total cell advances to two pages from the full vector"
+        );
+
+        click_staged_shop_control(&mut session, SHOP_CART_RIGHT_CODE, 0);
+        assert_eq!(session.game_mut().shop_cart_page(), 1);
+        let page_two = paint_at_frame(&mut session, 80_000);
+        assert!(
+            changed_pixels_in_rect(&two_pages, &page_two, current_ones) > 0,
+            "the current-page half advances at 80_000 ms"
+        );
+        assert_eq!(
+            changed_pixels_in_rect(&two_pages, &page_two, total_ones),
+            0,
+            "the total half stays 02 across a page turn"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// #886 S6/Tier 3: repeated ordinary row picks append fresh cart
+    /// rows through the live pointer path; there is no toggle-off.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> OnlineSession::stage_live_art ->
+    ///   GameLoop::ingest_snapshot (splash, room, ITEMSHOP, three
+    ///   ITEMBUY1 clicks) -> ScreenGame::click_shop ->
+    ///   ShopState::apply_action -> ShopState::toggle_row ->
+    ///   ScreenGame::paint_at -> ScreenGame::paint_side ->
+    ///   paint_shop_board -> paint_shop_cart -> paint_shop_cart_rows.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_repeated_row_picks_append_cart_rows_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (mut session, gateway) = boot_live_item_shop();
+        let price_template = live_shop_rect(&mut session, SHOP_CART_PRICE_CODE);
+        let row_rects = (0..3)
+            .map(|slot| live_shop_rect(&mut session, SHOP_CART_TOGGLE_FIRST_CODE + slot))
+            .collect::<Vec<_>>();
+        let price_rects = row_rects
+            .iter()
+            .map(|slot| music_shop_tiled_rect(price_template, slot))
+            .collect::<Vec<_>>();
+        let empty = paint_at_frame(&mut session, 0);
+
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        let first_id = session.game_mut().shop_cart()[0];
+        let first = paint_at_frame(&mut session, 20_000);
+        assert!(
+            changed_pixels_in_rect(&empty, &first, price_rects[0]) > 0,
+            "the first pick inks the first cart row"
+        );
+
+        for _ in 0..2 {
+            click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        }
+        assert_eq!(
+            session.game_mut().shop_cart(),
+            vec![first_id, first_id, first_id],
+            "each same-id pick appended a record"
+        );
+        for now_ms in [50_000_u64, 80_000] {
+            let frame = paint_at_frame(&mut session, now_ms);
+            for (slot, price_rect) in price_rects.iter().enumerate().skip(1) {
+                assert!(
+                    changed_pixels_in_rect(&first, &frame, *price_rect) > 0,
+                    "appended row {slot} inks at {now_ms} ms"
+                );
+                assert!(
+                    white_ink_in_rect(&frame, *price_rect) > 0,
+                    "appended row {slot} carries white price ink at {now_ms} ms"
+                );
+            }
+        }
         finish(session, gateway.server);
     }
 }
