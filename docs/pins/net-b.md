@@ -576,3 +576,26 @@ entries come from that dispatch table, not from the handler bodies.
 - **Evidence**: `ev_cd7e22b998ce16fa63d3a8f52cb2e26523a710a601307a0e54543c7eb5b0f7e4`
   (dossier), `ev_fddb145926cbdfe7e7a4df93aba651a0011eec33b490b5060987035cc3015b74`
   (pseudocode page).
+
+### `0x560960` wire-body addendum — 4026 MemberStateChanged body layout (2026-11-25 senior REA pass)
+
+- **Body layout (own words)**: one member byte, then TWO state bytes the
+  handler reads through two tiny setter wrappers: `0x541670` stores one
+  byte at the member record `+0x2130` (the PLAYING-state word the seat
+  PLAYING frame reads when it equals 1) and `0x541480` stores one byte at
+  `+0x217c` (the DOWNLOADING/music-state word, badge at 4). Both the
+  self-member and other-member arms call the same two setters (the
+  distinction is dead in this build), then the handler posts UI event
+  `(0x12, 0xfba, member, 0)`. The body is therefore
+  `[u8 member][u8 playing_state][u8 music_state]`, NOT one byte as the
+  first pass recorded — the first pass's "no state value" note is
+  superseded by this read.
+- **Consequence for #1015**: the setter destinations are the two
+  already-pinned seat words; the codec and the drain target are
+  implementable (`[member][playing][music]` ->
+  `ScreenGame::set_member_music_state` + the playing mark).
+- **Evidence**: `ev_ac1698e337aa0ae70e184add35ae70cffa4d104b7bdc41af61e9ad1d59539de2`
+  (handler dossier), `ev_ab4d4ea1d47c186caf152cbedb4a054ed01b504c1c88e470aa1df9dee6a581a7`
+  (handler pseudocode), `ev_34f99326186fea4bde84db8ee2f0739604fdf2b980c15120ac8e76b79dd483a0`
+  (`+0x2130` setter), `ev_485651cd7ff8782d94b771de2abeb5b7832d9dd1fc159582cd33ee143ae1b7f0`
+  (`+0x217c` setter).
