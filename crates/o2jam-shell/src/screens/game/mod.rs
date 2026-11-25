@@ -554,6 +554,45 @@ pub enum QuitConfirmOutcome {
     Confirmed,
 }
 
+/// Which caption the exit-confirm body selects. The exe asks the
+/// download manager (`0x4f7a10`) and shows the two-line cancel
+/// caption at `0x647278` when a song transfer stands, otherwise
+/// the plain quit caption at `0x647258` (`0x5a5600`, file
+/// `0x1a5600`, evidence `ev_8c1e036878b1e708b72ae60237af3974…`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitConfirmCaption {
+    /// Plain quit sheet (`0x647258`).
+    PlainQuit,
+    /// Two-line cancel-download-and-exit sheet (`0x647278`).
+    CancelDownloadAndExit,
+}
+
+#[cfg(test)]
+mod quit_confirm_caption_guards {
+    use super::*;
+
+    #[test]
+    // seam: the caption choice is the whole behavior of this seam
+    // until the painter accepts a caption argument. The planet quit
+    // chrome is reachable through `main.rs::run_play` ->
+    // `ScreenGame::click_planet_board` ->
+    // `dispatch_planet_action(PlanetAction::QuitConfirm)`. A Tier 1
+    // exit-disc leg stays OPEN.
+    fn quit_confirm_offers_download_cancellation_while_a_song_downloads() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.quit_confirm_caption(), QuitConfirmCaption::PlainQuit);
+        assert!(game.begin_music_download(757));
+        assert!(game.music_download().is_running());
+        assert_eq!(
+            game.quit_confirm_caption(),
+            QuitConfirmCaption::CancelDownloadAndExit,
+            "an active transfer must switch the exit caption"
+        );
+        game.finish_music_download(757);
+        assert_eq!(game.quit_confirm_caption(), QuitConfirmCaption::PlainQuit);
+    }
+}
+
 /// Local outcome of the item-shop BUYITEM MESSAGE sheet (#867). The
 /// 7.55 OK/CANCEL choice owns only this dialog; no purchase opcode is
 /// claimed from it (the purchase WIRE stays OPEN).
@@ -6683,6 +6722,19 @@ impl ScreenGame {
     #[must_use]
     pub fn planet_modal(&self) -> Option<PlanetModal> {
         self.planet_board.planet_modal
+    }
+
+    /// Caption arm for the quit-confirm sheet, from the same download
+    /// flag the START gate reads. The painter still takes the plain
+    /// caption; wiring the two-line bytes into `paint_planet_quit`
+    /// needs a separate painter seam and stays OPEN.
+    #[must_use]
+    pub fn quit_confirm_caption(&self) -> QuitConfirmCaption {
+        if self.music_download.is_running() {
+            QuitConfirmCaption::CancelDownloadAndExit
+        } else {
+            QuitConfirmCaption::PlainQuit
+        }
     }
 
     /// Whether the quit-confirm OK was pressed (the windowed shell

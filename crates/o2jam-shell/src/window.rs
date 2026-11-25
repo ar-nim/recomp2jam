@@ -21,6 +21,90 @@ mod capture;
 
 use capture::CaptureAdapter;
 
+/// Message ids of the 7.55 window hub (`0x5a5190`, file `0x1a5190`,
+/// evidence `ev_ef50a9ada383cfaaf038eefbdfd96333c757d6aa83393521db7d`
+/// prefix). `0xf060` is the SYSCOMMAND *command* that the `0x112`
+/// arm routes to exit-confirm, so it is named as its own arm here.
+pub(crate) const WM_KEY_DOWN: u32 = 0x100;
+pub(crate) const WM_ACTIVATE_APP: u32 = 0x1c;
+pub(crate) const SYS_CLOSE_COMMAND: u32 = 0xf060;
+pub(crate) const WM_APP_UI_EVENT: u32 = 0x232;
+
+/// One-second wait the exe's popup-or-close helper performs after it
+/// sends `WM_CLOSE` (`0x5a8ab0`, file `0x1a8ab0`, evidence
+/// `ev_a02f086e979ed751d9148dcb216bac12b61…`).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
+    )
+)]
+pub(crate) const ERROR_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Choice made by the exe's popup-or-close helper for a fatal error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
+    )
+)]
+pub(crate) enum FatalPathDisposition {
+    /// UI flag set: post the supplied error text as a popup.
+    ShowMessage,
+    /// UI flag clear: send `WM_CLOSE` and wait one second.
+    CloseWindowAfter(std::time::Duration),
+}
+
+/// Decide the fatal path from the shared UI flag (`0x5a8ab0`).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
+    )
+)]
+pub(crate) const fn fatal_path_disposition(ui_flag: bool) -> FatalPathDisposition {
+    if ui_flag {
+        FatalPathDisposition::ShowMessage
+    } else {
+        FatalPathDisposition::CloseWindowAfter(ERROR_CLOSE_DELAY)
+    }
+}
+
+/// The exe handler a window message reaches. Our client has no
+/// Win32 `WndProc`; the winit arms below call the same message
+/// decoder so a guard can name arm -> handler without a real window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExeWindowHandler {
+    /// `0x5a50d0`: the F8/print-screen key gate.
+    KeyDown,
+    /// `0x5a4b90`: activation and Playing-scene notices.
+    ActivateApp,
+    /// `0x5a5600`: exit confirmation (the system close command).
+    ExitConfirm,
+    /// `0x45e450`/`0x45ecd0`/`0x45f480` plus the scene-sheet closers
+    /// `0x495a30`/`0x4f3d00`/`0x4f5020`.
+    AppUiEvent,
+    /// Any unlisted message reaches `DefWindowProcA`.
+    DefaultProcedure,
+}
+
+/// Decode one pinned message arm to its handler. `0xf060` is a
+/// command value, handled by the `WM_SYSCOMMAND` branch of the exe
+/// hub; the other three are message ids.
+pub(crate) const fn exe_window_handler(message: u32) -> ExeWindowHandler {
+    match message {
+        WM_KEY_DOWN => ExeWindowHandler::KeyDown,
+        WM_ACTIVATE_APP => ExeWindowHandler::ActivateApp,
+        SYS_CLOSE_COMMAND => ExeWindowHandler::ExitConfirm,
+        WM_APP_UI_EVENT => ExeWindowHandler::AppUiEvent,
+        _ => ExeWindowHandler::DefaultProcedure,
+    }
+}
+
 /// Event-loop state: shell plus its softbuffer surface.
 pub struct WindowHandler {
     pub(crate) shell: Shell,
@@ -335,6 +419,16 @@ impl WindowHandler {
         self.route_key(winit::keyboard::KeyCode::Backspace, true);
     }
 
+    /// Decode one pinned window-message arm and write it to the
+    /// capture log. The winit event loop is the cross-platform
+    /// stand-in for the exe's `WndProc`, but the arm -> handler
+    /// mapping is the one the guard pins.
+    fn log_message_arm(&mut self, message: u32) -> ExeWindowHandler {
+        let handler = exe_window_handler(message);
+        self.log_event(&format!("wm-{message:#x} -> {handler:?}"));
+        handler
+    }
+
     /// Forward one applied-event line to the capture adapter (no-op
     /// when this run has no capture plan).
     fn log_event(&mut self, event: &str) {
@@ -525,7 +619,14 @@ impl ApplicationHandler for WindowHandler {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.log_message_arm(SYS_CLOSE_COMMAND);
+                event_loop.exit();
+            }
+            WindowEvent::Focused(_focused) => {
+                self.log_message_arm(WM_ACTIVATE_APP);
+                self.input_dirty = true;
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -534,7 +635,10 @@ impl ApplicationHandler for WindowHandler {
                         ..
                     },
                 ..
-            } => self.route_erase(),
+            } => {
+                self.log_message_arm(WM_KEY_DOWN);
+                self.route_erase();
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -548,6 +652,9 @@ impl ApplicationHandler for WindowHandler {
                 // Typed characters reach the chat drafts only when no
                 // dialog captured the key first (#314). Xvfb rigs have
                 // no XIM; real IMEs commit through `Ime::Commit`.
+                if state == ElementState::Pressed {
+                    self.log_message_arm(WM_KEY_DOWN);
+                }
                 self.route_key_with_text(code, state == ElementState::Pressed, text.as_deref());
             }
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
@@ -615,6 +722,44 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+    // `WindowHandler::window_event` -> `exe_window_handler`. The
+    // Win32 hub `0x5a5190` routes key-down, activation, system close
+    // and `WM_APP+0x32` to four distinct handler families; a winit
+    // run has no HWND, but the arms name the same handlers.
+    fn window_message_arms_name_their_exe_handlers() {
+        // The `WM_APP+0x32` arm has no winit source: our client posts
+        // no Win32 UI events. Its entry in the table pins the exe
+        // handler; a real-window leg stays OPEN.
+        assert_eq!(WM_APP_UI_EVENT, 0x232);
+        assert_eq!(exe_window_handler(0x100), ExeWindowHandler::KeyDown);
+        assert_eq!(exe_window_handler(0x1c), ExeWindowHandler::ActivateApp);
+        assert_eq!(exe_window_handler(0xf060), ExeWindowHandler::ExitConfirm);
+        assert_eq!(exe_window_handler(0x232), ExeWindowHandler::AppUiEvent);
+        assert_eq!(
+            exe_window_handler(0x10),
+            ExeWindowHandler::DefaultProcedure,
+            "an unlisted message still reaches the default procedure"
+        );
+    }
+
+    #[test]
+    // seam: the popup-or-close decision is a pure contract of the
+    // missing fatal-error caller (`0x5a35c0`/`0x5a36d0`); no live
+    // path in this client reaches it. A real-window leg stays OPEN.
+    fn fatal_error_flag_selects_the_popup_or_the_delayed_window_close() {
+        assert_eq!(
+            fatal_path_disposition(true),
+            FatalPathDisposition::ShowMessage
+        );
+        assert_eq!(
+            fatal_path_disposition(false),
+            FatalPathDisposition::CloseWindowAfter(std::time::Duration::from_secs(1)),
+            "the exe waits one second after WM_CLOSE"
+        );
+    }
 
     /// Game probe recording routed input for headless key-event tests.
     #[derive(Default)]

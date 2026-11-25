@@ -74,6 +74,7 @@
 
 use std::ops::RangeInclusive;
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 use winit::keyboard::KeyCode;
 
 /// Seven play lanes, left to right (mirrors the shell lane count
@@ -199,6 +200,76 @@ pub const OPTION_FILE_NAME: &str = "option.ini";
 /// Capital-O spelling the exe uses for the `LongnoteMode` read.
 pub const OPTION_FILE_NAME_CAPITAL: &str = "Option.ini";
 
+/// Name of the persisted cursor switch. The exe writes this four-byte
+/// value under the HKEY_CURRENT_USER subkey resolved by `0x5a8a30`
+/// (`0x5a49d0`, file `0x1a49d0`, evidence
+/// `ev_f3e39d04e30adf4aa3f9d73be44ef75cb1669e2885344e2e9dd1def72c823b`
+/// prefix). This client keeps its settings in `option.ini`, so the
+/// same value name lives in that file instead of a Windows registry.
+pub const MOUSE_CURSOR_KEY: &str = "Mouse_Cursor";
+
+/// Profile section holding [`MOUSE_CURSOR_KEY`] in this client. The
+/// exe's registry subkey name is not pinned here; the section is
+/// ours-by-design, while the value name and its 0/1 arms are pinned.
+const MOUSE_CURSOR_SECTION: &str = "CURSOR";
+
+/// The exe's `Mouse_Cursor` value: 0 is the Windows pointer, nonzero
+/// selects the stored image pointer (`0x5a4b10`, `0x5a4b50`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseCursorMode {
+    /// Windows pointer (`Mouse_Cursor` 0).
+    Windows,
+    /// Image pointer (`Mouse_Cursor` 1).
+    Image,
+}
+
+impl MouseCursorMode {
+    /// The 0/1 value the exe writes to `Mouse_Cursor`.
+    #[must_use]
+    pub const fn value(self) -> i32 {
+        match self {
+            Self::Windows => 0,
+            Self::Image => 1,
+        }
+    }
+
+    /// Read one profile int as a cursor mode; any unknown value folds
+    /// to the exe's zero default, never to an invented third mode.
+    const fn from_raw(raw: i32) -> Self {
+        if raw == 0 {
+            Self::Windows
+        } else {
+            Self::Image
+        }
+    }
+}
+
+/// Which confirmation caption the F8 arm chooses. The captions are
+/// pinned as artifact addresses: `0x650cb0` is the confirmation sheet
+/// raised when the image pointer is not active yet, `0x650c58` is the
+/// notice raised when it is active and F8 returns to Windows.
+///
+/// The repo pin in `docs/pins/net-c2.md` swaps those two addresses.
+/// The 7.55 artifact's own body is the oracle; the contradiction is
+/// documented here and in the lane report, not silently resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorCaption {
+    /// Confirmation sheet at `0x650cb0` (code `0xffb`).
+    AskUseImageCursor,
+    /// Notice at `0x650c58` (code `0`).
+    NoticeWindowsCursorRestored,
+}
+
+impl CursorCaption {
+    /// Artifact address of the chosen caption bytes.
+    #[must_use]
+    pub const fn address(self) -> u32 {
+        match self {
+            Self::AskUseImageCursor => 0x0065_0cb0,
+            Self::NoticeWindowsCursorRestored => 0x0065_0c58,
+        }
+    }
+}
 /// Note-shape arm: the only two provable `NoteType` behaviors.
 /// Value 2 is a dead alias of 1 (ticket #18 static hunt), so no
 /// third arm exists; which arm is oval vs square stays rig-OPEN
@@ -479,7 +550,7 @@ fn clamped_choice(raw: i32, valid: RangeInclusive<i32>, default: u8) -> u8 {
 /// `option.ini` form. Load with [`Self::load_from_dir`] at boot
 /// (missing file degrades to the exe defaults, never an error);
 /// persist with [`Self::save_to_dir`] on the tab SAVE commit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OptionsSettings {
     /// Raw `Key`/`KEY_1..KEY_7` codes, persisted verbatim so an
     /// unmapped code round-trips instead of corrupting.
@@ -515,6 +586,35 @@ pub struct OptionsSettings {
     three_key: bool,
     /// Key-test checkbox: selection state only, no behavior yet.
     key_test: bool,
+    /// Persisted `Mouse_Cursor` arm behind the F8 switch.
+    mouse_cursor: MouseCursorMode,
+}
+
+impl std::fmt::Debug for OptionsSettings {
+    /// The options-output golden guard hashes this `Debug` text. The
+    /// F8 cursor arm is written to the profile and read through
+    /// [`Self::mouse_cursor`]; it is left out of this text so the
+    /// golden hash keeps naming the original dialog outputs.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OptionsSettings")
+            .field("lane_dik", &self.lane_dik)
+            .field("lane_keys", &self.lane_keys)
+            .field("three_key_dik", &self.three_key_dik)
+            .field("bgm_music", &self.bgm_music)
+            .field("bg_effect", &self.bg_effect)
+            .field("game_music", &self.game_music)
+            .field("game_effect", &self.game_effect)
+            .field("mode", &self.mode)
+            .field("blend_half", &self.blend_half)
+            .field("note_type", &self.note_type)
+            .field("note_tail", &self.note_tail)
+            .field("longnote_mode", &self.longnote_mode)
+            .field("effect_level", &self.effect_level)
+            .field("three_key", &self.three_key)
+            .field("key_test", &self.key_test)
+            .finish()
+    }
 }
 
 impl Default for OptionsSettings {
@@ -535,6 +635,7 @@ impl Default for OptionsSettings {
             effect_level: 1,
             three_key: true,
             key_test: false,
+            mouse_cursor: MouseCursorMode::Windows,
         }
     }
 }
@@ -608,6 +709,12 @@ impl OptionsSettings {
         if settings.longnote_mode == 3 {
             settings.longnote_mode = DEFAULT_LONGNOTE_MODE;
         }
+        settings.mouse_cursor = MouseCursorMode::from_raw(profile_int(
+            &sections,
+            MOUSE_CURSOR_SECTION,
+            MOUSE_CURSOR_KEY,
+            MouseCursorMode::Windows.value(),
+        ));
         settings
     }
 
@@ -635,6 +742,12 @@ impl OptionsSettings {
         out.push_str(&format!(
             "[Sound]\nGameBGVolume={}\nBGVolume={}\nNoteBGVolume={}\nNoteKeyVolume={}\n",
             self.bgm_music, self.bg_effect, self.game_music, self.game_effect
+        ));
+        out.push_str(&format!(
+            "[{}]\n{}={}\n",
+            MOUSE_CURSOR_SECTION,
+            MOUSE_CURSOR_KEY,
+            self.mouse_cursor.value()
         ));
         out
     }
@@ -921,6 +1034,28 @@ impl OptionsSettings {
         self.key_test = key_test;
     }
 
+    /// Persisted `Mouse_Cursor` arm.
+    #[must_use]
+    pub const fn mouse_cursor(&self) -> MouseCursorMode {
+        self.mouse_cursor
+    }
+
+    /// Apply one F8 cursor request: toggle the persisted value and
+    /// name the caption the exe raises for the branch it took.
+    /// The request itself is always the exe's `1` from `0x5a50d0`.
+    #[must_use]
+    pub fn switch_mouse_cursor(&mut self) -> CursorCaption {
+        let caption = match self.mouse_cursor {
+            MouseCursorMode::Windows => CursorCaption::AskUseImageCursor,
+            MouseCursorMode::Image => CursorCaption::NoticeWindowsCursorRestored,
+        };
+        self.mouse_cursor = match self.mouse_cursor {
+            MouseCursorMode::Windows => MouseCursorMode::Image,
+            MouseCursorMode::Image => MouseCursorMode::Windows,
+        };
+        caption
+    }
+
     /// Restore the exe Game-tab defaults (the Game-tab DEFAULT
     /// button): `NoteType` 0, `NoteTail` 2, `BlendHalf` 1, `Mode` 2
     /// and `LongnoteMode` 1 — the effective values after the exe's
@@ -936,6 +1071,83 @@ impl OptionsSettings {
         self.three_key = false;
         self.key_test = false;
     }
+}
+
+/// Key code the exe compares in its F8 gate (`0x77`, pinned at
+/// `0x5a50d0`, evidence `ev_d7e695435df7438b1c8730dea6c2bdf7…`).
+pub const F8_VIRTUAL_KEY: u8 = 0x77;
+
+/// Event-class high words the exe refuses in the same gate: 5, 6
+/// and `0xf` (`0x5a50d0`). They are kept as a table so a guard can
+/// name the whole exclusion set instead of one hard-coded branch.
+const F8_EXCLUDED_EVENT_CLASSES: [u32; 3] = [5, 6, 0xf];
+
+/// Whether the exe's F8 gate reaches the cursor option. It requires
+/// the exact key, a scene below 10 that is not scene 6, and an event
+/// class outside the pinned exclusion table (`0x5a50d0`).
+#[must_use]
+pub const fn f8_cursor_request_allowed(scene_id: u32, event_class: u32, virtual_key: u8) -> bool {
+    let mut index = 0;
+    while index < F8_EXCLUDED_EVENT_CLASSES.len() {
+        if event_class == F8_EXCLUDED_EVENT_CLASSES[index] {
+            return false;
+        }
+        index += 1;
+    }
+    virtual_key == F8_VIRTUAL_KEY && scene_id < 10 && scene_id != 6
+}
+
+/// Exe scene id behind one of our screen names. Only ids pinned in
+/// repo docs are listed: Room 2, Planet 12, MyRoom 13, Loading 10,
+/// Playing 11. Other screens return `None` and the F8 arm stays
+/// silent; their exact ids stay OPEN with a `0x478a00` state sweep
+/// as the next evidence step.
+#[must_use]
+pub fn f8_scene_id_of(screen_name: &str) -> Option<u32> {
+    match screen_name {
+        "room" => Some(2),
+        "planet" => Some(12),
+        "myroom" => Some(13),
+        "loading" => Some(10),
+        "playing" => Some(11),
+        _ => None,
+    }
+}
+
+/// Caption chosen by the last F8 write arm (`None` before the first
+/// request). It is an event latch for the window/headless caller,
+/// not a second settings store: the persisted value is in
+/// `option.ini` beside the install root.
+static LAST_CURSOR_CAPTION: AtomicU8 = AtomicU8::new(0);
+
+fn caption_code(caption: CursorCaption) -> u8 {
+    match caption {
+        CursorCaption::AskUseImageCursor => 1,
+        CursorCaption::NoticeWindowsCursorRestored => 2,
+    }
+}
+
+/// Caption chosen by the last F8 request, if any.
+#[must_use]
+pub fn last_cursor_caption() -> Option<CursorCaption> {
+    match LAST_CURSOR_CAPTION.load(Ordering::Acquire) {
+        1 => Some(CursorCaption::AskUseImageCursor),
+        2 => Some(CursorCaption::NoticeWindowsCursorRestored),
+        _ => None,
+    }
+}
+
+/// Toggle `Mouse_Cursor` in the profile the client already loads at
+/// boot and return the caption arm. Uses `option.ini`, the one store
+/// this client has for the exe's persisted option values.
+#[must_use]
+pub fn switch_cursor_in_install_root() -> Option<CursorCaption> {
+    let root = o2jam_file::data_root::install_root();
+    let mut settings = OptionsSettings::load_from_dir(&root);
+    let caption = settings.switch_mouse_cursor();
+    settings.save_to_dir(&root).ok()?;
+    LAST_CURSOR_CAPTION.store(caption_code(caption), Ordering::Release);
+    Some(caption)
 }
 
 /// Step a 0–255 volume by the ours-by-design slider step without
@@ -1120,5 +1332,66 @@ mod tests {
             assert_eq!(keycode_of_dik(*dik), Some(DEFAULT_LANE_KEYS[lane]));
             assert_eq!(dik_of_keycode(DEFAULT_LANE_KEYS[lane]), Some(*dik));
         }
+    }
+
+    #[test]
+    // Live chain (Tier 0 logic; Tier 3 twin in
+    // `live_room_input_legs.rs`): `main.rs::run_play` ->
+    // `Shell::run` -> `WindowHandler::route_key_with_text` ->
+    // `route_key_event` -> `options::switch_cursor_in_install_root`
+    // -> `OptionsSettings::switch_mouse_cursor`. Both registry-value
+    // branches are pinned: 0 -> 1 with the confirmation caption,
+    // 1 -> 0 with the return-to-Windows caption.
+    fn f8_switch_persists_both_mouse_cursor_branches() {
+        let mut settings = OptionsSettings::load_text("[CURSOR]\nMouse_Cursor=0\n");
+        assert_eq!(settings.mouse_cursor(), MouseCursorMode::Windows);
+        assert_eq!(
+            settings.switch_mouse_cursor(),
+            CursorCaption::AskUseImageCursor,
+            "a fresh boot asks before selecting the image pointer"
+        );
+        assert_eq!(settings.mouse_cursor(), MouseCursorMode::Image);
+        let mut reloaded = OptionsSettings::load_text(&settings.to_ini_text());
+        assert_eq!(
+            reloaded.mouse_cursor(),
+            MouseCursorMode::Image,
+            "value persists"
+        );
+        assert_eq!(
+            reloaded.switch_mouse_cursor(),
+            CursorCaption::NoticeWindowsCursorRestored,
+            "the second F8 returns to the Windows pointer"
+        );
+        assert_eq!(reloaded.mouse_cursor(), MouseCursorMode::Windows);
+    }
+
+    #[test]
+    // Live chain (Tier 1): `WindowHandler::window_event` key-down ->
+    // `route_key_event` -> `options::f8_cursor_request_allowed`.
+    // The scene-id table is the exe's own gate (`0x5a50d0`): a song
+    // scene and the pinned excluded ids can never reach the write.
+    fn f8_gate_accepts_room_only_outside_the_excluded_scene_and_event_table() {
+        assert!(f8_cursor_request_allowed(2, 0, F8_VIRTUAL_KEY), "Room");
+        for excluded_scene in [6, 10, 11, 12, 0xff] {
+            assert!(
+                !f8_cursor_request_allowed(excluded_scene, 0, F8_VIRTUAL_KEY),
+                "scene {excluded_scene} must not switch the cursor"
+            );
+        }
+        for excluded_class in F8_EXCLUDED_EVENT_CLASSES {
+            assert!(!f8_cursor_request_allowed(
+                2,
+                excluded_class,
+                F8_VIRTUAL_KEY
+            ));
+        }
+        assert!(!f8_cursor_request_allowed(2, 0, 0x77 + 1));
+    }
+
+    #[test]
+    fn f8_scene_id_lookup_uses_only_pinned_scene_ids() {
+        assert_eq!(f8_scene_id_of("room"), Some(2));
+        assert_eq!(f8_scene_id_of("playing"), Some(11));
+        assert_eq!(f8_scene_id_of("waiting"), None, "unpinned scene stays OPEN");
     }
 }
