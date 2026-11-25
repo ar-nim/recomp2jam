@@ -238,3 +238,31 @@ Result sections of `docs/interaction-census.md`.
   the small unwind stubs; their role is inferred from the caller's body and is
   not a runtime observation. All details are Ghidra observations, not original
   source; PDB is absent.
+
+### `0x4c2b20` / `0x4c2cf0` — Result keyboard-Back mirror and the BACK/RETRY arm (2026-11-25 senior REA pass)
+
+- **VA / file offsets**: `0x4c2b20` / `0xc2b20` (queue drain), `0x4c2cf0` / `0xc2cf0` (dispatch arm).
+- **Behavior (own words)**: the Result state drains its queued input
+  events in `0x4c2b20`: for an event of class 2 (key) with code 8 or 9
+  (the Win32 VK order makes those Backspace and Tab), once the settle
+  flag at `+0x434a` is set (the same flag the settle timer
+  `0x4c28e0` waits on before enabling BACK), it invokes the state's
+  `+0x28` dispatch arm with the BACK control id `0x17200005` — the same
+  arm a mouse click on BACK reaches. The arm `0x4c2cf0` posts the `0x23`
+  notice and, when the settle flag stands, sends the empty 4021 body
+  through the `+0x5c` sender; its RETRY half (`0x17202006`) posts 4010
+  unless a battle peer is live (then the `0x64a3a0` caption with a
+  3000 ms show). No keyboard arm maps to RETRY.
+- **Consequence for our client**: the exe HAS a keyboard-Back mirror and
+  its target is the BACK button's own arm (4021, then Waiting after the
+  4022 answer). Our `result_keys_mirror_the_staged_buttons`
+  (`crates/o2jam-shell/src/screens/game/mod.rs:33690`) diverges twice:
+  its Back goes to a local Room shortcut (the exe's goes to the button's
+  Waiting path) and its Confirm mirror has no exe counterpart. Align:
+  keyboard Back (Backspace/Tab class) drives the BACK arm after the
+  settle flag; drop or re-pin the Confirm mirror.
+- **Evidence**: `ev_dbe3dc5432238ed4edd59f054accf0703cade787d2b88db3bdd72eab8503bf15`
+  (drain dossier), `ev_70fafb64080f1a1a9e7485cf14a1c102c9e82a512e6b968122a6f04d89f71fbd`
+  (arm dossier), `ev_9727bf792adf6ac2fd6ca1fa25744f1bed91796afca7fcf15222a16c7010c221`
+  (settle timer), `ev_9239cf8242aec5b5180ab9cbb7367a8461ded13d975166673c33a99104b08fc4`
+  (BACK enable helper).
