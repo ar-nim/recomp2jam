@@ -23,7 +23,6 @@ mod live_leg_support;
 mod live_messenger_legs;
 mod live_myroom_legs;
 mod live_payment_legs;
-mod live_payment_legs;
 mod live_planet_channel_legs;
 mod live_playing_render_legs;
 mod live_playing_shell_legs;
