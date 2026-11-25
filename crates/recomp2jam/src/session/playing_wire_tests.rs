@@ -3,11 +3,13 @@
 //! reaches the crate-private session items the drain paths live on.
 //!
 //! The shell has no generic UI-event queue or relay endpoint table, so
-//! the body-ignored forwards are observed through the thread-local
+//! the body-ignored forwards are observed through a thread-local
 //! [`PlayingWireObservation`] log at the session's wire seam. That log is
-//! instrumentation, not a runtime mirror: the shell consumer of those
-//! forwards stays OPEN and is named in the lane report.
+//! test-only instrumentation, never a runtime mirror: production decode
+//! stays side-effect free, so a long session cannot grow it. The shell
+//! consumer of those forwards stays OPEN and is named in the lane report.
 
+#[cfg(test)]
 use std::cell::RefCell;
 
 use o2jam_net::play::ScoreEntry;
@@ -29,6 +31,7 @@ pub(super) enum PlayingWireObservation {
     SpeedWrites([u8; 2], bool),
 }
 
+#[cfg(test)]
 thread_local! {
     static OBSERVATIONS: RefCell<Vec<PlayingWireObservation>> = const { RefCell::new(Vec::new()) };
 }
@@ -39,10 +42,13 @@ pub(super) fn clear_observations() {
     OBSERVATIONS.with(|log| log.borrow_mut().clear());
 }
 
-/// Record one wire step. The shell has no equivalent event sink; the
-/// log keeps the guarded step observable without inventing a caption.
+/// Record one wire step in tests. Production drops the observation:
+/// the shell has no event sink, and an unbounded log would leak.
 pub(super) fn observe(observation: PlayingWireObservation) {
+    #[cfg(test)]
     OBSERVATIONS.with(|log| log.borrow_mut().push(observation));
+    #[cfg(not(test))]
+    let _ = observation;
 }
 
 /// Take this thread's log so a guard can assert its exact sequence.
