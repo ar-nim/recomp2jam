@@ -23,8 +23,8 @@ use super::super::side::{
     OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, OPTION_SOUND_KEYSET,
     PLANET_OPTION_FIRST_TAB,
 };
-use super::options_key_mode;
 use super::ui_effect::UiEffectId;
+use super::{options_key_labels::is_rebindable_dik, options_key_mode};
 use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
 use crate::options::{dik_of_keycode, OptionsSettings};
 use o2jam_render::{Frame, Rgb555Image};
@@ -152,7 +152,7 @@ impl OptionsDialog {
         if self.rebind != Some(lane) || !options_key_mode::is_armable_lane(lane, is_three_key) {
             return false;
         }
-        let Some(dik) = dik_of_keycode(code) else {
+        let Some(dik) = dik_of_keycode(code).filter(|dik| is_rebindable_dik(*dik)) else {
             return false;
         };
         let written = if is_three_key {
@@ -260,6 +260,13 @@ impl OptionsDialog {
             self.clear_rebind();
             return OptionsClick::default();
         }
+        // Pinned #314 P4: while key test is checked, rebind cells and
+        // sheet tabs refuse the click instead of acting. The exe
+        // answers with an error cue; its id stays OPEN (next step:
+        // capture one key-test-gated click's cue on the Wine rig).
+        if self.settings.key_test() && self.key_test_gated_click(x, y) {
+            return OptionsClick::default();
+        }
         for code in [
             OPTION_KEY_SOUNDSET,
             OPTION_KEY_GAMESET,
@@ -285,6 +292,33 @@ impl OptionsDialog {
             PlanetOptionTab::Game => self.click_game_tab(x, y),
         }
         OptionsClick::default()
+    }
+
+    /// Whether a point hits one of the controls the key-test flag
+    /// holds back: rebind cells, their mode selectors, and sheet tabs.
+    /// The checkbox itself is never gated, so the player can uncheck it.
+    fn key_test_gated_click(&self, x: i32, y: i32) -> bool {
+        if [
+            OPTION_KEY_SOUNDSET,
+            OPTION_KEY_GAMESET,
+            OPTION_SOUND_KEYSET,
+            OPTION_SOUND_GAMESET,
+            OPTION_GAME_KEYSET,
+            OPTION_GAME_SOUNDSET,
+            OPTION_KEY_3KEY_MODE,
+            OPTION_KEY_7KEY_MODE,
+        ]
+        .iter()
+        .any(|code| self.hit(*code, x, y))
+        {
+            return true;
+        }
+        (0..7u32).any(|lane| self.hit(OPTION_KEY_LANE_FIRST + lane, x, y))
+            || (0..4u32).any(|lane| {
+                let armable = usize::try_from(lane)
+                    .is_ok_and(|index| options_key_mode::is_armable_lane(index, true));
+                armable && self.hit(OPTION_KEY_3KEY_FIRST + lane, x, y)
+            })
     }
 
     /// Key-tab value buttons: `KEY1..KEY7` arm their lane for

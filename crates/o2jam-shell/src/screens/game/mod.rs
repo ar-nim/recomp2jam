@@ -8675,6 +8675,39 @@ impl ScreenGame {
         // repaint above would cover its selected face. Selection is the
         // last layer: it must win over the pointer/press stand-in.
         self.paint_create_room_toggle_selection(frame);
+        self.paint_options_key_area_over_hover(frame);
+    }
+
+    /// Bound key faces for one Key-sheet repaint, read from the dialog.
+    fn options_key_captions(&self) -> options_key_labels::KeyCaptions {
+        let dialog = &self.options_dialog;
+        options_key_labels::KeyCaptions {
+            lane_dik: dialog
+                .settings()
+                .lane_dik_for_mode(dialog.settings().three_key()),
+            three_key: dialog.settings().three_key(),
+            armed_lane: dialog.rebind_armed(),
+        }
+    }
+
+    /// The generic dialog hover pass repaints a staged control's first
+    /// record. On the Key sheet there is no exe hover face for a rebind
+    /// cell (#314 pin P3), so the bound glyph is the final layer: hover
+    /// may change the surrounding plate, never the key's ink or bind.
+    fn paint_options_key_area_over_hover(&self, frame: &mut Frame<'_>) {
+        if self.planet_modal() != Some(PlanetModal::Options)
+            || self.options_dialog.tab() != PlanetOptionTab::Key
+        {
+            return;
+        }
+        let Some(art) = self
+            .options_dialog
+            .staged_art()
+            .filter(|art| art.has_figures())
+        else {
+            return;
+        };
+        options_key_labels::paint_key_area_after_hover(frame, art, self.options_key_captions());
     }
 
     /// The active side screen: staged art plus its board overlay
@@ -9097,13 +9130,7 @@ impl ScreenGame {
                         options_key_labels::paint_option_key_tab(
                             frame,
                             dialog.staged_art(),
-                            options_key_labels::KeyCaptions {
-                                lane_dik: dialog
-                                    .settings()
-                                    .lane_dik_for_mode(dialog.settings().three_key()),
-                                three_key: dialog.settings().three_key(),
-                                armed_lane: dialog.rebind_armed(),
-                            },
+                            self.options_key_captions(),
                             dialog.settings(),
                         );
                     }
@@ -9996,23 +10023,35 @@ impl Default for ScreenGame {
 
 impl GameLoop for ScreenGame {
     fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
-        // Key-tab rebind capture: while a lane is armed, the next
-        // mapped non-menu key press becomes that lane's key and the
-        // press is consumed (menu keys keep their routing so Escape
-        // still closes and disarms).
-        if !down
-            || self.planet_modal() != Some(PlanetModal::Options)
-            || self.options_dialog.tab() != PlanetOptionTab::Key
+        // The exe's CDOption dialog owns keys while a sheet is open:
+        // the main window hands the press to the top dialog and never
+        // walks the scene stack (#314 static pin P1). One owner serves
+        // both the Room and Planet entries (P2), so no caller check.
+        if self.planet_modal() != Some(PlanetModal::Options) {
+            return false;
+        }
+        if !down {
+            return true;
+        }
+        // The dialog's own char arm dispatches EXIT on Escape; the
+        // lobby never sees that key while the sheet is up.
+        if code == KeyCode::Escape {
+            self.planet_board.close_modal();
+            self.options_dialog.clear_rebind();
+            return true;
+        }
+        if self.options_dialog.tab() == PlanetOptionTab::Key
+            && !self.options_dialog.settings().key_test()
         {
-            return false;
+            if let Some(lane) = self.options_dialog.rebind_armed() {
+                if menu_of(code).is_none() {
+                    // A refused key is still consumed: invalid DIKs
+                    // are eaten by the dialog, never passed to chat.
+                    let _ = self.options_dialog.rebind_armed_lane(lane, code);
+                }
+            }
         }
-        let Some(lane) = self.options_dialog.rebind_armed() else {
-            return false;
-        };
-        if menu_of(code).is_some() {
-            return false;
-        }
-        self.options_dialog.rebind_armed_lane(lane, code)
+        true
     }
 
     fn lane_bindings(&self) -> Option<[KeyCode; 7]> {
@@ -23800,15 +23839,16 @@ mod game_tests {
         click_button(&mut game, 140, 100);
         assert_eq!(game.option_rebind_armed(), Some(1));
         assert!(
-            !game.capture_raw_key(KeyCode::F1, true),
-            "keys without a DirectInput code never persist"
+            game.capture_raw_key(KeyCode::F1, true),
+            "the open dialog eats keys without a DirectInput code"
         );
         assert_eq!(game.option_rebind_armed(), Some(1));
         assert_eq!(game.options().lane_keys()[1], KeyCode::KeyD);
         assert!(
-            !game.capture_raw_key(KeyCode::Escape, true),
-            "menu keys keep their routing while armed"
+            game.capture_raw_key(KeyCode::Escape, true),
+            "the dialog handles Escape itself instead of the lobby"
         );
+        assert_eq!(game.planet_modal(), None, "Escape closes the dialog");
     }
 
     #[test]
