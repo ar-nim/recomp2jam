@@ -191,6 +191,13 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    issue body on stdin) resolves every cited token with `git cat-file -t`
    and prints its full 40-character object name for close tables; it exits
    1 on stale tokens (issue #887).
+   At close time this check is mandatory and mechanical: write the close
+   comment (or close table) to a file and run
+   `scripts/check-cited-hashes.sh <file>` before every `gh issue comment`
+   that closes an issue or posts a close table. Exit 1 (`STALE`) blocks the
+   close until the token is replaced with a verified SHA or explicitly
+   marked UNVERIFIED. Record the command and its exit code in the close
+   record (retro #922; prose rule above stays in force).
 
 
 7. **Live-path reachability for player-visible closes.** Every guard named

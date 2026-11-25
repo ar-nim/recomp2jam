@@ -181,7 +181,7 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
   reset local main and lost a pushed commit; the merge was needed anyway.
 
-Close handoff rules (retro #175):
+Close handoff rules (retro #175; rule 3 from retro #922):
 
 1. **Ancestor check before close.** A fix is not done until
    `git merge-base --is-ancestor <fix-sha> <branch-under-test>` passes; quote
@@ -193,6 +193,13 @@ Close handoff rules (retro #175):
    flow returns the main checkout to `main`; confirm with
    `git -C /home/arnim/Projects/recomp2jam branch --show-current`. Owner rule
    2026-11-13 (#175): the next session starts from a known branch.
+3. **Mechanical cited-hash check before any close comment.** Before every
+   `gh issue comment` that closes an issue or posts a close table, write the
+   comment to a file and run `scripts/check-cited-hashes.sh <file>`. Exit 0
+   is required; any `STALE` token blocks the close until it is replaced with
+   a verified SHA or explicitly marked UNVERIFIED. Record the command and
+   its exit code in the close table. This enforces the prose rule in
+   `docs/agents/triage-labels.md` rule 6.
 
 ## Senior completeness pre-flight
 
@@ -250,6 +257,8 @@ opens each artifact (pixel rule) and re-reads metrics JSONs rather than
 re-running scorers blind (stale packs can hold pre-fix frames)
 Gates: `bash scripts/gate-check.sh --no-push` (the only accepted evidence;
 both install-root arms); wrap any ad-hoc run in timeout 600
+Both arms: any lane whose guards touch data-gated behavior must run BOTH gate arms (install-root present AND hidden); a data-less worktree alone silently skips the guards (random-default incident)
+Cited hashes: write each close comment to a file and run `scripts/check-cited-hashes.sh <file>` before posting; a stale token blocks the close
 Merge: run the named guards before composing any conflict resolution in
 guarded code (guard-first rule in "Merge-conflict discipline"); push only
 after gate-check rc=0 is observed in the same output
@@ -278,6 +287,8 @@ Verification: <paste git rev-parse HEAD and git cat-file -t <sha> output>
 
 ## Gates
 - <exact command> — exit <n>
+- Both arms (install-root present AND hidden), when guards touch data-gated behavior; a data-less worktree alone silently skips the guards (random-default incident)
+- `scripts/check-cited-hashes.sh <close-comment-file>` — exit 0, before every close comment
 <PASS and FAIL lines for every named guard; no bare PASS>
 
 ## Skips
@@ -374,5 +385,11 @@ Every implementer/rig brief carries, verbatim:
   `INSTALL_DATA_POOL=` to claim a private data slot when the shared
   symlink is absent, and report the skip count in your final report."
   (lesson 0a77d)
+- "Any lane whose guards touch data-gated behavior must run BOTH gate arms
+  (install-root present AND hidden) — a data-less worktree alone silently
+  skips the guards (the random-default incident)." (retro #922)
+- "Write every close comment to a file and run
+  `scripts/check-cited-hashes.sh <file>` before posting it; a stale token
+  blocks the close." (retro #922)
 - "If your fix touches a spec, `bash scripts/close-spec.sh <N>` must
   exit 0 before the close comment is written." (retro #869)
