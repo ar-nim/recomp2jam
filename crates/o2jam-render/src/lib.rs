@@ -1888,6 +1888,83 @@ pub fn draw_panel_alpha(
     draw_rect_border(frame, rect, border, border_width);
 }
 
+/// One recorded pixel run in a packed image body: a signed offset from
+/// the body origin plus consecutive RGB555 words (exe `0x416410`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackedRun<'a> {
+    /// Horizontal offset from the staged origin, in native pixels.
+    pub offset_x: i16,
+    /// Vertical offset from the staged origin, in native pixels.
+    pub offset_y: i16,
+    /// Consecutive pixels; an empty slice terminates the run list.
+    pub pixels: &'a [u16],
+}
+
+/// Paint a terminated packed run list at `origin`, skipping the decoded
+/// color key and clipping only to the frame (exe `0x416410`).
+pub fn blit_packed_runs(
+    frame: &mut Frame<'_>,
+    origin_x: i32,
+    origin_y: i32,
+    runs: &[PackedRun<'_>],
+    colorkey: u16,
+) {
+    let key = Some(colorkey);
+    for run in runs {
+        if run.pixels.is_empty() {
+            return;
+        }
+        let Some((x, y)) = add_run_origin(origin_x, origin_y, run.offset_x, run.offset_y) else {
+            continue;
+        };
+        let width = run.pixels.len();
+        let sprite = Sprite {
+            pixels: run.pixels,
+            w: width,
+            h: 1,
+            stride: width,
+        };
+        blit_rgb555(frame, &sprite, x, y, key);
+    }
+}
+
+/// Origin of one run: the staged origin plus its recorded signed offsets.
+fn add_run_origin(
+    origin_x: i32,
+    origin_y: i32,
+    offset_x: i16,
+    offset_y: i16,
+) -> Option<(i32, i32)> {
+    let x = origin_x.checked_add(i32::from(offset_x))?;
+    let y = origin_y.checked_add(i32::from(offset_y))?;
+    Some((x, y))
+}
+
+/// Frame selected by the exe's current-frame word (`+0x134`) and
+/// bounded by its frame-count word (`+0x11c`, exe `0x41e120`/`0x41e140`).
+#[must_use]
+pub fn frame_image_for_words(
+    frames: &[Rgb555Image],
+    index_word: u16,
+    count_word: u16,
+) -> Option<&Rgb555Image> {
+    let count = usize::from(count_word).min(frames.len());
+    let index = usize::from(index_word);
+    if index < count {
+        frames.get(index)
+    } else {
+        None
+    }
+}
+
+/// Frames a staged control may animate, bounded by its count word
+/// (`+0x148`, exe `0x42f760`). A zero count stages no frames.
+#[must_use]
+pub fn staged_frame_table_for_count(frames: &[Rgb555Image], count_word: u16) -> &[Rgb555Image] {
+    let count = usize::from(count_word).min(frames.len());
+    &frames[..count]
+}
+
 #[cfg(test)]
 mod fidelity_tests {
     use super::*;
@@ -3625,5 +3702,112 @@ mod tests {
         );
         assert!(!painted);
         assert_eq!(buf, vec![0x123456u32; 8 * 8]);
+    }
+
+    #[test]
+    fn packed_run_blit_lands_each_run_at_its_recorded_offsets() {
+        // seam: packed-run copy is pure pixel math with no live
+        // caller in this lane; the Tier 3 leg pins the staged
+        // `Playing_ChatWindow.oji` body through the shell painter.
+        // Exe pin 0x416410 / ev fdf8.4bf8…: zero length ends the list.
+        let runs = [
+            PackedRun {
+                offset_x: 1,
+                offset_y: 2,
+                pixels: &[0x7C00, 0x7D5F],
+            },
+            PackedRun {
+                offset_x: -1,
+                offset_y: 1,
+                pixels: &[0x03E0],
+            },
+            PackedRun {
+                offset_x: 9,
+                offset_y: 9,
+                pixels: &[],
+            },
+            PackedRun {
+                offset_x: 5,
+                offset_y: 5,
+                pixels: &[0x001F],
+            },
+        ];
+        let mut buf = vec![0x123456u32; 16 * 16];
+        blit_packed_runs(
+            &mut Frame {
+                buf: &mut buf,
+                w: 16,
+                h: 16,
+            },
+            3,
+            3,
+            &runs,
+            0x7D5F,
+        );
+        assert_eq!(buf[5 * 16 + 4], pack_xrgb(255, 0, 0));
+        assert_eq!(
+            buf[5 * 16 + 5],
+            0x123456,
+            "the stored key stays transparent"
+        );
+        assert_eq!(buf[4 * 16 + 2], pack_xrgb(0, 255, 0));
+        assert_eq!(
+            buf[8 * 16 + 8],
+            0x123456,
+            "a zero-length record ends the list"
+        );
+    }
+
+    #[test]
+    fn exe_frame_index_word_selects_the_painted_frame() {
+        // seam: frame-word selection is pure math with no live
+        // caller beyond this seam; the Tier 3 leg uses it as the
+        // oracle for the frame the booted scene paints. Exe pin
+        // 0x41e120 / ev aec1.1f01… reads +0x134, not file order.
+        let first = Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap();
+        let second = Rgb555Image::decode(&[0xE0, 0x03], 1, 1).unwrap();
+        let frames = [first, second];
+        let selected = frame_image_for_words(&frames, 1, 2).unwrap();
+        assert_eq!(selected.words, vec![0x03E0]);
+
+        let mut buf = vec![0x123456u32; 1];
+        blit_image_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 1,
+            },
+            selected,
+            0,
+            0,
+            0xFFFF,
+        );
+        assert_eq!(buf[0], pack_xrgb(0, 255, 0));
+    }
+
+    #[test]
+    fn frame_count_word_clamps_the_animation_to_the_staged_bodies() {
+        // seam: the exe count word is a pure bound on frame selection
+        // (pins 0x41e140 / ev e368… and 0x42f760 / ev 4a8d…); the
+        // Tier 3 legs stage the same count from the installed body.
+        let frames = [Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap()];
+        assert_eq!(
+            frame_image_for_words(&frames, 0, 1).map(|image| image.words[0]),
+            Some(0x7C00)
+        );
+        assert_eq!(frame_image_for_words(&frames, 7, 1), None);
+        assert_eq!(frame_image_for_words(&frames, 0, 0), None);
+    }
+
+    #[test]
+    fn control_count_word_bounds_the_staged_frame_table() {
+        // seam: a control's staged frame count is the bound read by
+        // frame selection (exe 0x42f760 / ev 4a8d…), not the table's
+        // decoded length; the Tier 3 leg stages the same control body.
+        let frames: Vec<Rgb555Image> = (0..3)
+            .map(|_| Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap())
+            .collect();
+        assert_eq!(staged_frame_table_for_count(&frames, 2).len(), 2);
+        assert!(staged_frame_table_for_count(&frames, 0).is_empty());
     }
 }
