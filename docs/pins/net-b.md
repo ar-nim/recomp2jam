@@ -599,3 +599,24 @@ entries come from that dispatch table, not from the handler bodies.
   (handler pseudocode), `ev_34f99326186fea4bde84db8ee2f0739604fdf2b980c15120ac8e76b79dd483a0`
   (`+0x2130` setter), `ev_485651cd7ff8782d94b771de2abeb5b7832d9dd1fc159582cd33ee143ae1b7f0`
   (`+0x217c` setter).
+
+### `0x55e2f0` caption-choice addendum — 3010 removal cause is DERIVED, not a wire byte (2026-11-25 senior REA pass)
+
+- **Behavior (own words)**: the 3010 handler reads NO body field. It
+  computes a local cause: when the room state byte the room state byte is 0
+  or 1 and the channel-dialog slot the channel-state object `+0xf6c` is occupied,
+  the cause is the own-seat helper at `0x4bb700` — the own-seat panel's state word (own
+  seat control `0x16015022 + the own seat index`, value via its state getter);
+  otherwise 0. It then resets all Waiting seat state (five seat words,
+  the eight ready flags, the state-change post) and picks the caption:
+  cause 0 -> `0x64da88` (plain removal, "당신은 퇴장 당하셨습니다."),
+  nonzero -> `0x64da60` (removed for a missing song, "곡을 가지고 있지
+  않아 퇴장되었습니다."). The missing-song caption therefore means "my
+  own seat's music/download state word was nonzero when the room
+  closed".
+- **Consequence for #994**: a scripted 3010 with a cause byte is NOT the
+  exe shape. The guard must stage the own-seat state word (0 vs nonzero)
+  and assert the caption pair; the wire body carries no cause.
+- **Evidence**: `ev_b30a14874aa7bc248ba3837df962f8984ce4d9059870eaa89df05cef999281c3`
+  (handler pseudocode), `ev_bce9903beb8615518b106ecf6b12dd40b8a63f15fb9c56aac645fe89ef853697`
+  (helper pseudocode).
