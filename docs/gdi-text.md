@@ -212,3 +212,20 @@ stack, exe pins placement only).
    two mode words (and which shipped dialogs use which painter) is
    OPEN, subject to the same channel-TITLE join gap as
    `channel-fill.md` OPEN 2.
+
+## Loading gate staging (2026-11-25 senior REA pass, #616/#618)
+
+The loading-gate setup `0x4e47a0` (dossier `ev_8bfe450075a5a6fa5aa48610383c1829e98bbb495d4a7e89a51a3c6cd97a37e8`,
+pseudocode `ev_62731adb474c0a041890b5578d66543e1d1af71e73f1c5c9775656c414a820fb`)
+creates the three fonts (Trebuchet MS 27x65 -> `+0x524`, Arial 7x14 ->
+`+0x528`, Gulimche 6x12 -> `+0x52c`, all w400) and stages the cover
+content: the picked song's id word to `DAT_00778a00`, its difficulty
+byte to `DAT_007789e4+4` (i.e. `DAT_007789e8`), and the chart title
+string into the gate object `+0x404`. The setup draws one blank line
+(ink `0xf0f0f0` on `0xfa9f`) and then branches on the game mode byte
+(`DAT_007789e4`): 0 -> `FUN_004e1550`, 2 -> `FUN_004e15d0`; otherwise
+it posts UI event `(0x12, 0x67, 0, 0)` and refuses. The Arial 7x14
+credits consumer and the Trebuchet 27x65 caption consumer are NOT in
+this function — they are the gate dialog's draw arms; next step: the
+dialog vftable's draw slot, then the "cover without baked credits"
+capture. This pins the staging side of #616/#618 only.
