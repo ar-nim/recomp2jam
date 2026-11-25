@@ -97,9 +97,12 @@ refuse_bad_preconditions() {
 }
 
 lane_worktree_path() {
+    # No early exit: awk must drain the pipe. An `exit` here SIGPIPEs
+    # `git worktree list` on a repo with many worktrees, and pipefail
+    # then aborts the whole script (found by the first dogfood run).
     git worktree list --porcelain | awk -v target="branch refs/heads/$lane_branch" '
         /^worktree / { path = substr($0, 10) }
-        $0 == target { print path; exit }
+        $0 == target && !found { print path; found = 1 }
     '
 }
 

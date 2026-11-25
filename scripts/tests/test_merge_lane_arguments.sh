@@ -54,6 +54,29 @@ scenario_refuses_dirty_tree() {
     git -C "$CLONE" branch -D lane-dirty >/dev/null
 }
 
+scenario_survives_many_worktrees_before_a_refusal() {
+    # Regression: lane discovery piped `git worktree list` into an awk that
+    # exited early; on a repo with enough worktrees the pipe filled, git
+    # took SIGPIPE, and pipefail killed the script with exit 141 before any
+    # output (found on the first real dogfood run of #917). With a dirty
+    # tree the first real step is a refusal, so reaching that refusal
+    # proves discovery survived the pipe.
+    local i
+    create_unmerged_lane lane-many-worktrees
+    for i in $(seq 1 150); do
+        git -C "$CLONE" worktree add -q --detach "$TEST_ROOT/wt-$i" main
+    done
+    printf '\n' >>"$CLONE/README.md"
+    expect_refusal "main checkout has uncommitted changes" \
+        run_merge_lane_from_clone lane-many-worktrees
+    git -C "$CLONE" checkout -q -- README.md
+    git -C "$CLONE" worktree list --porcelain \
+        | awk '/^worktree / { print substr($0, 10) }' \
+        | grep "$TEST_ROOT/wt-" \
+        | xargs -r -n1 git -C "$CLONE" worktree remove
+    git -C "$CLONE" branch -D lane-many-worktrees >/dev/null
+}
+
 scenario_refuses_missing_branch() {
     expect_refusal "branch not found: lane-missing" \
         run_merge_lane_from_clone lane-missing
@@ -75,4 +98,5 @@ scenario_refuses_invocation_from_linked_worktree
 scenario_refuses_dirty_tree
 scenario_refuses_missing_branch
 scenario_refuses_already_merged_branch
-echo 'test_merge_lane_arguments: 4 scenarios passed'
+scenario_survives_many_worktrees_before_a_refusal
+echo 'test_merge_lane_arguments: 5 scenarios passed'
