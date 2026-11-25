@@ -3563,16 +3563,21 @@ pub fn paint_dialog_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// plates and the blue 3-key plate, not the record-0 bodies staged
 /// from `Interface1.opi` (`~/scratch/paired-shots-v3` channel-popup and
 /// options-key pairs; `docs/dialog-frame-states.md` pins rest as the
-/// staged stack). Hover/press still repaint the body through
+/// staged stack). The MESSAGE sheet follows the same rule (#938):
+/// `FUN_0x4346f0` writes only placements, and both button bodies hold
+/// blue records, so their gray rest face is the `Dialog_Question1.ojs`
+/// plate. Hover/press still repaint the body through
 /// `ScreenGame::paint_dialog_frame_states`; geometry stays with the
 /// parsed `.bnd` placements.
-const BAKED_PLATE_BODIES: [&str; 6] = [
+const BAKED_PLATE_BODIES: [&str; 8] = [
     "Info_OK.ojs",
     "OptionKey_Btn_3Key.ojs",
     "OptionKey_Btn_7Key.ojs",
     "Option_Default.ojs",
     "Option_Save.ojs",
     "Option_Exit.ojs",
+    "Question1_OK.ojs",
+    "Question1_Cancel.ojs",
 ];
 
 /// Paint a dialog sheet, withholding placements the caller keeps inert.
@@ -16680,6 +16685,92 @@ mod dialog_paint_tests {
             buf[15 * 800 + 15],
             pack_xrgb(0, 0, 255),
             "an unbaked body keeps its staged frame"
+        );
+    }
+
+    /// MESSAGE-sheet stand-in: a baked gray plate and a two-record
+    /// button body. The records stand in for `Question1_OK.ojs` blue
+    /// frames; no installed art is needed to test the repaint seam.
+    fn baked_message_button_scene() -> SceneArt {
+        let mut body = filled_figure(20, 10, [0x1F, 0x00]);
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0xE0, 0x03].repeat(20 * 10), 20, 10)
+                .expect("message press test frame"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    id: "sheet".to_owned(),
+                    code: 0x2210_0001,
+                    sprite: Some("Dialog_Test.ojs".to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 100,
+                        h: 100,
+                    },
+                    role: PlacementRole::Single,
+                },
+                ScenePlacement {
+                    id: "ok".to_owned(),
+                    code: super::super::side::QUIT_OK_CODE,
+                    sprite: Some("Question1_OK.ojs".to_owned()),
+                    rect: Rect {
+                        x: 10,
+                        y: 10,
+                        w: 20,
+                        h: 10,
+                    },
+                    role: PlacementRole::Single,
+                },
+            ],
+            figures: HashMap::from([
+                (
+                    "Dialog_Test.ojs".to_owned(),
+                    filled_figure(100, 100, [0x10, 0x42]),
+                ),
+                ("Question1_OK.ojs".to_owned(), body),
+            ]),
+        }
+    }
+
+    #[test]
+    fn message_button_hover_and_press_records_repaint_over_the_baked_plate() {
+        // Live caller chain: boot stages `Dialog_Question1` ->
+        // `click_shop` -> `ShopAction::CartBuy` ->
+        // `shop_charge_confirm_open` -> `paint_shop_charge_confirm` ->
+        // `ScreenGame::paint_dialog_frame_states` ->
+        // `paint_dialog_frame_record`. The state choice is tested in
+        // `dialog_frame.rs`; this seam pins the record repaint on the
+        // body the rest pass now withholds (#938).
+        let art = baked_message_button_scene();
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        let at = 15 * 800 + 15;
+        paint_dialog_scene(&mut frame, &art);
+        assert_eq!(
+            frame.buf[at],
+            pack_xrgb(132, 132, 132),
+            "rest keeps the baked gray plate"
+        );
+        paint_dialog_frame_record(&mut frame, &art, super::super::side::QUIT_OK_CODE, 0);
+        assert_eq!(
+            frame.buf[at],
+            pack_xrgb(0, 0, 255),
+            "hover repaints the withheld body's record 0"
+        );
+        paint_dialog_frame_record(&mut frame, &art, super::super::side::QUIT_OK_CODE, 1);
+        assert_eq!(
+            frame.buf[at],
+            pack_xrgb(0, 255, 0),
+            "press repaints the withheld body's record 1"
         );
     }
 

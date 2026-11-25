@@ -36,9 +36,10 @@ mod live_input_leg_tests {
         MyRoomLowerTab, MyRoomNotice, MyRoomPanel, SideScreen, INFORMATION_OK_CODE,
         MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE,
         OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_SOUNDSET, OPTION_KEY_TEST,
-        OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE, SHOP_CATEGORY_FIRST_CODE,
-        SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_FIRST_CODE,
+        OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE, QUIT_CANCEL_CODE,
+        QUIT_OK_CODE, SHOP_BUYITEM_CODE, SHOP_CATEGORY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y,
+        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -303,6 +304,24 @@ mod live_input_leg_tests {
     fn boot_live_leg_with_art(port: u16, relay_down: bool) -> OnlineSession {
         let mut session = boot_live_leg(port, relay_down);
         session.stage_live_art();
+        session
+    }
+
+    /// Same live boot, but the interface archive is staged before the
+    /// socket connects. The fake gateway starts its five-second quiet
+    /// timer only after `accept`, so archive reads cannot close the
+    /// socket under a loaded test fleet.
+    fn boot_live_leg_with_prestaged_art(port: u16, relay_down: bool) -> OnlineSession {
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::live_art::stage_live_scenes(&mut game);
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        stage_online_identity(&mut game, report.character.as_ref());
+        stage_channel_list_after_relay_gate(&mut game, report.channels.clone(), relay_down);
+        stage_online_rooms(&mut game, report.rooms.clone());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        session.set_resident_channel(channel_row());
         session
     }
 
@@ -2523,6 +2542,185 @@ mod live_input_leg_tests {
                 "the gift face still inks the gift cell at {now_ms} ms"
             );
         }
+        finish(session, gateway.server);
+    }
+
+    /// Absolute native rects of the MESSAGE sheet's two buttons, read
+    /// from the same staged `Dialog_Question1.bnd` placements the
+    /// painter and click router consume.
+    fn message_button_rects(session: &mut OnlineSession) -> [Rect; 2] {
+        let art = session
+            .game_mut()
+            .question1_dialog_art()
+            .expect("live boot stages the MESSAGE sheet");
+        let origin = dialog_origin(&art.placements);
+        [QUIT_OK_CODE, QUIT_CANCEL_CODE].map(|code| {
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| placed.code == code)
+                .unwrap_or_else(|| panic!("MESSAGE sheet does not stage {code:#X}"));
+            Rect {
+                x: origin.0 + placed.rect.x,
+                y: origin.1 + placed.rect.y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            }
+        })
+    }
+
+    /// The plate baked into `Dialog_Question1.ojs`, painted on its
+    /// own so the expected rest pixels never come from the button
+    /// bodies the fix withholds.
+    fn baked_message_button_pixels(session: &mut OnlineSession, rect: Rect) -> Vec<u32> {
+        let art = session
+            .game_mut()
+            .question1_dialog_art()
+            .expect("live boot stages the MESSAGE sheet");
+        let backdrop = art
+            .placements
+            .iter()
+            .find(|placed| {
+                placed
+                    .sprite
+                    .as_deref()
+                    .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+            })
+            .expect("MESSAGE sheet stages its backdrop");
+        let sprite = backdrop.sprite.as_deref().expect("backdrop names a sprite");
+        let figure = art
+            .figures
+            .get(sprite)
+            .unwrap_or_else(|| panic!("MESSAGE backdrop figure {sprite} decodes"));
+        let mut baked = vec![
+            0u32;
+            usize::try_from(NATIVE_WIDTH).expect("width fits usize")
+                * usize::try_from(NATIVE_HEIGHT).expect("height fits usize")
+        ];
+        figure.paint_scaled_anchors(
+            &mut o2jam_render::Frame {
+                buf: &mut baked,
+                w: usize::try_from(NATIVE_WIDTH).expect("width fits usize"),
+                h: usize::try_from(NATIVE_HEIGHT).expect("height fits usize"),
+            },
+            0,
+            0,
+            usize::try_from(NATIVE_WIDTH).expect("width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("height fits usize"),
+        );
+        staged_rect_pixels_from(&baked, rect)
+    }
+
+    /// Button faces whose pixels differ from the baked plate by more
+    /// than one percent of the staged rect. Blue body art covers the
+    /// whole rect, so the current defect is far above this allowance.
+    fn assert_baked_message_face(painted: &[u32], baked: &[u32], label: &str) {
+        let mismatches = painted
+            .iter()
+            .zip(baked)
+            .filter(|(painted, baked)| painted != baked)
+            .count();
+        let allowance = painted.len().div_ceil(100);
+        assert!(
+            mismatches <= allowance,
+            "{label} keeps the baked gray rest face: {mismatches} mismatches, allowance {allowance}"
+        );
+    }
+
+    /// #938 T12. The exe's `FUN_0x4346f0` sheet setup (`ev_adfd8d48…`)
+    /// places `Dialog_Question1` and routes OK/CANCEL; `FUN_0x42ff30`
+    /// (`ev_f880d925…`) only offsets x/y. No rest-frame write exists,
+    /// so the baked gray plate in `Dialog_Question1.ojs` is the rest
+    /// face. Both `Question1_OK.ojs` and `Question1_Cancel.ojs` hold
+    /// two blue records; neither holds a gray frame. Live chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> stage_live_scenes (before the socket connects) ->
+    ///   assemble_online_session ->
+    ///   GameLoop::ingest_snapshot (splash, emblem, room row, ITEMSHOP,
+    ///   ITEMBUY1, BUYITEM) -> ScreenGame::click_shop ->
+    ///   ShopAction::CartBuy -> shop_charge_confirm_open -> paint_side ->
+    ///   paint_shop_charge_confirm -> paint_dialog_scene ->
+    ///   paint_dialog_frame_states.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn the_message_sheet_rest_face_keeps_the_baked_gray_buttons() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let itemshop = &room_top_tabs()[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        assert_eq!(session.game_mut().side(), Some(SideScreen::Shop));
+        paint(&mut session);
+        wait_for_enter_shop(&gateway.reports, itemshop.id);
+        while gateway.reports.try_recv().is_ok() {}
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        assert!(
+            !session.game_mut().shop_cart().is_empty(),
+            "the staged ITEMBUY row must check a good into the cart"
+        );
+        click_staged_shop_control(&mut session, SHOP_BUYITEM_CODE, 0);
+        assert!(
+            session.game_mut().shop_charge_confirm_open(),
+            "BUYITEM must post the native MESSAGE sheet"
+        );
+
+        let buttons = message_button_rects(&mut session);
+        let baked: Vec<Vec<u32>> = buttons
+            .iter()
+            .map(|rect| baked_message_button_pixels(&mut session, *rect))
+            .collect();
+        let rest = paint_frame(&mut session);
+        for ((label, rect), plate) in ["OK", "CANCEL"].into_iter().zip(buttons).zip(&baked) {
+            assert_baked_message_face(&staged_rect_pixels_from(&rest, rect), plate, label);
+        }
+
+        let ok_centre = rect_centre(buttons[0]);
+        session.ingest_snapshot(&InputSnapshot::motion_to(ok_centre.0, ok_centre.1));
+        let hovered = paint_frame(&mut session);
+        assert!(
+            changed_pixels_in_rect(&rest, &hovered, buttons[0]) > 0,
+            "hover still repaints the OK body through paint_dialog_frame_states"
+        );
+        assert_eq!(
+            changed_pixels_in_rect(&rest, &hovered, buttons[1]),
+            0,
+            "hovering OK leaves the CANCEL rest plate alone"
+        );
+        session.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
+        let rest_again = paint_frame(&mut session);
+        assert_eq!(
+            changed_pixels_in_rect(&rest, &rest_again, buttons[0]),
+            0,
+            "leaving the button restores the rest plate"
+        );
+        for now_ms in [0, 20_000, 50_000] {
+            let sampled = paint_at_frame(&mut session, now_ms);
+            for ((label, rect), plate) in ["OK", "CANCEL"].into_iter().zip(buttons).zip(&baked) {
+                assert_baked_message_face(
+                    &staged_rect_pixels_from(&sampled, rect),
+                    plate,
+                    &format!("{label} at {now_ms} ms"),
+                );
+            }
+        }
+        assert_eq!(
+            *cue_calls.borrow(),
+            cue_baseline,
+            "the local MESSAGE sheet queues no audio cue"
+        );
+        assert!(
+            observed(&gateway.reports).is_empty(),
+            "the BUYITEM sheet sends no buy wire"
+        );
         finish(session, gateway.server);
     }
 }
