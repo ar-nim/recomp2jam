@@ -566,3 +566,227 @@ fn staged_bag_slot_words_drive_the_myroom_paint() {
         "staged inventory words must ink the MyRoom bag face"
     );
 }
+
+#[test]
+fn billing_page_names_keep_the_pinned_hosts_and_request_paths() {
+    // seam: the URL inventory is a static host/path pin; this client
+    // creates no browser object and sends no HTTP request, so the
+    // literal request-line join is the whole observable behavior here.
+    use o2jam_shell::screens::messenger::{BillingWebPage, BILLING_HOST, COUPON_HOST};
+
+    assert_eq!(BILLING_HOST, "game1.o2jam.com");
+    assert_eq!(COUPON_HOST, "o2jam.nopp.co.kr");
+    assert_eq!(
+        BillingWebPage::Payment.url("7"),
+        "http://game1.o2jam.com/np/billing/payment/payment_input.aspx?USER_INDEX_ID=7"
+    );
+    assert_eq!(
+        BillingWebPage::GiftInput.url("7"),
+        "http://game1.o2jam.com/np/billing/gift/gift_input.aspx?USER_INDEX_ID=7"
+    );
+    assert_eq!(
+        BillingWebPage::JamCard.url("7"),
+        "http://game1.o2jam.com/client/jamcard.asp?USER_INDEX_ID=7"
+    );
+    assert_eq!(
+        BillingWebPage::Coupon.url("7"),
+        "http://o2jam.nopp.co.kr/client/coupon2/coupon.phtml?USER_INDEX_ID=7"
+    );
+}
+
+#[test]
+fn payment_web_rebuild_closes_the_old_window_before_the_new_page_mounts() {
+    // Tier 1 window-input seam; live chain:
+    //   main.rs::run_play -> window hub 0x5a5190 WM_APP+0x32 ->
+    //   billing_window_arm -> BillingWebHandle::rebuild ->
+    //   BillingWebEvent::ClosedPrevious then ::Mounted.
+    // seam note: no WebCtrl32 window exists in the winit client, so
+    // handle close/mount order is the whole host behavior.
+    const APP_UI_EVENT: u32 = 0x232;
+    use o2jam_shell::screens::messenger::{
+        billing_window_arm, BillingWebEvent, BillingWebHandle, BillingWebPage, BillingWindowArm,
+        BILLING_PAYMENT_STATE_WORD,
+    };
+
+    assert_eq!(
+        billing_window_arm(APP_UI_EVENT, BILLING_PAYMENT_STATE_WORD, true),
+        BillingWindowArm::RebuildPayment
+    );
+
+    let mut handle = BillingWebHandle::new();
+    let first = handle.rebuild(BillingWebPage::Payment, "2", 41);
+    assert_eq!(
+        first,
+        vec![BillingWebEvent::Mounted {
+            handle: 41,
+            url: "http://game1.o2jam.com/np/billing/payment/payment_input.aspx?USER_INDEX_ID=2"
+                .to_owned(),
+        }]
+    );
+
+    let second = handle.rebuild(BillingWebPage::Payment, "2", 42);
+    assert_eq!(second.first(), Some(&BillingWebEvent::ClosedPrevious(41)));
+    assert_eq!(
+        second.get(1),
+        Some(&BillingWebEvent::Mounted {
+            handle: 42,
+            url: "http://game1.o2jam.com/np/billing/payment/payment_input.aspx?USER_INDEX_ID=2"
+                .to_owned(),
+        })
+    );
+}
+
+#[test]
+fn gift_web_rebuild_reuses_the_user_index_id_on_both_gift_branches() {
+    // Tier 1 window-input seam; live chain:
+    //   main.rs::run_play -> window hub 0x5a5190 WM_APP+0x32 state 13 ->
+    //   billing_window_arm -> BillingWebHandle::rebuild (0x4f5020 ->
+    //   0x4f4bd0 URL opener) -> jamcard/coupon URL.
+    // seam note: the branch condition is unpinned; the explicit page
+    // argument keeps both pinned URL branches without inventing a gate.
+    const APP_UI_EVENT: u32 = 0x232;
+    use o2jam_shell::screens::messenger::{
+        billing_window_arm, BillingWebEvent, BillingWebHandle, BillingWebPage, BillingWindowArm,
+        BILLING_PAYMENT2_STATE_WORD,
+    };
+
+    assert_eq!(
+        billing_window_arm(APP_UI_EVENT, BILLING_PAYMENT2_STATE_WORD, true),
+        BillingWindowArm::RebuildGift
+    );
+
+    let mut handle = BillingWebHandle::with_handle(9);
+    let jamcard = handle.rebuild(BillingWebPage::JamCard, "55", 51);
+    assert_eq!(jamcard.first(), Some(&BillingWebEvent::ClosedPrevious(9)));
+    assert_eq!(
+        jamcard.get(1),
+        Some(&BillingWebEvent::Mounted {
+            handle: 51,
+            url: "http://game1.o2jam.com/client/jamcard.asp?USER_INDEX_ID=55".to_owned(),
+        })
+    );
+
+    let coupon = handle.rebuild(BillingWebPage::Coupon, "55", 52);
+    assert_eq!(coupon.first(), Some(&BillingWebEvent::ClosedPrevious(51)));
+    assert_eq!(
+        coupon.get(1),
+        Some(&BillingWebEvent::Mounted {
+            handle: 52,
+            url: "http://o2jam.nopp.co.kr/client/coupon2/coupon.phtml?USER_INDEX_ID=55".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn billing_rebuild_arm_needs_the_app_event_billing_state_and_a_live_handle() {
+    // seam: the Win32 hub has no winit message pump; the arm decode
+    // is the whole gate the headless client can observe.
+    use o2jam_shell::screens::messenger::{
+        billing_window_arm, BillingWindowArm, BILLING_PAYMENT_STATE_WORD,
+    };
+
+    assert_eq!(
+        billing_window_arm(0x100, BILLING_PAYMENT_STATE_WORD, true),
+        BillingWindowArm::None
+    );
+    assert_eq!(
+        billing_window_arm(0x232, BILLING_PAYMENT_STATE_WORD, false),
+        BillingWindowArm::None
+    );
+    assert_eq!(billing_window_arm(0x232, 99, true), BillingWindowArm::None);
+}
+
+#[test]
+fn print_screen_names_numbered_jpegs_outside_states_ten_and_eleven() {
+    // seam: no player Print Screen writer exists in this client, so
+    // the pinned path/name/counter helper is the whole behavior the
+    // headless seam can claim; JPEG bytes stay OPEN (Tier 4).
+    use o2jam_shell::screens::messenger::{
+        print_screen_file_name, print_screen_relative_path, PrintScreenAction, ScreenShotCounter,
+        SCREENSHOT_DIMENSIONS, SCREENSHOT_QUALITY,
+    };
+
+    assert_eq!(print_screen_file_name(1), "ScreenShot001.jpg");
+    assert_eq!(print_screen_file_name(1234), "ScreenShot1234.jpg");
+    assert_eq!(
+        print_screen_relative_path(7),
+        "오투잼_스크린샷\\ScreenShot007.jpg"
+    );
+    assert_eq!(SCREENSHOT_DIMENSIONS, (800, 600));
+    assert_eq!(SCREENSHOT_QUALITY, 80);
+
+    let mut counter = ScreenShotCounter::new(3);
+    assert_eq!(
+        counter.press(10),
+        PrintScreenAction::Suppressed { state: 10 }
+    );
+    assert_eq!(
+        counter.press(11),
+        PrintScreenAction::Suppressed { state: 11 }
+    );
+    let mut names = Vec::new();
+    for _ in 0..3 {
+        match counter.press(0) {
+            PrintScreenAction::Write {
+                file_name,
+                width,
+                height,
+                quality,
+            } => {
+                assert_eq!((width, height, quality), (800, 600, 80));
+                names.push(file_name);
+            }
+            other => panic!("an available shot must be written, got {other:?}"),
+        }
+    }
+    // The counter base (000 or 001 on the first press) is not named
+    // by the pin; only the per-press increment is claimed here.
+    for (index, name) in names.iter().enumerate().skip(1) {
+        let previous = names[index - 1]
+            .trim_start_matches("ScreenShot")
+            .trim_end_matches(".jpg")
+            .parse::<u32>()
+            .expect("pinned name shape");
+        let current = name
+            .trim_start_matches("ScreenShot")
+            .trim_end_matches(".jpg")
+            .parse::<u32>()
+            .expect("pinned name shape");
+        assert_eq!(current, previous + 1, "one name per written press");
+    }
+    assert_eq!(counter.used(), 3);
+    assert_eq!(counter.remaining(), 0);
+}
+
+#[test]
+fn print_screen_with_an_exhausted_counter_posts_a_notice_instead_of_a_file() {
+    // seam: the depleted branch calls the UI queue instead of the
+    // writer; no notice caption is pinned, so this guard claims only
+    // that no numbered file name is produced.
+    use o2jam_shell::screens::messenger::{PrintScreenAction, ScreenShotCounter};
+
+    let mut counter = ScreenShotCounter::new(0);
+    assert_eq!(counter.press(0), PrintScreenAction::Notice);
+    assert_eq!(counter.used(), 0, "no file name is consumed by a notice");
+    assert_eq!(counter.remaining(), 0);
+}
+
+#[test]
+fn cash_bill_host_table_keeps_the_five_publisher_literals() {
+    // seam: the host-selection condition is unpinned, so the whole
+    // claim here is the pinned host set and shared path; no URL is
+    // chosen and no HTTP request line is invented.
+    use o2jam_shell::screens::messenger::{CASH_BILL_HOSTS, CASH_BILL_PATH};
+
+    assert_eq!(CASH_BILL_PATH, "client/cash_bill/index.phtml");
+    assert_eq!(
+        CASH_BILL_HOSTS,
+        [
+            "o2jam.monawa.com",
+            "o2jam.gameangel.com",
+            "o2jam.gameon.nate.com",
+            "o2jam.pdbox.co.kr",
+            "o2jam.nopp.co.kr",
+        ]
+    );
+}
