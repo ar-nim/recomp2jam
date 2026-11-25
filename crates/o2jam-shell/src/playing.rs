@@ -7002,7 +7002,7 @@ mod pinned_image_state_tests {
     }
 
     #[test]
-    // seam: shortening helper has no live painter caller yet; Tier 3 label capture stays OPEN
+    // seam: shortening helper has no live painter caller yet; the label capture stays OPEN
     fn long_label_shrinks_to_the_measured_cell_width() {
         let cell = text_width("Lv 9");
         let fitted = shorten_label_to_cell("Lv 99 Robo", cell);
