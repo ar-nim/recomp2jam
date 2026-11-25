@@ -2,7 +2,7 @@
 //! (#139). The game seam keeps flow, dialog focus, and song-caption
 //! lookup; this module owns chat words and their pure decisions.
 
-pub use super::super::paint::WaitingChatChannel;
+pub use super::super::paint::ChatSendMode;
 use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
 use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
 use crate::screen::Screen;
@@ -250,7 +250,11 @@ pub(super) struct ChatState {
     room_panel: LobbyChatPanel,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
-    waiting_channel: WaitingChatChannel,
+    waiting_send_mode: ChatSendMode,
+    // `Some` is the local nickname prompt posted by the WHISPER tab;
+    // its string is the typed target before the prompt's OK.
+    whisper_prompt_target: Option<String>,
+    whisper_recipient: Option<String>,
     messenger_lamp: MessengerLamp,
     last_whisper_peer: Option<String>,
 }
@@ -295,29 +299,81 @@ impl ChatState {
     pub(super) fn clear_waiting(&mut self) {
         self.waiting_history.clear();
         self.waiting_draft.clear();
-        // The exe's Waiting setup arms CHAT_ALL and resets the lamps
-        // (files `0xba929`-`0xba94b`, `0xc06a0`).
-        self.waiting_channel = WaitingChatChannel::All;
+        // The exe's Waiting setup resets `+0x298` to room mode and
+        // resets the lamps (files `0xba929`-`0xba94b`, `0xc06a0`).
+        self.waiting_send_mode = ChatSendMode::Room;
+        self.whisper_prompt_target = None;
+        self.whisper_recipient = None;
         self.messenger_lamp.clear();
     }
 
-    /// Selected Waiting chat tab (exe `+0x298` toggle-group state).
+    /// Outgoing chat mode selected by the staged tab group (exe `+0x298`).
     #[must_use]
-    pub(super) const fn waiting_channel(&self) -> WaitingChatChannel {
-        self.waiting_channel
+    pub(super) const fn waiting_send_mode(&self) -> ChatSendMode {
+        self.waiting_send_mode
     }
 
-    /// Commit one staged tab press: light the selected tab and clear
-    /// the exe's per-tab row word on every switch; WHISPER also clears
-    /// the 256-byte draft buffer. `false` leaves every word untouched.
-    pub(super) fn select_waiting_channel(&mut self, code: u32) -> bool {
-        let Some(channel) = WaitingChatChannel::from_code(code) else {
+    /// Recipient staged by the local whisper prompt's OK.
+    pub(super) fn whisper_recipient(&self) -> Option<&str> {
+        self.whisper_recipient.as_deref()
+    }
+
+    /// True while the WHISPER tab's local nickname prompt owns typing.
+    #[must_use]
+    pub(super) const fn whisper_prompt_open(&self) -> bool {
+        self.whisper_prompt_target.is_some()
+    }
+
+    /// Text typed into the open nickname prompt.
+    pub(super) fn whisper_prompt_target(&self) -> &str {
+        self.whisper_prompt_target.as_deref().unwrap_or("")
+    }
+
+    /// Commit one staged tab press. The four tabs choose the next send
+    /// mode only: the received history is untouched. WHISPER additionally
+    /// clears the draft and posts the local nickname prompt
+    /// (`FUN_004b7c60`, file `0xb7df6`-`0xb7e24`). `false` for other codes.
+    pub(super) fn select_waiting_send_mode(&mut self, code: u32) -> bool {
+        let Some(mode) = ChatSendMode::from_code(code) else {
             return false;
         };
-        self.waiting_channel = channel;
-        self.waiting_history.clear();
-        if channel == WaitingChatChannel::Whisper {
+        self.waiting_send_mode = mode;
+        if mode == ChatSendMode::Whisper {
             self.waiting_draft.clear();
+            self.whisper_prompt_target = Some(String::new());
+            self.whisper_recipient = None;
+        } else {
+            self.whisper_prompt_target = None;
+        }
+        true
+    }
+
+    /// Type one character into the open local nickname prompt.
+    pub(super) fn type_whisper_prompt_char(&mut self, typed: char) {
+        let Some(target) = self.whisper_prompt_target.as_mut() else {
+            return;
+        };
+        if !typed.is_control() && target.chars().count() < MAX_CHAT_INPUT_CHARS {
+            target.push(typed);
+        }
+    }
+
+    /// Erase one character from the open local nickname prompt.
+    pub(super) fn erase_whisper_prompt_char(&mut self) {
+        if let Some(target) = self.whisper_prompt_target.as_mut() {
+            target.pop();
+        }
+    }
+
+    /// Accept the local nickname prompt: stage its target for the next
+    /// whisper send and remember it for `/r`. `false` when no prompt is open.
+    pub(super) fn confirm_whisper_prompt(&mut self) -> bool {
+        let Some(target) = self.whisper_prompt_target.take() else {
+            return false;
+        };
+        if !target.is_empty() {
+            self.whisper_recipient = Some(target.clone());
+            self.remember_whisper_peer(&target);
         }
         true
     }

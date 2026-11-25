@@ -169,7 +169,8 @@ use o2jam_net::{
     UpdateMusicState, UserJoinedWaiting, UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
-    AutoPickOutcome, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict, StartRequest,
+    AutoPickOutcome, ChatSendMode, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict,
+    StartRequest,
 };
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -1692,11 +1693,31 @@ impl OnlineSession {
                 self.game.clear_chat_input();
                 Ok(true)
             }
-            SlashCommand::Chat(_) => self.flush_chat(),
             SlashCommand::Whisper { recipient, content } => {
                 self.game.set_chat_input(&content);
                 self.flush_chat_whisper(&recipient)
             }
+            SlashCommand::Chat(_) => self.flush_chat_for_mode(),
+        }
+    }
+
+    /// Route one plain draft through the selected tab's send mode.
+    /// Only whisper (mode 3) is pinned to the 2017 target path
+    /// (`FUN_004b8d00`); FRIEND/GUILD stay distinct modes with their
+    /// addressee OPEN, so their room-chat send is a labelled stand-in.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (see [`Self::flush_chat`]).
+    fn flush_chat_for_mode(&mut self) -> Result<bool, o2jam_net::Error> {
+        match self.game.waiting_send_mode() {
+            ChatSendMode::Whisper => {
+                let Some(target) = self.game.whisper_recipient().map(str::to_owned) else {
+                    return Ok(false);
+                };
+                self.flush_chat_whisper(&target)
+            }
+            ChatSendMode::Room | ChatSendMode::Friend | ChatSendMode::Guild => self.flush_chat(),
         }
     }
 
@@ -2021,6 +2042,12 @@ impl OnlineSession {
     /// guest flips its `Ready` 4008 toggle. START/READY failures warn
     /// and keep state, so the next Confirm retries the same send.
     fn confirm_waiting(&mut self) {
+        // The WHISPER tab's local nickname prompt owns its own OK: no
+        // chat send, readiness toggle, or wire frame on that press.
+        if self.game.whisper_prompt_open() {
+            let _ = self.game.confirm_whisper_prompt();
+            return;
+        }
         if self.game.chat_slash_command() != SlashCommand::Empty {
             if let Err(source) = self.flush_chat_action() {
                 tracing::warn!(%source, "chat send failed; draft kept");

@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::ChatState;
-pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand, WaitingChatChannel};
+pub use self::chat::{ChatSendMode, LobbyChat, LobbyChatPanel, SlashCommand};
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
 
@@ -1260,15 +1260,6 @@ fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> 
     })
 }
 
-/// Control code of the first staged rect covering native pixel (`x`,
-/// `y`). Used only by toggle groups whose codes form a contiguous run.
-#[must_use]
-fn staged_code_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u32> {
-    placements
-        .iter()
-        .find(|placed| rect_hit(&placed.rect, x, y))
-        .map(|placed| placed.code)
-}
 /// Stage word behind one room arena value (the Playing applier's
 /// seeding rule, exe `0x4e78db`, `docs/stage-bga.md`): the low 16
 /// bits when a high word is set, the full value otherwise. `None`
@@ -3511,13 +3502,19 @@ impl ScreenGame {
         self
     }
 
-    /// Type one character into the waiting draft. Only the Waiting
-    /// scene accepts typing; control characters never enter the line
-    /// and the draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
+    /// Type one character into the waiting draft, or into the local
+    /// whisper nickname prompt when it owns the keyboard. Only the
+    /// Waiting scene accepts typing; control characters never enter a
+    /// line and each draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
     pub fn push_chat_char(&mut self, typed: char) {
-        if self.flow.current() == Screen::Waiting {
-            self.chat.type_waiting_char(typed);
+        if self.flow.current() != Screen::Waiting {
+            return;
         }
+        if self.chat.whisper_prompt_open() {
+            self.chat.type_whisper_prompt_char(typed);
+            return;
+        }
+        self.chat.type_waiting_char(typed);
     }
 
     /// Type one character into the lobby chat draft the on-screen
@@ -3533,11 +3530,16 @@ impl ScreenGame {
         }
     }
 
-    /// Erase the last waiting draft character (Backspace).
+    /// Erase one character from the whisper prompt or the waiting draft.
     pub fn delete_chat_char(&mut self) {
-        if self.flow.current() == Screen::Waiting {
-            self.chat.erase_waiting_char();
+        if self.flow.current() != Screen::Waiting {
+            return;
         }
+        if self.chat.whisper_prompt_open() {
+            self.chat.erase_whisper_prompt_char();
+            return;
+        }
+        self.chat.erase_waiting_char();
     }
 
     /// Erase the last character of the on-screen lobby draft. The
@@ -3826,6 +3828,9 @@ impl ScreenGame {
     /// gate passes ([`Self::press_start`]); guests, unready peers, and a
     /// room song some member lacks stay put.
     fn confirm_waiting(&mut self) {
+        if self.chat.confirm_whisper_prompt() {
+            return;
+        }
         if self.take_chat_slash() != SlashCommand::Empty {
             return;
         }
@@ -3926,10 +3931,32 @@ impl ScreenGame {
         self.waiting_effect
     }
 
-    /// Waiting chat tab selected by the four staged `CHAT_*` buttons.
+    /// Outgoing chat mode picked by the four staged Waiting tabs.
     #[must_use]
-    pub const fn waiting_chat_channel(&self) -> WaitingChatChannel {
-        self.chat.waiting_channel()
+    pub const fn waiting_send_mode(&self) -> ChatSendMode {
+        self.chat.waiting_send_mode()
+    }
+
+    /// Recipient staged by the WHISPER tab's local nickname prompt.
+    pub fn whisper_recipient(&self) -> Option<&str> {
+        self.chat.whisper_recipient()
+    }
+
+    /// True while the local whisper nickname prompt owns typing.
+    #[must_use]
+    pub const fn whisper_prompt_open(&self) -> bool {
+        self.chat.whisper_prompt_open()
+    }
+
+    /// Text typed into the open whisper nickname prompt.
+    pub fn whisper_prompt_target(&self) -> &str {
+        self.chat.whisper_prompt_target()
+    }
+
+    /// Accept the local whisper nickname prompt. `false` when none is
+    /// open; the caller owns the press so it sends no wire frame.
+    pub fn confirm_whisper_prompt(&mut self) -> bool {
+        self.chat.confirm_whisper_prompt()
     }
 
     /// True while the two messenger lamps show their 800 ms alert.
@@ -5207,12 +5234,21 @@ impl ScreenGame {
             return;
         }
         // The four chat tabs are the exe's four-control toggle group:
-        // one active frame, history-word clear, and a draft clear on
-        // the whisper arm (`FUN_004b7c60` files `0xb7d5d`-`0xb7e29`).
-        if let Some(code) = staged_code_at(placements, x, y)
-            .filter(|code| WaitingChatChannel::from_code(*code).is_some())
-        {
-            self.chat.select_waiting_channel(code);
+        // one active frame and an outgoing-mode pick, never a received
+        // row filter. Test each code directly: the chat EDIT rect
+        // overlaps every tab rect, so a first-hit sweep would swallow
+        // the press (`FUN_004b7c60` files `0xb7d5d`-`0xb7e29`).
+        let chat_tab = [
+            ChatSendMode::Room,
+            ChatSendMode::Friend,
+            ChatSendMode::Guild,
+            ChatSendMode::Whisper,
+        ]
+        .into_iter()
+        .map(ChatSendMode::code)
+        .find(|code| staged_code_hit(placements, *code, x, y));
+        if let Some(code) = chat_tab {
+            self.chat.select_waiting_send_mode(code);
             return;
         }
         // The two effect plates are an exclusive pair: the exe writes
@@ -9601,7 +9637,7 @@ impl ScreenGame {
             channel_family: None,
             room_number: self.waiting_room_number,
             effect: self.waiting_effect,
-            chat_channel: self.waiting_chat_channel(),
+            chat_send_mode: self.waiting_send_mode(),
             messenger_lamp_lit: self.messenger_lamp_lit_at(now_ms),
             wait_stamp_lit: self.waiting_stamp_lit_at(now_ms),
             local_download_badge_armed: self.local_download_badge_armed,
@@ -14666,29 +14702,53 @@ mod game_tests {
     }
 
     #[test]
-    fn chat_tab_clicks_switch_the_waiting_feed_and_clear_its_buffers() {
+    fn chat_tabs_switch_the_outgoing_send_mode_without_clearing_received_rows() {
         // Live chain: boot -> Waiting -> staged tab rect -> click ->
-        // ChatState -> paint. `FUN_004b7c60` handles the four tab codes
-        // `0x1620100E..11` through `FUN_0048c810(base, 4)`, lighting
+        // ScreenGame::click_waiting_button -> ChatState::select_waiting_send_mode
+        // -> paint_waiting_chat_tabs. `FUN_004b7c60` handles the four tab
+        // codes `0x1620100E..11` through `FUN_0048c810(base, 4)`, lighting
         // exactly the pressed control, and writes zero to dialog `+0x298`
         // on every tab; the whisper arm also zeroes the 0x100-byte input
-        // buffer at `+0x18c` (files `0xb7d5d`-`0xb7e29`).
+        // buffer at `+0x18c` and posts the local nickname prompt
+        // (files `0xb7d73`-`0xb7e24`). No tab filters the received chat
+        // list (`FUN_004bb6c0`).
         let mut game = waiting_chat_chrome_game();
-        game.push_waiting_user_message(&chat_user("peer", "hello"));
+        game.push_waiting_user_message(&chat_user("host", "from host"));
+        game.push_waiting_user_message(&chat_user("peer", "from peer"));
         game.set_chat_input("draft");
-        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
-        assert_eq!(game.waiting_chat().len(), 1);
+        assert_eq!(game.waiting_send_mode(), ChatSendMode::Room);
+        assert_eq!(game.waiting_chat().len(), 2);
         assert_eq!(game.chat_input(), "draft");
 
         game.ingest_snapshot(&InputSnapshot::click_at(442, 563));
-        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Friend);
-        assert!(game.waiting_chat().is_empty());
+        assert_eq!(game.waiting_send_mode(), ChatSendMode::Friend);
+        assert_eq!(
+            game.waiting_chat().len(),
+            2,
+            "a send-mode tab must keep both received rows"
+        );
         assert_eq!(game.chat_input(), "draft");
+        assert!(!game.whisper_prompt_open());
 
         game.set_chat_input("whisper me");
         game.ingest_snapshot(&InputSnapshot::click_at(494, 563));
-        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::Whisper);
+        assert_eq!(game.waiting_send_mode(), ChatSendMode::Whisper);
+        assert_eq!(game.waiting_chat().len(), 2);
         assert_eq!(game.chat_input(), "");
+        assert!(
+            game.whisper_prompt_open(),
+            "WHISPER posts the local nickname prompt"
+        );
+        assert_eq!(game.whisper_prompt_target(), "");
+
+        for typed in "eve".chars() {
+            game.push_chat_char(typed);
+        }
+        assert_eq!(game.whisper_prompt_target(), "eve");
+        assert!(game.confirm_whisper_prompt());
+        assert!(!game.whisper_prompt_open());
+        assert_eq!(game.whisper_recipient(), Some("eve"));
+        assert_eq!(game.waiting_chat().len(), 2);
 
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -14724,7 +14784,7 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(670, 571));
         assert!(!game.messenger_lamp_lit_at(2_001));
         assert_eq!(game.chat_input(), "payload");
-        assert_eq!(game.waiting_chat_channel(), WaitingChatChannel::All);
+        assert_eq!(game.waiting_send_mode(), ChatSendMode::Room);
     }
 
     fn waiting_seat_icon_game() -> ScreenGame {
