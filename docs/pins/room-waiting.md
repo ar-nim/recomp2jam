@@ -116,6 +116,25 @@ direct-caller edge, not proof of a runtime press.
   Refusal captions were read as CP949 bytes at `0x648330`, `0x648280`,
   `0x648250`, `0x648208`, `0x6481e8`, `0x648190`, `0x648178` through REA
   `read_bytes`.
+- **Arm-to-caption map** (2026-11-25 senior REA pass, pseudocode dossier
+  `ev_afff8af205e2391c580881dc5883d3c58fba5a8a400298c65448e15c105b4ea1`,
+  byte reads `ev_3b91f7e4b3512ff02a9e2862cfaed2ae379a9c818bbcfd842be452cf08d70176`,
+  `ev_771176cb5fb48980ddbe5c5f38c9820408d4e15bdb68529463708188d04bb006`):
+  unregistered song `0x648330`; 7Key-mode level-4 gate `0x648280`
+  (mode byte 2 + player level < 4); room full `0x648250` (`%s` = the
+  room name); game-info loading `0x648208` (row state byte 3); PT
+  insufficient `0x6481e8` (skilled row + player level < 10 + the PT word
+  `DAT_00768b34` == 0 — the same global the 5026 FREEINFO story calls
+  the pass word, so its reader set now includes this gate; the writer
+  stays OPEN); level window `0x648190` (`%d`/`%d` = the row's min/max
+  level bytes); password `0x648178` (posted with popup code 8).
+  **There is no started-room caption in this function**: the only other
+  popup is the relay-down NORMAL-mode notice at `0x644d98`
+  (`network problem, NORMAL mode only`), fired by the game-info state
+  word, not by the row. A started room either falls through to the 3002
+  post (server refuses) or is gated by the row state byte elsewhere —
+  which of the two is OPEN; next step: pin the started-room state-byte
+  value and watch one live press.
 - **Our client**: partial. `ScreenGame::quickjoin_accepts` /
   `queue_quickjoin` (`crates/o2jam-shell/src/screens/game/mod.rs:2588`,
   `:2609`) implement password, seat and level-window gates for QUICKJOIN;
