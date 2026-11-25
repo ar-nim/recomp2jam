@@ -119,6 +119,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn an_unpinned_or_out_of_range_slot_names_no_effect() {
         assert_eq!(UiEffectId::from_slot(0), None);
         assert_eq!(UiEffectId::from_slot(0x34), None);

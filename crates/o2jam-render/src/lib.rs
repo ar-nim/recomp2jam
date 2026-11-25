@@ -2100,6 +2100,8 @@ mod fidelity_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn scaled_alpha_zero_paints_nothing() {
         let sprite = Sprite {
             pixels: &[0x7FFF],
@@ -2441,6 +2443,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn zero_color_key_leaves_black_pixels_opaque() {
         // 7.55 installs a source colorkey only for a nonzero stored
         // key (docs/claims-render.md rule 4); key 0 must cover the
@@ -2664,6 +2668,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_highway_has_no_visible_spans() {
         let flat = Rect {
             x: 0,

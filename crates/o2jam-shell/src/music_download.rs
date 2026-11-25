@@ -232,6 +232,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn an_unstaged_room_song_queues_nothing() {
         // Song id 0 names no chart file, so a kick without a staged
         // room song stays a no-op instead of fetching `o2ma0.ojn`.
@@ -293,6 +295,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_fetch_source_keeps_the_transfer_idle() {
         let (source, music) = transfer_dirs("recomp2jam-chart-idle");
         let root = source.parent().expect("root").to_path_buf();

@@ -2453,6 +2453,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn playing_time_fill_stays_inside_the_staged_bar_rect() {
         // Ticket #102 leg 2: the procedural TIME shell and fill
         // route through the staged TIMEBAR rect (`State_Playing.bnd`
@@ -2524,6 +2526,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn missing_archives_stage_nothing() {
         assert!(read_install_archives(&install_root().join("No/Such"))
             .interface
@@ -2862,6 +2866,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_shot_paints_no_fill_under_the_live_list() {
         // Pinned no-fill rule (`docs/channel-fill.md`): the art-less
         // channel stages nothing, so the native corner stays untouched
@@ -3736,6 +3742,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_walk_without_staged_chat_holds_no_history() {
         // Empty histories paint nothing (the shell's no-invention
         // pin): re-joining the same room clears the scripted rows,
@@ -4600,6 +4608,8 @@ mod tests {
     /// state faces here doubles the labels and underlines (owner's
     /// symptom 2). Only the level sort's live frame stays on top.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_tab_leaves_baked_header_and_row_tags_visible() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
@@ -4956,6 +4966,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn guest_capture_carries_its_own_seats_but_no_select_view() {
         // The seat template paints from live flags (`SeatIndicator`:
         // master star, ready plate, no-song mark), so the guest view

@@ -1968,6 +1968,8 @@ mod live_boot_gate_tests {
     /// Planet -> Channel entry edge, over the channel frame. OK still
     /// reveals the held rows in Channel (#244).
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn relay_down_notice_waits_for_channel_entry_and_leaves_boot_on_avi() {
         let channels = vec![o2jam_net::ChannelState {
             gateway_id: 1,
@@ -2156,6 +2158,8 @@ mod live_boot_gate_tests {
     /// the whole window — the leg where the timing is the behavior.
     /// No timeout is invented as an exe rule.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn relay_notice_ok_click_comes_after_the_1003_answer_with_no_wire_gap() {
         let row = ChannelState {
             gateway_id: 1,

@@ -320,6 +320,8 @@ fn menu_walks_full_session_to_results() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn result_retries_to_waiting_and_leaves_to_room() {
     let mut retry = ScreenGame::new();
     retry.load_chart(vec![(2, 5000, 7)]);
@@ -386,6 +388,8 @@ fn splash_ignores_key_release() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn unfinished_chart_stays_in_playing() {
     let mut game = ScreenGame::new();
     game.load_chart(vec![(2, 5000, 7)]);

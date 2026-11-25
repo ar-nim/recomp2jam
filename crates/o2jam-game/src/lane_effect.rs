@@ -322,6 +322,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn narrow_shuffle_with_zero_width_stays_identity() {
         let mut random = stub_random(vec![]);
         let map = LaneMap::shuffled_narrow(0, &mut random);
@@ -329,6 +331,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn narrow_shuffle_leaves_slot_one_untouched() {
         let mut random = stub_random(vec![1, 2, 0, 1]);
         let map = LaneMap::shuffled_narrow(FULL_WIDTH_LANES, &mut random);
@@ -337,6 +341,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn narrow_shuffle_stays_a_permutation_of_four_slots() {
         let mut random = stub_random(vec![2, 0, 1, 2, 0, 1]);
         let map = LaneMap::shuffled_narrow(FULL_WIDTH_LANES, &mut random);
@@ -414,6 +420,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn hidden_ring_leaves_lanes_straight_through() {
         let mut random = stub_random(vec![]);
         let map = SkillRing::Hidden.build_lane_map(FULL_WIDTH_LANES, &mut random);
@@ -422,6 +430,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn sudden_ring_leaves_lanes_straight_through() {
         let mut random = stub_random(vec![]);
         let map = SkillRing::Sudden.build_lane_map(FULL_WIDTH_LANES, &mut random);
@@ -430,6 +440,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn dark_ring_leaves_lanes_straight_through() {
         let mut random = stub_random(vec![]);
         let map = SkillRing::Dark.build_lane_map(FULL_WIDTH_LANES, &mut random);
@@ -438,6 +450,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn reverse_dark_ring_leaves_lanes_straight_through() {
         let mut random = stub_random(vec![]);
         let map = SkillRing::ReverseDark.build_lane_map(FULL_WIDTH_LANES, &mut random);

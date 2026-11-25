@@ -10828,6 +10828,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unfinished_chart_stays_playing() {
         let mut game = ScreenGame::new();
         game.load_chart(vec![(2, 5000, 7)]);
@@ -11797,6 +11799,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_channel_list_answers_no_hover_or_click() {
         // Ticket #163 (channel leg, empty-list arm): with no rows
         // listed, the row bands arm nothing and clicks hold the
@@ -12429,6 +12433,8 @@ mod game_tests {
     /// Seam suffices: the verdict is a pure function of the staged
     /// room; the paint face is pinned by the guard above.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn solo_master_gate_has_no_peer_only_verdict_arm() {
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
@@ -13319,6 +13325,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn bundled_room_chrome_answers_no_click_or_hover() {
         // The exe clears the bundled chrome's draw-path words on room
         // setup (always-hidden, ticket #169): staged or not, clicks
@@ -13339,6 +13347,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn bundled_room_chrome_paints_no_pixels() {
         // Staging the bundled chrome changes no room pixel: the
         // painter holds it out exactly as the exe does.
@@ -14074,6 +14084,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_chrome_sweep_arms_no_hover_state() {
         // Ticket #163 (waiting leg, HOVER stand-in): no waiting
         // chrome was ever hover-captured (`docs/hover.md` covers
@@ -14127,6 +14139,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_ready_guest_press_arms_nothing_and_releases_clean() {
         // Ticket #163 (waiting leg, CLICK guest arm): a guest READY
         // press stays in Waiting (guests ready through the session
@@ -14208,6 +14222,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_seat_and_cover_clicks_land_nowhere_empty_or_populated() {
         // Ticket #163 (waiting leg, CLICK empty vs populated
         // seats): seat EXTEND plates and avatar covers are not
@@ -14251,6 +14267,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_unwired_chrome_clicks_land_nowhere() {
         // Ticket #163 (waiting leg, CLICK labelled no-ops):
         // MUSELECT-open, the map pager, change-title, emotion, skill
@@ -14945,6 +14963,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn click_leaves_result_into_rooms() {
         let mut game = result_game();
         // Pinned BACK rect (711,569)-(794,593).
@@ -15303,6 +15323,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn an_out_of_range_channel_family_index_stages_no_category_record() {
         // Seam suffices: `WaitingChannelFamily::from_index` is the
         // checked constructor; the only live caller maps `PlanetBand`
@@ -15452,6 +15474,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn guest_team_buttons_hold_no_highlight_cursor() {
         // The guest branch disables every team button and resets its
         // frame (`FUN_004ae350`, REA batch `ev_fb099d23…`), so the
@@ -15652,6 +15676,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn stage_waiting_figures_without_decodable_archive_stages_nothing() {
         // The shared `load_worn_figure` path skips unresolvable
         // pieces instead of failing: junk bytes stage no seat.
@@ -15763,6 +15789,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn selection_without_a_catalog_record_keeps_no_cover() {
         // The cover path runs through the staged catalog's container
         // token; a selection with no staged record resolves nothing
@@ -15926,6 +15954,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn staged_pick_leaves_the_musicname_plate_without_a_scrim() {
         // Live chain: main.rs::run_play -> Shell::run ->
         //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
@@ -15961,6 +15991,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn staged_pick_inks_nothing_below_the_seat_grid() {
         // Live chain: main.rs::run_play -> Shell::run ->
         //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
@@ -16232,6 +16264,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_without_a_song_paints_no_level_badge() {
         // Live chain: main.rs::run_play -> Shell::run ->
         //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
@@ -16622,6 +16656,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn select_text_layer_paints_nothing_over_the_seats() {
         // The dialog is modal art over the waiting seats, and the text
         // pass inks captions at its staged slots only: the seat pixel
@@ -17165,6 +17201,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn select_structure_stays_hidden_without_dialog_art() {
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
@@ -17515,6 +17553,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_empty_bag_cell_paints_no_selection_frame() {
         // Live caller chain (#305, BAG-CELL-EMPTY x peer):
         //   main.rs::run_play -> OnlineSession::ingest_snapshot
@@ -17768,6 +17808,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN story #180: this guard certified behavior the owner disproved.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #180.
     fn myroom_my_bag_tab_press_leaves_the_gift_panel_open() {
         // Live caller chain as above. The pinned exe3 `8515a7e5…`
         // frame keeps the gift box after clicking the MY BAG tab;
@@ -18271,6 +18313,8 @@ mod game_tests {
     /// is unpinned (OPEN), so the press only clears the staged worn
     /// set and restages.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_vacate_queues_no_wire_send() {
         // Live caller chain: same ingest path as
         // `myroom_vacate_clears_the_selected_slot_and_restages`;
@@ -18716,6 +18760,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_entry_queues_no_wire_call() {
         // The exe's paired MyRoom tap sends only 5006 on entry, and
         // no 5017/5018 (#857). The shell stages the side without a
@@ -19426,6 +19472,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_info_plate_leaves_unpinned_money_rank_guild_skills_notice_blank() {
         // Live caller chain: same 2001 staging + paint overlay as the
         // win-rate guard above; this guard pins the OPEN boundary.
@@ -19915,6 +19963,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn myroom_p0_controls_answer_nothing_and_queue_no_wire() {
         // Live caller chain:
         //   main.rs::run_play -> OnlineSession::ingest_snapshot
@@ -20060,6 +20110,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn payment_side_without_staged_rects_paints_nothing() {
         // No staged geometry and no invented notice: the miss path
         // paints nothing (ADR-0003 — no literal fallback rect).
@@ -20080,6 +20132,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn payment_entry_queues_no_wire_call() {
         // Billing completes no calls: visiting either billing view
         // stages nothing on any send seam (the run stays silent).
@@ -20268,6 +20322,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn splash_stays_before_timeout() {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS - 1);
@@ -20656,6 +20712,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn side_leaves_without_entry() {
         let mut game = ScreenGame::new();
         assert!(!game.leave_side());
@@ -20851,6 +20909,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_select_bar_holds_the_last_hovered_row_after_the_pointer_leaves() {
         // #876 v3 oracle: the exe frame parks its pointer off-canvas
         // yet the select bar stays on the Ch.03 row the driver last
@@ -21193,6 +21253,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn board_click_while_quit_modal_open_lands_nowhere() {
         // Ticket #163 (planet leg, modal gating arm): while the
         // quit-confirm owns the board, an emblem click is not a
@@ -21207,6 +21269,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_hover_stays_off_while_a_modal_owns_the_board() {
         // The quit-confirm modal layers over the bare board: motion
         // over an emblem must not arm board hover behind it.
@@ -21350,6 +21414,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_press_on_control_without_pressed_art_paints_nothing() {
         // Pinned #111 arm 1 (per-control rule): the option gear shows
         // no visible pressed art, and the shell must not invent one —
@@ -21763,6 +21829,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn tt222_room_breathing_no_stale_figure_pixels_across_ticks() {
         // Ticket #222 paint-seam guard: a worn breathing figure on a
         // bare Room board advances frames on the paint clock, and no
@@ -22170,6 +22238,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn quiet_server_slot_table_leaves_no_rows_to_click() {
         // Live 2026-11-09: the quiet server sends an all-`Number`-0
         // slot table, so the empty-slot filter leaves blank panels —
@@ -25210,6 +25280,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn select_row_click_without_master_or_art_commits_nothing() {
         // `MUSELECT 0x16200003` drops non-master clicks, and an
         // art-less master sees no dialog: both click nowhere.
@@ -25746,6 +25818,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn create_room_cleared_default_title_commits_nothing() {
         // Live chain: `main.rs::run_play` → winit Backspace →
         // `delete_room_dialog_char` → `CreateRoomForm::pop_title` (the
@@ -26159,6 +26233,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn hovering_an_emblem_cues_no_effect() {
         // Live chain: window.rs::route_mouse_input -> InputSnapshot with
         // pointer only -> ScreenGame::ingest_snapshot -> hovered_planet_action
@@ -26184,6 +26260,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn refused_channel_enter_cues_no_effect_after_the_row_pick() {
         // Live chain: main.rs::run_play -> OnlineSession::ingest_snapshot
         // -> 1005 refusal -> ScreenGame::open_channel_refusal_dialog ->
@@ -26214,6 +26292,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn a_cue_without_a_staged_bank_entry_fabricates_no_sample() {
         // Live chain: window.rs::route_mouse_edge -> InputSnapshot ->
         // ScreenGame::ingest_snapshot -> dispatch_planet_action ->
@@ -27300,6 +27380,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_buyitem_without_cart_queues_nothing() {
         // An empty cart commits nothing: no body reaches the seam.
         let mut game = open_shop_board(10);
@@ -27483,6 +27565,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN story #178: this guard certified behavior the owner disproved.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #178.
     fn shop_unwired_browse_chrome_lands_nowhere() {
         // Live caller chain: same catalog staging as the preview
         // guard, then click_shop on ControlList-named chrome the live
@@ -27785,6 +27869,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_unstaged_clicks_land_nowhere() {
         // No placements and no catalog: every click is a no-op.
         let mut game = ScreenGame::new();
@@ -28109,6 +28195,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn a_wrong_category_preview_press_stages_nothing_and_posts_no_notice() {
         // Same live chain as the occupied-slot guard. Category `0x17`
         // is outside the exe's `0x18..0x1b` range, where the arm falls
@@ -28256,6 +28344,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN story #178: this guard certified behavior the owner disproved.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916 and #178.
     fn item_shop_go_myroom_leaves_without_an_exit_send() {
         // Live caller chain (once the control stages):
         //   main.rs::run_play -> ingest_snapshot -> click_side_screen ->
@@ -28661,6 +28751,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_locked_bag_cell_selects_nothing_and_posts_no_notice() {
         // Same arm: the special-item pair check against globals
         // `0x77991c/20` skips selection and notice entirely. The
@@ -28911,6 +29003,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn shop_gift_buttons_record_noop_and_queue_nothing() {
         // Live caller chain:
         //   main.rs::run_play -> setup_online -> stage_online_identity
@@ -29584,6 +29678,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_shop_search_reports_empty_text_repeated_queries_and_no_hits() {
         // The exe compares the edit text with its stored query and
         // posts the pinned prompt on empty or unchanged input and on
@@ -30177,6 +30273,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn a_music_shop_gem_shortfall_posts_its_notice_and_queues_nothing() {
         // Same click chain; the gem total (bag +0x18) exceeds global
         // 0x768B44, so the exe posts VA 0x64A66C before the send.
@@ -30194,6 +30292,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn a_music_shop_cash_shortfall_posts_its_notice_and_queues_nothing() {
         // Same click chain; the won-priced total (bag +0x14) exceeds
         // all three cash globals 0x768B4C/50/54, so the exe posts
@@ -30351,6 +30451,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_shop_entry_clears_the_top100_press_and_stages_no_ranking_board() {
         // Live caller chain: main.rs::run_play -> stage_live_art ->
         // ScreenGame::visit_side(MusicShop) -> (entry FUN_004c6d70 writes
@@ -31235,6 +31337,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn music_shop_unstaged_clicks_land_nowhere() {
         // No placements and no catalog: every click is a no-op.
         let mut game = ScreenGame::new();
@@ -31311,6 +31415,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn lanking_unstaged_clicks_land_nowhere() {
         // No placements and no catalog: every click is a no-op and
         // every view reads empty.
@@ -31397,6 +31503,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn side_hover_sweep_arms_no_hover_state() {
         // Ticket #163 (side legs, HOVER): all seven sides open from
         // Waiting; the pointer sweeps every staged control center
@@ -31428,6 +31536,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn side_hover_from_channel_arms_no_channel_row() {
         // Ticket #163 (side legs, HOVER wiring): the channel select
         // bar must not arm under an open side overlay — clicks route
@@ -31810,6 +31920,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn payment_chrome_sweep_clicks_land_nowhere() {
         // Ticket #163 (payment leg, CLICK): the billing views complete
         // no web call, so every staged rect and every blank point
@@ -31836,6 +31948,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_side_and_tutorial_clicks_land_nowhere() {
         // Ticket #163 (planet-side + tutorial legs, CLICK): the
         // solo-mission board and the tutorial backdrop stage art but
@@ -31863,6 +31977,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn loading_chrome_absence_sweep_routes_no_click_or_hover() {
         // Ticket #163 (loading leg): the gate has no chrome — clicks
         // anywhere (corners, center, the staged READY rect) route
@@ -32227,6 +32343,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_without_battle_claim_paints_no_verdict() {
         let mut game = ScreenGame::new();
         finish_song(&mut game);
@@ -32399,6 +32517,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn grade_stays_below_the_lowest_threshold_on_a_miss() {
         // The timeout miss floors the points at zero: ratio 0 stays
         // under 0.30, the plate's empty state.
@@ -32428,6 +32548,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_win_paints_no_invented_verdict_for_rank_one() {
         let mut game = ScreenGame::new();
         game.set_battle_teams(battle_teams_self_wins());
@@ -32442,6 +32564,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_lose_paints_no_invented_verdict_off_rank_one() {
         let mut game = ScreenGame::new();
         game.set_battle_teams(battle_teams_self_wins());
@@ -33128,6 +33252,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_chrome_sweep_paints_no_hover_state() {
         // Ticket #163 (result leg, HOVER stand-in solo + battle):
         // no result chrome was ever hover-captured (`docs/hover.md`
@@ -33611,6 +33737,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn loading_confirm_without_a_walk_stays_in_loading() {
         use MenuKey;
         // No validation, no phases, no audio: the gate holds the
@@ -33625,6 +33753,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn loading_confirm_without_audio_stays_in_loading() {
         use MenuKey;
         // Validated and armed, but no audio rig: missing audio
@@ -34057,6 +34187,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_announcement_stages_no_row() {
         let mut game = ScreenGame::new();
         game.push_channel_announcement(&channel_announcement(""));
@@ -34089,6 +34221,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn invalid_rank_notification_stages_no_row() {
         let mut game = ScreenGame::new();
         game.push_channel_rank_notification(&o2jam_net::rooms::RankNotification {
@@ -34484,6 +34618,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_confirm_with_a_draft_sends_and_stays_in_channel() {
         let mut game = ScreenGame::new();
         game.menu_key(MenuKey::Back, true);
@@ -34515,6 +34651,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_without_packets_paints_no_chat_history() {
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
@@ -34571,6 +34709,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn confirm_with_a_draft_sends_and_stays_in_waiting() {
         let mut game = ScreenGame::new();
         walk_to_waiting(&mut game);
@@ -34659,6 +34799,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn waiting_non_master_confirm_stays_in_waiting() {
         // Guests never start (no `START` arm for them, file
         // `0xae805`): their Confirm readies up through the session
@@ -34869,6 +35011,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn a_missing_room_song_announces_no_music_state() {
         // §2: the announcement is computed for the room's staged song;
         // with none (id 0) the client answers Ready rather than
@@ -34935,6 +35079,8 @@ mod game_tests {
     const ROOM_CONTROL_TEST_CLICK: (i32, i32) = (410, 385);
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_enter_with_an_open_dialog_stays_in_the_lobby() {
         // The open room sheet owns the keyboard: Enter must neither
         // send the lobby draft nor leave for Waiting, and the draft
@@ -35471,6 +35617,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn planet_tutorial_plate_click_stays_click_silent_under_static_dead_verdict() {
         // Ticket #471: live chain boot → Waiting → Planet side → the
         // dimmed TUTORIAL plate `0x19201006` at its `docs/planet.md:84`
@@ -35700,6 +35848,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn tutorial_visit_leaves_the_channel_board_unchanged() {
         // Spec #313 channel-observer story: a private side visit has no
         // board cell (`docs/captures/journey-audit/313-tutorial-story-matrix.md`
@@ -35799,6 +35949,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn firststep_tutorial_lane_press_lights_only_its_own_cap_with_no_judgement() {
         // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
         // click → Tutorial → lane-key press → painter. Boot2 pack
@@ -36064,6 +36216,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn click_away_from_every_room_control_stays_in_the_lobby() {
         let mut game = room_lobby_with_control(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP");
         game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
@@ -36104,6 +36258,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_typing_leaves_the_channel_draft_alone() {
         let mut game = room_lobby_with_controls(&[]);
         game.set_channel_input("chan");
@@ -36113,6 +36269,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn channel_typing_leaves_the_room_draft_alone() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
@@ -36138,6 +36296,8 @@ mod game_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn room_confirm_with_a_draft_stays_in_the_lobby_and_clears_it() {
         let mut game = room_lobby_with_controls(&[]);
         game.set_lobby_input(LobbyChat::Room, "hello");

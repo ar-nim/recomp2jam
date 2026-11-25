@@ -2259,6 +2259,8 @@ mod cli_build_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_sound_flag_opts_out_of_audio() {
         // #120: `--no-sound` flips the rig silent on both windowed
         // subcommands; the session then stays on the null sink.

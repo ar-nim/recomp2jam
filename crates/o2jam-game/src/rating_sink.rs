@@ -619,6 +619,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn cool_below_threshold_reports_no_jam() {
         let mut sink = live_sink();
         for _ in 0..24 {
@@ -678,6 +680,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn sound_event_plays_its_payload_sample_and_reports_nothing() {
         let sink = RatingSink::new(0, 2);
         let outcome = sink.handle_sound(0x0107, 2);
@@ -691,6 +695,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn dispatch_sound_code_reports_no_server_payload() {
         let mut sink = live_sink();
         let outcome = sink.dispatch(SOUND_EVENT, 0x0107, 0, 2);
@@ -700,6 +706,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn hold_event_on_bad_or_miss_resets_combo_and_reports_nothing() {
         let mut sink = live_sink();
         sink.handle_judgement(tap_payload(), RatingClass::Cool, 0);
@@ -860,6 +868,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn relay_stays_silent_when_live_is_off() {
         let mut sink = RatingSink::new(0, 2);
         let outcome = sink.handle_judgement(tap_payload(), RatingClass::Cool, 0);
@@ -906,6 +916,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn paint_timing_and_nop_codes_report_nothing() {
         // B47: the 16-way dispatcher's remaining arms (2, 5-8, 10,
         // 11, 16, and the NOP arms 3/4/12/13/15) drive only local

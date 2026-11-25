@@ -145,6 +145,8 @@ mod live_stats_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unknown_channel_stores_nothing_but_still_broadcasts_ranks() {
         let mut peers = PeerBars::new();
         let update = GameStatsUpdate {
@@ -162,6 +164,8 @@ mod live_stats_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn out_of_range_slot_forwards_nothing_but_keeps_ranks() {
         let mut peers = PeerBars::new();
         let update = GameStatsUpdate {

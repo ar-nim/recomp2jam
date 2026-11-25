@@ -108,6 +108,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn rest_control_repaints_no_record() {
         let state = DialogFrameState::default();
         assert_eq!(

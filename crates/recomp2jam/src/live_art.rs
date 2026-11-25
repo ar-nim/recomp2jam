@@ -1381,6 +1381,8 @@ mod live_art_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn live_waiting_pick_leaves_the_musicname_plate_unscrimmed() {
         // Live chain: main.rs::run_play -> setup_online ->
         //   stage_online_identity -> stage_live_scenes ->
@@ -1472,6 +1474,8 @@ mod live_art_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn live_waiting_pick_inks_nothing_below_the_seat_grid() {
         // Live chain: main.rs::run_play -> setup_online ->
         //   stage_online_identity -> stage_live_scenes ->

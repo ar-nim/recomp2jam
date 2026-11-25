@@ -294,6 +294,8 @@ mod room_fuse_tests {
     /// seam: the latch is the whole behavior here; the live scripted
     /// gateway leg in `recomp2jam::session_tests` counts the pair.
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn one_room_visit_requests_the_user_list_once_until_it_leaves_room() {
         let sent_at = Instant::now();
         let mut fuse = fuse_stamped_at(sent_at);

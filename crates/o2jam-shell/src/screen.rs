@@ -240,6 +240,8 @@ mod screen_flow_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn leaves_result_for_room_list() {
         let mut flow = ScreenFlow::default();
         flow.go(Screen::Planet).unwrap();
@@ -285,6 +287,8 @@ mod screen_flow_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn main_flow_screens_host_no_side_screens() {
         for screen in [
             Screen::Avi,

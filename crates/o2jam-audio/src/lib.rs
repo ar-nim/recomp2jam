@@ -1119,6 +1119,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_bgm_starts_no_voice() {
         let mut queue = PcmQueue::default();
         let empty = PcmSamples {
@@ -1144,6 +1146,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn null_backend_silent_key_gain_leaves_clock_untouched() {
         let mut backend = NullBackend::new();
         let pcm = PcmSamples {

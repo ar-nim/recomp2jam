@@ -627,11 +627,15 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unknown_walk_stays_indeterminate() {
         assert_eq!(loading_fraction(0, 0), None);
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn phase_past_the_gate_stays_indeterminate() {
         assert_eq!(loading_phase_status(LOADING_GATE_STEPS + 1, "T", "A"), None);
     }
@@ -858,6 +862,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn null_backend_silent_gain_leaves_the_clock() {
         use o2jam_audio::{AudioBackend, NullBackend};
         let mut backend = NullBackend::new();

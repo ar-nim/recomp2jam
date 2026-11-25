@@ -96,6 +96,8 @@ mod script_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn probe_control_motion_carries_no_edges() {
         let mut gesture = probe_gesture((400, 300), (729, 580));
         let control = gesture.snapshot();

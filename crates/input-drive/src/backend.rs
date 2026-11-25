@@ -104,6 +104,8 @@ mod backend_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_env_selects_no_arm() {
         assert_eq!(select_backend(None, None, None), None);
         assert_eq!(select_backend(None, Some(""), Some("")), None);

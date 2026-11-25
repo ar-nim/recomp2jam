@@ -17,6 +17,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn no_tracked_path_may_shadow_the_git_ignored_data_dirs() {
         let out = Command::new("git")
             .args(["ls-files"])

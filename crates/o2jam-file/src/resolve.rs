@@ -379,6 +379,8 @@ STATE_ROOM 0x02\n\
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn bound_returns_none_when_stem_has_no_entry() {
         let block = fixture_block();
         assert!(resolve_bound_entry(&block, &for_entry(["Other.bnd"])).is_none());
@@ -468,6 +470,8 @@ STATE_ROOM 0x02\n\
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn entry_without_sprite_draws_no_art() {
         let block = fixture_block();
         let directory = fixture_directory();
@@ -600,6 +604,8 @@ STATE_ROOM 0x02\n\
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn unshaped_underscore_reference_stays_deferred_even_with_a_stage() {
         let entry = ControlEntry {
             id: "IDC_ODD".to_string(),

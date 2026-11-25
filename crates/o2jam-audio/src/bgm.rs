@@ -342,6 +342,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn cue_through_null_backend_counts_frames_and_stays_contained() {
         // Containment rule: tests exercise the null audio path only.
         let bank = bank_with_track(10, 8);

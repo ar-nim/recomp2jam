@@ -338,6 +338,8 @@ mod tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn zero_queue_dispatch_adds_no_ticks() {
         let (mut handler, state, game) = measured_handler();
         let sample = measure_input_latency(&mut handler, KeyCode::KeyS, 0, &state)

@@ -1428,6 +1428,8 @@ mod oja55_tests {
     /// A trailing block whose only walks stop above the bottom row is
     /// not a plane: the whole block stays raw (honest negative).
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn oja55_leaves_bottom_free_trailing_blocks_raw() {
         let (p0, a0) = oja_plane(&[oja_row_group(4, 0, 0, &[0x7C00; 4])], &[0x40]);
         let mut high = oja_row_group(4, 0, 1, &[0x03E0; 4]);

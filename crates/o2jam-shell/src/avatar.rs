@@ -3386,6 +3386,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn empty_figure_paints_nothing() {
         let figure = AvatarFigure::default();
         let mut buf = vec![0x123456u32; 4];
@@ -4096,6 +4098,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn stage_resolved_backdrop_miss_leaves_the_slot_empty() {
         // Only stage 1 exists: stage 7's numbered name misses and the
         // exe's slot loader leaves the slot empty — no bare-stem
@@ -4351,6 +4355,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn stub_blocks_stage_nothing() {
         // Recipe step 3: the bare `0x00` stubs draw nothing, even
         // with a bind section on hand.
@@ -4365,6 +4371,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn named_block_with_entries_is_no_stub() {
         let list = o2jam_file::parse_control_list(&stub_block_text()).unwrap();
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
@@ -4372,6 +4380,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn container_coded_rows_take_no_rect() {
         // Entry codes gate visibility: a zero low word marks a
         // scene/container row, so it stays unplaced even with a
@@ -4519,6 +4529,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn spriteless_channel_block_stages_no_placements() {
         // Structural parity: the real 7.55 `STATE_CHANNEL` shape (bare
         // `BOUND`, zero quoted sprites) stages nothing through the shared
@@ -4988,6 +5000,8 @@ mod avatar_figure_tests {
     }
 
     #[test]
+    // OPEN: this negative assertion is not yet exe-pinned.
+    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn tt222_hand_run_no_clear_preserves_backdrop_pixel() {
         // Ticket #222 root-cause leg (no-clear contract): the shared
         // centered figure painter must NOT clear the avatar box. A

@@ -107,6 +107,8 @@ fn rows_read_their_own_control_list() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn playing_row_carries_no_extras() {
     let row = STAGE_TABLE
         .iter()
@@ -135,6 +137,8 @@ fn result_row_merges_the_verdict_banner_and_bottom_counter_font_by_name() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn payment_rows_carry_no_extras() {
     for state in [State::Payment, State::Payment2] {
         let row = STAGE_TABLE
@@ -473,6 +477,8 @@ fn avi_stages_its_logo_through_the_bound_pairing() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn avi_missing_bind_file_stages_nothing_with_a_miss() {
     let list = [
         "NUMBER_OF_STATE 0x01",
@@ -496,6 +502,8 @@ fn avi_missing_bind_file_stages_nothing_with_a_miss() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn loading_stages_its_named_body_with_no_block() {
     let archive = o2jam_file::test_archive::build_archive(&[(
         "MusicLoading.ojs",
@@ -546,6 +554,8 @@ fn tutorial_stages_all_seven_receptor_kits_from_the_archive() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn tutorial_stages_backdrop_and_both_guide_bodies_with_no_block() {
     // Block-less full-canvas row: the B7 frame's backdrop, instruction
     // bubble (`1/13`) and coach come from three parsed records. Synthetic
@@ -610,6 +620,8 @@ fn byname_table_names_the_exe_literal_sheets_beside_playing() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn byname_sheet_stages_file_order_rects_with_no_block() {
     let archive = o2jam_file::test_archive::build_archive(&[(
         "State_Playing_network.bnd",
@@ -640,6 +652,8 @@ fn byname_sheet_stages_file_order_rects_with_no_block() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn byname_sheet_missing_file_stages_nothing_with_a_miss() {
     let archive = o2jam_file::test_archive::build_archive(&[]);
     let row = ByNameRow {
@@ -786,6 +800,8 @@ fn missing_body_keeps_block_with_empty_slot() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn missing_block_contributes_nothing() {
     let list = [
         "NUMBER_OF_STATE 0x01",
@@ -807,6 +823,8 @@ fn missing_block_contributes_nothing() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn missing_control_list_contributes_nothing() {
     let archive = o2jam_file::test_archive::build_archive(&[]);
     let report = stage_state(&archive, State::Room, StageContext::default());
@@ -816,6 +834,8 @@ fn missing_control_list_contributes_nothing() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn missing_bind_file_contributes_nothing() {
     let list = [
         "NUMBER_OF_STATE 0x01",
@@ -1022,6 +1042,8 @@ fn screen_view_maps_full_canvas_scenes_to_states() {
 }
 
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn screen_view_leaves_future_arms_unmapped() {
     assert_eq!(state_of_screen(Screen::Channel), None, "no State class");
 }
@@ -1467,6 +1489,8 @@ fn messenger_sheet_rows_stage_the_pinned_rect_counts() {
 /// as live boot and keeps the exe mount pin absent until a qualified frame
 /// names the host and every tab. Install data is local-only: CI skips.
 #[test]
+// OPEN: this negative assertion is not yet exe-pinned.
+// next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
 fn messenger_main_sheet_stays_a_seventy_seven_rect_park_without_a_mount() {
     // Live caller chain: main.rs::run_play -> assemble_online_session ->
     // session::OnlineSession::stage_live_art -> live_art::stage_live_scenes

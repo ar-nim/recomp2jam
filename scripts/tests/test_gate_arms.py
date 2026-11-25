@@ -27,8 +27,15 @@ class GateArmTest(unittest.TestCase):
         (self.repo / "scripts" / "lib").mkdir(parents=True)
         (self.repo / "fixtures").mkdir()
         shutil.copy(GATE_SCRIPT, self.repo / "scripts" / "gate-check.sh")
+        shutil.copy(
+            SCRIPTS_DIR / "check-guard-evidence.sh",
+            self.repo / "scripts" / "check-guard-evidence.sh",
+        )
         for lib in (SCRIPTS_DIR / "lib").glob("*.sh"):
             shutil.copy(lib, self.repo / "scripts" / "lib" / lib.name)
+        guards = self.repo / "crates" / "fixture" / "guards.rs"
+        guards.parent.mkdir(parents=True)
+        guards.write_text("#[test]\nfn computes_expected_score() {}\n", encoding="utf-8")
 
         music = self.repo / "install-root" / "O2Jam" / "Music"
         music.mkdir(parents=True)
