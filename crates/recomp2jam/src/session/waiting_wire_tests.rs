@@ -5,7 +5,8 @@
 use super::session_tests::{joined_snapshot, joined_waiting_session, paint_until};
 
 /// #994: the 3010 room-removal event picks one of the two pinned
-/// captions (`0x4bb700`; CP949 strings at `0x64da60`/`0x64da88`).
+/// captions from LOCAL seat state (`0x4bb700`; CP949 strings at
+/// `0x64da60`/`0x64da88`). The handler reads no wire body.
 mod removal_notice {
     use std::io::Write;
 
@@ -13,11 +14,14 @@ mod removal_notice {
 
     use super::*;
 
-    /// One scripted 3010 cause through the real session drain. The
-    /// caption is read from the same shell accessor the painter uses.
-    fn caption_for_cause(cause: u8) -> Option<String> {
-        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
-            stream.write_all(&encode_frame(3010, &[cause])).unwrap();
+    /// One scripted 3010 through the real session drain with the
+    /// staged own-seat state word set to `state`. The caption is read
+    /// from the same shell accessor the painter uses.
+    fn caption_for_own_seat_state(state: i32) -> Option<String> {
+        let mut room = joined_snapshot();
+        room.slots[0].state_code = state;
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&encode_frame(3010, &[])).unwrap();
         });
         paint_until(&mut session, |session| {
             session.game.waiting_notice().is_some()
@@ -27,21 +31,17 @@ mod removal_notice {
         caption
     }
 
-    /// Tier 2 scripted-gateway guard. Live caller chain (once the
-    /// missing handler lands): `main.rs::run_play` ->
-    /// `OnlineSession::paint` -> `poll_waiting_chat` ->
-    /// `drain_waiting_chat` -> the 3010 caption arm ->
-    /// `ScreenGame::waiting_notice`.
-    ///
-    /// BLOCKED: opcode 3010 has no handler in this branch, so both
-    /// causes leave `waiting_notice` empty. Ignored until the senior
-    /// re-slices the shell/session caption path; run with `--ignored`
-    /// to see the red.
+    /// Tier 2 scripted-gateway guard. Live caller chain:
+    /// `main.rs::run_play` -> `OnlineSession::paint` ->
+    /// `poll_waiting_chat` -> `drain_waiting_chat` ->
+    /// `apply_waiting_frame` -> `apply_room_closed_notice` ->
+    /// `ScreenGame::stage_waiting_wire_caption` ->
+    /// `ScreenGame::waiting_notice`. The exe reads no 3010 body bytes;
+    /// the staged own seat's state word selects the caption.
     #[test]
-    #[ignore = "#994: shell/session 3010 removal-caption arm outside this lane's files"]
     fn removal_cause_selects_a_distinct_caption_from_the_gateway() {
-        let no_song_caption = caption_for_cause(0);
-        let plain_caption = caption_for_cause(1);
+        let plain_caption = caption_for_own_seat_state(0);
+        let no_song_caption = caption_for_own_seat_state(2);
         assert_ne!(
             no_song_caption, plain_caption,
             "the two 3010 causes must reach different removal captions"
