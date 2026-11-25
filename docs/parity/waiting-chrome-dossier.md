@@ -197,9 +197,9 @@ side-by-side sheet are in
 
 The v6 master-name mismatch was a **content verdict**: both legs used
 the same account, so a wire-plus-server-log A/B was the next evidence
-step (owner rule); no paint change was warranted then. V13 refutes the
-"different account" cause and pins a paint source instead — see §6.
-The earlier verdict is kept here, not silently replaced.
+step (owner rule); no paint change was warranted then. V13 keeps that
+prior withdrawal and adds a paint source for the plate — see §6. It
+does not reopen the account attribution.
 
 Red proofs for all seven guards are in
 `~/scratch/lane-waiting-right-column/red-proof-all.log` (each guard
@@ -222,9 +222,16 @@ Full pin table: `~/scratch/lane-musicselect-panel/reports/rea-pins.md`.
 
 | Delta (exe → ours) | Pin / verdict | Fix |
 |---|---|---|
-| Top-left plate `사람손` → `서이이` | **PINNED, was OPEN**: `FUN_004bcaa0` (file `0xbcaa0`) sets `IDC_IMAGE_SWAIT_CHCATEGORY 0x16500049` to frame `DAT_0076fc38 + 1` (`ev_6b57088a…`, immediate `ev_592fd517…`). The global is the five-emblem family index (file `0x48e2fb`, `docs/captures/static-play/pins.md`; xrefs `ev_5d228649…`); both legs click the EASY/H plate (136,88) = family 2. Six-record body has record 2 = `사람손`, record 5 = the last stacked body (`ev_8bea5f5b…`; `서이이` has no exe bytes, `ev_0d720380…`) | `WaitingCaptions::channel_family_record` from `ScreenGame::planet_selection()` (`HARD 0 / NORMAL 1 / EASY 2`); painter inks one record. Guard `the_picked_planet_family_inks_only_its_waiting_category_plate` — red `16711935` vs blue `255`, green after |
+| Top-left plate `사람손` → `서이이` | **PINNED, was OPEN**: `FUN_004bcaa0` (file `0xbcaa0`) sets `IDC_IMAGE_SWAIT_CHCATEGORY 0x16500049` to frame `DAT_0076fc38 + 1` (`ev_6b57088a…`, immediate `ev_592fd517…`). The global is the five-emblem family index (file `0x48e2fb`, `docs/captures/static-play/pins.md`; xrefs `ev_5d228649…`); both legs click the EASY/H plate (136,88) = family 2. Six-record body has record 2 = `사람손`, record 5 = the last stacked body (`ev_8bea5f5b…`; `서이이` has no exe bytes, `ev_0d720380…`) | `WaitingCaptions::channel_family` (`WaitingChannelFamily`) from `ScreenGame::planet_selection()` (`HARD 0 / NORMAL 1 / EASY 2`); painter inks one record. Guard `the_picked_planet_family_inks_only_its_waiting_category_plate` — red `16711935` vs blue `255`, green after |
 | Second mini-card border dim → bright magenta | `FUN_004ad350` applier (`ev_2cb3a3c4…`) mounts `?` bodies on the spriteless EFFECT_1/2 rects; both records of `Wait_Btn_EffectBottom.ojs` carry a magenta border (art inventory), so no frame makes the exe's dim border | Random quiesced pass paints only the top bright record and skips the exclusive toggle for arena-0 random. Guard `local_random_selection_lights_the_first_effect_card_record` — red magenta vs clear, green after |
-| Seat 0 empty, seat 1 master/START/song-select/bright arrows/chat → two seats, guest READY/BPM/gray arrows/no chat | **Content, wire-pinned**: exe leg has S2C `3007 body=0001000000000000` (departing 0, promoted master 1) at 21:47:38 then `2007`; Rust leg has neither (`~/scratch/paired-shots-v3/legs/music-select/{exe,rust}/wire/room-stage.log`). Handler `ev_50242b6c…`; role `ev_aa74bced…`, skills batch `ev_b401b64b…`. Wire text of chat is absent from both logs — exe generates leave/skill notices locally on those events | No paint change. Our `promote_waiting_master` / `clear_waiting_member_seat` are already guarded by `solo_promoted_master_paints_the_start_face_not_the_guest_ready_face` and `handoff_master_id_wins_over_stale_member_rows` |
+| Seat 0 empty, seat 1 master/START/song-select/bright arrows/chat → two seats, guest READY/BPM/gray arrows/no chat | **Content, wire + server-log pinned** (owner A/B rule): exe `wire/room-stage.log` has S2C `3007 body=0001000000000000` (departing 0, promoted master 1) at 21:47:38 then `2007`; its `host/host.log` ends at `host guest JOINED` with no later opcode. Rust logs show neither event; `host/host.log` records `opcode 0BBF len=8 ... 0100000000000000` at 08:27:40. Both server-identity files show matched setup (host user 3, channel 0/0, WINEJOIN, 757/2/1), but different boots: PID 37333 vs 616689 — the verdict is matched setup plus each leg's own two logs, not a shared PID. Handler `ev_50242b6c…`; role `ev_aa74bced…`, skills batch `ev_b401b64b…`. Chat text appears in neither wire log; its local append source is **OPEN** (below) | No paint change. Our `promote_waiting_master` / `clear_waiting_member_seat` are already guarded by `solo_promoted_master_paints_the_start_face_not_the_guest_ready_face` and `handoff_master_id_wins_over_stale_member_rows` |
 | Top-bar caption font, `Random` label, BACK face | Approved modern-font presentation choice (owner) / quiesced-pair rule with static setter still OPEN (BACK) | No forced paint change |
+
+Chat append source stays **OPEN**: `FUN_0055d820` (3007 handler) has
+`referenced_strings: 0` in REA (`ev_f1758b60a156a73195b00b422f96d127cae120e05ae3d33bb9924d6b5e2d8ae8`);
+that evidence pins leave dispatch only, not chat generation. Next step:
+pin the chat-list append call reached from the 3007/2007 handlers (xref
+sweep from `LIST_SWAIT_CHAT 0x1680002B` / `TEXT_SWAIT_CHAT 0x1640003C`,
+then one qualified leave capture with a memory read of the list object).
 
 Both gate arms green in `~/scratch/lane-musicselect-panel/logs/` (`*-nodata*`, `*-data*`).

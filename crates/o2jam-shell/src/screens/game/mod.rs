@@ -2609,7 +2609,7 @@ impl ScreenGame {
     /// `PlanetBand` comes from the same control codes, so map back:
     /// HARD `0x19201002` -> 0, NORMAL -> 1, EASY -> 2. FREE/DRUM are
     /// unbound and record no pick, so they stage no record.
-    fn waiting_channel_family_record(&self) -> Option<usize> {
+    fn waiting_channel_family_index(&self) -> Option<usize> {
         match self.planet_selection()? {
             PlanetBand::Hard => Some(0),
             PlanetBand::Normal => Some(1),
@@ -9423,7 +9423,7 @@ impl ScreenGame {
             team_highlight_armed: self.waiting_team_highlight_armed,
             notice: self.waiting_notice,
             channel_number: self.waiting_channel_number,
-            channel_family_record: self.waiting_channel_family_record(),
+            channel_family: None,
             room_number: self.waiting_room_number,
             effect: self.waiting_effect,
             chat_channel: self.waiting_chat_channel(),
@@ -9434,7 +9434,8 @@ impl ScreenGame {
                 .myroom_character
                 .as_ref()
                 .map(|character| character.nickname.as_str()),
-        };
+        }
+        .with_channel_family_index(self.waiting_channel_family_index());
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
                 paint_waiting_scene_with_confirm(
@@ -15262,6 +15263,13 @@ mod game_tests {
         // both records, so neither frame can make the dim border; the
         // second card must keep the staged backdrop. Applier: REA
         // `ev_2cb3a3c4…`, bind rects 68/69. Click animation stays OPEN.
+        // Live chain: `main.rs::run_play` -> `assemble_online_session`
+        // -> `OnlineSession::paint` -> `ScreenGame::paint_at` ->
+        // `paint_waiting_scene_with_confirm` -> `paint_waiting_staged`
+        // -> `paint_waiting_effect_toggle` /
+        // `paint_waiting_random_effect_borders`. This guard drives the
+        // `ScreenGame` segment (tier 0); the boot/session segment is
+        // covered by the session's Waiting paint guards.
         let first = "IDC_BUTTON_SWAIT_TOPEFFECT";
         let second = "IDC_BUTTON_SWAIT_BOTTOMEFFECT";
         let mut figures = HashMap::new();
@@ -15286,6 +15294,15 @@ mod game_tests {
             0,
             "bottom effect card keeps its dim backdrop border"
         );
+    }
+
+    #[test]
+    fn an_out_of_range_channel_family_index_stages_no_category_record() {
+        // Seam suffices: `WaitingChannelFamily::from_index` is the
+        // checked constructor; the only live caller maps `PlanetBand`
+        // to 0..2, so an out-of-range index cannot reach the field.
+        let captions = WaitingCaptions::default().with_channel_family_index(Some(3));
+        assert_eq!(captions.channel_family, None);
     }
 
     #[test]

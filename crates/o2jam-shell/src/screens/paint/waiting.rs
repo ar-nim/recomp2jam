@@ -188,6 +188,55 @@ pub struct WaitingSong<'a> {
     pub title: Option<&'a str>,
 }
 
+/// One of the three lit Planet families that back the waiting category
+/// plate. A newtype would still allow an out-of-range record; the enum
+/// makes an invalid frame unrepresentable. The record order follows
+/// the authored control codes `0x19201002..04` (HARD/NORMAL/EASY).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingChannelFamily {
+    /// HARD (`0x19201002`), record 0.
+    Hard,
+    /// NORMAL (`0x19201003`), record 1.
+    Normal,
+    /// EASY (`0x19201004`), record 2. The v13 pair clicks this plate.
+    Easy,
+}
+
+impl WaitingChannelFamily {
+    /// Check the authored control index at the seam. Any other index
+    /// stages nothing, so the field never holds an invalid record.
+    #[must_use]
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Hard),
+            1 => Some(Self::Normal),
+            2 => Some(Self::Easy),
+            _ => None,
+        }
+    }
+
+    /// Zero-based `Wait_CH_Category.ojs` record for one family.
+    #[must_use]
+    pub const fn record(self) -> usize {
+        match self {
+            Self::Hard => 0,
+            Self::Normal => 1,
+            Self::Easy => 2,
+        }
+    }
+}
+
+impl<'a> WaitingCaptions<'a> {
+    /// Stage a category family by its authored control index. The
+    /// checked constructor keeps out-of-range records unrepresentable
+    /// in [`Self::channel_family`].
+    #[must_use]
+    pub fn with_channel_family_index(mut self, index: Option<usize>) -> Self {
+        self.channel_family = index.and_then(WaitingChannelFamily::from_index);
+        self
+    }
+}
+
 /// Live caption sources for the staged waiting rects. Every field
 /// has a pinned shell source (`docs/caption-sources.md`): the map
 /// name rides the room word, the BPM rides the staged catalog
@@ -233,11 +282,11 @@ pub struct WaitingCaptions<'a> {
     /// One-based channel number behind the two `CHNUM` digit wells:
     /// the resident 1003 `channel_id` plus one, staged on login.
     pub channel_number: Option<u16>,
-    /// Zero-based record of `Wait_CH_Category.ojs`, from the picked
-    /// Planet family index (`FUN_004bcaa0` sets frame index + 1).
-    /// `None` keeps the staged stack, which is only safe before a
-    /// family pick exists.
-    pub channel_family_record: Option<usize>,
+    /// Picked Planet family behind `Wait_CH_Category.ojs`
+    /// (`FUN_004bcaa0` sets frame index + 1). The validated enum has
+    /// no out-of-range record. `None` keeps the staged stack, which
+    /// is only safe before a family pick exists.
+    pub channel_family: Option<WaitingChannelFamily>,
     /// Room number behind the three `RMNUM` digit wells: the number
     /// from the accepted 3002 join request, staged on join.
     pub room_number: Option<i32>,
@@ -595,8 +644,7 @@ pub fn paint_waiting_scene_with_confirm(
             && waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
-            && !(captions.channel_family_record.is_some()
-                && placed.id == WAITING_CHANNEL_CATEGORY_ID)
+            && !(captions.channel_family.is_some() && placed.id == WAITING_CHANNEL_CATEGORY_ID)
             && !waiting_inactive_overlay_hidden_by_role(&placed.id, member_role)
             && !waiting_header_chip_hidden(&placed.id)
             && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
@@ -1528,7 +1576,7 @@ pub(crate) fn paint_waiting_staged(
         None => paint_waiting_title(frame, room, placements),
     }
     paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
-    paint_waiting_channel_category(frame, art, captions.channel_family_record);
+    paint_waiting_channel_category(frame, art, captions.channel_family);
     paint_waiting_level_badge(frame, captions.level, captions.random, art);
     paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(
@@ -1573,11 +1621,15 @@ pub(crate) fn paint_waiting_staged(
 /// last body. With no pick staged nothing is invented.
 const WAITING_CHANNEL_CATEGORY_ID: &str = "IDC_IMAGE_SWAIT_CHCATEGORY";
 
-fn paint_waiting_channel_category(frame: &mut Frame<'_>, art: &SceneArt, record: Option<usize>) {
-    let Some(record) = record else {
+fn paint_waiting_channel_category(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    family: Option<WaitingChannelFamily>,
+) {
+    let Some(family) = family else {
         return;
     };
-    paint_waiting_one_record(frame, art, WAITING_CHANNEL_CATEGORY_ID, record);
+    paint_waiting_one_record(frame, art, WAITING_CHANNEL_CATEGORY_ID, family.record());
 }
 
 /// Top-bar digit wells: `IDC_IMAGE_SWAIT_CHNUM_10/01` show the one-
