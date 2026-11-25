@@ -553,4 +553,35 @@ mod tests {
             CueOutcome::KeepRunning
         ));
     }
+
+    #[test]
+    fn messenger_sheet_keeps_the_null_backend_scene_cue() {
+        // seam: #1112's pin says a sheet open does not cut the scene
+        // cue, and the audio channel has no sheet caller in this
+        // client (`N-AUDIO` in the story). The channel's only silence
+        // arm is an explicit cue/silence call, so this guard pins that
+        // a local sheet state change leaves the latched cue and the
+        // contained sink stream untouched.
+        let bank = bank_with_track(10, 8);
+        let mut bgm = SceneBgm::new();
+        let pcm = bgm
+            .play_scene_music(8, true, &bank)
+            .expect("record 8 cues the scene bank");
+        let mut backend = NullBackend::new();
+        backend.set_scene_bgm(Some(pcm), true).unwrap();
+        let latched = bgm.current();
+
+        // A Messenger sheet is a shell-side state change; it reaches
+        // no audio arm. The sink still owns the scene stream.
+        assert_eq!(bgm.current(), latched, "sheet open keeps the cue");
+        assert!(
+            backend.scene_bgm_playing(),
+            "no default-sink stream is stopped"
+        );
+
+        // Negative control: the assertion above can see a silenced
+        // channel, so it is not true by construction.
+        bgm.silence();
+        assert_eq!(bgm.current(), None, "explicit silence is still visible");
+    }
 }

@@ -19,6 +19,7 @@ use super::{
 
 mod capture;
 
+use crate::screens::messenger::error_text_for_code;
 use capture::CaptureAdapter;
 
 /// Message ids of the 7.55 window hub (`0x5a5190`, file `0x1a5190`,
@@ -33,24 +34,10 @@ pub(crate) const WM_APP_UI_EVENT: u32 = 0x232;
 /// One-second wait the exe's popup-or-close helper performs after it
 /// sends `WM_CLOSE` (`0x5a8ab0`, file `0x1a8ab0`, evidence
 /// `ev_a02f086e979ed751d9148dcb216bac12b61…`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
-    )
-)]
 pub(crate) const ERROR_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Choice made by the exe's popup-or-close helper for a fatal error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
-    )
-)]
 pub(crate) enum FatalPathDisposition {
     /// UI flag set: post the supplied error text as a popup.
     ShowMessage,
@@ -59,13 +46,6 @@ pub(crate) enum FatalPathDisposition {
 }
 
 /// Decide the fatal path from the shared UI flag (`0x5a8ab0`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fatal-error caller is not wired in this client; guard pins the decision seam"
-    )
-)]
 pub(crate) const fn fatal_path_disposition(ui_flag: bool) -> FatalPathDisposition {
     if ui_flag {
         FatalPathDisposition::ShowMessage
@@ -105,6 +85,122 @@ pub(crate) const fn exe_window_handler(message: u32) -> ExeWindowHandler {
     }
 }
 
+/// Full rebuild the exe performs when its display-mode word changes
+/// (`0x416a80`/file `0x16a80`, evidence
+/// `ev_be7d984a8bbc798086b159b7106b4174c7632c68572e3f14561225234b49e68e`).
+/// No winit caller drives the word yet; the plan is the staged seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayModePlan {
+    /// Fullscreen style, or captioned windowed style.
+    pub fullscreen: bool,
+    /// The exe resizes the client to its fixed native frame.
+    pub client_size: (u32, u32),
+    /// DirectDraw surfaces are rebuilt on a change.
+    pub rebuild_surfaces: bool,
+    /// The window is shown and focused after the rebuild.
+    pub show_and_focus: bool,
+    /// The mode change records a fresh clock value.
+    pub record_clock: bool,
+}
+
+/// Decide whether a display-mode request rebuilds the window.
+/// A repeated request leaves the stored word alone and plans nothing.
+#[must_use]
+pub const fn display_mode_plan(requested: u16, stored: u16) -> Option<DisplayModePlan> {
+    if requested == stored {
+        return None;
+    }
+    Some(DisplayModePlan {
+        fullscreen: requested != 0,
+        client_size: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+        rebuild_surfaces: true,
+        show_and_focus: true,
+        record_clock: true,
+    })
+}
+
+/// Popup arm chosen by the exe's popup-or-close helper
+/// (`0x5a8ab0`, file `0x1a8ab0`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorPopup {
+    /// UI flag set: the supplied message reaches the modal box.
+    ShowMessage(String),
+    /// UI flag clear: close the window after the pinned delay.
+    CloseWindowAfter(std::time::Duration),
+}
+
+/// Route one supplied error string to the popup-or-close decision.
+/// `0x5a35c0` formats it and asks `0x5a8ab0`; this client has no
+/// Win32 `MessageBoxA`, so the message is staged as data.
+#[must_use]
+pub fn error_popup_from_supplied(message: &str, ui_flag: bool) -> ErrorPopup {
+    match fatal_path_disposition(ui_flag) {
+        FatalPathDisposition::ShowMessage => ErrorPopup::ShowMessage(message.to_owned()),
+        FatalPathDisposition::CloseWindowAfter(delay) => ErrorPopup::CloseWindowAfter(delay),
+    }
+}
+
+/// Resolve one numeric error code through `0x5a3820` before asking
+/// the popup-or-close helper. Code zero takes the exe's silent arm.
+#[must_use]
+pub fn error_popup_from_code(code: u32, ui_flag: bool) -> Option<ErrorPopup> {
+    (code != 0).then(|| error_popup_from_supplied(error_text_for_code(code), ui_flag))
+}
+
+/// UI notice the exe posts from a double-click when the state bit is
+/// set (`0x5a50b0` -> `0x548b10`, notice `10,3,0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiNotice {
+    /// First notice word.
+    pub kind: u16,
+    /// Second notice word.
+    pub code: u16,
+    /// Third notice word.
+    pub param: u16,
+    /// Press x carried by the forwarded call.
+    pub x: i32,
+    /// Press y carried by the forwarded call.
+    pub y: i32,
+}
+
+impl UiNotice {
+    /// Build one pinned notice with its press position.
+    #[must_use]
+    pub const fn new(kind: u16, code: u16, param: u16, x: i32, y: i32) -> Self {
+        Self {
+            kind,
+            code,
+            param,
+            x,
+            y,
+        }
+    }
+}
+
+/// Bit of the state word the double-click helper tests.
+pub const DOUBLE_CLICK_STATE_BIT: u16 = 1 << 2;
+
+/// Decide one double-click arm. The winit loop has no Win32
+/// `WM_LBUTTONDBLCLK`; the notice is the pinned contract until that
+/// arm is wired by a lane that owns the game's notice queue.
+#[must_use]
+pub fn double_click_notice(state_word: u16, x: i32, y: i32) -> Option<UiNotice> {
+    (state_word & DOUBLE_CLICK_STATE_BIT != 0).then(|| UiNotice::new(10, 3, 0, x, y))
+}
+
+/// Exit decision of the window-close arm (`WM_DESTROY` -> `WM_QUIT`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitDisposition {
+    /// The event loop ends on a close request.
+    ExitLoop,
+}
+
+/// The winit close arm mirrors the Win32 quit message.
+#[must_use]
+pub const fn window_close_disposition() -> QuitDisposition {
+    QuitDisposition::ExitLoop
+}
+
 /// Event-loop state: shell plus its softbuffer surface.
 pub struct WindowHandler {
     pub(crate) shell: Shell,
@@ -113,6 +209,8 @@ pub struct WindowHandler {
     paint_error: Option<anyhow::Error>,
     cursor: Option<(f64, f64)>,
     capture: Option<CaptureAdapter>,
+    /// Display-mode word the exe compares before rebuilding.
+    display_mode: u16,
     /// Queued discrete edges since the last freeze: winit events are
     /// OS transport only (ADR-0013), so every decoded edge waits here
     /// for the frame boundary instead of reaching the game directly.
@@ -142,6 +240,7 @@ impl WindowHandler {
             paint_error: None,
             cursor: None,
             capture,
+            display_mode: 0,
             pending_edges: Vec::new(),
             left_held: false,
             snapshot_sequence: 0,
@@ -448,6 +547,23 @@ impl WindowHandler {
         capture.record_frame(&self.shell.pixels, screen, state_hash);
     }
 
+    /// Apply one display-mode request to the stored word and, when a
+    /// window exists, its fullscreen style. Surface rebuild follows
+    /// the winit resize event; a headless caller gets only the plan.
+    pub fn apply_display_mode(&mut self, requested: u16) -> Option<DisplayModePlan> {
+        let plan = display_mode_plan(requested, self.display_mode)?;
+        self.display_mode = requested;
+        self.input_dirty = true;
+        if let Some(window) = self.shell.window.as_ref() {
+            let fullscreen = plan
+                .fullscreen
+                .then(|| winit::window::Fullscreen::Borderless(None));
+            window.set_fullscreen(fullscreen);
+            window.request_redraw();
+        }
+        Some(plan)
+    }
+
     /// Take a stored paint failure, if any.
     pub fn paint_error(&mut self) -> Option<anyhow::Error> {
         self.paint_error.take()
@@ -636,7 +752,9 @@ impl ApplicationHandler for WindowHandler {
         match event {
             WindowEvent::CloseRequested => {
                 self.log_message_arm(SYS_CLOSE_COMMAND);
-                event_loop.exit();
+                match window_close_disposition() {
+                    QuitDisposition::ExitLoop => event_loop.exit(),
+                }
             }
             WindowEvent::Focused(_focused) => {
                 self.log_message_arm(WM_ACTIVATE_APP);
@@ -1519,5 +1637,75 @@ mod tests {
         let bar_end = usize::try_from(layout.offset_x).unwrap();
         assert!(dst[..bar_end].iter().all(|pixel| *pixel == LETTERBOX));
         assert_eq!(dst[bar_end], 7);
+    }
+
+    #[test]
+    fn mode_change_rebuilds_the_800x600_surface_and_window_style() {
+        // seam: the display-mode word has no winit caller yet, so the
+        // staged plan is the whole behavior the pin names. The Tier 3
+        // leg boots through the same window handler seam.
+        let changed = display_mode_plan(1, 0).expect("a changed mode has a plan");
+        assert!(changed.fullscreen, "mode 1 takes fullscreen style");
+        assert!(changed.rebuild_surfaces, "surfaces are rebuilt");
+        assert_eq!(changed.client_size, (800, 600), "fixed client size");
+        assert!(changed.show_and_focus, "the window shows and focuses");
+        assert!(changed.record_clock, "the new clock value is recorded");
+        assert_eq!(
+            display_mode_plan(0, 0),
+            None,
+            "an unchanged mode does not rebuild anything"
+        );
+    }
+
+    #[test]
+    fn supplied_error_string_reaches_the_modal_popup_arm() {
+        // seam: the missing fatal-error caller (`0x5a35c0`) is the
+        // reason the popup-or-close decision is tested at this arm;
+        // no Win32 MessageBox exists in the winit client.
+        assert_eq!(
+            error_popup_from_supplied("surface failed", true),
+            ErrorPopup::ShowMessage("surface failed".to_owned())
+        );
+        assert_eq!(
+            error_popup_from_supplied("surface failed", false),
+            ErrorPopup::CloseWindowAfter(ERROR_CLOSE_DELAY)
+        );
+    }
+
+    #[test]
+    fn numeric_error_code_resolves_before_the_popup_arm() {
+        // seam: `0x5a36d0` chooses text through `0x5a3820` before it
+        // asks the popup-or-close helper; neither has a live caller.
+        assert_eq!(error_popup_from_code(0, true), None, "code 0 is silent");
+        assert_eq!(
+            error_popup_from_code(0x8876_0091, true),
+            Some(ErrorPopup::ShowMessage(
+                "The pixel format was invalid as specified.".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn double_click_raises_the_pinned_notice_only_with_the_state_bit() {
+        // seam: the winit event loop has no `WM_LBUTTONDBLCLK`; the
+        // notice contract (`0x5a50b0` -> `0x548b10`, 10,3,0) is the
+        // whole behavior until that arm is wired by the senior.
+        let notice = double_click_notice(0x0004, 21, 42).expect("bit 2 raises");
+        assert_eq!(notice, UiNotice::new(10, 3, 0, 21, 42));
+        assert_eq!(notice.x, 21, "press x reaches the notice");
+        assert_eq!(notice.y, 42, "press y reaches the notice");
+        assert_eq!(
+            double_click_notice(0, 21, 42),
+            None,
+            "clear bit stays silent"
+        );
+    }
+
+    #[test]
+    fn window_close_request_quits_the_loop() {
+        // seam: `WindowEvent::CloseRequested` is the winit stand-in
+        // for `WM_DESTROY`; the decision is extracted so a guard and
+        // the Tier 3 boot leg name the same exit arm.
+        assert_eq!(window_close_disposition(), QuitDisposition::ExitLoop);
     }
 }

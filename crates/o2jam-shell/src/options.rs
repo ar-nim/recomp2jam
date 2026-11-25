@@ -259,6 +259,42 @@ pub fn custom_cursor_arm(flag: MouseCursorMode, handle_word: u8) -> CustomCursor
     }
 }
 
+/// What one requested cursor mode does to the pointer
+/// (`0x5a4ac0`/file `0x1a4ac0` stores the word, then `0x431f70`
+/// applies it). The OS handle is opaque here; the arm and face are
+/// the whole decision a headless caller can observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorModeApplication {
+    /// Face word and the vftable arm it selects.
+    pub face: (u16, ImageFaceBranch),
+    /// OS-cursor action for the stored handle word.
+    pub arm: CustomCursorArm,
+    /// Caption raised by the F8 request that took this branch.
+    pub caption: CursorCaption,
+}
+
+/// Resolve one cursor-mode request into its face, pointer arm and
+/// caption. `promoted_to_two` is the exe's global-mode promotion of
+/// a mode-1 request; `handle_word` names the stored image handle.
+#[must_use]
+pub fn apply_cursor_mode(
+    requested: u16,
+    promoted_to_two: bool,
+    handle_word: u8,
+    previous: MouseCursorMode,
+) -> CursorModeApplication {
+    let mode = MouseCursorMode::from_raw(i32::from(requested));
+    let caption = match previous {
+        MouseCursorMode::Windows => CursorCaption::AskUseImageCursor,
+        MouseCursorMode::Image => CursorCaption::NoticeWindowsCursorRestored,
+    };
+    CursorModeApplication {
+        face: cursor_mode_face(requested, promoted_to_two),
+        arm: custom_cursor_arm(mode, handle_word),
+        caption,
+    }
+}
+
 /// Pointer reset the flag writer performs (`0x4321b0`, file
 /// `0x321b0`): a change to the custom arm with a tracking object
 /// present snaps the pointer to the origin.
@@ -1508,5 +1544,35 @@ mod tests {
         assert_eq!(f8_scene_id_of("room"), Some(2));
         assert_eq!(f8_scene_id_of("playing"), Some(11));
         assert_eq!(f8_scene_id_of("waiting"), None, "unpinned scene stays OPEN");
+    }
+
+    #[test]
+    fn requested_cursor_mode_applies_to_the_face_and_pointer_arm() {
+        // seam: the F8 work persists and toggles `Mouse_Cursor`,
+        // but no winit cursor handle exists here. The face/arm/caption
+        // decision is the whole pointer behavior Tier 4 can confirm.
+        let applied = apply_cursor_mode(1, false, 1, MouseCursorMode::Windows);
+        assert_eq!(applied.face, (1, ImageFaceBranch::ModeOne));
+        assert_eq!(applied.arm, CustomCursorArm::FirstHandle);
+        assert_eq!(applied.caption, CursorCaption::AskUseImageCursor);
+        assert_eq!(
+            apply_cursor_mode(1, true, 2, MouseCursorMode::Windows).face,
+            (2, ImageFaceBranch::ModeOne),
+            "global promotion changes the word, not the mode-1 arm"
+        );
+        assert_eq!(
+            apply_cursor_mode(1, false, 2, MouseCursorMode::Windows).arm,
+            CustomCursorArm::SecondHandle
+        );
+        assert_eq!(
+            apply_cursor_mode(1, false, 7, MouseCursorMode::Windows).arm,
+            CustomCursorArm::Hide,
+            "an unmapped handle hides the OS cursor"
+        );
+        assert_eq!(
+            apply_cursor_mode(0, false, 1, MouseCursorMode::Image).arm,
+            CustomCursorArm::Hide,
+            "the Windows mode clears the custom pointer"
+        );
     }
 }
