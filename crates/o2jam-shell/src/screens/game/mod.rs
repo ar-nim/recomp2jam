@@ -15450,6 +15450,21 @@ mod game_tests {
         figure
     }
 
+    /// Two-record full-canvas sheet with its ink at one anchor, so a
+    /// seam test can tell which backdrop record the BACK rest pass cut.
+    fn waiting_backdrop_pair_at(first: u16, second: u16, x: i32, y: i32) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for word in [first, second] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: x,
+                dy: y,
+                colorkey: 0x0000,
+            });
+        }
+        figure
+    }
+
     fn waiting_placed(id: &str, x: i32, y: i32) -> ScenePlacement {
         use crate::avatar::PlacementRole;
         ScenePlacement {
@@ -15767,23 +15782,42 @@ mod game_tests {
 
     #[test]
     fn waiting_back_button_ink_paints_only_its_rest_record() {
-        // The staged `Wait_Back.ojs` has two records; the quiesced exe
-        // frame shows the rest (gray) face, never the stacked pressed
-        // face. Control code `0x16200002`, bind rect 1
-        // (711,569)-(794,593) from the parsed `State_Waiting.bnd`.
+        // Seam for the one-record selection, not the player-visible
+        // verdict (the live-paint leg in `live_input_legs.rs` owns that).
+        // The hot `Wait_Back.ojs` body keeps two bright records; the
+        // quiesced face comes from the staged sheet's record 0. Control
+        // code `0x16200002`, bind rect 1 (711,569)-(794,593).
         let id = "IDC_BUTTON_SWAIT_BACK";
         let mut figures = HashMap::new();
-        figures.insert(format!("{id}.ojs"), waiting_record_pair(0x03E0, 0x001F));
+        let hot = waiting_record_pair(0x001F, 0x001F);
+        assert_eq!(hot.len(), 2, "the pressed hot record stays staged");
+        figures.insert(format!("{id}.ojs"), hot);
+        figures.insert(
+            "State_Waiting.ojs".to_owned(),
+            waiting_backdrop_pair_at(0x03E0, 0x001F, 50, 50),
+        );
+        let sheet = ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BACK_SWAIT_1".to_owned(),
+            code: 0,
+            sprite: Some("State_Waiting.ojs".to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+        };
         let mut game = waiting_right_column_game(
             waiting_guest_room(),
-            vec![waiting_placed(id, 50, 50)],
+            vec![sheet, waiting_placed(id, 50, 50)],
             figures,
         );
         let frame = paint_waiting_frame(&mut game, 800, 600);
         assert_eq!(
             frame[50 * 800 + 50],
             pack_xrgb(0, 255, 0),
-            "BACK must paint its rest record only"
+            "BACK must paint the sheet's rest record only"
         );
     }
 

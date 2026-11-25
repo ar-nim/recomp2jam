@@ -27,7 +27,7 @@ mod live_input_leg_tests {
         AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, EmptyMessage, Frame, Gender,
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
-    use o2jam_render::{pack_xrgb, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+    use o2jam_render::{expand_rgb555, pack_xrgb, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::{
         ChatSendMode, LobbyChat, PlanetModal, RoomListFilter, ScreenGame,
     };
@@ -48,7 +48,8 @@ mod live_input_leg_tests {
     };
 
     use o2jam_shell::{
-        route_key_event, GameLoop, InputEdge, InputSnapshot, KeyRoute, Keymap, Screen,
+        load_archive_sprite, route_key_event, GameLoop, InputEdge, InputSnapshot, KeyRoute, Keymap,
+        Screen,
     };
     use winit::keyboard::KeyCode;
 
@@ -3022,6 +3023,160 @@ mod live_input_leg_tests {
                 "both received rows stay painted at {now_ms} ms"
             );
         }
+        finish(session, gateway.server);
+    }
+
+    /// Two colours sampled from the quiesced 7.55 BACK crop in
+    /// `~/scratch/paired-shots-v6/states/music-select/exe.png` at native
+    /// `(711,569)-(794,593)`: the plate at crop `(8,2)` and the dark
+    /// letter ink at `(16,10)`. These are colour facts, not copied art.
+    /// Wine's capture differs from our RGB555 expansion by at most three
+    /// per channel; four leaves room for the compositor.
+    const EXE_BACK_PLATE_SAMPLE: ((usize, usize), (u8, u8, u8)) = ((8, 2), (206, 202, 206));
+    const EXE_BACK_INK_SAMPLE: ((usize, usize), (u8, u8, u8)) = ((16, 10), (41, 65, 140));
+    const EXE_BACK_TOLERANCE: u8 = 4;
+
+    /// One XRGB8888 sample as channels, for a Wine-tolerant comparison.
+    fn xrgb_channels(pixel: u32) -> (u8, u8, u8) {
+        ((pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8)
+    }
+
+    /// Crop pixels of the real staged `State_Waiting.ojs` record 0 at a
+    /// staged rect. No fixture: every word comes from the installed
+    /// Interface archive that live boot already staged.
+    fn staged_backdrop_record_zero_crop(rect: Rect) -> Vec<u32> {
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let figure = load_archive_sprite(&archive, "State_Waiting.ojs")
+            .expect("the Waiting sheet decodes from installed bytes");
+        let layer = figure
+            .layer(0)
+            .expect("the sheet has its plain-canvas record");
+        let origin_x = i64::from(rect.x) - i64::from(layer.dx);
+        let origin_y = i64::from(rect.y) - i64::from(layer.dy);
+        (0..rect.h)
+            .flat_map(|row| (0..rect.w).map(move |column| (row, column)))
+            .map(|(row, column)| {
+                let source_x = usize::try_from(origin_x + i64::from(column))
+                    .expect("BACK crop lies inside the staged sheet");
+                let source_y = usize::try_from(origin_y + i64::from(row))
+                    .expect("BACK crop lies inside the staged sheet");
+                let word = layer.image.words[source_y * layer.image.w + source_x];
+                let (red, green, blue) = expand_rgb555(word);
+                pack_xrgb(red, green, blue)
+            })
+            .collect()
+    }
+
+    /// Pixels outside a per-channel tolerance, with their first
+    /// difference, so a red guard names where the plate diverged.
+    fn crop_mismatches(
+        actual: &[u32],
+        expected: &[u32],
+        tolerance: u8,
+    ) -> Vec<(usize, (u8, u8, u8))> {
+        actual
+            .iter()
+            .zip(expected)
+            .enumerate()
+            .filter_map(|(index, (painted, wanted))| {
+                let painted = xrgb_channels(*painted);
+                let wanted = xrgb_channels(*wanted);
+                let far = painted
+                    .0
+                    .abs_diff(wanted.0)
+                    .max(painted.1.abs_diff(wanted.1))
+                    .max(painted.2.abs_diff(wanted.2));
+                (far > tolerance).then_some((index, painted))
+            })
+            .collect()
+    }
+
+    /// The hot `Wait_Back.ojs` body keeps both bright records: record 1
+    /// is the press animation the rest-face fix must not consume.
+    fn assert_waiting_hot_back_records_intact() {
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present behind the guard");
+        let hot = load_archive_sprite(&archive, "Wait_Back.ojs")
+            .expect("the hot BACK body decodes from installed bytes");
+        assert_eq!(hot.len(), 2, "the pressed record stays staged");
+        assert_ne!(
+            hot.layer(0).expect("rest record").image.words,
+            hot.layer(1).expect("pressed record").image.words,
+            "the pressed face remains a distinct frame"
+        );
+    }
+
+    /// #934 T8 live-paint leg: the BACK plate at rest must show the
+    /// quiesced 7.55 face, not the bright hot body. The real staged
+    /// sheet's record 0 reproduces the exe crop; the hot body's record 0
+    /// is bright blue and must not overpaint it while idle.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> stage_channel_list_after_relay_gate -> assemble_online_session
+    ///   -> session.stage_live_art -> GameLoop::ingest_snapshot (emblem + row clicks)
+    ///   -> OnlineSession::poll_room_join (3002/3003) -> Waiting
+    ///   -> OnlineSession::paint_at -> ScreenGame::paint_at
+    ///   -> paint_waiting_scene_with_confirm -> paint_waiting_backdrop
+    ///   -> paint_waiting_back_rest.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_waiting_back_rest_inks_the_staged_exe_plate_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        assert_waiting_hot_back_records_intact();
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        assert_eq!(session.screen(), Screen::Waiting, "boot reached Waiting");
+
+        let rect = staged_waiting_rect(&mut session, "IDC_BUTTON_SWAIT_BACK");
+        assert_eq!(
+            (rect.x, rect.y, rect.w, rect.h),
+            (711, 569, 83, 24),
+            "the staged .bnd rect is the quiesced BACK rect"
+        );
+        let expected = staged_backdrop_record_zero_crop(rect);
+        let columns = usize::try_from(rect.w).expect("rect width fits usize");
+
+        for now_ms in [0, 16_667, 50_001] {
+            let frame = paint_at_frame(&mut session, now_ms);
+            let crop = staged_rect_pixels_from(&frame, rect);
+            let mismatches = crop_mismatches(&crop, &expected, EXE_BACK_TOLERANCE);
+            assert!(
+                mismatches.is_empty(),
+                "BACK ink at {now_ms} ms differs from staged record 0 at {} pixels, first {:?}",
+                mismatches.len(),
+                mismatches.first()
+            );
+            for ((column, row), exe_colour) in [EXE_BACK_PLATE_SAMPLE, EXE_BACK_INK_SAMPLE] {
+                let painted = xrgb_channels(crop[row * columns + column]);
+                let far = painted
+                    .0
+                    .abs_diff(exe_colour.0)
+                    .max(painted.1.abs_diff(exe_colour.1))
+                    .max(painted.2.abs_diff(exe_colour.2));
+                assert!(
+                    far <= EXE_BACK_TOLERANCE,
+                    "BACK crop ({column},{row}) at {now_ms} ms is {painted:?}, exe was {exe_colour:?}"
+                );
+            }
+        }
+
+        // The live pointer path still reaches BACK and leaves Waiting;
+        // the rest-face mapping never stole the click dispatch.
+        click_staged(&mut session, Screen::Waiting, "IDC_BUTTON_SWAIT_BACK");
+        assert_eq!(session.screen(), Screen::Room, "BACK click leaves Waiting");
+        paint(&mut session);
+        let leave = wait_for_opcode(&gateway.reports, Request::ExitWaiting.id());
+        assert_eq!(leave, vec![0, 0], "BACK still posts the 3005 leave");
         finish(session, gateway.server);
     }
 }

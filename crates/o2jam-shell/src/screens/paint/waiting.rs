@@ -2149,11 +2149,37 @@ fn paint_waiting_guest_skill_covers(frame: &mut Frame<'_>, art: &SceneArt, is_ro
     }
 }
 
-/// Paint the BACK button's dark face at bind rect 1. The record choice
-/// comes from the quiesced 7.55 pair plus the synthetic two-record
-/// figure; no static setter for the two faces is pinned yet (OPEN).
+/// Paint the BACK button's quiesced face at bind rect 1 from the
+/// sheet's baked record 0. The real `Wait_Back.ojs` records are both
+/// bright blue; only the full-canvas sheet bakes the dark plate the exe
+/// shows at rest (`~/scratch/paired-shots-v6/states/music-select/exe.png`,
+/// crop `(711,569)-(794,593)`, matched to the installed sheet's bytes
+/// within Wine's channel tolerance). The hot body's second record stays
+/// staged for the click animation; no frame word selects either face.
 fn paint_waiting_back_rest(frame: &mut Frame<'_>, art: &SceneArt) {
-    paint_waiting_one_record(frame, art, WAITING_BACK_ID, 0);
+    let Some(back) = art
+        .placements
+        .iter()
+        .find(|placed| placed.id == WAITING_BACK_ID)
+    else {
+        return;
+    };
+    let Some(sheet) = art
+        .placements
+        .iter()
+        .find(|placed| placed.sprite.as_deref() == Some(WAITING_BACKDROP_SPRITE))
+    else {
+        return;
+    };
+    let shares_body = shared_sprite_names(&art.placements).contains(WAITING_BACKDROP_SPRITE);
+    paint_placement_layer(
+        frame,
+        sheet,
+        &art.figures,
+        WAITING_PLAIN_RECORD,
+        shares_body,
+        Some(back.rect),
+    );
 }
 
 /// Paint the quiesced bright border on the first mini-card rect only.
