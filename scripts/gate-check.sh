@@ -7,8 +7,9 @@
 #   --arm quick : fmt, clippy, guard-evidence audit, the cheap workspace
 #                 suite, build (CI)
 #   --arm hidden: the hidden install-root suite with a data probe (CI)
-#   --arm full  : quick checks, sample, stale sweep, hidden suite,
-#                 guard-evidence audit, build, push + verify (senior gate)
+#   --arm full  : quick checks, sample, stale sweep, data-bearing present
+#                 suite, hidden suite, guard-evidence audit, build,
+#                 push + verify (senior gate)
 #
 # Per-ticket legs use `--arm quick [-- <crate...>]` (or the legacy
 # `--quick [-- <crate...>]`): fmt, clippy and only the named crates'
@@ -18,9 +19,13 @@
 # The hidden arm renames that symlink inside this checkout only; the slot
 # and other worktrees are untouched. Both data arms export
 # O2JAM_INSTALL_ROOT (scripts/lib/data-root.sh) so stale test binaries
-# cannot borrow another worktree's archives. The 515-chart sweeps are
-# skipped in the suite (issue #737) and run on a seven-day stamp; the
-# real-window X11 proof is a rig-lane run (issue #738).
+# cannot borrow another worktree's archives. The full arm requires data
+# and enforces it with GATE_REQUIRE_ARCHIVES=1 in its present suite: an
+# archive-gated canary that only skips fails the suite (issue #923).
+# The quick arm and hidden suite leave the variable unset, so CI stays
+# green without game data. The 515-chart sweeps are skipped in the
+# suite (issue #737) and run on a seven-day stamp; the real-window
+# X11 proof is a rig-lane run (issue #738).
 #
 # Usage: scripts/gate-check.sh [--arm quick|hidden|full]
 #                              [--no-push|--dry-run]
@@ -71,6 +76,9 @@ if [ "${#extra_crates[@]}" -gt 0 ]; then
     per_ticket=1
 fi
 if [ "${GATE_CHECK_NO_PUSH:-0}" = "1" ]; then no_push=1; fi
+
+# Only the full arm's present suite may require archives (issue #923).
+unset GATE_REQUIRE_ARCHIVES
 
 HIDDEN_BACKUP=""
 
@@ -139,6 +147,12 @@ run_workspace_suite() {
     fi
     assert_canaries present "$log"
 }
+
+# The subshell keeps GATE_REQUIRE_ARCHIVES out of the later hidden suite.
+run_present_suite_requiring_archives() (
+    export GATE_REQUIRE_ARCHIVES=1
+    run_workspace_suite
+)
 
 run_hidden_suite() {
     step "hidden-arm data probe (archives must be unreachable)"
@@ -231,7 +245,7 @@ case "$arm" in
         ;;
     full)
         run_fmt_clippy
-        run_workspace_suite
+        run_present_suite_requiring_archives
         step "hash-pinned sample of the shipped chart pack"
         verify_sweep_sample "$PRESENT_ROOT" "$SWEEP_SAMPLE"
         run_full_pack_sweep_if_stale

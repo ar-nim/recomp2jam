@@ -32,9 +32,10 @@ use o2jam_shell::staging::{
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
-/// Repository-local `install-root` (git-ignored game data).
+/// Data root for live art: `O2JAM_INSTALL_ROOT` when set, else the
+/// repository's git-ignored `install-root`.
 fn install_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
+    o2jam_file::data_root::install_root()
 }
 
 /// Live Playing mode: the joined room's key mode and team flag (the
@@ -356,6 +357,8 @@ pub fn restage_live_playing(game: &mut ScreenGame) {
 
 #[cfg(test)]
 mod live_art_tests {
+    use std::path::Path;
+
     use o2jam_file::data_root::{pack_skip_report, root_has_game_data};
     use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry};
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
@@ -375,18 +378,75 @@ mod live_art_tests {
         read_install_archives(&install_root()).interface.is_some()
     }
 
-    /// Archives behind the Playing staging.
-    fn playing_present() -> bool {
-        read_install_archives(&install_root()).playing.is_some()
+    /// Gate env that turns a missing data pack from a skip into a failure.
+    const REQUIRE_ARCHIVES_ENV: &str = "GATE_REQUIRE_ARCHIVES";
+
+    /// Fail a data-bearing gate arm when its required archives are absent.
+    fn enforce_required_archives(required: bool, present: bool, root: &Path) {
+        if required && !present {
+            panic!(
+                "{REQUIRE_ARCHIVES_ENV}=1 but archives are missing from data root {}; \
+                 restore install-root or set {} to a data-bearing root",
+                root.display(),
+                o2jam_file::data_root::INSTALL_ROOT_ENV
+            );
+        }
     }
 
     /// Skip helper: the staged-pixel comparisons need real archives.
     fn skip_without_archives() -> bool {
-        if interface_present() && playing_present() {
+        let root = install_root();
+        let installed = read_install_archives(&root);
+        let archives_present = installed.interface.is_some() && installed.playing.is_some();
+        let archives_required = std::env::var(REQUIRE_ARCHIVES_ENV).as_deref() == Ok("1");
+        enforce_required_archives(archives_required, archives_present, &root);
+        if archives_present {
             return false;
         }
         println!("skip: missing install-root archives");
         true
+    }
+
+    mod archive_requirement_tests {
+        use std::path::Path;
+
+        use super::enforce_required_archives;
+
+        #[test]
+        #[should_panic(
+            expected = "GATE_REQUIRE_ARCHIVES=1 but archives are missing from data root /nonexistent/o2jam-install"
+        )]
+        fn required_archives_panic_when_the_data_root_is_empty() {
+            let required = true;
+            let archives_present = false;
+            enforce_required_archives(
+                required,
+                archives_present,
+                Path::new("/nonexistent/o2jam-install"),
+            );
+        }
+
+        #[test]
+        fn missing_archives_skip_when_the_gate_does_not_require_them() {
+            let required = false;
+            let archives_present = false;
+            enforce_required_archives(
+                required,
+                archives_present,
+                Path::new("/nonexistent/o2jam-install"),
+            );
+        }
+
+        #[test]
+        fn required_archives_pass_when_present() {
+            let required = true;
+            let archives_present = true;
+            enforce_required_archives(
+                required,
+                archives_present,
+                Path::new("/nonexistent/o2jam-install"),
+            );
+        }
     }
 
     /// One Interface State staged through the declaration, if the
