@@ -190,6 +190,8 @@ mod payment_tests;
 mod playing_wire_tests;
 mod press;
 #[cfg(test)]
+mod result_notice_tests;
+#[cfg(test)]
 mod room_wire_tests;
 #[cfg(test)]
 mod waiting_wire_tests;

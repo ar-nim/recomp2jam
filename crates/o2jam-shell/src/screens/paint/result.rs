@@ -957,6 +957,7 @@ pub(crate) fn paint_result_digit_field_if_staged(
 /// a four-byte word, and a one-byte marker. Only the storage shape
 /// and one record per grade band are pinned; what each field means
 /// to the grade chooser stays OPEN.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResultGradeBandRecord {
     /// Two-byte id/value field.
@@ -967,6 +968,7 @@ pub struct ResultGradeBandRecord {
     pub marker: u8,
 }
 
+#[cfg(test)]
 impl ResultGradeBandRecord {
     /// Exe vector stride for one band record. The field packing
     /// inside those six bytes stays OPEN; the struct keeps the
@@ -978,6 +980,7 @@ impl ResultGradeBandRecord {
 /// thresholds (stored as thousandths) mirror the pinned chooser
 /// ([`o2jam_game::grade_frame`]); the record fields are our storage
 /// mirror, not a claim about the exe's field semantics.
+#[cfg(test)]
 #[must_use]
 pub fn grade_band_records() -> [ResultGradeBandRecord; 6] {
     let bands = [
@@ -1017,9 +1020,14 @@ pub(crate) fn result_viewport_rect() -> Rect {
 #[must_use]
 pub(crate) fn result_placement_visible(rect: Rect) -> bool {
     let viewport = result_viewport_rect();
-    let right = rect.x.saturating_add(i32::try_from(rect.w).unwrap_or(i32::MAX));
-    let bottom = rect.y.saturating_add(i32::try_from(rect.h).unwrap_or(i32::MAX));
-    right > viewport.x && rect.x < viewport.x + i32::try_from(viewport.w).unwrap_or(0)
+    let right = rect
+        .x
+        .saturating_add(i32::try_from(rect.w).unwrap_or(i32::MAX));
+    let bottom = rect
+        .y
+        .saturating_add(i32::try_from(rect.h).unwrap_or(i32::MAX));
+    right > viewport.x
+        && rect.x < viewport.x + i32::try_from(viewport.w).unwrap_or(0)
         && bottom > viewport.y
         && rect.y < viewport.y + i32::try_from(viewport.h).unwrap_or(0)
 }
@@ -1203,12 +1211,12 @@ mod result_page_and_band_tests {
 
     use super::{
         grade_band_records, paint_album_cover, paint_information_message, paint_result_body_frame,
-        paint_result_scene, result_placement_visible, result_scroll_step, result_viewport_rect,
-        quit_fallback_rects, BattleVerdict, ResultPaint, ResultVerdict, ResultGradeBandRecord,
+        paint_result_scene, quit_fallback_rects, result_placement_visible, result_scroll_step,
+        result_viewport_rect, BattleVerdict, ResultGradeBandRecord, ResultPaint, ResultVerdict,
         RESULT_RANK_SPRITE,
     };
-    use crate::screens::paint::SceneArt;
     use crate::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+    use crate::screens::paint::SceneArt;
     use std::collections::HashMap;
 
     /// One opaque 1×1 layer at an arbitrary native anchor.
@@ -1269,14 +1277,8 @@ mod result_page_and_band_tests {
             "each band carries its own marker"
         );
         // The chooser still climbs the pinned table independently.
-        assert_eq!(
-            super::result_grade_frame(&band_score(3_135), 51),
-            Some(1)
-        );
-        assert_eq!(
-            super::result_grade_frame(&band_score(9_928), 51),
-            Some(6)
-        );
+        assert_eq!(super::result_grade_frame(&band_score(3_135), 51), Some(1));
+        assert_eq!(super::result_grade_frame(&band_score(9_928), 51), Some(6));
     }
 
     /// #1073 page clip. Live chain: `main.rs::run_play` →
@@ -1310,7 +1312,7 @@ mod result_page_and_band_tests {
         );
         // The anchor scales to x=875 in this larger framebuffer: it
         // is inside the buffer but outside the 800x600 exe page.
-        assert_eq!(buf[12 * 1000 + 875], 0, "art outside the page is clipped");
+        assert_eq!(buf[11 * 1000 + 875], 0, "art outside the page is clipped");
         assert_eq!(result_viewport_rect().w, 800);
     }
 
@@ -1333,7 +1335,7 @@ mod result_page_and_band_tests {
                     w: 10,
                     h: 10,
                 },
-                role: PlacementRole::Single,
+                role: PlacementRole::Clone,
             }],
             figures,
         };
@@ -1341,16 +1343,18 @@ mod result_page_and_band_tests {
             !result_placement_visible(art.placements[0].rect),
             "a rect wholly outside the page is not staged"
         );
-        let mut buf = vec![0u32; 800 * 600];
+        // A clone keeps its parent rect's view origin even when its
+        // layer anchor pulls it back inside a larger framebuffer.
+        let mut buf = vec![0u32; 1000 * 700];
         super::paint_result_backdrop(
             &mut Frame {
                 buf: &mut buf,
-                w: 800,
-                h: 600,
+                w: 1000,
+                h: 700,
             },
             &art,
         );
-        assert_eq!(buf[0], 0, "its anchor cannot bleed back into the page");
+        assert_eq!(buf[812], 0, "the off-page clone cannot bleed in");
     }
 
     /// #1075 unclamped caller rect. `seam: the caller-rect arm is a
@@ -1438,7 +1442,10 @@ mod result_page_and_band_tests {
     #[test]
     fn result_seam_scene_paints_without_staged_art() {
         let mut figures = HashMap::new();
-        figures.insert(RESULT_RANK_SPRITE.to_owned(), single_layer_figure(395, 531, 0x7C00));
+        figures.insert(
+            RESULT_RANK_SPRITE.to_owned(),
+            single_layer_figure(395, 531, 0x7C00),
+        );
         let art = SceneArt {
             placements: Vec::new(),
             figures,
