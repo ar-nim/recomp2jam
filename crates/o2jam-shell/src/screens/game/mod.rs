@@ -82,41 +82,42 @@ use super::paint::{
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, shop_bagsort_kept, staged_rect_hit, waiting_confirm_control_id,
-    waiting_local_is_master, waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage,
-    LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState,
-    WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots,
-    WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
+    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
+    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
+    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
+    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
-    can_return_side, can_visit_side, cash_charge_close_hit, create_room_action_at,
-    default_room_title, lanking_action_at, music_shop_action_at, music_shop_page_digit,
-    music_shop_scene_kept, music_shop_tooltip_hovered, myroom_bag_page_digit, myroom_equip_slot,
-    myroom_panel_kept, myroom_record_slot, myroom_tab_kept, paint_side_scene,
-    paint_side_scene_live, paint_side_scene_selected, paint_tutorial_scene, password_action_at,
-    planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
-    select_index_matches, select_music_rows, select_music_songs_with_labels,
-    select_row_column_text, select_row_hit, shop_action_at_on_board, shop_category_index,
-    shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for, shop_submenu_caption_kept,
-    shop_tooltip_kept, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopFace,
-    MusicShopGenreFilter, MusicShopMessengerState, MusicShopNotice, MusicShopRow,
-    MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction,
-    PasswordForm, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, RoomDialog,
-    SelectChromeAction, SelectDialogTab, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter,
-    SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField,
-    ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen, TutorialChartGlobals,
-    TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow, WalletState,
-    CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE,
-    MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
-    ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
-    SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
-    SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
-    TUTORIAL_EXIT_SPRITE,
+    can_return_side, can_visit_side, cart_pager_digits, cash_charge_close_hit,
+    create_room_action_at, default_room_title, lanking_action_at, music_shop_action_at,
+    music_shop_page_digit, music_shop_scene_kept, music_shop_tooltip_hovered,
+    myroom_bag_page_digit, myroom_equip_slot, myroom_panel_kept, myroom_record_slot,
+    myroom_tab_kept, paint_side_scene, paint_side_scene_live, paint_side_scene_selected,
+    paint_tutorial_scene, password_action_at, planet_action_at, select_chrome_action_at,
+    select_filter_button_id, select_filter_choice_at, select_index_matches, select_music_rows,
+    select_music_songs_with_labels, select_row_column_text, select_row_hit,
+    shop_action_at_on_board, shop_cart_face_controls_kept, shop_cart_page_digit_kept,
+    shop_category_index, shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for,
+    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
+    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
+    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
+    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
+    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
+    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
+    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
+    TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
+    WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
+    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE, O2_CASH_LABEL,
+    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE,
+    ROOM_ITEMSHOP_BUTTON_CODE, ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS,
+    TUTORIAL_EXIT_HIT_RECT, TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::MessengerHost;
@@ -7864,17 +7865,17 @@ impl ScreenGame {
         wallet_row_caption(&WalletRow::named(O2_CASH_LABEL, self.wallet.o2_cash))
     }
 
-    /// Checked-cart cash total caption: the summed `ITEMWON` row
-    /// prices (ours-by-design, same rule the board paints).
+    /// Won total summed from the local cart vector by the same
+    /// mapping the board paints.
     #[must_use]
     pub fn shop_cart_money_total(&self) -> u32 {
-        self.shop_cart_total()
+        self.shop.cart_total()
     }
 
-    /// Summed `ITEMWON` prices over the checked cart (saturating;
-    /// the board and the caption share this one total).
-    fn shop_cart_total(&self) -> u32 {
-        self.shop.cart_total()
+    /// Gem total summed from the local cart vector.
+    #[must_use]
+    pub fn shop_cart_gem_total(&self) -> u32 {
+        self.shop.cart_gem_total()
     }
 
     /// Fold a 5028 wallet refresh into the shop wallet.
@@ -8948,13 +8949,16 @@ impl ScreenGame {
             let featured = self.shop_entry_catalog();
             let active_category = self.shop.category().unwrap_or(0);
             let charge_sheet_open = self.shop_charge_confirm_open;
-            // `FUN_004a1010` disables BAGSORT when the cart count is
-            // nonzero (#886); the plate then comes only from the face
-            // art, never from the control body.
-            let cart_count = self.shop.cart().len();
+            // `FUN_0x4a1010` (file `0xa1010`, `ev_d9bda480…`) enables
+            // BUYITEM/GIFTITEM and both cart arrows from the cart-face
+            // flag and BAGSORT from its inverse — not from a count.
+            // Digit frames with a blank value carry no body.
+            let cart_face_open = self.shop.cart_face_open();
+            let cart_digits = cart_pager_digits(self.shop.cart().len(), self.shop_cart_page());
             let keep = |placed: &ScenePlacement| {
                 shop_panel_kept(placed, panel)
-                    && shop_bagsort_kept(placed.code, cart_count)
+                    && shop_cart_face_controls_kept(placed.code, cart_face_open)
+                    && shop_cart_page_digit_kept(placed.code, cart_digits)
                     && shop_tooltip_kept(placed, shelf_hovered)
                     && shop_submenu_caption_kept(placed.code, gender)
                     && shop_extmenu_kept(placed, ext_menu_open)
@@ -28623,18 +28627,25 @@ mod game_tests {
     }
 
     #[test]
-    fn an_empty_cart_blocks_the_static_payment_leg() {
-        // The first ladder gate (`FUN_0053c1d0`, string VA `0x648cc8`)
-        // stops BUYITEM before the mode word and 5015 write. The
-        // qualified live tap was empty, so this arm keeps the
-        // recorded no-op leg.
+    fn an_empty_cart_buy_click_is_silent_without_a_notice_or_send() {
+        // Live chain: main.rs::run_play -> ... -> ScreenGame::click_shop
+        // -> ShopAction::CartBuy -> ShopState::approve_checkout ->
+        // shop_checkout_decision. Statics: FUN_0x499760 BUYITEM arm
+        // refreshes rows, then ends on cart length zero: no notice,
+        // no 5015 (ev_e9af897d…, file `0x99760`). The two strings in
+        // that arm are for gender/owned cleanup, not an empty cart.
         let mut game = open_shop_board(2);
 
         game.click_shop(18, 564);
 
         assert_eq!(
             game.shop_checkout_notice(),
-            Some(super::super::side::CheckoutNotice::EmptyCart)
+            None,
+            "an empty cart posts no notice"
+        );
+        assert!(
+            !game.shop_charge_confirm_open(),
+            "an empty cart mounts no sheet"
         );
         assert_eq!(game.shop_payment_mode(), None);
         assert_eq!(game.take_start_payment(), None);
