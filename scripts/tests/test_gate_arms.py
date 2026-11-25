@@ -17,6 +17,12 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 GATE_SCRIPT = SCRIPTS_DIR / "gate-check.sh"
+PRESENT_CANARY_OK = (
+    "test live_art::live_art_tests::"
+    "live_matches_declaration_on_walked_screens_when_archives_present ... ok"
+)
+REQUIRED_MARKER = "GATE_REQUIRE_ARCHIVES=1"
+UNSET_MARKER = "GATE_REQUIRE_ARCHIVES=unset"
 
 
 class GateArmTest(unittest.TestCase):
@@ -49,23 +55,43 @@ class GateArmTest(unittest.TestCase):
         self.bin = self.repo / "bin"
         self.bin.mkdir()
         (self.bin / "cargo").write_text(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$FAKE_CARGO_LOG\"\n",
+            "#!/usr/bin/env bash\n"
+            "printf 'GATE_REQUIRE_ARCHIVES=%s :: %s\\n' \"${GATE_REQUIRE_ARCHIVES-unset}\" "
+            "\"$*\" >> \"$FAKE_CARGO_LOG\"\n"
+            "if [ -n \"${FAKE_CANARY_LINE:-}\" ]; then\n"
+            "  printf '%s\\n' \"$FAKE_CANARY_LINE\"\n"
+            "fi\n",
             encoding="utf-8",
         )
         (self.bin / "cargo").chmod(0o755)
         self.log = self.repo / "cargo.log"
         self.env = dict(os.environ)
         self.env.update(PATH=f"{self.bin}:{self.env['PATH']}", FAKE_CARGO_LOG=str(self.log))
+        self.env.pop("GATE_REQUIRE_ARCHIVES", None)
+        self.env.pop("FAKE_CANARY_LINE", None)
 
-    def run_gate(self) -> subprocess.CompletedProcess[str]:
+    def run_gate(
+        self, *args: str, fake_canary: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        env = dict(self.env)
+        if fake_canary:
+            env["FAKE_CANARY_LINE"] = PRESENT_CANARY_OK
         return subprocess.run(
-            ["bash", str(self.repo / "scripts" / "gate-check.sh"), "--no-push"],
+            ["bash", str(self.repo / "scripts" / "gate-check.sh"), "--no-push", *args],
             capture_output=True,
             text=True,
-            env=self.env,
+            env=env,
             cwd=self.repo,
             timeout=60,
         )
+
+    def workspace_suite_markers(self) -> list[str]:
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        return [
+            line.split(" :: ", 1)[0]
+            for line in lines
+            if "test --workspace" in line
+        ]
 
     def test_absent_stamp_runs_the_full_sweep_then_stamps(self) -> None:
         result = self.run_gate()
@@ -127,6 +153,26 @@ class GateArmTest(unittest.TestCase):
         result = self.run_gate()
         self.assertEqual(result.returncode, 1)
         self.assertTrue(probe_log.is_file())
+
+    def test_full_arm_requires_archives_only_in_the_present_suite(self) -> None:
+        result = self.run_gate(fake_canary=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.workspace_suite_markers(), [REQUIRED_MARKER, UNSET_MARKER]
+        )
+
+    def test_quick_arm_leaves_archive_requirement_unset(self) -> None:
+        result = self.run_gate("--arm", "quick", fake_canary=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.workspace_suite_markers(), [UNSET_MARKER])
+
+    def test_hidden_arm_leaves_archive_requirement_unset(self) -> None:
+        result = self.run_gate("--arm", "hidden", fake_canary=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.workspace_suite_markers(), [UNSET_MARKER])
 
 
 if __name__ == "__main__":
