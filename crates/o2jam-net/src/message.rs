@@ -2283,10 +2283,11 @@ mod waiting_wire_codec_tests {
         );
     }
 
+    // seam: pure codec; the handler skips the cap byte when the result
+    // word is non-zero (VA 0x55b6d0,
+    // ev_2a4a9653505cecfa56fb762db6b71d87fa79a2340ca688f713cca043832fae3d).
     #[test]
     fn free_music_status_with_a_nonzero_result_carries_no_cap_byte() {
-        // seam: pure codec; the handler skips the byte when the word
-        // is non-zero (VA 0x55b6d0, ev_2a4a9653505cecfa56fb762db6b71d87fa79a2340ca688f713cca043832fae3d).
         let frame = decode_frame(
             &FreeMusicStatusAnswer {
                 result: -1,
@@ -2331,11 +2332,11 @@ mod waiting_wire_codec_tests {
         assert_eq!(StartGameAnswer::decode_frame(&frame), Ok(answer));
     }
 
+    // seam: pure codec; both handlers read no body field (3010 VA
+    // 0x55e2f0 ev_e91089f51d6c959161da81f01b5c1d6f51f00bfe10c69998b9629b659941cce8;
+    // 3014 VA 0x55f210 ev_5d9c48f9d8fe27887b34e15b4bc11ec313a9527b93b07a15b70db96c178672ee).
     #[test]
     fn room_closed_and_disappeared_events_carry_no_fields() {
-        // seam: pure codec; both handlers read no body field (3010 VA
-        // 0x55e2f0 ev_e91089f51d6c959161da81f01b5c1d6f51f00bfe10c69998b9629b659941cce8;
-        // 3014 VA 0x55f210 ev_5d9c48f9d8fe27887b34e15b4bc11ec313a9527b93b07a15b70db96c178672ee).
         assert_eq!(RoomClosedNotice::decode_body(&[]), Ok(RoomClosedNotice));
         assert_eq!(
             RoomDisappearedNotice::decode_body(&[]),
