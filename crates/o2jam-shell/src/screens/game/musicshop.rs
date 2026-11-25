@@ -17,18 +17,18 @@ use super::super::side::{
     MSHOP_CART_ROWS, MSHOP_CASHFILLUP_NOTICE_ID, MSHOP_CASH_FILLUP_CODE, MSHOP_CONFERENCE_CODE,
     MSHOP_DIFF_SORT_CODE, MSHOP_DOWN_CANCEL_CODE, MSHOP_ENTRY_BOARD_SONG_IDS, MSHOP_GEM_BUY_CODE,
     MSHOP_GIFT_CODE, MSHOP_MESSENGER_CODE, MSHOP_MUSICDELETE_CODE, MSHOP_OWNED_FIRST_CODE,
-    MSHOP_OWNED_ROWS, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS, MSHOP_TITLE_SORT_CODE,
+    MSHOP_OWNED_ROWS, MSHOP_RANK_HEADER_FIRST_CODE, MSHOP_SEARCH_CODE, MSHOP_SONG_ROWS,
+    MSHOP_TITLE_SORT_CODE,
 };
 
 /// One result of a music-shop control press. The board owns the
-/// state change; the caller owns the side effects (the 5010 outbox
-/// and the staged download queue).
+/// state change; the caller owns the staged download queue. Payment
+/// and purchase frames belong to the checkout ladder and the reply
+/// replay, never to a board press (P2 pin).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MusicShopEffect {
     /// No caller-side effect.
     None,
-    /// Queue the pinned 5010 music purchase.
-    Buy,
     /// Hand these owned song ids to the staged download engine.
     StartDownloads(Vec<u16>),
     /// A confirmed DOWN_CANCEL dropped the queued fetches.
@@ -157,9 +157,15 @@ pub(crate) struct MusicShopState {
     /// gated while a download stands (#817).
     pub(crate) music_shop_owned_page: usize,
     /// Active owned-list sort key and its per-key direction word
-    /// (exe `state+0x370 + index*4`, #816).
+    /// (exe `state+0x370 + index*4`, P1 pin). Every header press
+    /// flips its own word, including when the key changes.
     pub(crate) music_shop_owned_sort: Option<OwnedSort>,
     pub(crate) music_shop_owned_sort_descending: [bool; 3],
+    /// Six rank-header direction words (exe `state+0x194 + index*4`).
+    /// Each of `0x1A20007E..83` flips its own word on every press.
+    /// The initial values are config-sourced in the exe and stay OPEN
+    /// here (`FUN_004d6930(0)` is not decoded).
+    pub(crate) music_shop_rank_sort_descending: [bool; 6],
     /// Standing notice and the staged control code whose rect hosts
     /// it. The exe posts these strings through its notice helper;
     /// the host rect is ours-by-design chrome over the bnd layout.
@@ -418,6 +424,19 @@ impl MusicShopState {
     pub(crate) fn owned_sort_descending(&self) -> bool {
         self.music_shop_owned_sort
             .is_some_and(|sort| self.music_shop_owned_sort_descending[sort.index()])
+    }
+
+    /// Direction word of one rank header (`0x1A20007E..83`).
+    pub(crate) fn rank_header_descending(&self, code: u32) -> bool {
+        rank_header_index(code).is_some_and(|index| self.music_shop_rank_sort_descending[index])
+    }
+
+    /// Flip the direction word owned by one rank header press.
+    fn flip_rank_header(&mut self, code: u32) {
+        if let Some(index) = rank_header_index(code) {
+            self.music_shop_rank_sort_descending[index] =
+                !self.music_shop_rank_sort_descending[index];
+        }
     }
 
     /// Catalog title of one owned song id, or the bare id.
@@ -710,6 +729,16 @@ impl MusicShopState {
         self.music_shop_songs.get(start.checked_add(slot)?)
     }
 
+    /// Catalog sort code that doubles as one rank header, if any.
+    fn rank_header_for_sort(sort: LankingSort) -> Option<u32> {
+        match sort {
+            LankingSort::Title => Some(MSHOP_TITLE_SORT_CODE),
+            LankingSort::Diff => Some(MSHOP_DIFF_SORT_CODE),
+            LankingSort::Bpm => Some(MSHOP_BPM_SORT_CODE),
+            LankingSort::Artist => None,
+        }
+    }
+
     /// Sorted song-shop rows with live flags on the current page
     /// (owned page: small, five rows at most).
     pub(crate) fn visible_rows(&self) -> Vec<MusicShopRow> {
@@ -724,6 +753,11 @@ impl MusicShopState {
         };
         if let Some(sort) = self.music_shop_sort {
             sort_lanking_songs(&mut songs, sort);
+            if Self::rank_header_for_sort(sort)
+                .is_some_and(|code| self.rank_header_descending(code))
+            {
+                songs.reverse();
+            }
         }
         let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
         music_shop_rows(
@@ -736,9 +770,9 @@ impl MusicShopState {
 
     /// Board action through the control-code dispatch: row picks
     /// stage the cart, sorts resort and reset the page, and the
-    /// pagers step and wrap. Reports the caller-side effect — a
-    /// pinned 5010 buy or the marked song ids for the staged worker
-    /// — so this board state never touches the wire or the queue.
+    /// pagers step and wrap. Reports only the marked song ids for
+    /// the staged worker, so this board state never touches a wire
+    /// outbox (P1/P2 pins).
     pub(crate) fn apply_action(&mut self, action: MusicShopAction) -> MusicShopEffect {
         // A notice owns only the next board press: any control that
         // follows dismisses it, and the arm may post a fresh one or
@@ -777,11 +811,12 @@ impl MusicShopState {
                     .insert(song_id, Self::bag_code_for_price(gem));
                 self.music_shop_selected_row = Some(slot);
                 self.music_shop_buyitem_invoked = Some(MSHOP_BUYITEM_INVOKE_CODE);
-                MusicShopEffect::Buy
+                MusicShopEffect::None
             }
             MusicShopAction::Top100Chrome { code } => {
                 self.music_shop_top100_pressed = Some(code);
                 if music_shop_rank_header_key(code).is_some() {
+                    self.flip_rank_header(code);
                     self.music_shop_rank_key = Some(code);
                     self.music_shop_search_active = false;
                     self.music_shop_page = 0;
@@ -903,12 +938,9 @@ impl MusicShopState {
             }
             MusicShopAction::OwnedSort(sort) => {
                 let direction = sort.index();
-                if self.music_shop_owned_sort == Some(sort) {
-                    self.music_shop_owned_sort_descending[direction] =
-                        !self.music_shop_owned_sort_descending[direction];
-                } else {
-                    self.music_shop_owned_sort = Some(sort);
-                }
+                self.music_shop_owned_sort_descending[direction] =
+                    !self.music_shop_owned_sort_descending[direction];
+                self.music_shop_owned_sort = Some(sort);
                 self.music_shop_owned_page = 0;
                 self.music_shop_owned_marks = [false; MSHOP_OWNED_ROWS];
                 MusicShopEffect::None
@@ -924,13 +956,9 @@ impl MusicShopState {
                 self.music_shop_sort = Some(sort);
                 // TITLE/DIFF/BPM double as rank headers (`0x80..82`);
                 // the lanking-only ARTIST key selects no rank table.
-                let header = match sort {
-                    LankingSort::Title => Some(MSHOP_TITLE_SORT_CODE),
-                    LankingSort::Diff => Some(MSHOP_DIFF_SORT_CODE),
-                    LankingSort::Bpm => Some(MSHOP_BPM_SORT_CODE),
-                    LankingSort::Artist => None,
-                };
-                if header.is_some() {
+                let header = Self::rank_header_for_sort(sort);
+                if let Some(code) = header {
+                    self.flip_rank_header(code);
                     self.music_shop_rank_key = header;
                 }
                 self.music_shop_search_active = false;
@@ -977,8 +1005,11 @@ impl MusicShopState {
                 }
                 MusicShopEffect::None
             }
-            MusicShopAction::CartBuy => MusicShopEffect::Buy,
-            MusicShopAction::CartGift => MusicShopEffect::None,
+            // P2: case 0x1A20005D sends an empty 5015 after its own
+            // gates; the cart pager (0x5F) and the row-buy arm queue
+            // no purchase frame here. The checkout ladder owns both
+            // payment presses; the 5010 constants are reply/web only.
+            MusicShopAction::CartBuy | MusicShopAction::CartGift => MusicShopEffect::None,
             MusicShopAction::CartRemove(slot) => {
                 if let Some(song) = self.visible_cart().get(slot) {
                     let song_id = song.song_id;
@@ -1011,4 +1042,11 @@ impl MusicShopState {
             MusicShopAction::BackToLobby => MusicShopEffect::None,
         }
     }
+}
+
+/// Zero-based direction-word index behind one rank header code.
+fn rank_header_index(code: u32) -> Option<usize> {
+    let offset = code.checked_sub(MSHOP_RANK_HEADER_FIRST_CODE)?;
+    let index = usize::try_from(offset).ok()?;
+    (index < 6).then_some(index)
 }

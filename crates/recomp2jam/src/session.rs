@@ -5913,8 +5913,8 @@ pub(super) mod session_tests {
         );
         assert_eq!(
             opcodes.iter().filter(|id| **id == 5010).count(),
-            1,
-            "the row buy keeps its existing 5010 leg: {opcodes:?}"
+            0,
+            "no click arm queues the reply-only opcode 5010: {opcodes:?}"
         );
     }
 
@@ -6062,9 +6062,9 @@ pub(super) mod session_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MusicShop));
-        game.click_music_shop(19, 105);
-        assert_eq!(game.music_shop_cart(), vec![757]);
-        game.click_music_shop(424, 529);
+        // The 5010/5011 read-side fold is a reply probe, not a click
+        // arm: no Music Shop press queues this opcode (P2 pin).
+        game.stage_music_buy_reply_probe();
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
@@ -6163,8 +6163,9 @@ pub(super) mod session_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MusicShop));
-        game.click_music_shop(19, 105);
-        game.click_music_shop(424, 529);
+        // Reply-side probe: the 5011 omission, not a BUYITEM send,
+        // drives this failure fold (P2 pin).
+        game.stage_music_buy_reply_probe();
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
@@ -6235,8 +6236,11 @@ pub(super) mod session_tests {
             HashMap::new(),
         );
         assert!(game.visit_side(SideScreen::MusicShop));
-        game.click_music_shop(19, 105);
-        game.click_music_shop(424, 529);
+        // Reply-side probe: this leg pins the 5011 failure notice,
+        // not a click-generated 5010 (P2 pin). The cart is staged
+        // separately because the failure keeps it for a retry.
+        game.music_shop_cart_push(757);
+        game.stage_music_buy_reply_probe();
 
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);

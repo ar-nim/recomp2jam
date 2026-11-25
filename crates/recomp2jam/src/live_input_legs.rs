@@ -35,14 +35,16 @@ mod live_input_leg_tests {
     use o2jam_shell::screens::paint::dialog_origin;
 
     use o2jam_shell::screens::side::{
-        MyRoomLowerTab, MyRoomNotice, MyRoomPanel, ShopPanel, SideScreen, INFORMATION_OK_CODE,
-        MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE,
-        OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_SOUNDSET, OPTION_KEY_TEST,
-        OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE, QUIT_CANCEL_CODE,
-        QUIT_OK_CODE, SHOP_BUYITEM_CODE, SHOP_CATEGORY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y,
-        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SET_PRICE_CODE,
-        SHOP_SUBMENU_FIRST_CODE,
+        music_shop_action_at, MusicShopAction, MyRoomLowerTab, MyRoomNotice, MyRoomPanel,
+        ShopPanel, SideScreen, INFORMATION_OK_CODE, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE,
+        MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_TITLE_SORT_CODE, MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET, OPTION_KEY_3KEY_FIRST,
+        OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_SOUNDSET,
+        OPTION_KEY_TEST, OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE,
+        QUIT_CANCEL_CODE, QUIT_OK_CODE, SHOP_BUYITEM_CODE, SHOP_CATEGORY_FIRST_CODE,
+        SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_SET_PRICE_CODE, SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -3760,6 +3762,202 @@ mod live_input_leg_tests {
         paint(&mut session);
         let leave = wait_for_opcode(&gateway.reports, Request::ExitWaiting.id());
         assert_eq!(leave, vec![0, 0], "BACK still posts the 3005 leave");
+        finish(session, gateway.server);
+    }
+
+    /// Synthetic seven-song catalog for the Music Shop live leg.
+    /// Titles are chosen so a flipped TITLE word visibly reverses the
+    /// staged first row; ids match the synthetic price words.
+    fn music_shop_live_catalog_blob() -> Vec<u8> {
+        let names = ["Zulu", "Alpha", "Mike", "Delta", "Echo", "Foxtrot", "Golf"];
+        let mut blob = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            let song_id = 757u32 + u32::try_from(index).unwrap_or(0);
+            let mut record = vec![0u8; 300];
+            record[4..8].copy_from_slice(&song_id.to_le_bytes());
+            record[8..11].copy_from_slice(b"ojn");
+            record[20..24].copy_from_slice(&124f32.to_le_bytes());
+            record[112..112 + name.len()].copy_from_slice(name.as_bytes());
+            record[176..181].copy_from_slice(b"Bands");
+            let file_name = format!("o2ma{song_id}.ojm");
+            record[240..240 + file_name.len()].copy_from_slice(file_name.as_bytes());
+            blob.extend_from_slice(&record);
+        }
+        blob
+    }
+
+    /// A click that the statics pin marks wire-quiet must leave the
+    /// recording gateway silent for a bounded interval. A timeout is
+    /// the absence proof; an unexpected frame names its opcode.
+    fn assert_no_new_frames(reports: &Receiver<Frame>, label: &str) {
+        match reports.recv_timeout(Duration::from_millis(300)) {
+            Ok(frame) => panic!("{label} sent opcode {} (P1/P2 pin says no wire)", frame.id),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => panic!("{label}: gateway closed early"),
+        }
+    }
+
+    /// Find one point inside a staged control rect that actually
+    /// resolves to the expected action. Overlapping `.bnd` plates can
+    /// take a control's centre, so the live leg must not assume it.
+    fn staged_music_shop_action_point(
+        session: &mut OnlineSession,
+        code: u32,
+        expected: impl Fn(MusicShopAction) -> bool,
+    ) -> (i32, i32) {
+        let placements = session.game_mut().staged_side_placements().to_vec();
+        session
+            .game_mut()
+            .staged_side_control_rects(code)
+            .into_iter()
+            .flat_map(|rect| {
+                (rect.y..rect.y + i32::try_from(rect.h).unwrap_or(0)).flat_map(move |y| {
+                    (rect.x..rect.x + i32::try_from(rect.w).unwrap_or(0)).map(move |x| (x, y))
+                })
+            })
+            .find(|(x, y)| music_shop_action_at(&placements, *x, *y).is_some_and(&expected))
+            .unwrap_or_else(|| {
+                panic!("no staged point resolves to the expected action for {code:#x}")
+            })
+    }
+
+    /// P1/P2 + #916 T3 live leg: boot through the real pointer path
+    /// into the Music Shop, then prove that sort/pager clicks are
+    /// wire-quiet while one BUYITEM click sends one empty 5015.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> GameLoop::ingest_snapshot
+    ///   (splash, emblem, room row) -> ScreenGame::click_room_control
+    ///   -> ScreenGame::visit_side(MusicShop) -> GameLoop::mouse_click
+    ///   -> ScreenGame::click_music_shop -> music_shop_action_at
+    ///   -> MusicShopState::apply_action (Sort/MsPrev/BuyRow/CartBuy)
+    ///   -> ScreenGame::run_music_shop_checkout -> PendingOutbox
+    ///   -> OnlineSession::poll_wire -> flush_start_payment -> C2S 5015.
+    ///   The recording gateway sees the frame; the outbox also sees
+    ///   no 5010, whose two exe constants are reply/web-side only.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_music_shop_buy_sends_one_5015_and_sort_pager_stay_wire_quiet() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let catalog_blob = music_shop_live_catalog_blob();
+        let catalog = o2jam_file::parse_ojn_list(&catalog_blob).expect("synthetic catalog parses");
+        session.game_mut().set_song_catalog(&catalog);
+        session
+            .game_mut()
+            .set_myroom_character(o2jam_net::CharacterInfo {
+                gem: 500,
+                o2_cash: 500,
+                music_cash: 500,
+                item_cash: 500,
+                ..o2jam_net::CharacterInfo::default()
+            });
+        let prices: Vec<o2jam_file::OjnMidParamEntry> = (757u32..=763)
+            .map(|song_id| o2jam_file::OjnMidParamEntry {
+                song_id,
+                param_a: 0,
+                param_b: 40,
+                anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+            })
+            .collect();
+        session.game_mut().stage_music_shop_prices(&prices);
+
+        let shop_tab = &room_top_tabs()[0];
+        assert_tab_aim_is_staged(&mut session, shop_tab);
+        session.ingest_snapshot(&InputSnapshot::click_at(shop_tab.aim.0, shop_tab.aim.1));
+        paint(&mut session);
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::MusicShop),
+            "the staged Room tab must mount the Music Shop"
+        );
+        wait_for_enter_shop(&gateway.reports, shop_tab.id);
+        while gateway.reports.try_recv().is_ok() {}
+
+        // NEW entry hides the catalog cells; the RED filter opens the
+        // board the same way the shell's staged board tests do.
+        click_staged_side_code(&mut session, MSHOP_GENRE_FILTER_FIRST_CODE + 4);
+        paint(&mut session);
+        let cue_calls = attach_cue_counter(&mut session);
+        let cue_baseline = *cue_calls.borrow();
+        let page_digit = session
+            .game_mut()
+            .staged_side_control_rect(MSHOP_PAGE_CUR_ONES_CODE)
+            .expect("the current-page digit stages with the installed .bnd");
+        let before_frames: Vec<Vec<u32>> = [0_u64, 16_667, 50_001]
+            .iter()
+            .map(|now_ms| paint_at_frame(&mut session, *now_ms))
+            .collect();
+
+        click_staged_side_code(&mut session, MSHOP_TITLE_SORT_CODE);
+        paint(&mut session);
+        assert!(session
+            .game_mut()
+            .music_shop_rank_header_descending(MSHOP_TITLE_SORT_CODE));
+        assert_no_new_frames(&gateway.reports, "sort press");
+
+        click_staged_side_code(&mut session, MSHOP_MSALL_LEFT_CODE);
+        paint(&mut session);
+        assert_eq!(
+            session.game_mut().music_shop_page(),
+            1,
+            "MSALL left wraps to the last page"
+        );
+        for (index, now_ms) in [0_u64, 16_667, 50_001].iter().enumerate() {
+            let after = paint_at_frame(&mut session, *now_ms);
+            assert!(
+                changed_pixels_in_rect(&before_frames[index], &after, page_digit) > 0,
+                "the wrapped page must re-ink the staged digit at {now_ms} ms"
+            );
+        }
+        assert_no_new_frames(&gateway.reports, "pager press");
+
+        click_staged_side_code(&mut session, MSHOP_EX_FIRST_CODE);
+        paint(&mut session);
+        let picked_song = *session
+            .game_mut()
+            .music_shop_cart()
+            .first()
+            .expect("the live MS_EX click staged a cart song");
+        // This .bnd stages the row-buy rects absolute, while our
+        // tiled hit-test assumes row-local templates, so the bag
+        // producer is staged at the seam. The BUYITEM click and its
+        // wire ride below still use the real pointer path.
+        session.game_mut().music_shop_bag_push(picked_song, true);
+        assert!(
+            session.game_mut().music_shop_bag_count() > 0,
+            "the staged bag entry reaches the BUYITEM ladder"
+        );
+        assert_no_new_frames(&gateway.reports, "bag staging");
+
+        let buy_point =
+            staged_music_shop_action_point(&mut session, MSHOP_CART_BUY_CODE, |action| {
+                action == MusicShopAction::CartBuy
+            });
+        session.ingest_snapshot(&InputSnapshot::click_at(buy_point.0, buy_point.1));
+        paint(&mut session);
+        assert_eq!(
+            session.game_mut().music_shop_payment_mode(),
+            Some(o2jam_shell::screens::side::CheckoutMode::Buy),
+            "the staged BUYITEM rect must run the checkout ladder"
+        );
+        let body = wait_for_opcode(&gateway.reports, 5015);
+        assert!(body.is_empty(), "BUYITEM sends one empty 5015");
+        assert_no_new_frames(&gateway.reports, "the frame after BUYITEM");
+        assert_eq!(
+            session.game_mut().take_music_buy(),
+            None,
+            "BUYITEM never queues the 5010 reply opcode"
+        );
+        assert_eq!(*cue_calls.borrow(), cue_baseline, "no invented audio cue");
         finish(session, gateway.server);
     }
 }
