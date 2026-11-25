@@ -8,6 +8,14 @@ This file is the single home for rig procedure. Every other doc points
 here instead of restating rig lore. AGENTS.md carries one pointer line
 to this file.
 
+## Statics-first rule (owner decision 2026-11-25)
+
+No re-pair, A/V-compare, or rig leg runs for a parity gap before an exe
+statics pin exists for that behavior (REA MCP evidence IDs, pinned to the
+7.55 hashes). Statics come first; the rig then confirms or refutes a named
+prediction, it never goes fishing. A re-pair wave without a prior statics
+pin is out of procedure.
+
 ## Scope and pairing
 
 A run drives the client through scenes, injects input, and observes
