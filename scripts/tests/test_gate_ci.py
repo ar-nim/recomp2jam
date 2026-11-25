@@ -17,6 +17,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = SCRIPTS_DIR.parent
 GATE_SCRIPT = SCRIPTS_DIR / "gate-check.sh"
 CI_WORKFLOW = REPO_DIR / ".github" / "workflows" / "ci.yml"
+PRESENT_CANARY_OK = (
+    "test live_art::live_art_tests::"
+    "live_matches_declaration_on_walked_screens_when_archives_present ... ok"
+)
 
 
 class GateCiArmTest(unittest.TestCase):
@@ -41,7 +45,9 @@ class GateCiArmTest(unittest.TestCase):
         self.bin = self.repo / "bin"
         self.bin.mkdir()
         (self.bin / "cargo").write_text(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$FAKE_CARGO_LOG\"\n",
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$FAKE_CARGO_LOG\"\n"
+            f"printf '%s\\n' \"{PRESENT_CANARY_OK}\"\n",
             encoding="utf-8",
         )
         (self.bin / "cargo").chmod(0o755)

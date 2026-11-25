@@ -71,7 +71,7 @@ class GateArmTest(unittest.TestCase):
         self.env.pop("FAKE_CANARY_LINE", None)
 
     def run_gate(
-        self, *args: str, fake_canary: bool = False
+        self, *args: str, fake_canary: bool = True
     ) -> subprocess.CompletedProcess[str]:
         env = dict(self.env)
         if fake_canary:
