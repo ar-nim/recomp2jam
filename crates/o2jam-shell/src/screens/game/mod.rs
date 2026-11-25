@@ -33691,6 +33691,8 @@ mod game_tests {
         // Confirm/Back are the keyboard arms of RETRY/BACK: the
         // pinned fallback rects answer while the buttons stage
         // nothing, and a miss lands nowhere.
+        // seam: this mirror is an ours-by-design local shortcut; the
+        // exe keyboard-Back target stays OPEN (#294 T3, no REA in lane).
         use MenuKey;
         let mut game = ScreenGame::new();
         finish_song(&mut game);
