@@ -995,14 +995,17 @@ fn stage_shop_master_mascot(art: &mut StagedArt) {
 /// at `0x4988d5`–`0x498905`, REA `ev_7bd1198a…`); case 3 sets the
 /// current frame to zero (`ev_3d8872a9…`), and `FUN_0042f870` maps a
 /// current frame to surface `frame - 1` (`ev_5ce481b1…`), so zero
-/// paints no alarm body. The baked lamp stays visible. Hover frames
-/// stay capture-class.
-const SHOP_BAKED_CHROME_CODES: [u32; 5] = [
+/// paints no alarm body. Both `B9` (lamp) and `BA` (popup) come from
+/// that computed `base + index` loop; detaching either body keeps its
+/// `.bnd` rect for hit tests. The baked lamp stays visible. Hover
+/// frames stay capture-class.
+const SHOP_BAKED_CHROME_CODES: [u32; 6] = [
     0x1420_0002, // IDC_BUTTON_SSHOP_BACK
     0x1420_00B6, // IDC_BUTTON_SSHOP_CONFERENCE
     0x1420_00B7, // IDC_BUTTON_SSHOP_BAGSORT
     0x1420_00B8, // IDC_BUTTON_SSHOP_MESSENGER
     0x1450_00B9, // IDC_IMAGE_SSHOP_MESSENGER_ALRAM
+    0x1450_00BA, // IDC_IMAGE_SSHOP_MESSENGER_ALRAM1 (popup body)
 ];
 
 /// Keep a baked chrome control's staged rect for hit testing but

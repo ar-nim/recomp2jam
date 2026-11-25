@@ -10,7 +10,7 @@
 #[cfg(test)]
 mod live_input_leg_tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::rc::Rc;
@@ -27,18 +27,19 @@ mod live_input_leg_tests {
         AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, EmptyMessage, Frame, Gender,
         JoinRoom, JoinRoomResponse, Request, RoomList, RoomListEntry, RoomSlotState, WireMessage,
     };
-    use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+    use o2jam_render::{pack_xrgb, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::{LobbyChat, PlanetModal, RoomListFilter, ScreenGame};
     use o2jam_shell::screens::messenger::MessengerHost;
     use o2jam_shell::screens::paint::dialog_origin;
 
     use o2jam_shell::screens::side::{
-        MyRoomLowerTab, MyRoomNotice, MyRoomPanel, SideScreen, INFORMATION_OK_CODE,
+        MyRoomLowerTab, MyRoomNotice, MyRoomPanel, ShopPanel, SideScreen, INFORMATION_OK_CODE,
         MYROOM_GOSHOP_CODE, OPTION_GAME_KEYSET, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE,
         OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_SOUNDSET, OPTION_KEY_TEST,
         OPTION_SOUND_GAMESET, OPTION_SOUND_KEYSET, PLANET_OPTION_CODE, SHOP_CATEGORY_FIRST_CODE,
         SHOP_CHILD_ORIGIN_Y, SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GOMYROOM_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_FIRST_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        SHOP_SET_PRICE_CODE, SHOP_SUBMENU_FIRST_CODE,
     };
     use o2jam_shell::staging::{
         read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -2522,6 +2523,162 @@ mod live_input_leg_tests {
                 changed_pixels_in_rect(&on_bag, &sampled, gift_cell) > 0,
                 "the gift face still inks the gift cell at {now_ms} ms"
             );
+        }
+        finish(session, gateway.server);
+    }
+
+    /// Packed core colors of the archive's green `₩` and gold `G`
+    /// glyphs (RGB555 words `0x3706` and `0x7F20`, pinned by the
+    /// `live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs`
+    /// count guard). Only these two distinctive colors are counted; a
+    /// broad atlas-color set also matches the cart art.
+    fn shop_price_prefix_colors() -> HashSet<u32> {
+        [0x3706u16, 0x7F20]
+            .iter()
+            .map(|word| {
+                let (red, green, blue) = o2jam_file::rgb555_to_rgb888(*word);
+                pack_xrgb(red, green, blue)
+            })
+            .collect()
+    }
+
+    /// Count pixels whose color can only come from the price sprite
+    /// atlases inside one staged price cell.
+    fn price_ink_pixels(frame: &[u32], rect: Rect, colors: &HashSet<u32>) -> usize {
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let left = usize::try_from(rect.x).expect("rect left fits usize");
+        let top = usize::try_from(rect.y).expect("rect top fits usize");
+        let columns = usize::try_from(rect.w).expect("rect width fits usize");
+        let rows = usize::try_from(rect.h).expect("rect height fits usize");
+        (top..top + rows)
+            .flat_map(|y| (left..left + columns).map(move |x| y * width + x))
+            .filter(|index| colors.contains(&frame[*index]))
+            .count()
+    }
+
+    /// Boot -> Room -> Item Shop -> ITEMBUY row pick, then three
+    /// explicit paint clocks on the cart face. This is the live
+    /// confirmation leg for #937 and #939: the entry frame first
+    /// proves the price atlases really ink the cloned cells, then the
+    /// cart frame must leave them dark and keep the alarm popup body
+    /// off (white `...` at the pinned `(630,560)` probe).
+    ///
+    /// Exe pins: `FUN_0x4a21a0` writes card prices only for face words
+    /// `+0x168 == 0` and `+0x144 != 0` (`ev_bec61aed…`, file `0xa21a0`);
+    /// shop entry calls `FUN_0x42f5a0(3)` on `0x145000b9 + index`
+    /// (`ev_1b078fdd…`), frame 0 selects surface `-1`
+    /// (`ev_68329752…`).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online ->
+    ///   connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> OnlineSession::stage_live_art ->
+    ///   stage_interface_scenes -> stage_state(State::Shop) ->
+    ///   stage_shop_baked_chrome (BA body detached) ->
+    ///   GameLoop::ingest_snapshot -> ScreenGame::click_room_control ->
+    ///   visit_side(Shop) -> ScreenGame::click_shop ->
+    ///   ShopState::apply_action -> ShopPanel::ShoppingBag ->
+    ///   ScreenGame::paint_at -> ScreenGame::paint_side ->
+    ///   paint_shop_board -> ShopPriceFace::for_panel ->
+    ///   paint_shop_featured_captions (price rows skipped).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_cart_face_keeps_set_item_prices_dark_and_the_alarm_popup_bodyless_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        if let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) {
+            session.game_mut().set_decoded_avatar_source(&source);
+            session
+                .game_mut()
+                .stage_exe_item_shop_catalog(source.table());
+        }
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let itemshop = &room_top_tabs()[1];
+        assert_tab_aim_is_staged(&mut session, itemshop);
+        session.ingest_snapshot(&InputSnapshot::click_at(itemshop.aim.0, itemshop.aim.1));
+        assert_eq!(session.game_mut().side(), Some(SideScreen::Shop));
+        // The 5006 entry frame is certified by the sibling shop legs;
+        // this one pins paint, so no timed gateway wait (its socket has
+        // a 5 s read timeout that trips under a loaded suite).
+        drop(painted_frame(&mut session));
+        assert!(
+            session.game_mut().shop_entry_catalog(),
+            "the live state-3 landing mounted the featured cards"
+        );
+
+        let colors = shop_price_prefix_colors();
+        let price_rects = session
+            .game_mut()
+            .staged_side_control_rects(SHOP_SET_PRICE_CODE);
+        assert!(
+            price_rects.len() >= 3,
+            "the v6 pair pins at least three uncovered price cells"
+        );
+        let entry_frame = paint_at_frame(&mut session, 0);
+        let entry_ink: usize = price_rects
+            .iter()
+            .map(|rect| price_ink_pixels(&entry_frame, *rect, &colors))
+            .sum();
+        assert!(
+            entry_ink > 0,
+            "the entry face must really ink the sprite price rows"
+        );
+
+        click_staged_shop_control(&mut session, SHOP_ITEMBUY_FIRST_CODE, SHOP_CHILD_ORIGIN_Y);
+        assert_eq!(
+            session.game_mut().shop_panel(),
+            ShopPanel::ShoppingBag,
+            "ITEMBUY1 opens the cart face"
+        );
+        // A second checked row keeps the cart face armed while the
+        // browse scroll below repaints the live surface.
+        click_staged_shop_control(
+            &mut session,
+            SHOP_ITEMBUY_FIRST_CODE + 1,
+            SHOP_CHILD_ORIGIN_Y,
+        );
+        assert_eq!(session.game_mut().shop_cart().len(), 2);
+
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a frame index");
+        let mut previous = paint_at_frame(&mut session, 0);
+        let mut previous_browse = shop_browse_pixels(&mut session);
+        for (step, now_ms) in [20_000, 50_000].iter().enumerate() {
+            let scroll_code = if step % 2 == 0 {
+                SHOP_SCROLL_RIGHT_CODE
+            } else {
+                SHOP_SCROLL_LEFT_CODE
+            };
+            click_staged_shop_control(&mut session, scroll_code, 0);
+            assert_eq!(session.game_mut().shop_panel(), ShopPanel::ShoppingBag);
+            let browse = shop_browse_pixels(&mut session);
+            assert!(
+                changed_pixels(&previous_browse, &browse) > 0,
+                "the live browse face repaints at {now_ms} ms"
+            );
+            previous_browse = browse;
+            let frame = paint_at_frame(&mut session, *now_ms);
+            assert!(
+                changed_pixels(&previous, &frame) > 0,
+                "the cart face repaints at {now_ms} ms"
+            );
+            for rect in &price_rects {
+                assert_eq!(
+                    price_ink_pixels(&frame, *rect, &colors),
+                    0,
+                    "cart face leaves staged price cell {rect:?} dark at {now_ms} ms"
+                );
+            }
+            assert_ne!(
+                frame[560 * width + 630],
+                pack_xrgb(255, 255, 255),
+                "the alarm popup body stays off at (630,560) and {now_ms} ms"
+            );
+            previous = frame;
         }
         finish(session, gateway.server);
     }

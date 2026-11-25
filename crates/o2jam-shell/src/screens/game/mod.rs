@@ -6139,10 +6139,19 @@ impl ScreenGame {
     /// aim. `None` when the mounted side block omits the code.
     #[must_use]
     pub fn staged_side_control_rect(&self, code: u32) -> Option<Rect> {
+        self.staged_side_control_rects(code).into_iter().next()
+    }
+
+    /// Every staged side rect for one control code, in placement
+    /// order. Clone children share a code, so a guard can check all
+    /// four featured-card cells without literal coordinates.
+    #[must_use]
+    pub fn staged_side_control_rects(&self, code: u32) -> Vec<Rect> {
         self.side_placements
             .iter()
-            .find(|placed| placed.code == code)
+            .filter(|placed| placed.code == code)
             .map(|placed| placed.rect)
+            .collect()
     }
 
     /// Planet board click through the control-code → action

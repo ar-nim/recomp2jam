@@ -1797,6 +1797,65 @@ mod live_art_tests {
         assert_ne!(bare, staged);
     }
 
+    /// The shop entry resets both alarm controls to a body-less rest
+    /// frame: `FUN_0x4984d0` calls `FUN_0x42f5a0(3)` on `0x145000b9
+    /// + index` (`ev_1b078fdd…`), case 3 zeroes the frame
+    /// (`ev_18bc8931…`), and `FUN_0x42f870` maps frame 0 to surface
+    /// `-1` (`ev_68329752…`). The white `...` body must not paint at
+    /// rest, while its `.bnd` rect stays for hit tests.
+    ///
+    /// Live caller chain: main.rs::run_play -> stage_live_scenes ->
+    /// stage_state(State::Shop) -> stage_shop_baked_chrome ->
+    /// ScreenGame::visit_side -> ScreenGame::paint_at -> paint_side ->
+    /// paint_side_scene_selected.
+    #[test]
+    fn the_shop_alarm_popup_stays_body_less_until_a_notice() {
+        let root = install_root();
+        if !root_has_game_data(&root) {
+            println!(
+                "{}",
+                pack_skip_report(&root, "the_shop_alarm_popup_stays_body_less_until_a_notice")
+            );
+            return;
+        }
+        let Some(staged) = declared_interface(State::Shop) else {
+            panic!("STATE_SHOP must stage behind the archive guard");
+        };
+        let mut with_rest = live_game();
+        with_rest.load_side_scene(staged.placements.clone(), staged.figures.clone());
+        walk_to(&mut with_rest, Screen::Room);
+        assert!(with_rest.visit_side(SideScreen::Shop));
+
+        // The control paint drops only the popup placement; every
+        // other staged body and the animation clock stay identical.
+        let popup_code = 0x1450_00BA;
+        let without_popup: Vec<_> = staged
+            .placements
+            .into_iter()
+            .filter(|placed| placed.code != popup_code)
+            .collect();
+        let mut control = live_game();
+        control.load_side_scene(without_popup, staged.figures);
+        walk_to(&mut control, Screen::Room);
+        assert!(control.visit_side(SideScreen::Shop));
+
+        let rest_pixels = painted_pixels(&mut with_rest, 0);
+        let control_pixels = painted_pixels(&mut control, 0);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits a frame index");
+        let probe = 560 * width + 630;
+        assert_eq!(
+            rest_pixels[probe], control_pixels[probe],
+            "the pinned (630,560) probe carries no popup ink at rest"
+        );
+        let changed = (543..=575)
+            .flat_map(|row| (612..=649).map(move |col| (row, col)))
+            .filter(|(row, col)| {
+                rest_pixels[row * width + col] != control_pixels[row * width + col]
+            })
+            .count();
+        assert_eq!(changed, 0, "no popup body pixel in the v6 S7 region");
+    }
+
     #[test]
     fn live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs() {
         // Live caller chain (ticket #877): main.rs::run_play ->

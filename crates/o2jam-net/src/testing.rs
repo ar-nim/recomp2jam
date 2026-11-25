@@ -42,8 +42,13 @@ pub fn fake_gateway(with_server: impl FnOnce(TcpStream) + Send + 'static) -> (u1
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
+        // Boot staging reads large 7.55 archives. Under a parallel
+        // workspace suite that can exceed five seconds before the
+        // client sends the next frame; a short read timeout closes the
+        // socket and makes unrelated live legs fail (#937/#939 gate).
+        // Callers still bound their own waits with `recv_timeout`.
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         with_server(stream);
     });
