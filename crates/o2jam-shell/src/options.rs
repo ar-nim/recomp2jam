@@ -77,6 +77,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 use winit::keyboard::KeyCode;
 
+use crate::playing::ImageFaceBranch;
+
 /// Seven play lanes, left to right (mirrors the shell lane count
 /// without depending on it).
 pub const OPTION_LANES: usize = 7;
@@ -221,6 +223,55 @@ pub enum MouseCursorMode {
     Windows,
     /// Image pointer (`Mouse_Cursor` 1).
     Image,
+}
+
+/// OS-cursor arm the exe takes for the custom-pointer flag
+/// (`0x431f70`, file `0x31f70`): off hides the OS cursor, on selects
+/// one of two stored handles or hides it for other words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomCursorArm {
+    /// No usable handle: hide the OS cursor.
+    Hide,
+    /// First stored `Window_Cursor.ojs` handle.
+    FirstHandle,
+    /// Second stored `Window_Cursor.ojs` handle.
+    SecondHandle,
+}
+
+/// Which cursor face a mode word selects (`0x430130`, file
+/// `0x30130`). The two branches are the two vftable arms; the
+/// global-mode promotion can change the stored word before the
+/// mode-1 arm runs.
+pub fn cursor_mode_face(requested: u16, promoted_to_two: bool) -> (u16, ImageFaceBranch) {
+    crate::playing::image_mode_switch(requested, promoted_to_two)
+}
+
+/// Which OS-cursor action the custom-pointer flag takes for one
+/// stored handle word.
+pub fn custom_cursor_arm(flag: MouseCursorMode, handle_word: u8) -> CustomCursorArm {
+    if flag == MouseCursorMode::Windows {
+        return CustomCursorArm::Hide;
+    }
+    match handle_word {
+        1 => CustomCursorArm::FirstHandle,
+        2 => CustomCursorArm::SecondHandle,
+        _ => CustomCursorArm::Hide,
+    }
+}
+
+/// Pointer reset the flag writer performs (`0x4321b0`, file
+/// `0x321b0`): a change to the custom arm with a tracking object
+/// present snaps the pointer to the origin.
+pub fn pointer_reset_on_cursor_flag_change(
+    previous: MouseCursorMode,
+    next: MouseCursorMode,
+    tracking_present: bool,
+) -> Option<(i32, i32)> {
+    if previous != next && next == MouseCursorMode::Image && tracking_present {
+        Some((0, 0))
+    } else {
+        None
+    }
 }
 
 impl MouseCursorMode {
@@ -1332,6 +1383,67 @@ mod tests {
             assert_eq!(keycode_of_dik(*dik), Some(DEFAULT_LANE_KEYS[lane]));
             assert_eq!(dik_of_keycode(DEFAULT_LANE_KEYS[lane]), Some(*dik));
         }
+    }
+
+    #[test]
+    fn cursor_mode_switch_names_both_vftable_arms() {
+        assert_eq!(cursor_mode_face(2, false), (2, ImageFaceBranch::ModeTwo));
+        assert_eq!(cursor_mode_face(1, false), (1, ImageFaceBranch::ModeOne));
+        assert_eq!(
+            cursor_mode_face(1, true),
+            (2, ImageFaceBranch::ModeOne),
+            "a global-mode promotion stores 2 but keeps the mode-1 face"
+        );
+    }
+
+    #[test]
+    fn custom_cursor_arm_hides_or_selects_one_of_two_handles() {
+        assert_eq!(
+            custom_cursor_arm(MouseCursorMode::Windows, 1),
+            CustomCursorArm::Hide
+        );
+        assert_eq!(
+            custom_cursor_arm(MouseCursorMode::Image, 1),
+            CustomCursorArm::FirstHandle
+        );
+        assert_eq!(
+            custom_cursor_arm(MouseCursorMode::Image, 2),
+            CustomCursorArm::SecondHandle
+        );
+        assert_eq!(
+            custom_cursor_arm(MouseCursorMode::Image, 7),
+            CustomCursorArm::Hide
+        );
+    }
+
+    #[test]
+    fn custom_cursor_flag_change_resets_the_pointer_to_the_origin() {
+        assert_eq!(
+            pointer_reset_on_cursor_flag_change(
+                MouseCursorMode::Windows,
+                MouseCursorMode::Image,
+                true
+            ),
+            Some((0, 0))
+        );
+        assert_eq!(
+            pointer_reset_on_cursor_flag_change(
+                MouseCursorMode::Image,
+                MouseCursorMode::Image,
+                true
+            ),
+            None,
+            "an unchanged flag does not move the pointer"
+        );
+        assert_eq!(
+            pointer_reset_on_cursor_flag_change(
+                MouseCursorMode::Windows,
+                MouseCursorMode::Image,
+                false
+            ),
+            None,
+            "no tracking object means no pointer to reset"
+        );
     }
 
     #[test]
