@@ -5,6 +5,9 @@
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use o2jam_audio::{PcmSamples, RecordingBackend, SceneBgmRecorder, RESULT_WORKER_SLOT};
     use o2jam_net::play::SetRoomMusic;
     use o2jam_render::{Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::playing::{PlaySkin, SkinSprite};
@@ -43,6 +46,25 @@ mod tests {
         );
         assert!(session.game_mut().enter_screen(Screen::Playing));
         assert_eq!(session.screen(), Screen::Playing, "the loaded gate opened");
+    }
+
+    /// Boot into Result with the null recording sink: the scene bank
+    /// is the same one `attach_initial_audio` stages in `run_online`.
+    fn boot_to_result_with_recorder() -> (OnlineSession, LiveLegGateway, SceneBgmRecorder) {
+        let gateway = spawn_live_leg_gateway(joined_room(0, false));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        let recorder = SceneBgmRecorder::new();
+        session.game_mut().with_audio(
+            Box::new(RecordingBackend::new(recorder.clone())),
+            HashMap::new(),
+        );
+        session
+            .game_mut()
+            .stage_scene_bgm(crate::load_scene_bgm_bank());
+        walk_to_playing(&mut session);
+        assert!(session.game_mut().enter_screen(Screen::Result));
+        (session, gateway, recorder)
     }
 
     fn marker_sprite(word: u16) -> SkinSprite {
@@ -139,6 +161,72 @@ mod tests {
             first, second,
             "the painted Playing frame must follow the explicit clock"
         );
+        paint(&mut session);
+        finish(session, gateway.server);
+    }
+
+    /// Tier 3 live chain: `main.rs::run_online` ->
+    /// `connect::connect_and_login_with_transport` ->
+    /// `boot_live_leg_with_art` -> `ScreenGame::stage_scene_bgm` ->
+    /// `ScreenGame::enter_screen(Screen::Result)` -> `Screen::bgm_cue`
+    /// -> `SceneBgm::cue(0x13, once)` ->
+    /// `AudioBackend::set_scene_bgm`. The recording backend is a null
+    /// sink: no output device opens. Archives absent -> skip cleanly.
+    #[test]
+    fn live_result_cue_delivers_decoded_bg_result_to_the_recording_backend_from_boot() {
+        if !archives_present() {
+            println!("skip: install archives absent");
+            return;
+        }
+        let expected = crate::expected_result_cue_pcm().expect("bgResult decodes from the install");
+        let (mut session, gateway, recorder) = boot_to_result_with_recorder();
+        let captures = recorder.captures();
+        assert_eq!(
+            captures.len(),
+            5,
+            "the walk cues Planet, Room, Waiting, silence, then Result"
+        );
+        let result_cue = &captures[4];
+        assert_eq!(
+            result_cue.pcm().map(PcmSamples::content_hash),
+            Some(expected.content_hash()),
+            "the backend receives the decoded bgResult PCM"
+        );
+        assert!(!result_cue.repeat(), "the exe pushes loop 0 for Result");
+        assert_eq!(
+            session
+                .game_mut()
+                .scene_bgm_selection()
+                .map(|cue| (cue.record, cue.repeat)),
+            Some((RESULT_WORKER_SLOT, false))
+        );
+        paint(&mut session);
+        finish(session, gateway.server);
+    }
+
+    /// Tier 3 live chain: same boot and cue path as the Result guard,
+    /// then `ScreenGame::enter_screen(Screen::Room)` -> `Screen::bgm_cue`
+    /// -> `SceneBgm::cue(3, loop)` -> a second
+    /// `AudioBackend::set_scene_bgm` with different PCM.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_next_scene_cue_replaces_the_recorded_result_track_from_boot() {
+        if !archives_present() {
+            println!("skip: install archives absent");
+            return;
+        }
+        let (mut session, gateway, recorder) = boot_to_result_with_recorder();
+        let result_cue = recorder.captures().pop().expect("Result cued once");
+        assert!(session.game_mut().enter_screen(Screen::Room));
+        let captures = recorder.captures();
+        assert_eq!(captures.len(), 6, "Room replaces the Result cue");
+        let replacement = &captures[5];
+        assert_ne!(
+            replacement.pcm().map(PcmSamples::content_hash),
+            result_cue.pcm().map(PcmSamples::content_hash),
+            "the replacement carries a different track"
+        );
+        assert!(replacement.repeat(), "Room loops its own record");
         paint(&mut session);
         finish(session, gateway.server);
     }

@@ -5,6 +5,9 @@
 
 mod bgm;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 pub use bgm::{
     BgmSelection, CueOutcome, SceneBgm, SceneCue, BGM_SILENCE_ID, RESULT_WORKER_BANK_BASE_SLOT,
     RESULT_WORKER_RECORD_ORDINAL, RESULT_WORKER_SLOT,
@@ -23,6 +26,11 @@ pub enum AudioError {
     #[error("audio backend failed: {0}")]
     Backend(String),
 }
+
+/// Basis and prime of the stable FNV-1a digest in
+/// [`PcmSamples::content_hash`].
+const CONTENT_HASH_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
+const CONTENT_HASH_PRIME: u64 = 0x1_0000_01B3;
 
 /// Decoded PCM: interleaved `i16` samples + sample rate + channels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +52,21 @@ impl PcmSamples {
         }
         let frames = self.samples.len() as u64 / u64::from(self.channels);
         frames * 1000 / u64::from(self.sample_rate)
+    }
+
+    /// Stable digest of the exact PCM (rate, channels, and every
+    /// little-endian sample). Lets a test name which track a backend
+    /// received without pasting the samples into an assertion.
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        self.sample_rate
+            .to_le_bytes()
+            .into_iter()
+            .chain(self.channels.to_le_bytes())
+            .chain(self.samples.iter().flat_map(|sample| sample.to_le_bytes()))
+            .fold(CONTENT_HASH_BASIS, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(CONTENT_HASH_PRIME)
+            })
     }
 }
 
@@ -197,6 +220,109 @@ impl AudioBackend for NullBackend {
 
     fn samples_played(&self) -> u64 {
         self.played
+    }
+}
+
+/// One `set_scene_bgm` call observed by a [`RecordingBackend`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneBgmCapture {
+    pcm: Option<PcmSamples>,
+    repeat: bool,
+}
+
+impl SceneBgmCapture {
+    /// The exact PCM handed to the backend, or `None` for a stop cue.
+    #[must_use]
+    pub const fn pcm(&self) -> Option<&PcmSamples> {
+        self.pcm.as_ref()
+    }
+
+    /// The cue's loop flag.
+    #[must_use]
+    pub const fn repeat(&self) -> bool {
+        self.repeat
+    }
+
+    /// Digest of the cued PCM, or `None` for a stop cue.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<u64> {
+        self.pcm.as_ref().map(PcmSamples::content_hash)
+    }
+
+    fn new(pcm: Option<&PcmSamples>, repeat: bool) -> Self {
+        Self {
+            pcm: pcm.cloned(),
+            repeat,
+        }
+    }
+}
+
+/// Read-only handle on the cue log a [`RecordingBackend`] writes.
+///
+/// The backend moves into the game's audio rig; keeping this handle
+/// outside lets a live-path test read the calls the shell made after
+/// boot without reaching into the rig.
+#[derive(Clone, Debug, Default)]
+pub struct SceneBgmRecorder {
+    captures: Rc<RefCell<Vec<SceneBgmCapture>>>,
+}
+
+impl SceneBgmRecorder {
+    /// Create an empty cue log.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Snapshot the cues in call order.
+    #[must_use]
+    pub fn captures(&self) -> Vec<SceneBgmCapture> {
+        self.captures.borrow().clone()
+    }
+
+    fn record(&self, pcm: Option<&PcmSamples>, repeat: bool) {
+        self.captures
+            .borrow_mut()
+            .push(SceneBgmCapture::new(pcm, repeat));
+    }
+}
+
+/// Null sink that records every scene-BGM cue it receives. It never
+/// opens a device: the inner [`NullBackend`] keeps the clock and the
+/// silence, while the shared log keeps the exact PCM for tests.
+#[derive(Debug, Default)]
+pub struct RecordingBackend {
+    inner: NullBackend,
+    recorder: SceneBgmRecorder,
+}
+
+impl RecordingBackend {
+    /// Record into the log held by `recorder`.
+    #[must_use]
+    pub fn new(recorder: SceneBgmRecorder) -> Self {
+        Self {
+            inner: NullBackend::new(),
+            recorder,
+        }
+    }
+}
+
+impl AudioBackend for RecordingBackend {
+    fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), AudioError> {
+        self.inner.play_pcm(pcm)
+    }
+
+    fn set_scene_bgm(&mut self, pcm: Option<&PcmSamples>, repeat: bool) -> Result<(), AudioError> {
+        self.recorder.record(pcm, repeat);
+        self.inner.set_scene_bgm(pcm, repeat)
+    }
+
+    fn scene_bgm_playing(&self) -> bool {
+        self.inner.scene_bgm_playing()
+    }
+
+    fn samples_played(&self) -> u64 {
+        self.inner.samples_played()
     }
 }
 
@@ -869,6 +995,48 @@ mod tests {
             channels: 2,
         };
         assert_eq!(pcm.duration_ms(), 1000);
+    }
+
+    #[test]
+    fn recording_backend_captures_the_exact_scene_pcm_and_loop_flag() {
+        let pcm = stereo_pcm(&[1000, -1000, 2000, -2000]);
+        let recorder = SceneBgmRecorder::new();
+        let mut backend = RecordingBackend::new(recorder.clone());
+
+        backend.set_scene_bgm(Some(&pcm), true).unwrap();
+
+        let captures = recorder.captures();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].pcm(), Some(&pcm), "exact samples are retained");
+        assert!(captures[0].repeat());
+        assert_eq!(backend.samples_played(), 2, "the sink stays clock-only");
+    }
+
+    #[test]
+    fn recording_backend_captures_a_stop_cue_without_pcm() {
+        let recorder = SceneBgmRecorder::new();
+        let mut backend = RecordingBackend::new(recorder.clone());
+
+        backend.set_scene_bgm(None, false).unwrap();
+
+        let captures = recorder.captures();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].pcm(), None);
+        assert_eq!(captures[0].content_hash(), None);
+        assert!(!captures[0].repeat());
+    }
+
+    #[test]
+    fn pcm_content_hash_changes_with_samples_and_metadata() {
+        let original = stereo_pcm(&[1000, -1000]);
+        let changed_samples = stereo_pcm(&[1001, -1000]);
+        let changed_rate = PcmSamples {
+            sample_rate: 48_000,
+            ..original.clone()
+        };
+        assert_ne!(original.content_hash(), changed_samples.content_hash());
+        assert_ne!(original.content_hash(), changed_rate.content_hash());
+        assert_eq!(original.content_hash(), original.clone().content_hash());
     }
 
     #[test]

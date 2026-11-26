@@ -1937,6 +1937,21 @@ pub(crate) fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
     slots
 }
 
+/// Expected PCM of the Result cue, decoded straight from the installed
+/// `BGMwinter.ojm` mode-3 record 6. Test-only: a live leg compares the
+/// backend capture against this independent source of truth. `None`
+/// means the archive is absent, so the caller skips the leg.
+#[cfg(test)]
+pub(crate) fn expected_result_cue_pcm() -> Option<o2jam_audio::PcmSamples> {
+    let path = boot_bank_path(RESULT_WORKER_BANK_INDEX);
+    let bytes = std::fs::read(path).ok()?;
+    let tables = o2jam_file::parse_new_variant_entries(&bytes).ok()?;
+    let entry = tables
+        .mode3
+        .get(o2jam_audio::RESULT_WORKER_RECORD_ORDINAL)?;
+    decode_bgm_record(&bytes, entry)
+}
+
 /// Stage one bank's mode-3 records at `base + ordinal`, or only `wanted`
 /// when the caller needs one pinned record. Slot `N` lands at array index
 /// `N - 1` because the cue id is one-based; slot 0 has no cue.
