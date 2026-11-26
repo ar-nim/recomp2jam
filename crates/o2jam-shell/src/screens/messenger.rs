@@ -113,7 +113,9 @@ pub const ROOM_FRIEND_PAGE_BOUNDARY_OPEN: &str =
 /// Native stand-in for the exe's Room friend-list host. Only the
 /// pinned constructor words are represented: roster rows and gift-on
 /// state stay in `ChatState`, and the browser page is not rendered.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// `ChatState` stores this type as `Option`, so no unmounted host with
+/// an invalid word set can exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeRoomFriendHost {
     vftable: Option<&'static str>,
     trailing_flags: [u32; 3],
@@ -121,9 +123,10 @@ pub struct NativeRoomFriendHost {
 
 impl NativeRoomFriendHost {
     /// Install the friend vftable identity and write the three trailing
-    /// flags in the order pinned at exe `0x57f5f0`.
+    /// flags in the order pinned at exe `0x57f5f0`. Named `mount` so an
+    /// unmounted word set is represented by `Option`, not `Default`.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn mount() -> Self {
         Self {
             vftable: Some(ROOM_FRIEND_VFTABLE),
             trailing_flags: ROOM_FRIEND_TRAILING_FLAGS,
@@ -1832,12 +1835,14 @@ mod tests {
     fn room_friend_host_constructor_installs_the_pinned_vftable_and_flags() {
         // seam: the pin defines these constructor words and nothing
         // about page content; the hosted document stays OPEN (#405).
-        let host = NativeRoomFriendHost::new();
-        assert_eq!(host.vftable(), Some(ROOM_FRIEND_VFTABLE));
-        assert_eq!(host.trailing_flags(), ROOM_FRIEND_TRAILING_FLAGS);
-        assert!(
-            host.page_boundary_open().contains("OPEN"),
-            "the browser boundary must stay labeled"
+        // Expected values are independent literals, not the constants
+        // that feed the constructor.
+        let host = NativeRoomFriendHost::mount();
+        assert_eq!(host.vftable(), Some("CWebFriendCtrl::vftable"));
+        assert_eq!(host.trailing_flags(), [1, 0, 0]);
+        assert_eq!(
+            host.page_boundary_open(),
+            "OPEN: no gamefine_main.asp render or wire capture (#405)"
         );
     }
 }

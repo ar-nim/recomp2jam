@@ -583,8 +583,9 @@ pub(super) struct ChatState {
     room_user_sheet_gift_on: bool,
     room_user_sheet_url_gift_on: bool,
     /// Friend-list host constructed when the Room user sheet mounts.
-    /// It owns no page or roster; both stay with the existing seam.
-    room_friend_host: NativeRoomFriendHost,
+    /// `None` is the only unmounted state; the host owns no page or
+    /// roster, both of which stay with the existing seam.
+    room_friend_host: Option<NativeRoomFriendHost>,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
     /// Whisper target staged by the page's `SelectedUserNickName`
@@ -1111,7 +1112,7 @@ impl ChatState {
     pub(super) fn open_room_user_sheet(&mut self, gift_on: bool) {
         self.room_user_sheet_open = true;
         self.room_user_sheet_gift_on = gift_on;
-        self.room_friend_host = NativeRoomFriendHost::new();
+        self.room_friend_host = Some(NativeRoomFriendHost::mount());
     }
 
     /// Close the sheet and rebuild its URL word from the gift-on flag
@@ -1119,6 +1120,7 @@ impl ChatState {
     pub(super) fn close_room_user_sheet(&mut self) {
         self.room_user_sheet_open = false;
         self.room_user_sheet_url_gift_on = self.room_user_sheet_gift_on;
+        self.room_friend_host = None;
     }
 
     pub(super) fn room_user_sheet_open(&self) -> bool {
@@ -1133,9 +1135,9 @@ impl ChatState {
         self.room_user_sheet_url_gift_on
     }
 
-    /// Friend host mounted with the user sheet, or the unmounted
-    /// default before the first open.
-    pub(super) const fn room_friend_host(&self) -> &NativeRoomFriendHost {
-        &self.room_friend_host
+    /// Friend host mounted with the user sheet; `None` before the
+    /// first open or after teardown clears it.
+    pub(super) const fn room_friend_host(&self) -> Option<&NativeRoomFriendHost> {
+        self.room_friend_host.as_ref()
     }
 }

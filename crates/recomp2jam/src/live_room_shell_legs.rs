@@ -217,7 +217,6 @@ use o2jam_net::{
     RoomListEntry, WireMessage,
 };
 use o2jam_shell::screens::game::LobbyChat;
-use o2jam_shell::screens::messenger::{ROOM_FRIEND_TRAILING_FLAGS, ROOM_FRIEND_VFTABLE};
 
 /// Boot gateway for a Room-board leg with a chosen channel id and a
 /// scripted-frame queue. The frame queue keeps each leg free of wall-
@@ -531,18 +530,16 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
     finish(session, gateway.server);
 }
 
-/// #1125 Tier 3: the booted Room user-list frame keeps the native
-/// roster and gift word beside the friend-host constructor words.
+/// #1125 boot-to-Room paint leg with explicit seam staging; it is not
+/// a Tier 3 close. Unlike the 2011 leg, it injects no 2011 frame and
+/// calls no `set_room_user_sheet`: the tested roster row comes from the
+/// boot 3003 gateway answer and the frame goes through `paint_at`.
 ///
-/// Live caller chain up to the staged DESC well:
-///   main.rs::run_play -> connect::connect_and_login_with_transport
-///   -> assemble_online_session -> enter_room_by_clicks -> OnlineSession::poll_wire
-///   -> note_room_user_list -> ScreenGame::set_room_user_sheet
-///   -> ScreenGame::paint_at -> paint_room.
-/// seam: the 2011 frame is injected through the scripted socket, and
-/// `ScreenGame::open_room_user_sheet` is the session.rs hand-off that
-/// mounts the host; neither edits session.rs. Browser content from
-/// `gamefine_main.asp` stays OPEN (#405).
+/// seam: no production `session.rs` path calls `open_room_user_sheet`,
+/// and `room_friend_host` is read only by tests. The host and gift word
+/// are test-staged, not frame-derived; only the constructor words and
+/// native paint contract are pinned here. Browser content stays OPEN
+/// (#405).
 /// Archives absent -> skip cleanly (CI has no game data).
 #[test]
 fn live_room_friend_host_frame_inks_the_native_roster_with_gift_on() {
@@ -550,38 +547,35 @@ fn live_room_friend_host_frame_inks_the_native_roster_with_gift_on() {
         println!("SKIP live_room_friend_host_frame_inks_the_native_roster_with_gift_on: missing install-root interface archive");
         return;
     }
-    let (mut session, gateway, send) = boot_room_leg(2);
+    let (mut session, gateway) = boot_roster_leg();
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    return_to_room(&mut session);
     let rest = roster_pixels(&mut session);
-    let sheet = RoomUserList {
-        users: vec![RoomUserListEntry {
-            id: 7,
-            username: "alice".to_owned(),
-            nickname: "Alice".to_owned(),
-            level: 42,
-        }],
-    };
-    send.send(sheet.encode()).unwrap();
-    paint_until_room(&mut session, |session| {
-        session.game_mut().room_user_sheet().len() == 1
-    });
     session.game_mut().open_room_user_sheet(true);
 
     let painted = roster_pixels(&mut session);
-    let host = *session.game_mut().room_friend_host();
+    let host = *session
+        .game_mut()
+        .room_friend_host()
+        .expect("the open mounts the friend host");
     let roster = session.game_mut().room_user_sheet().to_vec();
     let gift_on = session.game_mut().room_user_sheet_gift_on();
-    drop(send);
+    drop(gateway.incoming);
     finish(session, gateway.server);
 
-    assert_eq!(host.vftable(), Some(ROOM_FRIEND_VFTABLE));
-    assert_eq!(host.trailing_flags(), ROOM_FRIEND_TRAILING_FLAGS);
-    assert_eq!(roster.len(), 1, "the 2011 wire row is the native roster");
-    assert_eq!(roster[0].nickname, "Alice");
-    assert!(gift_on, "the user-list frame keeps the gift-on word");
+    assert_eq!(host.vftable(), Some("CWebFriendCtrl::vftable"));
+    assert_eq!(host.trailing_flags(), [1, 0, 0]);
+    assert_eq!(
+        roster.len(),
+        1,
+        "the boot 3003 snapshot is the native roster"
+    );
+    assert_eq!(roster[0].nickname, "peer");
+    assert!(gift_on, "the test-staged gift-on word stays with the sheet");
     assert_ne!(rest, painted, "the staged DESC well inks the native row");
-    assert!(
-        host.page_boundary_open().contains("OPEN"),
-        "no browser render is claimed"
+    assert_eq!(
+        host.page_boundary_open(),
+        "OPEN: no gamefine_main.asp render or wire capture (#405)"
     );
 }
 

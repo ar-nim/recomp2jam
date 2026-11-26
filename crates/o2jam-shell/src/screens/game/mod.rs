@@ -4248,10 +4248,10 @@ impl ScreenGame {
         self.chat.room_user_sheet_url_gift_on()
     }
 
-    /// Friend host mounted with the Room user sheet. Its constructor
-    /// words are pinned; the roster and gift words stay in `ChatState`.
+    /// Friend host mounted with the Room user sheet. `None` means the
+    /// sheet has no host; the roster and gift words stay in `ChatState`.
     #[must_use]
-    pub const fn room_friend_host(&self) -> &NativeRoomFriendHost {
+    pub const fn room_friend_host(&self) -> Option<&NativeRoomFriendHost> {
         self.chat.room_friend_host()
     }
 
