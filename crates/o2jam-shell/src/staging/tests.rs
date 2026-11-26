@@ -387,7 +387,7 @@ fn live_shop_bnd_stages_the_audit_visible_row_and_price_origin() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Image/Interface1.opi");
     let Ok(bytes) = std::fs::read(&path) else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_shop_bnd_stages_the_audit_visible_row_and_price_origin: missing install-root interface archive");
         return;
     };
     let art = stage_state(&bytes, State::Shop, StageContext::default())
@@ -1297,7 +1297,7 @@ fn side_view_maps_bound_sides_to_states() {
 fn cash_charge_sheet_stages_the_b8_frame_client_and_close() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP cash_charge_sheet_stages_the_b8_frame_client_and_close: missing install-root interface archive");
         return;
     };
     let art = stage_cash_charge(&interface, StageContext::default());
@@ -1344,7 +1344,7 @@ fn cash_charge_sheet_stages_the_b8_frame_client_and_close() {
 fn cash_charge_close_press_hits_the_b8_sprite_anchor() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP cash_charge_close_press_hits_the_b8_sprite_anchor: missing install-root interface archive");
         return;
     };
     let art = stage_cash_charge(&interface, StageContext::default());
@@ -1371,7 +1371,7 @@ fn billing_and_gift_web_sheets_stage_only_their_bound_chrome() {
     // o2jam_file::parse_bnd (this guard stages the same rows).
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP billing_and_gift_web_sheets_stage_only_their_bound_chrome: missing install-root interface archive");
         return;
     };
     let ctx = StageContext::default();
@@ -1411,7 +1411,7 @@ fn shopping_bag_add_sheet_stages_seven_parent_relative_rects() {
     // -> stage_parked_sheet -> o2jam_file::parse_bnd (same block here).
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP shopping_bag_add_sheet_stages_seven_parent_relative_rects: missing install-root interface archive");
         return;
     };
     let report = stage_shopping_bag_add_sheet(&interface, StageContext::default());
@@ -1450,7 +1450,7 @@ fn messenger_sheet_rows_stage_the_pinned_rect_counts() {
     // Archives absent -> skip cleanly (CI has no game data).
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP messenger_sheet_rows_stage_the_pinned_rect_counts: missing install-root interface archive");
         return;
     };
     let expected_counts = [77usize, 6, 7, 13, 6, 5];
@@ -1504,7 +1504,7 @@ fn messenger_main_sheet_stays_a_seventy_seven_rect_park_without_a_mount() {
     use crate::screens::messenger::{MESSENGER_MAIN_MOUNT_NEXT_STEP, MESSENGER_MAIN_MOUNT_PIN};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP messenger_main_sheet_stays_a_seventy_seven_rect_park_without_a_mount: missing install-root interface archive");
         return;
     };
     let row = StageRow {
@@ -1548,7 +1548,7 @@ fn messenger_sheet_children_stage_at_the_parsed_parent_origin() {
     // absent -> skip cleanly (CI has no game data).
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP messenger_sheet_children_stage_at_the_parsed_parent_origin: missing install-root interface archive");
         return;
     };
     for sheet in MESSENGER_SHEETS {
@@ -1625,7 +1625,7 @@ fn messenger_frame_states_stay_open_until_a_qualified_mount_pack() {
     // skip cleanly (CI has no game data).
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP messenger_frame_states_stay_open_until_a_qualified_mount_pack: missing install-root interface archive");
         return;
     };
     for sheet in MESSENGER_SHEETS {
@@ -1694,7 +1694,7 @@ fn repeated_staging_reuses_one_cached_archive_pair_when_root_is_present() {
     let (Some(first_interface), Some(first_playing)) =
         (first.interface.as_ref(), first.playing.as_ref())
     else {
-        println!("skip: missing install-root archives");
+        println!("SKIP repeated_staging_reuses_one_cached_archive_pair_when_root_is_present: missing install-root archives");
         return;
     };
     let second = read_install_archives(&root);
@@ -1719,7 +1719,7 @@ fn missing_root_never_displaces_cached_archives_when_data_is_hidden() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let present = read_install_archives(&root);
     let Some(interface) = present.interface.as_ref() else {
-        println!("skip: missing install-root archives");
+        println!("SKIP missing_root_never_displaces_cached_archives_when_data_is_hidden: missing install-root archives");
         return;
     };
     let hidden = root.join("No/Such");
@@ -1999,7 +1999,7 @@ fn probe_waiting_top_overlaps() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Image/Interface1.opi");
     let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("MISSING INSTALL");
+        println!("SKIP probe_waiting_top_overlaps: install-root absent");
         return;
     };
     let report = crate::staging::stage_state(
@@ -2035,7 +2035,7 @@ fn probe_waiting_buttons_all() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Image/Interface1.opi");
     let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("MISSING INSTALL");
+        println!("SKIP probe_waiting_buttons_all: install-root absent");
         return;
     };
     let report = crate::staging::stage_state(
@@ -2061,6 +2061,7 @@ fn probe_waiting_right_side() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root/O2Jam/Image/Interface1.opi");
     let Ok(bytes) = std::fs::read(&path) else {
+        println!("SKIP probe_waiting_right_side: install-root absent");
         return;
     };
     let report = crate::staging::stage_state(
@@ -2100,7 +2101,7 @@ fn probe_waiting_right_side() {
 fn payment_page_maps_its_nine_bound_rects_from_the_installed_declaration() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP payment_page_maps_its_nine_bound_rects_from_the_installed_declaration: missing install-root interface archive");
         return;
     };
     let page = PAYMENT_PAGES[0];
@@ -2188,7 +2189,7 @@ fn payment_page_keeps_a_zero_rect_record_without_inventing_geometry() {
 fn gift_page_maps_its_twelve_bound_rects_from_the_installed_declaration() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP gift_page_maps_its_twelve_bound_rects_from_the_installed_declaration: missing install-root interface archive");
         return;
     };
     let page = PAYMENT_PAGES[1];
@@ -2257,7 +2258,7 @@ fn gift_page_maps_its_twelve_bound_rects_from_the_installed_declaration() {
 fn merged_payment_sheet_keeps_both_declared_page_groups() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP merged_payment_sheet_keeps_both_declared_page_groups: missing install-root interface archive");
         return;
     };
     let merged = stage_payment_pages(&interface, StageContext::default()).into_merged();
@@ -2280,7 +2281,7 @@ fn merged_payment_sheet_keeps_both_declared_page_groups() {
 fn set_item_card_children_stage_once_under_each_card_origin() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
     let Some(interface) = read_install_archives(&root).interface else {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP set_item_card_children_stage_once_under_each_card_origin: missing install-root interface archive");
         return;
     };
     let art = stage_state(&interface, State::Shop, StageContext::default())

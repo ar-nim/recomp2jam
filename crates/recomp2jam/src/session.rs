@@ -9334,6 +9334,7 @@ pub(super) mod session_tests {
         let data_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi");
         if std::fs::metadata(&data_dir).is_err() {
+            println!("SKIP relay_down_ok_reveals_rows_first_then_starts_the_pinned_entry_wire: install-root absent");
             return;
         }
 
@@ -10308,7 +10309,7 @@ pub(super) mod session_tests {
         let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         if !chart_path.is_file() {
-            println!("skip: missing installed chart");
+            println!("SKIP matched_guest_start_stages_the_room_song_loading_cover: missing installed chart");
             return;
         }
         let catalog_blob = select_catalog_blob();
@@ -10361,7 +10362,7 @@ pub(super) mod session_tests {
         let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         let Ok(bytes) = std::fs::read(&chart_path) else {
-            println!("skip: missing installed chart");
+            println!("SKIP solo_host_start_paints_the_staged_song_cover_full_bleed: missing installed chart");
             return;
         };
         let catalog = select_catalog_blob();
@@ -10723,7 +10724,7 @@ pub(super) mod session_tests {
         let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         if !chart_path.is_file() {
-            println!("skip: missing installed chart");
+            println!("SKIP live_paced_guest_reaches_playing_without_scripted_loading_gate_arming: missing installed chart");
             return;
         }
         let catalog_blob = select_catalog_blob();
@@ -14326,6 +14327,7 @@ pub(super) mod session_tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         let Ok(bytes) = std::fs::read(&path) else {
+            println!("SKIP walked_cover_paints_the_session_loading_scene: install-root absent");
             return;
         };
         let (mut session, server) = waiting_session(|mut stream| {
@@ -14350,7 +14352,7 @@ pub(super) mod session_tests {
         let chart_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         if !chart_path.is_file() {
-            println!("skip: missing installed chart");
+            println!("SKIP local_waiting_advance_paints_the_pending_host_picks_installed_cover: missing installed chart");
             return;
         }
         let (port, server) = fake_gateway(|_stream| {});
@@ -15175,6 +15177,7 @@ pub(super) mod session_tests {
             .interface
             .is_none()
         {
+            println!("SKIP live_created_room_master_paints_start_not_ready: install-root absent");
             return;
         }
 

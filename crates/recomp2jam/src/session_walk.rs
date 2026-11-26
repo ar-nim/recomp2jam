@@ -717,10 +717,10 @@ mod session_walk_tests {
     /// Live-plus-install guard: the walk config plus the chart path
     /// for one installed song, or `None` (after a skip note) without
     /// gateway credentials or without its chart and bank files.
-    fn guard_live_song_paths(music_id: u16) -> Option<(WalkConfig, PathBuf)> {
+    fn guard_live_song_paths(test_name: &str, music_id: u16) -> Option<(WalkConfig, PathBuf)> {
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
-            eprintln!("skipping audible walk (set O2JAM_LIVE_GATEWAY=host:port)");
+            eprintln!("SKIP {test_name}: set O2JAM_LIVE_GATEWAY=host:port");
             return None;
         }
         let token =
@@ -732,7 +732,7 @@ mod session_walk_tests {
         let bank = music.join(format!("{stem}.ojm"));
         for path in [&chart, &bank] {
             if !path.is_file() {
-                eprintln!("skipping audible walk (missing {})", path.display());
+                eprintln!("SKIP {test_name}: missing {}", path.display());
                 return None;
             }
         }
@@ -825,11 +825,11 @@ mod session_walk_tests {
     fn walk_staging_resolves_bound_scenes_from_real_archives() {
         let archives = read_install_archives(&install_root());
         let Some(interface) = archives.interface else {
-            eprintln!("skipping walk staging (missing interface archive)");
+            eprintln!("SKIP walk_staging_resolves_bound_scenes_from_real_archives: missing interface archive");
             return;
         };
         let Some(playing) = archives.playing else {
-            eprintln!("skipping walk staging (missing playing archive)");
+            eprintln!("SKIP walk_staging_resolves_bound_scenes_from_real_archives: missing playing archive");
             return;
         };
         let ctx = StageContext::default();
@@ -962,7 +962,10 @@ mod session_walk_tests {
     #[test]
     fn struck_live_notes_emit_audible_frames_through_real_bank() {
         let _live = crate::live_guard::hold_live_gateway();
-        let Some((config, chart_path)) = guard_live_song_paths(757) else {
+        let Some((config, chart_path)) = guard_live_song_paths(
+            stringify!(struck_live_notes_emit_audible_frames_through_real_bank),
+            757,
+        ) else {
             return;
         };
         let mut session =
@@ -1045,7 +1048,9 @@ mod session_walk_tests {
         let _live = crate::live_guard::hold_live_gateway();
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
-            eprintln!("skipping session walk (set O2JAM_LIVE_GATEWAY=host:port)");
+            eprintln!(
+                "SKIP walk_reaches_result_against_local_gateway: set O2JAM_LIVE_GATEWAY=host:port"
+            );
             return;
         }
         let token =

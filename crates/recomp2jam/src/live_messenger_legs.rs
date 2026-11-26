@@ -44,7 +44,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_messenger_sheet_keeps_the_boot_scene_cue_on_the_null_backend() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_messenger_sheet_keeps_the_boot_scene_cue_on_the_null_backend: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -86,7 +86,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_display_mode_change_plans_the_native_rebuild_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_display_mode_change_plans_the_native_rebuild_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -122,7 +122,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_cash_bill_and_bingo_ui_events_open_one_sheet_after_the_prior_closes() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cash_bill_and_bingo_ui_events_open_one_sheet_after_the_prior_closes: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -153,7 +153,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_qa_ui_event_uses_the_exe_scene_two_rect_shift() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_qa_ui_event_uses_the_exe_scene_two_rect_shift: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -181,7 +181,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_both_global_web_sheets_show_then_hide_on_the_app_event() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_both_global_web_sheets_show_then_hide_on_the_app_event: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -212,7 +212,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_uhp_start_names_the_success_caption_and_4046_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_uhp_start_names_the_success_caption_and_4046_frame: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -242,7 +242,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_error_popup_accepts_supplied_text_and_mapped_codes() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_error_popup_accepts_supplied_text_and_mapped_codes: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -275,7 +275,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_cursor_request_applies_the_persisted_mode_to_the_pointer_arm() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cursor_request_applies_the_persisted_mode_to_the_pointer_arm: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -301,7 +301,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_window_close_takes_the_boot_session_to_the_exit_decision() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_window_close_takes_the_boot_session_to_the_exit_decision: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -323,7 +323,7 @@ mod live_messenger_leg_tests {
     #[test]
     fn live_double_click_raises_the_pinned_notice_when_the_bit_is_set() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_double_click_raises_the_pinned_notice_when_the_bit_is_set: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));

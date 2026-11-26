@@ -400,11 +400,7 @@ mod live_art_tests {
         let archives_present = installed.interface.is_some() && installed.playing.is_some();
         let archives_required = std::env::var(REQUIRE_ARCHIVES_ENV).as_deref() == Ok("1");
         enforce_required_archives(archives_required, archives_present, &root);
-        if archives_present {
-            return false;
-        }
-        println!("skip: missing install-root archives");
-        true
+        !archives_present
     }
 
     mod archive_requirement_tests {
@@ -634,6 +630,7 @@ mod live_art_tests {
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
+            println!("SKIP waiting_song_rect_shows_select_button_for_host_and_cover_for_peer: install-root absent");
             return;
         }
         let mut host = live_game();
@@ -815,7 +812,7 @@ mod live_art_tests {
         //   ScreenGame::cache_select_music_scene (cache only).
         // Archives absent -> skip cleanly (CI has no game data).
         if !interface_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_waiting_lands_plain_without_select_music_dialog: missing install-root interface archive");
             return;
         }
         let mut game = live_game();
@@ -838,6 +835,7 @@ mod live_art_tests {
         // scene painter (covered there); the walk cannot reach Planet
         // without invented input, so no pixels assert here.
         if skip_without_archives() {
+            println!("SKIP planet_stages_bound_art_when_archives_present: install-root absent");
             return;
         }
         let art = declared_interface(State::Planet).expect("planet: unstaged state");
@@ -854,6 +852,7 @@ mod live_art_tests {
         // fallback title three times).
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP option_tabs_stage_all_three_sheets_when_archives_present: install-root absent");
             return;
         }
         let archive = read_install_archives(&install_root())
@@ -895,6 +894,7 @@ mod live_art_tests {
         // opening the dialog over the same staged lobby inks pixels
         // (unstaged, the open dialog paints nothing extra).
         if skip_without_archives() {
+            println!("SKIP create_dialog_paints_its_sheet_after_live_staging: install-root absent");
             return;
         }
         let mut game = live_game();
@@ -920,6 +920,7 @@ mod live_art_tests {
         use o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE;
         use o2jam_shell::staging::{stage_dialog, Dialog};
         if skip_without_archives() {
+            println!("SKIP live_staged_create_sheet_commits_a_title: install-root absent");
             return;
         }
         let archive = read_install_archives(&install_root())
@@ -956,6 +957,7 @@ mod live_art_tests {
         // beyond the flat card.
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP planet_paints_real_art_when_archives_present: install-root absent");
             return;
         }
         let art = scene_art_of(declared_interface(State::Planet).expect("planet: unstaged state"));
@@ -987,6 +989,7 @@ mod live_art_tests {
         // code ordinal, and the full-bleed state art grows. Pixel cover
         // rides the shell scene painter (covered there).
         if skip_without_archives() {
+            println!("SKIP lanking_stages_bound_art_when_archives_present: install-root absent");
             return;
         }
         let art = declared_interface(State::Lanking).expect("lanking: unstaged state");
@@ -1001,6 +1004,7 @@ mod live_art_tests {
         // directly (see the planet twin).
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP lanking_paints_real_art_when_archives_present: install-root absent");
             return;
         }
         let art =
@@ -1131,6 +1135,7 @@ mod live_art_tests {
         // (the flow never enters it); its bound wiring rides the
         // `myroom_stages_bound_art` row plus the art-equivalence probe.
         if skip_without_archives() {
+            println!("SKIP live_matches_declaration_on_walked_screens_when_archives_present: install-root absent");
             return;
         }
         for target in [
@@ -1192,6 +1197,7 @@ mod live_art_tests {
         // Bound `.bnd` pairing (ruling 1): placements pair the rects by
         // code ordinal and the full-bleed state art grows.
         if skip_without_archives() {
+            println!("SKIP myroom_stages_bound_art_when_archives_present: install-root absent");
             return;
         }
         let art = declared_interface(State::MyRoom).expect("myroom: unstaged state");
@@ -1205,6 +1211,7 @@ mod live_art_tests {
         // directly (see the planet twin).
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP myroom_paints_real_art_when_archives_present: install-root absent");
             return;
         }
         let art = scene_art_of(declared_interface(State::MyRoom).expect("myroom: unstaged state"));
@@ -1230,6 +1237,7 @@ mod live_art_tests {
         // Catalogue rows need item data joins (OPEN); this pins the
         // staging shape only (gapless ordinal pairing per docs/shop.md).
         if skip_without_archives() {
+            println!("SKIP shop_stages_bound_art_when_archives_present: install-root absent");
             return;
         }
         let art = declared_interface(State::Shop).expect("shop: unstaged state");
@@ -1244,6 +1252,7 @@ mod live_art_tests {
         // directly (see the planet twin).
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP shop_paints_real_art_when_archives_present: install-root absent");
             return;
         }
         let art = scene_art_of(declared_interface(State::Shop).expect("shop: unstaged state"));
@@ -1269,6 +1278,7 @@ mod live_art_tests {
         // Catalogue rows need the song index join (OPEN); this pins
         // the staging shape only.
         if skip_without_archives() {
+            println!("SKIP music_shop_stages_bound_art_when_archives_present: install-root absent");
             return;
         }
         let art = declared_interface(State::MusicShop).expect("music shop: unstaged state");
@@ -1283,6 +1293,7 @@ mod live_art_tests {
         // directly (see the planet twin).
         use o2jam_render::Frame;
         if skip_without_archives() {
+            println!("SKIP music_shop_paints_real_art_when_archives_present: install-root absent");
             return;
         }
         let art =
@@ -1307,6 +1318,9 @@ mod live_art_tests {
     #[test]
     fn room_paint_uses_staged_bound_art_when_archives_present() {
         if skip_without_archives() {
+            println!(
+                "SKIP room_paint_uses_staged_bound_art_when_archives_present: install-root absent"
+            );
             return;
         }
         let (bare, staged) = paint_pair(Screen::Room, 0);
@@ -1320,7 +1334,7 @@ mod live_art_tests {
         // paint_room_scene_with_hover. Archives absent -> skip cleanly
         // (CI has no game data). The body has no ControlList entry.
         let Some(interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing install-root archives");
+            println!("SKIP room_hover_overlay_stages_from_the_code_mounted_archive_body: missing install-root archives");
             return;
         };
         let overlay = stage_room_hover_overlay(&interface).expect("room hover body");
@@ -1332,6 +1346,7 @@ mod live_art_tests {
     #[test]
     fn waiting_paint_uses_staged_bound_art_when_archives_present() {
         if skip_without_archives() {
+            println!("SKIP waiting_paint_uses_staged_bound_art_when_archives_present: install-root absent");
             return;
         }
         let (bare, staged) = paint_pair(Screen::Waiting, 0);
@@ -1410,10 +1425,11 @@ mod live_art_tests {
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
+            println!("SKIP live_waiting_pick_titles_the_bound_musicname_rect: install-root absent");
             return;
         }
         let Some(songs) = installed_catalog_songs() else {
-            println!("skip: missing installed song catalog");
+            println!("SKIP live_waiting_pick_titles_the_bound_musicname_rect: missing installed song catalog");
             return;
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
@@ -1457,10 +1473,13 @@ mod live_art_tests {
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
+            println!(
+                "SKIP live_waiting_pick_leaves_the_musicname_plate_unscrimmed: install-root absent"
+            );
             return;
         }
         let Some(songs) = installed_catalog_songs() else {
-            println!("skip: missing installed song catalog");
+            println!("SKIP live_waiting_pick_leaves_the_musicname_plate_unscrimmed: missing installed song catalog");
             return;
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
@@ -1560,10 +1579,13 @@ mod live_art_tests {
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
+            println!(
+                "SKIP live_waiting_pick_inks_nothing_below_the_seat_grid: install-root absent"
+            );
             return;
         }
         let Some(songs) = installed_catalog_songs() else {
-            println!("skip: missing installed song catalog");
+            println!("SKIP live_waiting_pick_inks_nothing_below_the_seat_grid: missing installed song catalog");
             return;
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
@@ -1690,14 +1712,15 @@ mod live_art_tests {
         //
         // Archives absent -> skip cleanly (CI has no game data).
         if skip_without_archives() {
+            println!("SKIP live_waiting_badge_paints_the_bound_level_frame: install-root absent");
             return;
         }
         let Some(songs) = installed_catalog_songs() else {
-            println!("skip: missing installed song catalog");
+            println!("SKIP live_waiting_badge_paints_the_bound_level_frame: missing installed song catalog");
             return;
         };
         let Some(staged) = declared_interface(State::Waiting) else {
-            println!("skip: STATE_WAITING does not stage");
+            println!("SKIP live_waiting_badge_paints_the_bound_level_frame: STATE_WAITING does not stage");
             return;
         };
         let body = staged
@@ -1764,6 +1787,9 @@ mod live_art_tests {
     #[test]
     fn loading_paint_uses_staged_gate_when_archives_present() {
         if skip_without_archives() {
+            println!(
+                "SKIP loading_paint_uses_staged_gate_when_archives_present: install-root absent"
+            );
             return;
         }
         let (bare, staged) = paint_pair(Screen::Loading, 0);
@@ -1773,6 +1799,9 @@ mod live_art_tests {
     #[test]
     fn playing_paint_uses_staged_venue_when_archives_present() {
         if skip_without_archives() {
+            println!(
+                "SKIP playing_paint_uses_staged_venue_when_archives_present: install-root absent"
+            );
             return;
         }
         let mut bare = live_game();
@@ -1791,6 +1820,9 @@ mod live_art_tests {
     #[test]
     fn result_paint_uses_staged_banner_when_archives_present() {
         if skip_without_archives() {
+            println!(
+                "SKIP result_paint_uses_staged_banner_when_archives_present: install-root absent"
+            );
             return;
         }
         let (bare, staged) = paint_pair(Screen::Playing, 0);
@@ -1873,14 +1905,20 @@ mod live_art_tests {
         if !root_has_game_data(&root) {
             println!(
                 "{}",
-                pack_skip_report(&root, "live_stage_inks_shop_price_row_with_sprite_glyphs")
+                pack_skip_report(
+                    &root,
+                    stringify!(live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs)
+                )
             );
             return;
         }
         let Some(source) = o2jam_shell::read_installed_avatar(&root) else {
             println!(
                 "{}",
-                pack_skip_report(&root, "live_stage_inks_shop_price_row_with_sprite_glyphs")
+                pack_skip_report(
+                    &root,
+                    stringify!(live_stage_inks_the_shop_price_row_with_archive_sprite_glyphs)
+                )
             );
             return;
         };

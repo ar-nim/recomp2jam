@@ -100,7 +100,10 @@ fn sample_manifest_digests_are_full_length_hex() {
 
 #[test]
 fn full_pack_sample_compares_every_pinned_chart_hash() {
-    let Some(data_dir) = pack_dir_for_test(&install_root(), "full pack sample") else {
+    let Some(data_dir) = pack_dir_for_test(
+        &install_root(),
+        stringify!(full_pack_sample_compares_every_pinned_chart_hash),
+    ) else {
         return; // gate printed SKIP
     };
     let music_dir = data_dir.join("Music");

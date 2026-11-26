@@ -86,7 +86,7 @@ fn live_focus_off_and_on_reach_the_booted_scene_bgm_stop_hook() {
     // `AudioBackend::set_scene_bgm(None, false)`. Archives absent ->
     // skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_focus_off_and_on_reach_the_booted_scene_bgm_stop_hook: missing install-root interface archive");
         return;
     }
     let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -224,7 +224,7 @@ fn live_4035_acquire_arms_the_local_badge_from_boot() {
     // guard; this leg proves the same frame reaches the booted scene.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4035_acquire_arms_the_local_badge_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_acquire_gateway(joined_room(0, true));
@@ -274,7 +274,7 @@ fn live_focus_return_from_playing_installs_room_from_boot() {
     // `ScreenGame::apply_focus_change` -> `ScreenGame::enter_screen(Room)`.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_focus_return_from_playing_installs_room_from_boot: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_focus_leg(joined_room(0, true));
@@ -309,7 +309,7 @@ fn live_focus_return_from_loading_empty_title_clears_seats_and_installs_room_fro
     // `ScreenGame::clear_waiting_seats` ->
     // `ScreenGame::enter_screen(Screen::Room)`. Archives absent -> skip.
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_focus_return_from_loading_empty_title_clears_seats_and_installs_room_from_boot: missing install-root interface archive");
         return;
     }
     let mut room = joined_room(0, true);
@@ -348,7 +348,7 @@ fn live_focus_return_from_loading_named_room_installs_waiting_from_boot() {
     // `OnlineSession::focus_changed` -> `ScreenGame::apply_focus_change`
     // -> `ScreenGame::enter_screen(Screen::Waiting)`. Archives absent -> skip.
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_focus_return_from_loading_named_room_installs_waiting_from_boot: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_focus_leg(joined_room(0, true));

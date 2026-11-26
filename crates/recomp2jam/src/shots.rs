@@ -1686,7 +1686,7 @@ mod tests {
         let mut game = seeded_game();
         walk_to_waiting(&mut game);
         if !stage_side_art(&mut game, SideScreen::Shop) {
-            println!("skip: missing side art");
+            println!("SKIP side_native_repaints_the_open_side_at_full_canvas: missing side art");
             return;
         }
         stage_shop_walk_board(&mut game);
@@ -1701,7 +1701,7 @@ mod tests {
     #[test]
     fn playing_kit_stacks_a_worn_figure() {
         let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
-            println!("skip: missing {AVATAR_ARCHIVE}");
+            println!("SKIP playing_kit_stacks_a_worn_figure: missing {AVATAR_ARCHIVE}");
             return;
         };
         let figure = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true)
@@ -1716,7 +1716,7 @@ mod tests {
         // The 07D1 tap in the #329 Wine run carries only item 35; the
         // capture's full figure is item 30 beneath it (EV-336-A/B/C).
         let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
-            println!("skip: missing {AVATAR_ARCHIVE}");
+            println!("SKIP capture_kit_stacks_the_default_body_beneath_the_face: missing {AVATAR_ARCHIVE}");
             return;
         };
         let figure = stack_worn_figure(&archive, &capture_kit_equipment(), true)
@@ -1730,7 +1730,9 @@ mod tests {
         // resolution: the staged `_Playing_BG.ojs` figure is the
         // `Playing_BG2.ojs` body, not the bare stem's.
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP playing_venue_stages_the_room_arena_backdrop: missing {PLAYING_ARCHIVE}"
+            );
             return;
         };
         let game = seeded_game();
@@ -1770,7 +1772,7 @@ mod tests {
         // stage; the 3-key/P2P note backgrounds, the right buffer,
         // and the unused gauge-back shell leave empty slots.
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP playing_art_stages_only_the_solo_seven_key_members: missing {PLAYING_ARCHIVE}");
             return;
         };
         let ctx = StageContext {
@@ -1815,7 +1817,7 @@ mod tests {
         // VS panel paints over the center while the solo slots
         // (Note_BG, left bars) sit empty.
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP playing_shot_pins_solo_composition_despite_live_room: missing {PLAYING_ARCHIVE}");
             return;
         };
         let walk = seeded_game();
@@ -1990,7 +1992,7 @@ mod tests {
         // opaque `Playing_Menu.ojs` body and never paints in 7.55.)
         use o2jam_shell::avatar::{playing_backdrop_sprite, PLAYING_BACKDROP_CODE};
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP playing_shot_paints_the_backdrop_edge_label: missing {PLAYING_ARCHIVE}");
             return;
         };
         let box_bytes = |buf: &[u32], w: usize| {
@@ -2312,7 +2314,9 @@ mod tests {
                 checked += staged_entries_paint_on_origins(&art, "STATE_PLAYING");
             }
         } else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP every_bound_entry_paints_at_its_placement_origin: missing {PLAYING_ARCHIVE}"
+            );
         }
         if let Some(archive) = read_install_archives(&install_root()).interface {
             if let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art {
@@ -2324,10 +2328,10 @@ mod tests {
                 checked += staged_entries_paint_on_origins(&art, "DAILOG_SELECTMUSIC");
             }
         } else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP every_bound_entry_paints_at_its_placement_origin: missing {INTERFACE_ARCHIVE}");
         }
         if checked == 0 {
-            println!("skip: no archives present");
+            println!("SKIP every_bound_entry_paints_at_its_placement_origin: no archives present");
             return;
         }
         assert!(
@@ -2347,7 +2351,7 @@ mod tests {
         // at (489,556), never at rect + anchor (which lands off-canvas
         // and hides the bar).
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP staged_time_bar_paints_on_its_bound_rect: missing {PLAYING_ARCHIVE}");
             return;
         };
         // The declared Playing subset carries the same bound run:
@@ -2395,7 +2399,9 @@ mod tests {
         // (ADR-0003: the painter consumes staged rects, never a
         // canvas stretch).
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP playing_gauge_paints_at_its_staged_anchor_rect: missing {PLAYING_ARCHIVE}"
+            );
             return;
         };
         let ctx = StageContext {
@@ -2465,7 +2471,7 @@ mod tests {
         use o2jam_shell::playing::{AvatarScene, PlayingBoundFields};
 
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP playing_time_fill_stays_inside_the_staged_bar_rect: missing {PLAYING_ARCHIVE}");
             return;
         };
         let art = stage_state(&archive, State::Playing, StageContext::default())
@@ -2553,7 +2559,7 @@ mod tests {
     fn present_archives_stage_key_scenes() {
         let ctx = StageContext::default();
         let Some(interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP present_archives_stage_key_scenes: missing {INTERFACE_ARCHIVE}");
             return;
         };
         assert_channel_block_names_no_sprites(&interface);
@@ -2562,7 +2568,7 @@ mod tests {
             "avi stages its logo through the declaration"
         );
         let Some(playing) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP present_archives_stage_key_scenes: missing {PLAYING_ARCHIVE}");
             return;
         };
         assert!(
@@ -2597,11 +2603,11 @@ mod tests {
         // every side screen inks staged pixels, and the frame stays
         // byte-identical once the side is left (flow unchanged).
         let Some(interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP side_shot_paints_staged_placements_for_every_screen: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let Some(playing) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP side_shot_paints_staged_placements_for_every_screen: missing {PLAYING_ARCHIVE}");
             return;
         };
         let _ = (interface, playing);
@@ -2662,19 +2668,19 @@ mod tests {
     fn tutorial_chart_notes_ink_the_highway_when_due() {
         let chart_path = install_root().join("O2Jam/Music/Tutorial.ojn");
         let Ok(bytes) = std::fs::read(&chart_path) else {
-            println!("skip: missing Tutorial.ojn");
+            println!("SKIP tutorial_chart_notes_ink_the_highway_when_due: missing Tutorial.ojn");
             return;
         };
         let Some(onsets) = crate::loading::tutorial_chart_onsets(&bytes) else {
-            println!("skip: unreadable Tutorial.ojn");
+            println!("SKIP tutorial_chart_notes_ink_the_highway_when_due: unreadable Tutorial.ojn");
             return;
         };
         if !side_stage_data(SideScreen::Tutorial).is_some() {
-            println!("skip: missing tutorial art");
+            println!("SKIP tutorial_chart_notes_ink_the_highway_when_due: missing tutorial art");
             return;
         };
         let Some(&(lane, at_ms, _)) = onsets.iter().find(|(_, at, _)| *at > 3_000) else {
-            println!("skip: chart has no late onset");
+            println!("SKIP tutorial_chart_notes_ink_the_highway_when_due: chart has no late onset");
             return;
         };
         let mut game = seeded_game();
@@ -2710,7 +2716,7 @@ mod tests {
         let (Ok(playing), Ok(interface)) =
             (std::fs::read(&playing_path), std::fs::read(&interface_path))
         else {
-            println!("skip: missing playing or interface archive");
+            println!("SKIP firststep_tutorial_painter_inks_all_seven_staged_receptor_kits: missing playing or interface archive");
             return;
         };
         let art = stage_state(&playing, State::Tutorial, StageContext::default())
@@ -2785,7 +2791,9 @@ mod tests {
         // The two rects are the parsed record anchors of `Guide_Text.ojs`
         // frame 0 (bubble + `1/13`) and `Guide_Ani.ojs` frame 0 (coach).
         let Some((placements, figures)) = side_stage_data(SideScreen::Tutorial) else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP tutorial_shot_inks_the_b7_bubble_and_coach_rects: missing {PLAYING_ARCHIVE}"
+            );
             return;
         };
         for (name, layers, x, y) in [
@@ -2835,7 +2843,7 @@ mod tests {
         // DAILOG_SELECTMUSIC placements carry 27 + 15 INDEX buttons
         // at the exact 15 px pitch (docs/geometry-audit.md).
         let Some(interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP musicselect_chosung_grid_matches_the_bind_inventory: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let art = stage_dialog(&interface, Dialog::SelectMusic, StageContext::default())
@@ -2909,7 +2917,7 @@ mod tests {
         // the MENU bar band may differ — but only where the board
         // itself paints.
         let Some(interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP channel_shot_stages_dialog_art_inside_the_measured_bands: missing {INTERFACE_ARCHIVE}");
             return;
         };
         // Art-less baseline: same seed, both scene slots cleared.
@@ -2991,7 +2999,7 @@ mod tests {
         // paints (no scene painter, no cursor) — covered unguarded in
         // `planet_shot_records_the_picked_band_without_art`.
         let Some(_interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP planet_shot_stages_bound_art_with_the_picked_band: missing {INTERFACE_ARCHIVE}");
             return;
         };
         // The walk reaches the bare board through the dialog X (no
@@ -3122,7 +3130,7 @@ mod tests {
         // painter ink both count (the painter itself is proven by
         // the shell's synthetic-caption test).
         let Some(_interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP planet_shot_paints_emblem_captions: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let mut game = seeded_game();
@@ -3147,7 +3155,7 @@ mod tests {
         // and Escape closes it. Guarded: without archives the
         // fallback popup/title paths are covered by the shell suite.
         let Some(_interface) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP planet_modals_stage_their_dialog_art: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let mut game = seeded_game();
@@ -3182,7 +3190,7 @@ mod tests {
     fn play_skin_decodes_every_lane_when_present() {
         use o2jam_shell::playing::PlaySkin;
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP play_skin_decodes_every_lane_when_present: missing {PLAYING_ARCHIVE}");
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -3215,11 +3223,15 @@ mod tests {
         use o2jam_shell::playing::{HighwayGeometry, LivePlay, PlaySkin};
         const NOTE_BLUE: u32 = pack_xrgb(0x40, 0xC0, 0xFF);
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP skinned_highway_replaces_procedural_note_ink: missing {PLAYING_ARCHIVE}"
+            );
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
-            println!("skip: PlaySkin decoded no lanes");
+            println!(
+                "SKIP skinned_highway_replaces_procedural_note_ink: PlaySkin decoded no lanes"
+            );
             return;
         };
         assert!(skin.note_head(2).is_some());
@@ -3320,7 +3332,7 @@ mod tests {
     fn playing_shot_paints_the_staged_combo_digit() {
         use o2jam_shell::playing::combo_digits_origin;
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP playing_shot_paints_the_staged_combo_digit: missing {PLAYING_ARCHIVE}");
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -3377,7 +3389,9 @@ mod tests {
         // pinned origin must appear in the playing shot's frame.
         use o2jam_shell::playing::long_combo_plate_origin;
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!(
+                "SKIP playing_shot_paints_the_staged_long_note_caption: missing {PLAYING_ARCHIVE}"
+            );
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -3454,7 +3468,7 @@ mod tests {
             long_combo_digits_origin, HighwayGeometry, LivePlay, LONG_COMBO_DIGIT_GAP,
         };
         let Some(archive) = read_install_archives(&install_root()).playing else {
-            println!("skip: missing {PLAYING_ARCHIVE}");
+            println!("SKIP skinned_highway_renders_hold_tails_and_tick_feedback: missing {PLAYING_ARCHIVE}");
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -3831,7 +3845,7 @@ mod tests {
             waiting_bpm_caption, waiting_map_name, waiting_skillcount_text,
         };
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP waiting_shot_paints_mapname_bpm_skillcount_captions: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let art = stage_state(&archive, State::Waiting, StageContext::default())
@@ -3976,7 +3990,7 @@ mod tests {
             .ok()
             .is_none()
         {
-            println!("skip: missing {MUSICSELECT_CATALOG}");
+            println!("SKIP loading_shot_paints_staged_fraction_and_caption: missing {MUSICSELECT_CATALOG}");
             return;
         }
         let mut game = seeded_game();
@@ -4028,7 +4042,7 @@ mod tests {
     #[test]
     fn result_shot_paints_the_battle_lose_frame() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP result_shot_paints_the_battle_lose_frame: missing {INTERFACE_ARCHIVE}");
             return;
         };
         // Rank 2 sits on the local team, so the battle verdict
@@ -4074,7 +4088,9 @@ mod tests {
     #[test]
     fn result_shot_paints_the_perfect_grade_plate() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!(
+                "SKIP result_shot_paints_the_perfect_grade_plate: missing {INTERFACE_ARCHIVE}"
+            );
             return;
         };
         // The walked chart holds a handful of records, far below the
@@ -4125,7 +4141,7 @@ mod tests {
     #[test]
     fn solo_shot_paints_the_solo_banner_frame() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP solo_shot_paints_the_solo_banner_frame: missing {INTERFACE_ARCHIVE}");
             return;
         };
         // Solo verdict selects WinLose frame 4, clamped onto image
@@ -4328,7 +4344,7 @@ mod tests {
         // old literal panel used to paint here). Skip cleanly: CI has no
         // game data.
         if read_install_archives(&install_root()).interface.is_none() {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP musicselect_shot_repaints_waiting_with_the_staged_pick: missing {INTERFACE_ARCHIVE}");
             return;
         }
         let mut game = seeded_game();
@@ -4407,7 +4423,9 @@ mod tests {
         // unchanged at its staged origin: an opaque plate over the
         // button (the #272 black rectangles) replaces its pixels.
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!(
+                "SKIP song_dialog_buttons_paint_their_staged_bodies: missing {INTERFACE_ARCHIVE}"
+            );
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4461,7 +4479,7 @@ mod tests {
         // on top covers them with its grey variant, so the exe's plate
         // and its click band no longer agree (#272 placement residual).
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP song_dialog_question_buttons_leave_the_baked_backdrop_plate_visible: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4514,7 +4532,7 @@ mod tests {
         // opening OK pill and inactive GOLD bucket show frame 0, while
         // stacking every frame lets the dark state cover the lit art.
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP song_dialog_inactive_button_bodies_paint_one_state_frame: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4570,7 +4588,7 @@ mod tests {
     #[test]
     fn unselected_level_buttons_leave_the_baked_faces_visible() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP unselected_level_buttons_leave_the_baked_faces_visible: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4612,7 +4630,7 @@ mod tests {
     // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
     fn result_tab_leaves_baked_header_and_row_tags_visible() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP result_tab_leaves_baked_header_and_row_tags_visible: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4670,7 +4688,7 @@ mod tests {
     #[test]
     fn three_chart_rows_paint_their_own_difficulty_letter_frame() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP three_chart_rows_paint_their_own_difficulty_letter_frame: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
@@ -4698,7 +4716,7 @@ mod tests {
         // reference frame has song-select mode and no guide sheet.
         // The block proof below pins that every gated body is named.
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP song_dialog_mode_and_help_families_stage_for_paint_gating: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("opi parses");
@@ -4731,12 +4749,12 @@ mod tests {
         // (356,94)) over the waiting seats; the retired structure
         // plates filled the surrounding band with the scrim tone.
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP musicselect_dialog_text_layer_inks_the_staged_tab_slot: missing {INTERFACE_ARCHIVE}");
             return;
         };
         let (art, frame) = painted_select_music_frame(&archive);
         if !art.figures.values().any(|figure| !figure.is_empty()) {
-            println!("skip: dialog art staged no figures");
+            println!("SKIP musicselect_dialog_text_layer_inks_the_staged_tab_slot: dialog art staged no figures");
             return;
         }
         let amber = o2jam_render::pack_xrgb(0xFF, 0xA0, 0x20);
@@ -4766,7 +4784,7 @@ mod tests {
         // filter VA `0x446950`: 1 <= level < 8).
         use o2jam_shell::screens::side::{select_music_rows, SelectLevelBand};
         if read_install_archives(&install_root()).interface.is_none() {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP song_dialog_level_filter_click_narrows_the_live_catalog: missing {INTERFACE_ARCHIVE}");
             return;
         }
         let mut game = seeded_game();
@@ -4778,7 +4796,7 @@ mod tests {
                 .find(|placed| placed.id == "IDC_BUTTON_DSMUSIC_STEP1_EASY")
                 .map(|placed| placed.rect)
         }) else {
-            println!("skip: staged dialog names no STEP1 level buttons");
+            println!("SKIP song_dialog_level_filter_click_narrows_the_live_catalog: staged dialog names no STEP1 level buttons");
             return;
         };
         let unfiltered_rows = select_music_rows(game.select_songs(), game.select_filter()).len();
@@ -4975,7 +4993,7 @@ mod tests {
         // not the room master and sees READY instead of START. The
         // select-music dialog and panel stay master-only either way.
         if read_install_archives(&install_root()).interface.is_none() {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+            println!("SKIP guest_capture_carries_its_own_seats_but_no_select_view: missing {INTERFACE_ARCHIVE}");
             return;
         }
         let shots = shared_shots().unwrap();

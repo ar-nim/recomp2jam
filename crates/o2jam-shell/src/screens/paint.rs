@@ -5262,7 +5262,7 @@ mod paint_tests {
         // v6 re-pair rerun after merge, not the pre-fix wave.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
         let Some(source) = crate::avatar_source::read_installed_avatar(&root) else {
-            println!("skip: missing install-root avatar archive");
+            println!("SKIP featured_card_blits_the_full_body_sprite_at_the_exe_native_box: missing install-root avatar archive");
             return;
         };
         let figures = crate::avatar::load_shop_featured_figures(source.archive(), source.table());
@@ -5479,6 +5479,9 @@ mod paint_tests {
         // place the literal sprite names and their frame shapes can
         // be checked against the pin; skip cleanly without game data.
         let Some(archive) = interface_archive() else {
+            println!(
+                "SKIP staged_shop_price_fonts_come_from_the_exe_archive_atlas: install-root absent"
+            );
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("Interface directory parses");
@@ -5524,6 +5527,9 @@ mod paint_tests {
         // frames: the sprite raster, not just its pinned position,
         // must reach the canvas. Skips without install-root.
         let Some(archive) = interface_archive() else {
+            println!(
+                "SKIP featured_price_row_inks_the_real_archive_glyph_raster: install-root absent"
+            );
             return;
         };
         let fonts = stage_shop_price_fonts(&archive, StageContext::default())
@@ -11151,6 +11157,7 @@ mod paint_tests {
         // frame's holes show the sibling frames (ghost of the previous
         // banner where the exe shows the dialog backdrop).
         let Some(archive) = interface_archive() else {
+            println!("SKIP promo_banner_paints_only_the_selected_frame: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Planet, StageContext::default())
@@ -11227,6 +11234,7 @@ mod paint_tests {
         // only for a nonzero key (docs/claims-render.md rule 4), so a
         // stored black pixel must cover the board art beneath it.
         let Some(archive) = interface_archive() else {
+            println!("SKIP planet_zero_key_black_plates_cover_the_board_art: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Planet, StageContext::default())
@@ -11273,6 +11281,7 @@ mod paint_tests {
         // transparent pixels are zero words: the band must not hide
         // the header backdrop, unlike the key-0 `.ojs` plates.
         let Some(archive) = interface_archive() else {
+            println!("SKIP waiting_notice_board_zero_words_leave_the_header_backdrop_visible: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Waiting, StageContext::default())
@@ -11314,6 +11323,7 @@ mod paint_tests {
         // their black pixels are opaque in 7.55, so the flanks show
         // dark vinyl instead of the board art under the dialog holes.
         let Some(archive) = interface_archive() else {
+            println!("SKIP channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels: install-root absent");
             return;
         };
         let staged_board = stage_state(&archive, State::Planet, StageContext::default())
@@ -12558,7 +12568,7 @@ mod paint_tests {
         // so the room paint must land that same stack centered and
         // contained in the `IDC_IMAGE_SROOM_AVATA` slot.
         let Some(figure) = stacked_hero_figure() else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP room_user_panel_centers_the_stacked_worn_figure_in_its_slot: missing install-root avatar.opa");
             return;
         };
         let placements = room_user_panel_placements();
@@ -12601,7 +12611,7 @@ mod paint_tests {
         // too — the room panel matches this figure for the same
         // equipment, both through the shared seat-slot helper.
         let Some(figure) = stacked_hero_figure() else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_avatar_centers_the_stacked_worn_figure_in_its_slot: missing install-root avatar.opa");
             return;
         };
         let slot = Rect {
@@ -12673,11 +12683,11 @@ mod paint_tests {
         let mut face_only = [0i32; 17];
         face_only[11] = 35;
         let Some(full) = stacked_figure_for_row(&face_only, true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_paints_bare_arms_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let Some(old) = stacked_figure_for_row(&[30, 35], true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_paints_bare_arms_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let slot = Rect {
@@ -12751,7 +12761,7 @@ mod paint_tests {
         let mut face_only = [0i32; 17];
         face_only[11] = 35;
         let Some(figure) = stacked_figure_for_row(&face_only, true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP room_user_panel_paints_default_body_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let placements = room_user_panel_placements();
@@ -16993,6 +17003,7 @@ mod dialog_paint_tests {
         // art and hit tests land together (#131 inert controls, #132
         // stacked sprites both traced here).
         let Some(archive) = interface_archive() else {
+            println!("SKIP option_sheets_paint_on_their_hit_rects: install-root absent");
             return;
         };
         let ctx = StageContext::default();
@@ -17101,6 +17112,7 @@ mod dialog_paint_tests {
         // `.bnd` rect; the #132 regression stacked all 37 records at
         // the dialog origin.
         let Some(archive) = interface_archive() else {
+            println!("SKIP keytext_sheet_paints_one_frame_per_key_button: install-root absent");
             return;
         };
         let art = stage_dialog(&archive, Dialog::PlanetOption, StageContext::default())

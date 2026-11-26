@@ -8605,7 +8605,7 @@ mod side_tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi");
         let Ok(archive) = std::fs::read(path) else {
-            println!("skip: missing installed Interface1.opi");
+            println!("SKIP music_shop_top100_arm_stages_eight_rects_and_answer_each_press: missing installed Interface1.opi");
             return;
         };
         let staged = stage_state(&archive, State::MusicShop, StageContext::default())
@@ -9909,7 +9909,7 @@ mod side_tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi");
         let Ok(archive) = std::fs::read(path) else {
-            println!("skip: missing installed Interface1.opi");
+            println!("SKIP song_dialog_controls_keep_their_ordinal_paired_rects: missing installed Interface1.opi");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("opi parses");
@@ -9989,7 +9989,7 @@ mod side_tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi");
         let Some(archive) = std::fs::read(path).ok() else {
-            println!("skip: missing installed Interface1.opi");
+            println!("SKIP select_chrome_inventory_covers_every_bound_control: missing installed Interface1.opi");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("opi parses");

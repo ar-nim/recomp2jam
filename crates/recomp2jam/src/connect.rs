@@ -2061,7 +2061,9 @@ mod song_flow_tests {
         let _live = crate::live_guard::hold_live_gateway();
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
-            eprintln!("skipping live song flow (set O2JAM_LIVE_GATEWAY=host:port)");
+            eprintln!(
+                "SKIP live_host_song_flow_against_local_gateway: set O2JAM_LIVE_GATEWAY=host:port"
+            );
             return;
         }
         let token = std::env::var("O2JAM_LIVE_TOKEN")
@@ -2448,7 +2450,9 @@ mod wallet_flow_tests {
         let _live = crate::live_guard::hold_live_gateway();
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
-            eprintln!("skipping live wallet fetch (set O2JAM_LIVE_GATEWAY=host:port)");
+            eprintln!(
+                "SKIP live_wallet_fetch_against_local_gateway: set O2JAM_LIVE_GATEWAY=host:port"
+            );
             return;
         }
         let token = std::env::var("O2JAM_LIVE_TOKEN")

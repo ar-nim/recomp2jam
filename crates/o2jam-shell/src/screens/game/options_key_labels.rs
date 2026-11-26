@@ -317,6 +317,7 @@ mod tests {
     #[test]
     fn three_key_button_paints_the_bound_shift_glyph_at_the_captured_origin() {
         let Some(art) = key_art() else {
+            println!("SKIP three_key_button_paints_the_bound_shift_glyph_at_the_captured_origin: install-root absent");
             return;
         };
         // Capture play-02: 3KEY_1 = L Shift (DIK 0x2A), rec34 at
@@ -344,6 +345,9 @@ mod tests {
     #[test]
     fn seven_key_button_repaints_the_new_glyph_after_a_rebind() {
         let Some(art) = key_art() else {
+            println!(
+                "SKIP seven_key_button_repaints_the_new_glyph_after_a_rebind: install-root absent"
+            );
             return;
         };
         // Capture play-04: a rebind to A (DIK 0x1E) puts rec12 at the
@@ -389,6 +393,7 @@ mod tests {
     #[test]
     fn armed_lane_has_a_distinct_open_stand_in_face() {
         let Some(art) = key_art() else {
+            println!("SKIP armed_lane_has_a_distinct_open_stand_in_face: install-root absent");
             return;
         };
         let rest = paint_key_tab(
@@ -424,6 +429,7 @@ mod tests {
         // ScreenGame::paint_planet_modal -> this painter. The seam
         // guards above pin the frame math; this guard pins the wiring.
         let Some(art) = key_art() else {
+            println!("SKIP gear_opened_key_tab_paints_the_bound_caption_through_the_live_modal: install-root absent");
             return;
         };
         let mut game = ScreenGame::new();
@@ -546,6 +552,9 @@ mod tests {
         // Exe constructor 0x438080 selects 3K; capture play-02 pins
         // 3KEY_1 = L Shift (rec34). Archives absent -> skip.
         let Some(art) = key_art() else {
+            println!(
+                "SKIP gear_opened_key_tab_seeds_the_exe_three_key_caption: install-root absent"
+            );
             return;
         };
         let game = open_key_sheet(&art);
@@ -574,6 +583,9 @@ mod tests {
         // (314,243) is black inside the L pad bar, not the white
         // baked plate of `OptionKey_Back.ojs`.
         let Some(art) = key_art() else {
+            println!(
+                "SKIP key_tab_unchecked_rest_paints_the_three_key_pad_bodies: install-root absent"
+            );
             return;
         };
         let game = open_key_sheet(&art);
@@ -592,6 +604,7 @@ mod tests {
         // paint_planet_modal -> paint_option_key_tab -> paint_dialog_scene.
         // Exe toggle handler 0x4383d0 swaps control groups. Archives absent -> skip.
         let Some(art) = key_art() else {
+            println!("SKIP key_mode_toggle_switches_the_painted_family_and_ignores_inactive_lanes: install-root absent");
             return;
         };
         let mut game = open_key_sheet(&art);
@@ -641,6 +654,7 @@ mod tests {
         // Exe repaint 0x439780 skips 3K family index 1; 0x25209009
         // and 0x2520900A share one staged rect. Archives absent -> skip.
         let Some(art) = key_art() else {
+            println!("SKIP three_key_duplicate_rect_paints_only_the_kept_family_index: install-root absent");
             return;
         };
         let origin = dialog_origin(&art.placements);
@@ -691,6 +705,7 @@ mod tests {
         // Exe 0x4395e0/0x438e80 write +0x18a + armed, advance the arm,
         // and read mode-specific key arrays. Archives absent -> skip.
         let Some(art) = key_art() else {
+            println!("SKIP rebind_advances_the_arm_and_keeps_seven_key_binds_separate: install-root absent");
             return;
         };
         let mut game = open_key_sheet(&art);
@@ -754,6 +769,9 @@ mod tests {
     #[test]
     fn key_tab_paints_only_the_bound_frame_not_the_whole_atlas() {
         let Some(art) = key_art() else {
+            println!(
+                "SKIP key_tab_paints_only_the_bound_frame_not_the_whole_atlas: install-root absent"
+            );
             return;
         };
         let buf = paint_key_tab(
@@ -784,6 +802,9 @@ mod tests {
     #[test]
     fn unchecked_key_test_keeps_the_three_key_pad_bodies_lit() {
         let Some(art) = key_art() else {
+            println!(
+                "SKIP unchecked_key_test_keeps_the_three_key_pad_bodies_lit: install-root absent"
+            );
             return;
         };
         let game = open_key_sheet(&art);
@@ -844,6 +865,7 @@ mod tests {
     #[test]
     fn unchecked_key_test_hides_the_staged_check_body() {
         let Some(art) = key_art() else {
+            println!("SKIP unchecked_key_test_hides_the_staged_check_body: install-root absent");
             return;
         };
         let game = open_key_sheet(&art);
@@ -868,6 +890,7 @@ mod tests {
     #[test]
     fn clicking_key_test_paints_the_staged_check_body() {
         let Some(art) = key_art() else {
+            println!("SKIP clicking_key_test_paints_the_staged_check_body: install-root absent");
             return;
         };
         let mut game = open_key_sheet(&art);

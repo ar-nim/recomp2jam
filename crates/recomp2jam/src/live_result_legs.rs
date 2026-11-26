@@ -77,7 +77,7 @@ mod live_result_leg_tests {
     #[test]
     fn live_result_paint_leg_inks_the_staged_panels_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_result_paint_leg_inks_the_staged_panels_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_result_back_gateway(joined_room(0, true));
@@ -141,7 +141,7 @@ mod live_result_leg_tests {
     #[test]
     fn live_result_fill_body_ink_is_sampled_in_a_settled_result_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_result_fill_body_ink_is_sampled_in_a_settled_result_frame: missing install-root interface archive");
             return;
         }
         let archive = read_install_archives(&install_root())

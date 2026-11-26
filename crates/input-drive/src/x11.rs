@@ -592,11 +592,13 @@ mod x11_tests {
     #[test]
     fn x11_arm_routes_click_through_real_game() {
         if which_xvfb().is_none() {
-            eprintln!("SKIP: no Xvfb binary on PATH");
+            eprintln!("SKIP x11_arm_routes_click_through_real_game: no Xvfb binary on PATH");
             return;
         }
         if !game_data_present() {
-            eprintln!("SKIP: no game data under install-root");
+            eprintln!(
+                "SKIP x11_arm_routes_click_through_real_game: no game data under install-root"
+            );
             return;
         }
         let game_binary = ensure_fresh_game_binary();
@@ -608,7 +610,9 @@ mod x11_tests {
                 let message = format!("{error:#}");
                 std::fs::remove_dir_all(&scratch).ok();
                 if message.contains("mid-boot") {
-                    eprintln!("SKIP: game never booted ({message})");
+                    eprintln!(
+                        "SKIP x11_arm_routes_click_through_real_game: game never booted ({message})"
+                    );
                     return;
                 }
                 panic!("x11 probe failed after boot: {message}");

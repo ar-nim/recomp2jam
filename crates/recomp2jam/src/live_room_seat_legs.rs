@@ -152,7 +152,7 @@ fn count_ink(frame: &[u32], rect: Rect, ink: u32) -> usize {
 #[test]
 fn live_room_3003_member_fields_stage_the_roster_and_readouts() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3003_member_fields_stage_the_roster_and_readouts: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
@@ -195,7 +195,7 @@ fn live_room_3003_member_fields_stage_the_roster_and_readouts() {
 #[test]
 fn live_room_gender_byte_from_3003_reaches_the_staged_seat() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_gender_byte_from_3003_reaches_the_staged_seat: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
@@ -227,7 +227,7 @@ fn live_room_gender_byte_from_3003_reaches_the_staged_seat() {
 #[test]
 fn live_room_team_ready_and_master_marks_paint_from_the_wire_seat() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_team_ready_and_master_marks_paint_from_the_wire_seat: missing install-root interface archive");
         return;
     }
     let (mut ready_session, ready_gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
@@ -282,7 +282,7 @@ fn live_room_team_ready_and_master_marks_paint_from_the_wire_seat() {
 #[test]
 fn live_room_champion_streak_inks_the_wins_well_from_3003() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_champion_streak_inks_the_wins_well_from_3003: missing install-root interface archive");
         return;
     }
     let (mut with_streak, streak_gateway) =

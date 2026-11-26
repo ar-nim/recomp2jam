@@ -653,12 +653,12 @@ mod tests {
     fn firststep_tutorial_chart_autoplay_judges_every_note_without_key_input() {
         let chart_path = install_root().join("O2Jam/Music/Tutorial.ojn");
         if !chart_path.is_file() {
-            println!("skip: missing install chart");
+            println!("SKIP firststep_tutorial_chart_autoplay_judges_every_note_without_key_input: missing install chart");
             return;
         }
         let installed = o2jam_shell::staging::read_install_archives(&install_root());
         let Some(interface) = installed.interface else {
-            println!("skip: missing interface archive");
+            println!("SKIP firststep_tutorial_chart_autoplay_judges_every_note_without_key_input: missing interface archive");
             return;
         };
         let mut game = ScreenGame::new();
@@ -964,7 +964,7 @@ mod tests {
         // ScreenGame::set_avatar_source + load_room_avatar (#336).
         // Archives absent -> skip cleanly (CI has no game data).
         if !install_root().join("O2Jam/Image/avatar.opa").exists() {
-            println!("skip: install-root avatar.opa absent");
+            println!("SKIP e2e_seeds_item_figures_for_the_waiting_seats_and_room_plate: install-root avatar.opa absent");
             return;
         }
         let walker = E2eWalker::seeded(None).expect("seeded walker");
@@ -1051,17 +1051,20 @@ mod tests {
         let catalog_path = install_root().join("O2Jam/Image/OJNList.dat");
         let chart_path = install_root().join("O2Jam/Music/o2ma757.ojn");
         if !catalog_path.is_file() || !chart_path.is_file() {
-            println!("skip: missing install catalog or chart");
+            println!("SKIP song_pick_paints_the_installed_ojn_cover_on_the_loading_gate: missing install catalog or chart");
             return;
         }
         let Ok(chart_bytes) = std::fs::read(&chart_path) else {
-            println!("skip: unreadable {}", chart_path.display());
+            println!(
+                "SKIP song_pick_paints_the_installed_ojn_cover_on_the_loading_gate: unreadable {}",
+                chart_path.display()
+            );
             return;
         };
         let Ok(cover) = o2jam_file::ojn_cover_jpeg(&chart_bytes)
             .and_then(|stream| o2jam_file::decode_ojn_cover(&stream))
         else {
-            println!("skip: undecodable OJN cover");
+            println!("SKIP song_pick_paints_the_installed_ojn_cover_on_the_loading_gate: undecodable OJN cover");
             return;
         };
 

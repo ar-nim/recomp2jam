@@ -23,7 +23,9 @@ use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 /// -> paint_side_scene_selected. A data-free run skips at the seam.
 #[test]
 fn shop_back_and_messenger_lamp_stay_baked_into_the_backdrop() {
-    let Some(art) = stage_shop_art("shop_back_and_messenger_lamp_stay_baked") else {
+    let Some(art) = stage_shop_art(stringify!(
+        shop_back_and_messenger_lamp_stay_baked_into_the_backdrop
+    )) else {
         return;
     };
     let mut game = room_game();

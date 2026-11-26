@@ -374,7 +374,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_native_music_purchase_from_boot_folds_the_5011_success_body() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_native_music_purchase_from_boot_folds_the_5011_success_body: missing install-root interface archive");
             return;
         }
         let gateway = spawn_purchase_gateway(joined_room(0, true), false);
@@ -425,7 +425,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_native_music_purchase_from_boot_inks_the_5011_refusal_notice() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_native_music_purchase_from_boot_inks_the_5011_refusal_notice: missing install-root interface archive");
             return;
         }
         let gateway = spawn_purchase_gateway(joined_room(0, true), true);
@@ -475,7 +475,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn live_web_nickname_report_back_sends_the_2017_chat_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_web_nickname_report_back_sends_the_2017_chat_frame: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -526,7 +526,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn live_web_cart_report_back_adds_the_packed_mid_to_the_cart_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_web_cart_report_back_adds_the_packed_mid_to_the_cart_frame: missing install-root interface archive");
             return;
         }
         let gateway = spawn_purchase_gateway(joined_room(0, true), false);
@@ -576,7 +576,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn live_web_document_complete_report_back_inks_the_notice_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_web_document_complete_report_back_inks_the_notice_frame: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -703,7 +703,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_result_zero_selector_pairs_the_tally_wire_with_the_hot_time_frame() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_result_zero_selector_pairs_the_tally_wire_with_the_hot_time_frame: missing install-root interface archive");
             return;
         }
         let gateway = spawn_result_back_gateway(joined_room(0, true));
@@ -744,7 +744,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_qa_page_open_inks_the_labeled_help_stand_in_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_qa_page_open_inks_the_labeled_help_stand_in_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -797,7 +797,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row: missing install-root interface archive");
             return;
         }
         let (root, music, source) = downloaded_chart_dirs("recomp2jam-tier3-purchase-complete");
@@ -979,7 +979,7 @@ mod live_web_native_leg_tests {
     #[test]
     fn tier_3_scripted_2028_from_boot_inks_the_native_top100_rows() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP tier_3_scripted_2028_from_boot_inks_the_native_top100_rows: missing install-root interface archive");
             return;
         }
         let gateway = spawn_top100_gateway(joined_room(0, true));

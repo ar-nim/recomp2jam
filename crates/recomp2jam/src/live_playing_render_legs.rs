@@ -320,6 +320,7 @@ mod tests {
         // ScreenGame::paint_playing -> paint_placement_layer ->
         // o2jam_render::blit_rgb555. Archives absent -> skip cleanly.
         if !playing_render_archives_present() {
+            println!("SKIP live_colorkeyed_playing_figure_uploads_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -342,6 +343,9 @@ mod tests {
         // Same chain as above through `paint_placement_layer` on the
         // chat-window body, whose row runs carry the 0x7D5F key.
         if !playing_render_archives_present() {
+            println!(
+                "SKIP live_playing_row_copy_skips_the_authored_key_from_boot: install-root absent"
+            );
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -364,6 +368,7 @@ mod tests {
         // Live chain ends at the staged `Playing_ChatWindow.oji` body:
         // its repeated-Y/X runs decode into the layer this leg checks.
         if !playing_render_archives_present() {
+            println!("SKIP live_packed_run_body_lands_each_run_at_its_staged_offset_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -385,6 +390,7 @@ mod tests {
         // the oracle for the frame the live scene paints; the source
         // of the shell's index word stays a documented hand-off.
         if !playing_render_archives_present() {
+            println!("SKIP live_frame_index_word_selects_the_painted_stage_frame_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -410,6 +416,7 @@ mod tests {
         // The count word bounds selection to the staged EXIT frames;
         // the live painter shows one frame, never the whole stack.
         if !playing_render_archives_present() {
+            println!("SKIP live_frame_count_bounds_the_staged_playing_animation_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -434,6 +441,7 @@ mod tests {
         // `BpPoint_Left_bar.ojs` anchors at (2,266), not at its bound
         // rect (200,3); the signed record offset must move the ink.
         if !playing_render_archives_present() {
+            println!("SKIP live_signed_anchor_lands_the_staged_playing_figure_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -460,6 +468,7 @@ mod tests {
         // The painter consumes the same staged rect and figure the boot
         // installed; no paint-side geometry is invented for this leg.
         if !playing_render_archives_present() {
+            println!("SKIP live_staged_playing_geometry_travels_with_the_figure_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -489,6 +498,7 @@ mod tests {
         // size in the painted frame. The exe's transform floats remain
         // a shell-side hand-off, but no ink leaves the staged measure.
         if !playing_render_archives_present() {
+            println!("SKIP live_transformed_playing_image_keeps_the_staged_position_and_size_from_boot: install-root absent");
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -522,6 +532,9 @@ mod tests {
         // The control's count word bounds the staged frame table; the
         // live scene paints one of those frames in one control rect.
         if !playing_render_archives_present() {
+            println!(
+                "SKIP live_control_frame_count_stages_one_frame_from_boot: install-root absent"
+            );
             return;
         }
         let (mut session, gateway) = boot_playing_render_leg();
@@ -549,6 +562,7 @@ mod tests {
         // LivePlay::paint_hold_tails -> LivePlay::paint_tail_span.
         // Archives absent -> skip cleanly (CI has no game data).
         if !playing_render_archives_present() {
+            println!("SKIP live_staged_hold_art_width_follows_the_selected_note_tail_pair: install-root absent");
             return;
         }
         let hold = (3, 150_000, 151_000, 7);

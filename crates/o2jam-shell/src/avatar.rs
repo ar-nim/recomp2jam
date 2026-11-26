@@ -2456,7 +2456,7 @@ mod avatar_figure_tests {
         // `SA0501.ojs` pixel-for-pixel, not the stretched slot-0 thumbnail.
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
         let Some(source) = super::super::avatar_source::read_installed_avatar(&root) else {
-            println!("skip: missing install-root avatar archive");
+            println!("SKIP featured_card_figure_uses_the_full_body_sprite_at_the_exe_pose: missing install-root avatar archive");
             return;
         };
         let row = source
@@ -2950,6 +2950,7 @@ mod avatar_figure_tests {
         let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/avatar.opa");
         let Ok(archive) = std::fs::read(&archive_path) else {
+            println!("SKIP live_face_only_kit_stages_the_pinned_arm_sprite: install-root absent");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).unwrap();
@@ -3079,6 +3080,7 @@ mod avatar_figure_tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         let Ok(bytes) = std::fs::read(&path) else {
+            println!("SKIP ojn_cover_stage_names_the_song_illustration: install-root absent");
             return;
         };
         let figure =
@@ -3334,6 +3336,7 @@ mod avatar_figure_tests {
     #[test]
     fn oja_bodies_render_from_the_archive() {
         let Some(archive) = install_archive("Playing1.opi") else {
+            println!("SKIP oja_bodies_render_from_the_archive: install-root absent");
             return;
         };
         for (name, frames) in [
@@ -3366,9 +3369,11 @@ mod avatar_figure_tests {
     #[test]
     fn oji_prefixed_bodies_render_from_the_archives() {
         let Some(interface) = install_archive("Interface1.opi") else {
+            println!("SKIP oji_prefixed_bodies_render_from_the_archives: install-root absent");
             return;
         };
         let Some(playing) = install_archive("Playing1.opi") else {
+            println!("SKIP oji_prefixed_bodies_render_from_the_archives: install-root absent");
             return;
         };
         for (archive, name, frames) in [
@@ -3398,9 +3403,11 @@ mod avatar_figure_tests {
     #[test]
     fn oji_repeated_y_bodies_render_from_the_archives() {
         let Some(interface) = install_archive("Interface1.opi") else {
+            println!("SKIP oji_repeated_y_bodies_render_from_the_archives: install-root absent");
             return;
         };
         let Some(playing) = install_archive("Playing1.opi") else {
+            println!("SKIP oji_repeated_y_bodies_render_from_the_archives: install-root absent");
             return;
         };
         for (archive, name, frames) in [
@@ -4668,9 +4675,11 @@ mod avatar_figure_tests {
         // and the reference photo pins the disagreeing pair
         // (`BpPoint_Left_bar.ojs` (2,266) vs rect[3] (200,3)).
         let Some(interface) = install_archive("Interface1.opi") else {
+            println!("SKIP every_bound_body_paints_on_its_authored_position: install-root absent");
             return;
         };
         let Some(playing) = install_archive("Playing1.opi") else {
+            println!("SKIP every_bound_body_paints_on_its_authored_position: install-root absent");
             return;
         };
         let Some(interface_list) = archive_control_list(&interface, "ControlList_Interface.txt")
@@ -5128,6 +5137,7 @@ mod avatar_figure_tests {
             .join("../../install-root/O2Jam/Image/avatar.opa");
         let Ok(archive) = std::fs::read(&archive_path) else {
             // CI has no game data: skip cleanly.
+            println!("SKIP tt222_single_paint_blits_one_pose_per_hand_anchor: install-root absent");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).unwrap();
@@ -5208,6 +5218,7 @@ mod avatar_figure_tests {
             .join("../../install-root/O2Jam/Image/avatar.opa");
         let Ok(archive) = std::fs::read(&archive_path) else {
             // CI has no game data: skip cleanly.
+            println!("SKIP tt222d_live_kit_moves_between_animation_steps: install-root absent");
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).unwrap();
