@@ -632,3 +632,22 @@ openers as static bodies; no live capture is claimed by this lane.
   success/refusal split.
 - **Evidence**: `ev_5336dbe5254d48f17d33ad7ed0b4fa0789916c58000848416bc3de2d0fc881f3`
   (handler pseudocode).
+
+### `0x5a4b90` focus-return addendum — scene exits happen on activation (2026-11-25 senior REA pass)
+
+`WM_ACTIVATEAPP` (`0x1c`) stores active = (`wParam` is 1 or 2) at
+window `+0x14` and sets `+0xc = 1`. When the game object `+0x914` is
+present, DEACTIVATION clears `+0x18` after stopping the BGM; it does
+not change scenes. ACTIVATION sets `+0x18 = 0`, then checks the pause
+reason bits at `+0x1c`:
+
+- Scene 11 (Playing), bit 2 set: install Room state 2, show `0x650d68`.
+- Scene 10 (Loading), bit 2 set: if the room title string is empty,
+  clear the Waiting seat words, show `0x650d38`, install Room state 2;
+  otherwise install Waiting state 5 and show `0x650d08`.
+
+Therefore #1046's transition is on focus RETURN, not focus loss. The
+three captions already landed; the missing behavior is the activation
+transition. A local pause flag alone is not parity.
+
+Evidence: `ev_029802374255012a8839d968da6743c2d91da5ca03fbe050fbff865e78a8cf49`.
