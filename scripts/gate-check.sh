@@ -47,6 +47,10 @@ SWEEP_SAMPLE="$REPO_ROOT/fixtures/full-pack-sample.sha256"
 SUITE_SKIPS=(--skip real_ojn_covers_extract_and_decode
              --skip shipped_charts_set_bit26_only_on_tutorial_bgm_records
              --skip x11_arm_routes_click_through_real_game)
+# Cargo captures stdout by default, so named SKIP lines from real-data
+# tests never reach the official gate log (#914). Show it on both data
+# arms without changing which tests run.
+SUITE_OUTPUT_ARGS=(--show-output)
 
 arm=full
 per_ticket=0
@@ -142,7 +146,8 @@ run_workspace_suite() {
     export O2JAM_INSTALL_ROOT="$PRESENT_ROOT"
     local log
     log="$(mktemp -t gate-present.XXXXXX.log)"
-    if ! cargo test --workspace -- "${SUITE_SKIPS[@]}" 2>&1 | tee "$log"; then
+    if ! cargo test --workspace -- "${SUITE_SKIPS[@]}" \
+        "${SUITE_OUTPUT_ARGS[@]}" 2>&1 | tee "$log"; then
         exit 1
     fi
     assert_canaries present "$log"
@@ -165,7 +170,7 @@ run_hidden_suite() {
     assert_hidden_data_unreachable "$UNREACHABLE_ROOT" "$PRESENT_ROOT"
 
     step "cargo test --workspace (install-root hidden)"
-    cargo test --workspace -- "${SUITE_SKIPS[@]}"
+    cargo test --workspace -- "${SUITE_SKIPS[@]}" "${SUITE_OUTPUT_ARGS[@]}"
     restore_hidden_root
     HIDDEN_BACKUP=""
 }

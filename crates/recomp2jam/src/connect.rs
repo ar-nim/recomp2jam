@@ -899,6 +899,9 @@ mod connect_flow_tests {
 
     use super::*;
 
+    /// RGB555 word of the other parity's blue fixture body.
+    const BLUE_PIXEL: u16 = 0x001F;
+
     /// Read one whole frame off the fake server's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
         let mut header = [0u8; 4];
@@ -948,6 +951,7 @@ mod connect_flow_tests {
         let archive = opa_blob(&[
             ("Itemdata_Korea.dat", &item_table_blob()),
             ("AA.ojs", &red_sprite()),
+            ("BB.ojs", &blue_sprite()),
         ]);
         let dir = std::env::temp_dir();
         let path = dir.join("recomp2jam-test-build-avatar.opa");
@@ -956,6 +960,11 @@ mod connect_flow_tests {
         let figure = stack_worn_figure(&source, &[1], false).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(figure.len(), 1);
+        assert_eq!(
+            figure.layer(0).unwrap().image.words[0],
+            BLUE_PIXEL,
+            "the female wearer reads the female pose slot"
+        );
         assert_eq!(table.rows.len(), 1);
         assert!(read_avatar_source("nonexistent.opa").is_err());
     }
@@ -1249,6 +1258,14 @@ mod connect_flow_tests {
         blob
     }
 
+    /// Minimal sprite-55 body: 1x1 blue pixel, colorkey black.
+    fn blue_sprite() -> Vec<u8> {
+        let mut blob = red_sprite();
+        let last = blob.len() - 2;
+        blob[last..].copy_from_slice(&BLUE_PIXEL.to_le_bytes());
+        blob
+    }
+
     /// Minimal `.opa`: header + bodies + trailing entry table.
     fn opa_blob(bodies: &[(&str, &[u8])]) -> Vec<u8> {
         let mut blob = vec![0u8; 16];
@@ -1287,6 +1304,7 @@ mod connect_flow_tests {
         names[0] = (1, "i.oji");
         names[1] = (1, "i.oji");
         names[2] = (1, "AA.oji");
+        names[3] = (1, "BB.oji");
         for (flag, name) in names {
             row.push(flag);
             row.extend_from_slice(&(name.len() as u32).to_le_bytes());
@@ -1304,6 +1322,7 @@ mod connect_flow_tests {
         let archive = opa_blob(&[
             ("Itemdata_Korea.dat", &item_table_blob()),
             ("AA.ojs", &red_sprite()),
+            ("BB.ojs", &blue_sprite()),
         ]);
         let dir = std::env::temp_dir();
         let path = dir.join("recomp2jam-test-avatar.opa");
@@ -1488,6 +1507,11 @@ mod connect_flow_tests {
 mod avatar_io_tests {
     use super::*;
 
+    /// RGB555 words of the two fixture bodies: red for the male
+    /// parity slot, blue for the other parity slot.
+    const RED_PIXEL: u16 = 0x7C00;
+    const BLUE_PIXEL: u16 = 0x001F;
+
     /// Minimal sprite-55 body: 1x1 red pixel, colorkey black.
     fn red_sprite() -> Vec<u8> {
         let mut blob = Vec::new();
@@ -1543,6 +1567,7 @@ mod avatar_io_tests {
         names[0] = (1, "i.oji");
         names[1] = (1, "i.oji");
         names[2] = (1, "AA.oji");
+        names[3] = (1, "BB.oji");
         for (flag, name) in names {
             row.push(flag);
             row.extend_from_slice(&(name.len() as u32).to_le_bytes());
@@ -1555,10 +1580,19 @@ mod avatar_io_tests {
         blob
     }
 
+    /// Minimal sprite-55 body: 1x1 blue pixel, colorkey black.
+    fn blue_sprite() -> Vec<u8> {
+        let mut blob = red_sprite();
+        let last = blob.len() - 2;
+        blob[last..].copy_from_slice(&BLUE_PIXEL.to_le_bytes());
+        blob
+    }
+
     fn worn_archive() -> Vec<u8> {
         opa_blob(&[
             ("Itemdata_Korea.dat", &item_table_blob()),
             ("AA.ojs", &red_sprite()),
+            ("BB.ojs", &blue_sprite()),
         ])
     }
 
@@ -1567,6 +1601,11 @@ mod avatar_io_tests {
         let archive = worn_archive();
         let figure = stack_worn_figure(&archive, &[1], false).unwrap();
         assert_eq!(figure.len(), 1);
+        assert_eq!(
+            figure.layer(0).unwrap().image.words[0],
+            BLUE_PIXEL,
+            "the female wearer reads the female pose slot"
+        );
     }
 
     #[test]
@@ -1606,6 +1645,11 @@ mod avatar_io_tests {
         equipped.equipment[0] = 1;
         let figure = figure_for_character(&archive, &equipped).unwrap();
         assert_eq!(figure.len(), 1);
+        assert_eq!(
+            figure.layer(0).unwrap().image.words[0],
+            BLUE_PIXEL,
+            "the other wearer reads the female pose slot"
+        );
         let bare = CharacterInfo {
             nickname: "tester".to_owned(),
             ..Default::default()
@@ -1616,6 +1660,11 @@ mod avatar_io_tests {
 
     #[test]
     fn male_and_other_heroes_both_stack() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        // connect::figure_for_character -> stack_worn_figure ->
+        // o2jam_shell::load_worn_figure -> pick_wear_sprites.
+        // The fixture gives each wearer parity its own pose sprite;
+        // neither hero may borrow the other parity's body (ADR-0016).
         let archive = worn_archive();
         let mut male = CharacterInfo {
             nickname: "tester".to_owned(),
@@ -1625,9 +1674,18 @@ mod avatar_io_tests {
         male.equipment[0] = 1;
         let mut other = male.clone();
         other.gender = Gender::Any;
+        let male_figure = figure_for_character(&archive, &male).unwrap();
+        let other_figure = figure_for_character(&archive, &other).unwrap();
+        assert_eq!(male_figure.len(), other_figure.len());
         assert_eq!(
-            figure_for_character(&archive, &male).unwrap().len(),
-            figure_for_character(&archive, &other).unwrap().len(),
+            male_figure.layer(0).unwrap().image.words[0],
+            RED_PIXEL,
+            "the male wearer reads the male pose slot"
+        );
+        assert_eq!(
+            other_figure.layer(0).unwrap().image.words[0],
+            BLUE_PIXEL,
+            "the other wearer reads its own pose slot"
         );
     }
 }

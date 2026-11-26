@@ -259,6 +259,66 @@ pub fn custom_cursor_arm(flag: MouseCursorMode, handle_word: u8) -> CustomCursor
     }
 }
 
+/// Width and height words of the staged pointer surface. The exe
+/// passes these to its surface creators after loading the sprite
+/// (`0x432090`, file `0x32090`, REA ev
+/// 18ee.0400.f390.fbdd.1283.9b20.267f.6e89.cc3f.ecde.a490.da7b.db50.a7fa.57d6.7360).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowCursorSurface {
+    /// Sprite width in pixels.
+    pub width: u16,
+    /// Sprite height in pixels.
+    pub height: u16,
+}
+
+impl WindowCursorSurface {
+    /// Narrow one decoded sprite's dimensions to the exe's word fields.
+    #[must_use]
+    pub fn from_dimensions(width: usize, height: usize) -> Option<Self> {
+        Some(Self {
+            width: u16::try_from(width).ok()?,
+            height: u16::try_from(height).ok()?,
+        })
+    }
+}
+
+/// First-use staging state of the window pointer sprite. The exe sets
+/// two flags, loads `Window_Cursor.ojs` once, and keeps the resulting
+/// handle on the control; the flag names stay OPEN, so this seam owns
+/// only the attempt count and the one stored surface.
+#[derive(Debug, Default)]
+pub struct WindowCursorStage {
+    surface: Option<WindowCursorSurface>,
+    load_attempts: u8,
+}
+
+impl WindowCursorStage {
+    /// Stage on the first pointer use, then reuse that result forever.
+    #[must_use]
+    pub fn stage_on_first_use(
+        &mut self,
+        sprite: Option<WindowCursorSurface>,
+    ) -> Option<WindowCursorSurface> {
+        if self.load_attempts == 0 {
+            self.load_attempts = self.load_attempts.saturating_add(1);
+            self.surface = sprite;
+        }
+        self.surface
+    }
+
+    /// Number of load attempts made so far (zero before first use).
+    #[must_use]
+    pub const fn load_attempts(&self) -> u8 {
+        self.load_attempts
+    }
+
+    /// Surface stored by the first use, if the sprite decoded.
+    #[must_use]
+    pub const fn surface(&self) -> Option<WindowCursorSurface> {
+        self.surface
+    }
+}
+
 /// What one requested cursor mode does to the pointer
 /// (`0x5a4ac0`/file `0x1a4ac0` stores the word, then `0x431f70`
 /// applies it). The OS handle is opaque here; the arm and face are
@@ -1574,5 +1634,47 @@ mod tests {
             CustomCursorArm::Hide,
             "the Windows mode clears the custom pointer"
         );
+    }
+
+    #[test]
+    fn window_cursor_sprite_stages_only_on_the_first_use() {
+        // Live chain (Tier 0 logic; Tier 3 twin in
+        // `recomp2jam/src/live_formats_legs.rs`): `main.rs::run_play` ->
+        // `stage_online_identity` -> first pointer use ->
+        // `options::WindowCursorStage::stage_on_first_use`.
+        // The exe sets its two first-use flags, loads the one sprite,
+        // and stores one handle (`0x432090`, file `0x32090`).
+        let mut stage = WindowCursorStage::default();
+        let first = WindowCursorSurface::from_dimensions(32, 32).expect("32x32 fits");
+        let later = WindowCursorSurface::from_dimensions(64, 64).expect("64x64 fits");
+
+        assert_eq!(stage.load_attempts(), 0, "boot stages no pointer art");
+        assert_eq!(stage.stage_on_first_use(Some(first)), Some(first));
+        assert_eq!(
+            stage.stage_on_first_use(Some(later)),
+            Some(first),
+            "a second pointer use reuses the stored surface"
+        );
+        assert_eq!(stage.load_attempts(), 1, "the load happens only once");
+    }
+
+    // 7.55 exe pin: `0x432090` / file `0x32090`, REA ev
+    // 18ee.0400.f390.fbdd.1283.9b20.267f.6e89.cc3f.ecde.a490.da7b.db50.a7fa.57d6.7360.
+    // seam: no OS handle exists headless; one attempt and its stored
+    // surface are the whole first-use contract a live pointer capture
+    // can confirm (Tier 4 is OPEN).
+    #[test]
+    fn window_cursor_missing_sprite_stays_unstaged_after_one_attempt() {
+        let mut stage = WindowCursorStage::default();
+        let later = WindowCursorSurface::from_dimensions(32, 32).expect("32x32 fits");
+
+        assert_eq!(stage.stage_on_first_use(None), None);
+        assert_eq!(stage.stage_on_first_use(Some(later)), None);
+        assert_eq!(stage.load_attempts(), 1, "a miss is not retried");
+    }
+
+    #[test]
+    fn window_cursor_surface_rejects_dimensions_wider_than_a_word() {
+        assert!(WindowCursorSurface::from_dimensions(usize::from(u16::MAX) + 1, 1).is_none());
     }
 }
