@@ -126,27 +126,28 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         Some(o2jam_shell::screens::side::PlanetBand::Hard)
     );
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
-    // The native companion paints the live ten-row wire mirror (open
-    // ids 0-4 and 9, padded closed ids 5-8), so the reference
-    // comparison reads the same rows the exe shows. The highlight
-    // resets to row 0 (id 0, open), so the Room entry arm is unchanged.
-    stage_channel_wire_mirror(&mut game);
-    // Open-row companion for `scripts/rig-channel-digits.sh`: the
-    // closed-row `channel-native` below has no digit ink to probe, so
-    // this one pins the same ten-row mirror before the scroll (#304).
+    // The native companions paint the four active ids 0-3 the
+    // qualified 7.55 exe frame shows, with its held Ch.03 bar. The
+    // keyboard highlight stays row 0, so Room entry is unchanged.
+    stage_channel_parity_rows(&mut game);
     shots.push(shoot_checked_native(
         &mut game,
         "channel-digits-native",
         Screen::Channel,
         0,
     )?);
-    scroll_channel_to_closed_rows(&mut game);
     shots.push(shoot_checked_native(
         &mut game,
         "channel-native",
         Screen::Channel,
         0,
     )?);
+    // Restore the walk's former pointer stop (the scroll arrow) before
+    // leaving Channel: later lobby shots hover from that point, and a
+    // seed change must not move them. Pointer-only, so no scroll edge.
+    let mut park = InputSnapshot::new();
+    park.set_pointer(Some((583, 419)));
+    game.ingest_snapshot(&park);
     // Room entry happens only through the channel dialog (entry-button
     // faces; wine-boot.md Attempt 9 verified 입장 clicks advance to the
     // room list): Confirm takes the highlighted row into Room.
@@ -589,59 +590,39 @@ pub(crate) fn stage_avatar_figures(game: &mut ScreenGame) {
     game.set_avatar_source(archive, table);
 }
 
-/// Live 1003 wire mirror (2026-11-13 CLI probe against local Memoryer
-/// 7.2.0 at 127.0.0.1:15010): ids 0-4 and 9 open with 0/100, ids 5-8
-/// padded closed with 0/0 and the inactive byte set. The native channel
-/// shot paints this list so the exe comparison reads the same ten rows.
-fn wire_mirror_channels() -> Vec<ChannelState> {
-    let mut rows = Vec::with_capacity(10);
-    for channel_id in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
-        let open = channel_id < 5 || channel_id == 9;
-        rows.push(ChannelState {
+/// The four active ids 0-3 in the qualified 7.55 exe frame
+/// (`~/scratch/paired-shots-v3/states/channel/exe.png`, SHA-256
+/// `a96aee26…356a7393c8`): `Ch.01`–`Ch.04`, empty population strips,
+/// all joinable. Display digits read `channel_id + 1` (D25 pin in
+/// `docs/parity/channel.md`).
+fn channel_parity_rows() -> Vec<ChannelState> {
+    (0..4)
+        .map(|channel_id| ChannelState {
             gateway_id: 0,
             channel_id,
-            capacity: if open { 100 } else { 0 },
+            capacity: 100,
             population: 0,
-            active: open,
-        });
-    }
-    rows
+            active: true,
+        })
+        .collect()
 }
 
-/// Stage the live wire mirror over the seeded lobby rows before the
-/// native channel shot (highlight resets to row 0, id 0, open).
-fn stage_channel_wire_mirror(game: &mut ScreenGame) {
-    game.set_channels(wire_mirror_channels());
-}
-
-/// Scroll the mirrored list to its closed rows through the pinned
-/// scroll-down arrow (583,419): five list-top steps show rows 5-8
-/// while the highlight stays on row 0, so Confirm still enters id 0.
-fn scroll_channel_to_closed_rows(game: &mut ScreenGame) {
-    for _ in 0..5 {
-        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-    }
+/// Stage the qualified four-row list before the native channel shots.
+/// The exe driver last hovered Ch.03 (id 2) before parking its pointer;
+/// a pointer-only snapshot arms that bar without moving the keyboard
+/// highlight, so Confirm still enters row 0 (id 0) and the later Room
+/// shot stays byte-identical. Up/Down are exe-pinned no-ops (#189).
+fn stage_channel_parity_rows(game: &mut ScreenGame) {
+    game.set_channels(channel_parity_rows());
+    let mut hover = InputSnapshot::new();
+    hover.set_pointer(Some((300, 340)));
+    game.ingest_snapshot(&hover);
 }
 
 /// Lobby list rows shared by the battle and solo walks (channels
 /// plus room rows): display data only, no walked state.
 fn seed_lobby_lists(game: &mut ScreenGame) {
-    game.set_channels(vec![
-        ChannelState {
-            gateway_id: 0,
-            channel_id: 2,
-            capacity: 100,
-            population: 5,
-            active: true,
-        },
-        ChannelState {
-            gateway_id: 0,
-            channel_id: 9,
-            capacity: 0,
-            population: 0,
-            active: false,
-        },
-    ]);
+    game.set_channels(channel_parity_rows());
     game.set_rooms(vec![
         room_entry(3, "Jam", false, 5),
         room_entry(7, "Locked", true, 1),
@@ -1565,6 +1546,55 @@ mod tests {
         std::fs::read(install_root().join(MUSICSELECT_CATALOG)).is_ok()
     }
 
+    /// Ink box of the bright `Ch. 0N` strokes inside one row's pinned
+    /// name well. The measurement window sits inside the live-measured
+    /// well `(225,row top+4)-(296,row top+36)` and excludes the bar's
+    /// bright top rule; it is a measurement window, never a placement.
+    fn channel_title_ink(shot: &Shot, row_top: usize) -> Option<([usize; 4], [u8; 3], f64)> {
+        const X0: usize = 230;
+        const X1: usize = 288;
+        let mut x0 = usize::MAX;
+        let mut y0 = usize::MAX;
+        let mut x1 = 0;
+        let mut y1 = 0;
+        let mut total_ink = 0usize;
+        let mut tens_ink = 0usize;
+        let mut colors = [Vec::new(), Vec::new(), Vec::new()];
+        for y in row_top + 15..row_top + 25 {
+            for x in X0..X1 {
+                let offset = (y * shot.w + x) * 3;
+                let rgb = [shot.rgb[offset], shot.rgb[offset + 1], shot.rgb[offset + 2]];
+                if rgb.iter().any(|channel| *channel <= 180) {
+                    continue;
+                }
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+                total_ink += 1;
+                // Bar-local tens well at +50 (`Dialog_ChannelInfo.bnd`
+                // rect 7): its share of the title ink names the digit
+                // even when a modern rasterizer changes glyph shape.
+                if (37..50).contains(&(x - X0)) {
+                    tens_ink += 1;
+                }
+                for (bin, channel) in colors.iter_mut().zip(rgb) {
+                    bin.push(channel);
+                }
+            }
+        }
+        if colors[0].is_empty() {
+            return None;
+        }
+        let median = colors.map(|mut bin| {
+            bin.sort_unstable();
+            bin[bin.len() / 2]
+        });
+        let tens_share = f64::from(u32::try_from(tens_ink).expect("ink count fits u32"))
+            / f64::from(u32::try_from(total_ink).expect("ink count fits u32"));
+        Some(([x0, y0, x1, y1], median, tens_share))
+    }
+
     /// Canary (retro 2026-11-12): broken data-dir symlinks once made
     /// every "with install-root present" run silently skip, and the
     /// suites stayed green while verifying nothing. A dangling symlink
@@ -1638,45 +1668,116 @@ mod tests {
     }
 
     #[test]
-    fn channel_wire_mirror_matches_the_live_ten_row_list() {
-        // The 2026-11-13 CLI probe against local Memoryer lists ten
-        // rows: ids 0-4 and 9 open at 0/100, ids 5-8 padded closed at
-        // 0/0 with the inactive byte set.
-        let rows = wire_mirror_channels();
-        assert_eq!(rows.len(), 10, "the gateway pads the list to ten rows");
+    fn channel_parity_rows_are_the_four_active_exe_ids() {
+        // Qualified v3 exe frame: four `Ch.01`–`Ch.04` rows, empty
+        // population strips, all active. D25 pins `channel_id + 1`.
+        let rows = channel_parity_rows();
+        assert_eq!(rows.len(), 4, "the exe pair shows four rows");
         for (index, row) in rows.iter().enumerate() {
-            let want_id = u16::try_from(index).expect("ten rows fit u16");
+            let want_id = u16::try_from(index).expect("four rows fit u16");
             assert_eq!(row.gateway_id, 0);
             assert_eq!(row.channel_id, want_id);
-            let open = want_id < 5 || want_id == 9;
-            assert_eq!(row.active, open, "row {want_id} joinability");
+            assert!(row.active, "row {want_id} joinability");
             assert_eq!(row.population, 0);
-            assert_eq!(row.capacity, if open { 100 } else { 0 });
+            assert_eq!(row.capacity, 100);
         }
     }
 
     #[test]
-    fn channel_native_paints_the_wire_mirror_at_full_canvas() {
-        // The native companion repaints the channel instant over the
-        // ten-row mirror scrolled to its closed rows (5-8) at 800x600
-        // while the highlight stays on row 0, so the walk still
-        // enters id 0.
+    fn channel_native_paints_the_four_exe_rows_at_full_canvas() {
+        // The native companion repaints the four-row exe list at
+        // 800x600 with the bar held on Ch.03 (id 2) while the keyboard
+        // highlight stays row 0, so Confirm still enters id 0.
         let mut game = seeded_game();
         game.menu_key(MenuKey::Back, true);
         game.click_planet(386, 88);
-        stage_channel_wire_mirror(&mut game);
-        scroll_channel_to_closed_rows(&mut game);
+        stage_channel_parity_rows(&mut game);
+        assert_eq!(game.channel_select_bar_row(), Some(2));
         assert_eq!(
             game.highlighted_channel().map(|row| row.channel_id),
             Some(0),
-            "scrolling never moves the highlight"
+            "hover never moves the keyboard highlight"
         );
         let shot = shoot_checked_native(&mut game, "channel-native", Screen::Channel, 0)
-            .expect("channel dialog stays open over the mirror");
+            .expect("channel dialog stays open over the four rows");
         assert_eq!((shot.w, shot.h), (800, 600));
         assert_eq!(shot.rgb.len(), 800 * 600 * 3);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room, "row 0 stays enterable");
+    }
+
+    #[test]
+    fn channel_native_row_titles_match_the_exe_ink_boxes() {
+        // Live caller chain:
+        //   main.rs::Shots -> shots::capture_all -> stage_channel_parity_rows
+        //   -> shoot_checked_native -> ScreenGame::paint_at
+        //   -> ScreenGame::paint_channel -> paint_channel_scene
+        //   -> paint_channel_rows -> paint_channel_bar_art.
+        // Expected values are measured from the qualified 7.55 frame
+        // `~/scratch/paired-shots-v3/states/channel/exe.png` SHA-256
+        // `a96aee2684e434dc0f0aa169ce474b6a012d519fbb2ab0eef430b3356a7393c8`.
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !crate::live_leg_support::archives_present() {
+            println!(
+                "SKIP channel_native_row_titles_match_the_exe_ink_boxes: missing install-root"
+            );
+            return;
+        }
+        let shots = shared_shots().expect("scripted walk stays on its scenes");
+        let native = shots
+            .iter()
+            .find(|shot| shot.name == "channel-native")
+            .expect("native channel companion is captured");
+        assert_eq!((native.w, native.h), (800, 600));
+
+        // Ink boxes: (x0, y0, x1, y1) per row, in exe native pixels.
+        // Box, row top, and tens-well ink share measured from the exe.
+        let expected = [
+            ([234, 239, 288, 249], 224usize, 0.292f64),
+            ([234, 290, 288, 300], 275usize, 0.282f64),
+            ([234, 339, 288, 349], 324usize, 0.295f64),
+            ([234, 390, 288, 400], 375usize, 0.280f64),
+        ];
+        for (row, (want, top, want_tens_share)) in expected.into_iter().enumerate() {
+            let (got, median, tens_share) = channel_title_ink(native, top)
+                .unwrap_or_else(|| panic!("row {row} has no title ink"));
+            assert!(
+                got[0].abs_diff(want[0]) <= 6,
+                "row {row} title x0 {} vs exe {}",
+                got[0],
+                want[0]
+            );
+            assert!(
+                got[1].abs_diff(want[1]) <= 6,
+                "row {row} title y0 {} vs exe {}",
+                got[1],
+                want[1]
+            );
+            let width = got[2].saturating_sub(got[0]);
+            let want_width = want[2] - want[0];
+            assert!(
+                width.abs_diff(want_width) <= 12,
+                "row {row} title width {width} vs exe {want_width}"
+            );
+            let height = got[3].saturating_sub(got[1]);
+            let want_height = want[3] - want[1];
+            assert!(
+                height.abs_diff(want_height) <= 3,
+                "row {row} title height {height} vs exe {want_height}"
+            );
+            for (channel, (value, exe_value)) in
+                median.into_iter().zip([222u8, 219, 222]).enumerate()
+            {
+                assert!(
+                    value.abs_diff(exe_value) <= 40,
+                    "row {row} title median channel {channel} {value} vs exe {exe_value}"
+                );
+            }
+            assert!(
+                (tens_share - want_tens_share).abs() <= 0.05,
+                "row {row} title tens-well ink share {tens_share:.3} vs exe {want_tens_share:.3}"
+            );
+        }
     }
 
     #[test]

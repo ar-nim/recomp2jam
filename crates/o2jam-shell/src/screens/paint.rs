@@ -26,6 +26,9 @@
 
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "channel_parity_tests.rs"]
+mod channel_parity_tests;
 mod myroom;
 mod options_game;
 pub use self::myroom::*;
