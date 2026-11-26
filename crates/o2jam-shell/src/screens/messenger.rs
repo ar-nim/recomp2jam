@@ -7,7 +7,11 @@
 //! action frame, and no send opcode. This module therefore names the
 //! five buttons without inventing a semantic action or a wire shape.
 
+use std::net::SocketAddrV4;
+use std::time::Duration;
+
 use super::side::{myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE};
+use o2jam_net::relay::P2PListResponse;
 use o2jam_render::Rect;
 
 // The window module is private to `o2jam-shell`; re-export the arms
@@ -685,11 +689,17 @@ pub const UHP_REPORT_OPCODE: u16 = 4046;
 /// Success literal written through the relay text sink at `0x18ff70`.
 pub const UHP_SUCCESS_CAPTION: &str = "UDP Hole Punching Success~!!";
 
-/// The failure caption is not named by the pin set.
-pub const UHP_FAILURE_CAPTION_NEXT_STEP: &str = concat!(
-    "N-CAPTION: read the failure string at 0x18ff70 in a qualified ",
-    "live-battle UHP capture before naming it"
-);
+/// Failure literal written through the same pinned text sink.
+pub const UHP_FAILURE_CAPTION: &str = "UHP Start 실패";
+
+/// The exe walks six-byte endpoint rows and four-byte member words
+/// (VA `0x58d580`, file `0x18d580`, ev
+/// `e8ab.954b.f7d6.fbb8.9a20.6214.83b1.3652.7784.512e.8cb4.649d`).
+pub const UHP_ENDPOINT_STRIDE_BYTES: usize = 6;
+pub const UHP_MEMBER_STRIDE_BYTES: usize = 4;
+
+/// The readiness poller waits one `Sleep(300)` per pending step.
+pub const UHP_POLL_INTERVAL: Duration = Duration::from_millis(300);
 
 /// Success or failure branch of the UHP start sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -698,13 +708,13 @@ pub enum UhpStartOutcome {
     Failure,
 }
 
-/// Caption the pinned branch writes for one outcome. An unnamed
-/// failure caption stays `None` instead of being invented.
+/// Caption the pinned branch writes for one outcome. Both literals
+/// now come from the 7.55 sink pin, not from an invented caption.
 #[must_use]
 pub const fn uhp_start_caption(outcome: UhpStartOutcome) -> Option<&'static str> {
     match outcome {
         UhpStartOutcome::Success => Some(UHP_SUCCESS_CAPTION),
-        UhpStartOutcome::Failure => None,
+        UhpStartOutcome::Failure => Some(UHP_FAILURE_CAPTION),
     }
 }
 
@@ -712,6 +722,172 @@ pub const fn uhp_start_caption(outcome: UhpStartOutcome) -> Option<&'static str>
 #[must_use]
 pub const fn uhp_report_opcode() -> u16 {
     UHP_REPORT_OPCODE
+}
+
+/// The three peer tables the start sequence walks. A `4045` answer
+/// stages one public endpoint, one local endpoint and one member word
+/// per peer; those are the only rows this client has. The 6-byte and
+/// 4-byte strides are the exe's row widths, not a UDP socket claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UhpPeerTables {
+    pub public_endpoints: Vec<SocketAddrV4>,
+    pub local_endpoints: Vec<SocketAddrV4>,
+    pub member_ids: Vec<i32>,
+}
+
+impl UhpPeerTables {
+    /// Stage the three tables from one decoded peer list.
+    #[must_use]
+    pub fn from_peer_list(list: &P2PListResponse) -> Self {
+        Self {
+            public_endpoints: list.peers.iter().map(|peer| peer.public_endpoint).collect(),
+            local_endpoints: list.peers.iter().map(|peer| peer.local_endpoint).collect(),
+            member_ids: list.peers.iter().map(|peer| peer.member_id).collect(),
+        }
+    }
+
+    /// Walk each staged table once, in table order. No socket is
+    /// opened and no helper thread is started here.
+    #[must_use]
+    pub fn walk(&self) -> Vec<UhpPeerVisit> {
+        let mut visits = Vec::with_capacity(
+            self.public_endpoints.len() + self.local_endpoints.len() + self.member_ids.len(),
+        );
+        visits.extend(self.endpoint_visits(UhpPeerTable::PublicEndpoint, &self.public_endpoints));
+        visits.extend(self.endpoint_visits(UhpPeerTable::LocalEndpoint, &self.local_endpoints));
+        visits.extend(
+            self.member_ids
+                .iter()
+                .enumerate()
+                .map(|(index, member_id)| UhpPeerVisit {
+                    table: UhpPeerTable::MemberId,
+                    index,
+                    entry: UhpPeerEntry::MemberId(*member_id),
+                }),
+        );
+        visits
+    }
+
+    fn endpoint_visits(
+        &self,
+        table: UhpPeerTable,
+        endpoints: &[SocketAddrV4],
+    ) -> Vec<UhpPeerVisit> {
+        endpoints
+            .iter()
+            .enumerate()
+            .map(|(index, endpoint)| UhpPeerVisit {
+                table,
+                index,
+                entry: UhpPeerEntry::Endpoint(*endpoint),
+            })
+            .collect()
+    }
+}
+
+/// Which of the three staged tables owns one walk step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UhpPeerTable {
+    PublicEndpoint,
+    LocalEndpoint,
+    MemberId,
+}
+
+/// One 6-byte endpoint row or one 4-byte member word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UhpPeerEntry {
+    Endpoint(SocketAddrV4),
+    MemberId(i32),
+}
+
+/// One recorded step of the peer walk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UhpPeerVisit {
+    pub table: UhpPeerTable,
+    pub index: usize,
+    pub entry: UhpPeerEntry,
+}
+
+/// The runtime effects of UHP start. The shell owns the caption and
+/// completion word; the session owns the single empty report.
+pub trait UhpStartHost {
+    fn post_uhp_caption(&mut self, caption: &'static str);
+    fn send_uhp_report(&mut self, opcode: u16, body: &[u8]) -> bool;
+    fn mark_uhp_complete(&mut self);
+}
+
+/// Everything observable from one scripted UHP start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UhpStartTrace {
+    pub peer_visits: Vec<UhpPeerVisit>,
+    pub polls: usize,
+    pub waits: Vec<Duration>,
+    pub outcome: UhpStartOutcome,
+    pub caption: &'static str,
+    pub report: Option<(u16, Vec<u8>)>,
+    pub report_delivered: bool,
+    pub completed: bool,
+}
+
+/// Run the UHP start order with an injected readiness script and an
+/// injected wait callback. This is a seam, not a hole punch: it does
+/// not send UDP, open a socket, or create a worker thread.
+pub struct UhpStartSequence<Wait> {
+    readiness: Vec<bool>,
+    wait: Wait,
+}
+
+impl<Wait> UhpStartSequence<Wait>
+where
+    Wait: FnMut(Duration),
+{
+    #[must_use]
+    pub fn new(readiness: Vec<bool>, wait: Wait) -> Self {
+        Self { readiness, wait }
+    }
+
+    /// Walk peers, poll readiness, post one caption, send one empty
+    /// report, then set the completion flag.
+    pub fn run<Host: UhpStartHost>(
+        &mut self,
+        tables: &UhpPeerTables,
+        host: &mut Host,
+    ) -> UhpStartTrace {
+        let peer_visits = tables.walk();
+        let (outcome, polls, waits) = self.poll_readiness();
+        let caption = uhp_start_caption(outcome).unwrap_or(UHP_FAILURE_CAPTION);
+        host.post_uhp_caption(caption);
+        let report = (UHP_REPORT_OPCODE, Vec::new());
+        let delivered = host.send_uhp_report(report.0, &report.1);
+        host.mark_uhp_complete();
+
+        UhpStartTrace {
+            peer_visits,
+            polls,
+            waits,
+            outcome,
+            caption,
+            report: Some(report),
+            report_delivered: delivered,
+            completed: true,
+        }
+    }
+
+    /// Each `false` step consumes one 300 ms wait before the next
+    /// poll. Exhausting the script takes the failure branch.
+    fn poll_readiness(&mut self) -> (UhpStartOutcome, usize, Vec<Duration>) {
+        let mut waits = Vec::new();
+        for (index, ready) in self.readiness.iter().copied().enumerate() {
+            if ready {
+                return (UhpStartOutcome::Success, index + 1, waits);
+            }
+            if index + 1 < self.readiness.len() {
+                (self.wait)(UHP_POLL_INTERVAL);
+                waits.push(UHP_POLL_INTERVAL);
+            }
+        }
+        (UhpStartOutcome::Failure, self.readiness.len(), waits)
+    }
 }
 
 /// Pin of the error-box mapping at `0x5a3820`/file `0x1a3820`:
@@ -828,7 +1004,68 @@ pub const fn error_text_for_code(code: u32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
+
+    /// One seam host that records the three UHP effects without a
+    /// socket or a worker thread.
+    #[derive(Default)]
+    struct RecordingUhpHost {
+        captions: Vec<&'static str>,
+        reports: Vec<(u16, Vec<u8>)>,
+        completions: usize,
+    }
+
+    impl UhpStartHost for RecordingUhpHost {
+        fn post_uhp_caption(&mut self, caption: &'static str) {
+            self.captions.push(caption);
+        }
+
+        fn send_uhp_report(&mut self, opcode: u16, body: &[u8]) -> bool {
+            self.reports.push((opcode, body.to_vec()));
+            true
+        }
+
+        fn mark_uhp_complete(&mut self) {
+            self.completions += 1;
+        }
+    }
+
+    /// Drive one scripted UHP run and check the host saw the same
+    /// caption, report and completion the trace records.
+    fn run_uhp_start(
+        tables: &UhpPeerTables,
+        readiness: Vec<bool>,
+        waits: &mut Vec<Duration>,
+    ) -> UhpStartTrace {
+        let mut sequence = UhpStartSequence::new(readiness, |interval| waits.push(interval));
+        let mut host = RecordingUhpHost::default();
+        let trace = sequence.run(tables, &mut host);
+        assert_eq!(host.captions, vec![trace.caption]);
+        assert_eq!(
+            host.reports,
+            vec![trace.report.clone().expect("one UHP report")]
+        );
+        assert_eq!(host.completions, 1);
+        assert!(trace.report_delivered);
+        trace
+    }
+
+    /// Two peers staged in the three 4045-derived tables.
+    fn staged_uhp_peer_tables() -> UhpPeerTables {
+        UhpPeerTables {
+            public_endpoints: vec![
+                SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 4000),
+                SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 4002),
+            ],
+            local_endpoints: vec![
+                SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 5), 4001),
+                SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 6), 4003),
+            ],
+            member_ids: vec![-2, 3],
+        }
+    }
 
     #[test]
     // OPEN: this negative assertion is not yet exe-pinned.
@@ -1022,20 +1259,113 @@ mod tests {
     }
 
     #[test]
-    fn uhp_start_reports_4046_with_the_pinned_success_caption() {
+    fn uhp_start_reports_4046_with_both_pinned_captions() {
         // seam: the relay UHP branch is battle-only and has no Rust
-        // caller yet; caption literal + opcode are the whole pin that
-        // can be staged here. Failure text stays OPEN.
+        // caller yet; the two caption literals and opcode are the
+        // whole static pin that can be staged here.
         assert_eq!(uhp_report_opcode(), 4046);
         assert_eq!(
             uhp_start_caption(UhpStartOutcome::Success),
             Some("UDP Hole Punching Success~!!")
         );
-        assert_eq!(uhp_start_caption(UhpStartOutcome::Failure), None);
-        assert!(
-            UHP_FAILURE_CAPTION_NEXT_STEP.contains("0x18ff70"),
-            "failure text needs the next sink capture"
+        assert_eq!(
+            uhp_start_caption(UhpStartOutcome::Failure),
+            Some("UHP Start 실패")
         );
+    }
+
+    #[test]
+    fn uhp_start_walks_all_three_staged_peer_tables() {
+        // seam: the exe's three peer arrays (6-byte endpoints and
+        // 4-byte member words) are the whole peer walk; this client
+        // stages them from 4045 and sends no UDP packet.
+        let tables = staged_uhp_peer_tables();
+        let mut waits = Vec::new();
+        let trace = run_uhp_start(&tables, vec![true], &mut waits);
+        assert_eq!(
+            trace.peer_visits,
+            vec![
+                UhpPeerVisit {
+                    table: UhpPeerTable::PublicEndpoint,
+                    index: 0,
+                    entry: UhpPeerEntry::Endpoint(SocketAddrV4::new(
+                        Ipv4Addr::new(203, 0, 113, 5),
+                        4000
+                    )),
+                },
+                UhpPeerVisit {
+                    table: UhpPeerTable::PublicEndpoint,
+                    index: 1,
+                    entry: UhpPeerEntry::Endpoint(SocketAddrV4::new(
+                        Ipv4Addr::new(203, 0, 113, 6),
+                        4002
+                    )),
+                },
+                UhpPeerVisit {
+                    table: UhpPeerTable::LocalEndpoint,
+                    index: 0,
+                    entry: UhpPeerEntry::Endpoint(SocketAddrV4::new(
+                        Ipv4Addr::new(10, 0, 0, 5),
+                        4001
+                    )),
+                },
+                UhpPeerVisit {
+                    table: UhpPeerTable::LocalEndpoint,
+                    index: 1,
+                    entry: UhpPeerEntry::Endpoint(SocketAddrV4::new(
+                        Ipv4Addr::new(10, 0, 0, 6),
+                        4003
+                    )),
+                },
+                UhpPeerVisit {
+                    table: UhpPeerTable::MemberId,
+                    index: 0,
+                    entry: UhpPeerEntry::MemberId(-2),
+                },
+                UhpPeerVisit {
+                    table: UhpPeerTable::MemberId,
+                    index: 1,
+                    entry: UhpPeerEntry::MemberId(3),
+                },
+            ]
+        );
+        assert_eq!(UHP_ENDPOINT_STRIDE_BYTES, 6);
+        assert_eq!(UHP_MEMBER_STRIDE_BYTES, 4);
+    }
+
+    #[test]
+    fn uhp_start_polls_readiness_in_300_ms_steps_before_the_success_report() {
+        // seam: the injected poll script replaces the exe's real
+        // readiness poller and `Sleep(300)`; no thread exists in this
+        // client. The report follows the poll, exactly once and empty.
+        let mut waits = Vec::new();
+        let trace = run_uhp_start(
+            &staged_uhp_peer_tables(),
+            vec![false, false, true],
+            &mut waits,
+        );
+        assert_eq!(trace.polls, 3);
+        assert_eq!(waits, vec![UHP_POLL_INTERVAL, UHP_POLL_INTERVAL]);
+        assert_eq!(waits[0], Duration::from_millis(300));
+        assert_eq!(trace.outcome, UhpStartOutcome::Success);
+        assert_eq!(trace.caption, UHP_SUCCESS_CAPTION);
+        assert_eq!(
+            trace.report,
+            Some((UHP_REPORT_OPCODE, Vec::new())),
+            "one empty 4046 follows the readiness poll"
+        );
+        assert!(trace.completed);
+    }
+
+    #[test]
+    fn uhp_start_posts_the_pinned_failure_caption_when_readiness_never_passes() {
+        // seam: exhausted readiness is the branch whose caption was
+        // unnamed before the 7.55 sink pin; the report still follows.
+        let mut waits = Vec::new();
+        let trace = run_uhp_start(&staged_uhp_peer_tables(), vec![false, false], &mut waits);
+        assert_eq!(trace.outcome, UhpStartOutcome::Failure);
+        assert_eq!(trace.caption, "UHP Start 실패");
+        assert_eq!(trace.report, Some((4046, Vec::new())));
     }
 
     #[test]

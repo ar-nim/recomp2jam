@@ -111,6 +111,7 @@ mod wire_guards {
     use o2jam_render::Rect;
     use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
     use o2jam_shell::screens::game::ResultMemberRecord;
+    use o2jam_shell::screens::messenger::{UhpPeerTables, UhpStartSequence, UHP_SUCCESS_CAPTION};
     use o2jam_shell::screens::side::{SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE};
     use o2jam_shell::MenuKey;
 
@@ -558,5 +559,61 @@ mod wire_guards {
             session.game.result_rank_rows()[0].judgements,
             Some([0, 0, 0, 0])
         );
+    }
+
+    #[test]
+    fn uhp_start_after_4045_posts_the_exact_caption_and_sends_one_empty_4046() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> 4045 arm -> UhpPeerTables::from_peer_list
+        // -> UhpStartSequence::run -> ScreenGame::post_uhp_start_caption
+        // + OnlineSession::send_uhp_report (one empty 4046). The
+        // injected poll script stands in for the exe's battle-only
+        // readiness poller; no UDP packet or thread is created.
+        let response = P2PListResponse {
+            peers: vec![PeerInfo {
+                member_id: 3,
+                public_endpoint: SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 4002),
+                local_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 6), 4003),
+            }],
+        };
+        let scripted = response.clone();
+        let (mut session, server, written) =
+            playing_gateway_session(joined_snapshot(), move |stream| {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream.write_all(&scripted.encode()).unwrap();
+                loop {
+                    let frame = read_frame(stream);
+                    if frame.id == o2jam_shell::screens::messenger::UHP_REPORT_OPCODE {
+                        assert!(frame.payload.is_empty(), "UHP report body must be empty");
+                        break;
+                    }
+                }
+            });
+        paint_frame(&mut session);
+        assert_eq!(
+            take_observations(),
+            vec![PlayingWireObservation::PeerList(response.clone())]
+        );
+
+        let tables = UhpPeerTables::from_peer_list(&response);
+        let mut waits = Vec::new();
+        let trace = {
+            let mut sequence =
+                UhpStartSequence::new(vec![false, true], |interval| waits.push(interval));
+            sequence.run(&tables, &mut session)
+        };
+        written.recv_timeout(Duration::from_secs(5)).unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            trace.outcome,
+            o2jam_shell::screens::messenger::UhpStartOutcome::Success
+        );
+        assert_eq!(waits, vec![Duration::from_millis(300)]);
+        assert_eq!(session.game.uhp_start_caption(), Some(UHP_SUCCESS_CAPTION));
+        assert!(session.game.uhp_start_completed());
     }
 }
