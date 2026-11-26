@@ -126,7 +126,11 @@ use super::side::{
     TUTORIAL_EXIT_SPRITE,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
-use crate::screens::messenger::MessengerHost;
+use crate::screens::messenger::{
+    result_event_page, web_sheet_visibility_arm, MessengerHost, NativeEventPage, WebSheet,
+    WebSheetHost, WebSheetTransition, WebSheetVisibilityArm, NATIVE_EVENT_NOTICE_LINE_PITCH,
+    NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, RESULT_EVENT_MODE_BATTLE,
+};
 use crate::staging::{MessengerSheet, SHOP_MASTER_MASCOT_CODE};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
@@ -1152,6 +1156,14 @@ pub struct ScreenGame {
     select_mode: SelectMusicMode,
     /// Which help sheet the `?` buttons show (#285); none at open.
     select_help: SelectHelpSheet,
+    /// Native event/help stand-in armed by Result entry or a page-open
+    /// UI event (#1144/#1145). No page bytes are held here.
+    native_event_page: Option<NativeEventPage>,
+    /// Exe selector word `0x77ee50`; its writer stays OPEN. Zero takes
+    /// hot-time, nonzero takes the ticket arm.
+    result_event_selector: u32,
+    /// Opaque web-sheet handles for the three pinned UI events.
+    web_sheets: WebSheetHost,
     /// Zero-based result page the pager shows (#285).
     select_page: usize,
     /// Column the next search applies to (exe field `+0x188`).
@@ -1671,6 +1683,9 @@ impl ScreenGame {
             select_tab: SelectDialogTab::Result,
             select_mode: SelectMusicMode::SongSelect,
             select_help: SelectHelpSheet::None,
+            native_event_page: None,
+            result_event_selector: 0,
+            web_sheets: WebSheetHost::new(),
             select_page: 0,
             select_search_field: SelectSearchField::Title,
             select_search_draft: String::new(),
@@ -2193,6 +2208,9 @@ impl ScreenGame {
             }
             if next == Screen::Channel && self.relay_down_notice_pending {
                 self.open_relay_down_dialog();
+            }
+            if next == Screen::Result {
+                self.arm_result_event_notice();
             }
             if next == Screen::Loading {
                 self.loading_gate_failed = false;
@@ -3013,6 +3031,68 @@ impl ScreenGame {
     #[must_use]
     pub fn last_web_document_url(&self) -> Option<&str> {
         self.chat.last_web_document_url()
+    }
+
+    /// Stage the exe's Result selector word. Its writer is OPEN, so
+    /// only a caller that names a value can arm the ticket arm.
+    pub fn stage_result_event_selector(&mut self, selector: u32) -> &mut Self {
+        self.result_event_selector = selector;
+        self
+    }
+
+    /// Selector word staged for Result entry.
+    #[must_use]
+    pub const fn result_event_selector(&self) -> u32 {
+        self.result_event_selector
+    }
+
+    /// Native event/help page staged for this frame, if any.
+    #[must_use]
+    pub const fn native_event_page(&self) -> Option<NativeEventPage> {
+        self.native_event_page
+    }
+
+    /// Result entry's `FUN_004c1b90` web arm. Battle mode skips both
+    /// pages; solo takes hot-time at selector zero and ticket otherwise.
+    fn arm_result_event_notice(&mut self) {
+        let mode_word = if self.room_team_play() {
+            RESULT_EVENT_MODE_BATTLE
+        } else {
+            0
+        };
+        self.native_event_page = result_event_page(mode_word, self.result_event_selector);
+    }
+
+    /// Open one of the three pinned `WM_APP+0x32` page hosts. The
+    /// handle word is a stand-in for the exe's opaque window handle;
+    /// no browser object or page body is created (#948).
+    pub fn stage_native_web_ui_event(
+        &mut self,
+        event_code: u16,
+        scene_id: u32,
+    ) -> Option<WebSheetTransition> {
+        let sheet = crate::screens::messenger::web_sheet_for_ui_event(event_code)?;
+        let transition = self.web_sheets.open(sheet, scene_id, event_code);
+        self.native_event_page = match sheet {
+            WebSheet::BingoEvent => Some(NativeEventPage::Bingo),
+            WebSheet::PlayingQa => Some(NativeEventPage::InGameQa),
+            WebSheet::CashBill => None,
+        };
+        Some(transition)
+    }
+
+    /// Apply the `WM_APP+0x31` host visibility arm. Hide clears the
+    /// native stand-in with both stored handles; every other message
+    /// leaves the surface untouched.
+    pub fn hide_native_web_host(&mut self, message: u32) -> bool {
+        if web_sheet_visibility_arm(message, self.web_sheets.has_stored_handle())
+            != WebSheetVisibilityArm::HideBoth
+        {
+            return false;
+        }
+        let hidden = self.web_sheets.hide_on_app_event();
+        self.native_event_page = None;
+        hidden.both_hidden
     }
 
     /// Named rows currently staged for the Room user sheet.
@@ -9562,6 +9642,7 @@ impl ScreenGame {
             Screen::MusicShop => {}
         }
         self.paint_start_payment_answer_band(frame);
+        self.paint_native_event_surface(frame);
         self.paint_dialog_frame_states(frame);
         // The cursor stays on a toggle after the click, so the hover
         // repaint above would cover its selected face. Selection is the
@@ -9620,6 +9701,24 @@ impl ScreenGame {
         let band =
             scale_rect_to_frame(&super::paint::BILLING_FAILURE_NOTICE_RECT, frame.w, frame.h);
         fill_rect(frame, &band, 0x0067_BAF0);
+    }
+
+    /// Ink the labeled native stand-in over the pinned notice band.
+    /// The caption, literal URL and OPEN note are the whole surface:
+    /// no page body is drawn or claimed (#750/#1144/#1145).
+    fn paint_native_event_surface(&self, frame: &mut Frame<'_>) {
+        let Some(page) = self.native_event_page else {
+            return;
+        };
+        let band = scale_rect_to_frame(&NATIVE_EVENT_NOTICE_RECT, frame.w, frame.h);
+        fill_rect(frame, &band, NATIVE_EVENT_NOTICE_TONE);
+        for (row, line) in [page.caption(), page.pinned_url(), page.open_note()]
+            .into_iter()
+            .enumerate()
+        {
+            let offset = 8 + i32::try_from(row).unwrap_or(0) * NATIVE_EVENT_NOTICE_LINE_PITCH;
+            draw_text(frame, band.x + 8, band.y + offset, line, 0x0000_0000);
+        }
     }
 
     fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
@@ -11513,6 +11612,9 @@ mod game_tests {
     use crate::avatar::PlacementRole;
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
+    use crate::screens::messenger::{
+        EXE_SCENE_ROOM, PLAYING_QA_UI_EVENT, QA_PLAYING_RECT_SHIFT, WM_APP_HIDE_WEB_SHEETS,
+    };
     use crate::screens::side::{
         SelectMusicSong, SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
     };
@@ -38988,5 +39090,91 @@ mod game_tests {
             region.contains(&pack_xrgb(0xE6, 0x71, 0x00)),
             "the 2014 row inks admin amber"
         );
+    }
+
+    #[test]
+    fn result_entry_arms_only_the_selector_pinned_event_page() {
+        // Live caller chain: main.rs::run_play ->
+        // ScreenGame::paint_at -> ScreenGame::enter_screen(Result) ->
+        // result_event_page -> ScreenGame::arm_result_event_notice.
+        let mut solo = ScreenGame::new();
+        finish_song(&mut solo);
+        paint_result_frame(&mut solo);
+        assert_eq!(solo.native_event_page(), Some(NativeEventPage::HotTime));
+
+        let mut armed = ScreenGame::new();
+        armed.stage_result_event_selector(1);
+        finish_song(&mut armed);
+        paint_result_frame(&mut armed);
+        assert_eq!(armed.native_event_page(), Some(NativeEventPage::TicketAdd));
+
+        let mut live = ScreenGame::new();
+        let mut room = waiting_room();
+        room.game_mode = GameMode::Live as u8;
+        live.set_joined_room(room);
+        live.stage_result_event_selector(1);
+        finish_song(&mut live);
+        paint_result_frame(&mut live);
+        assert_eq!(
+            live.native_event_page(),
+            None,
+            "mode word 2 skips both web arms"
+        );
+    }
+
+    #[test]
+    fn native_qa_page_open_inks_a_labeled_stand_in_and_hides_on_the_app_message() {
+        // Live caller chain: main.rs::run_play ->
+        // ScreenGame::stage_native_web_ui_event (0x14 page-open arm) ->
+        // WebSheetHost::open -> NativeEventPage::InGameQa ->
+        // ScreenGame::paint_at -> paint_native_event_surface;
+        // hide follows window.rs::web_sheet_visibility_arm ->
+        // ScreenGame::hide_native_web_host. The page body is absent by
+        // owner decision (#750), so the guard pins only the labeled
+        // surface and its visibility.
+        let mut game = ScreenGame::new();
+        let rest = paint_native_band(&mut game);
+        let open = game
+            .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
+            .expect("0x14 names the Q&A sheet");
+        assert_eq!(open.qa_rect_shift, QA_PLAYING_RECT_SHIFT);
+        assert_eq!(game.native_event_page(), Some(NativeEventPage::InGameQa));
+        let inked = paint_native_band(&mut game);
+        assert_ne!(inked, rest, "the help stand-in must ink the frame");
+
+        let hidden = game.hide_native_web_host(WM_APP_HIDE_WEB_SHEETS);
+        assert!(hidden, "the app hide message hides both host handles");
+        assert_eq!(game.native_event_page(), None);
+        assert_eq!(
+            paint_native_band(&mut game),
+            rest,
+            "hiding removes the stand-in ink"
+        );
+    }
+
+    /// Sample the native event band through the same `paint_at` the
+    /// window uses, so a mounted stand-in must change these pixels.
+    fn paint_native_band(game: &mut ScreenGame) -> Vec<u32> {
+        let rect = NATIVE_EVENT_NOTICE_RECT;
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let (left, top) = (
+            usize::try_from(rect.x).unwrap_or(0),
+            usize::try_from(rect.y).unwrap_or(0),
+        );
+        let width = usize::try_from(rect.w).unwrap_or(0);
+        let height = usize::try_from(rect.h).unwrap_or(0);
+        buf.chunks(800)
+            .skip(top)
+            .take(height)
+            .flat_map(|row| row[left..left + width].iter().copied())
+            .collect()
     }
 }

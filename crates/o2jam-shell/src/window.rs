@@ -34,6 +34,9 @@ pub(crate) const WM_KEY_DOWN: u32 = 0x100;
 pub(crate) const WM_ACTIVATE_APP: u32 = 0x1c;
 pub(crate) const SYS_CLOSE_COMMAND: u32 = 0xf060;
 pub(crate) const WM_APP_UI_EVENT: u32 = 0x232;
+/// `WM_APP+0x31`, the hub arm that hides both global web handles
+/// through `0x5a8ba0` (`docs/pins/input-msg.md`, window hub evidence).
+pub const WM_APP_HIDE_WEB_SHEETS: u32 = 0x231;
 
 /// One-second wait the exe's popup-or-close helper performs after it
 /// sends `WM_CLOSE` (`0x5a8ab0`, file `0x1a8ab0`, evidence
@@ -90,6 +93,27 @@ pub const fn billing_window_arm(
         BILLING_PAYMENT_STATE_WORD => BillingWindowArm::RebuildPayment,
         BILLING_PAYMENT2_STATE_WORD => BillingWindowArm::RebuildGift,
         _ => BillingWindowArm::None,
+    }
+}
+
+/// What the exe's `WM_APP+0x31` window arm does to the web sheets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebSheetVisibilityArm {
+    /// No hide: the message is not the hide arm or no handle is stored.
+    Preserve,
+    /// Hide both stored handles through `0x5a8ba0`.
+    HideBoth,
+}
+
+/// Decode one window message into the web-sheet visibility arm.
+/// `0x5a5190` hides both handles only on `WM_APP+0x31` with a stored
+/// handle; the `WM_APP+0x32` sheet-open message never hides them.
+#[must_use]
+pub const fn web_sheet_visibility_arm(message: u32, web_handle_set: bool) -> WebSheetVisibilityArm {
+    if message == WM_APP_HIDE_WEB_SHEETS && web_handle_set {
+        WebSheetVisibilityArm::HideBoth
+    } else {
+        WebSheetVisibilityArm::Preserve
     }
 }
 
@@ -1325,6 +1349,29 @@ mod tests {
             exe_window_handler(0x10),
             ExeWindowHandler::DefaultProcedure,
             "an unlisted message still reaches the default procedure"
+        );
+    }
+
+    #[test]
+    fn exe_app_hide_message_hides_web_sheets_with_a_stored_handle() {
+        // seam: `WM_APP+0x31` reaches `0x5a8ba0` only from the Win32
+        // hub `0x5a5190`, which this winit client has no message pump
+        // to call. The pure arm and the host's hide call are the whole
+        // visibility behavior a headless client can observe.
+        assert_eq!(WM_APP_HIDE_WEB_SHEETS, 0x231);
+        assert_eq!(
+            web_sheet_visibility_arm(WM_APP_HIDE_WEB_SHEETS, true),
+            WebSheetVisibilityArm::HideBoth
+        );
+        assert_eq!(
+            web_sheet_visibility_arm(WM_APP_UI_EVENT, true),
+            WebSheetVisibilityArm::Preserve,
+            "the UI-event message opens a sheet; it never hides it"
+        );
+        assert_eq!(
+            web_sheet_visibility_arm(WM_APP_HIDE_WEB_SHEETS, false),
+            WebSheetVisibilityArm::Preserve,
+            "no stored handle means no sheet to hide"
         );
     }
 

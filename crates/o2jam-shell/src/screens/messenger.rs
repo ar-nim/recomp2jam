@@ -8,16 +8,17 @@
 //! five buttons without inventing a semantic action or a wire shape.
 
 use super::side::{myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE};
+use o2jam_render::Rect;
 
 // The window module is private to `o2jam-shell`; re-export the arms
 // this family's live legs drive through the public messenger seam.
 pub use crate::window::{
     billing_window_arm, display_mode_plan, double_click_notice, error_popup_from_code,
     error_popup_from_supplied, print_screen_file_name, print_screen_relative_path,
-    window_close_disposition, BillingWindowArm, ErrorPopup, PrintScreenAction, QuitDisposition,
-    ScreenShotCounter, WindowHandler, BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD,
-    PRINT_SCREEN_SUPPRESSED_STATES, SCREENSHOT_DIMENSIONS, SCREENSHOT_FOLDER_SUFFIX,
-    SCREENSHOT_QUALITY,
+    web_sheet_visibility_arm, window_close_disposition, BillingWindowArm, ErrorPopup,
+    PrintScreenAction, QuitDisposition, ScreenShotCounter, WebSheetVisibilityArm, WindowHandler,
+    BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD, PRINT_SCREEN_SUPPRESSED_STATES,
+    SCREENSHOT_DIMENSIONS, SCREENSHOT_FOLDER_SUFFIX, SCREENSHOT_QUALITY, WM_APP_HIDE_WEB_SHEETS,
 };
 
 /// One lobby hosting the Messenger control family. The five codes
@@ -223,6 +224,102 @@ pub const PLAYING_QA_UI_EVENT: u16 = 0x14;
 /// not named by the pin and stays OPEN.
 pub const QA_PLAYING_RECT_SHIFT: i32 = 50;
 
+/// Mode word `0x77ee84 == 2` skips both Result-time web arms.
+/// The selector word `0x77ee50` chooses hot-time at zero and the
+/// ticket arm when nonzero (`ev_64c08939…` and the three qualified
+/// solo Result stub logs recorded in `docs/web-url-archive-audit.md`).
+pub const RESULT_EVENT_MODE_BATTLE: u32 = 2;
+
+/// One native event/help stand-in. The enum names only pinned pages;
+/// no page body, question, reward, or outbound link is represented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeEventPage {
+    /// `0x45ea60`: bingo event; `USER_INDEX_ID=<id>` is appended.
+    Bingo,
+    /// `0x45f190`: 1:1 Q&A; `USER_INDEX_ID=<id>` is appended.
+    InGameQa,
+    /// `0x4c1b90` zero-selector arm and `0x4f5730` second host.
+    HotTime,
+    /// `0x4c1b90` armed selector arm.
+    TicketAdd,
+}
+
+impl NativeEventPage {
+    /// Short caption of the pinned page, not page content.
+    #[must_use]
+    pub const fn caption(self) -> &'static str {
+        match self {
+            Self::Bingo => "2009 bingo event - native notice",
+            Self::InGameQa => "1:1 QnA help - native stand-in",
+            Self::HotTime => "hot-time event - native notice",
+            Self::TicketAdd => "event ticket add - native notice",
+        }
+    }
+
+    /// The literal URL shape the exe pins. `<id>` stays a placeholder:
+    /// the shell stores no user-index value for these pages. The two
+    /// event-time arms keep only their literal path because their
+    /// assembled suffix and title source are OPEN.
+    #[must_use]
+    pub const fn pinned_url(self) -> &'static str {
+        match self {
+            Self::Bingo => concat!(
+                "http://o2jam.nopp.co.kr/client/event/2009/01/01_bingo/index.asp",
+                "?USER_INDEX_ID=<id>"
+            ),
+            Self::InGameQa => concat!(
+                "http://o2jam.nopp.co.kr/client/mtm/ingame_1n1qna01.phtml",
+                "?USER_INDEX_ID=<id>"
+            ),
+            Self::HotTime => "http://o2jam.nopp.co.kr/client/event/2009/06_moa/hot_time.php",
+            Self::TicketAdd => "http://o2jam.nopp.co.kr/client/event/2009/06_moa/ticket_add.php",
+        }
+    }
+
+    /// The evidence gap printed under the caption. No missing value
+    /// is guessed to make the stand-in look complete.
+    #[must_use]
+    pub const fn open_note(self) -> &'static str {
+        match self {
+            Self::Bingo => "rules, rewards and page fields OPEN",
+            Self::InGameQa => "questions and outbound links OPEN",
+            Self::HotTime => "caller appends <id>; separator/key OPEN",
+            Self::TicketAdd => "USER_INDEX_ID=<id>&title=<title>; title source OPEN",
+        }
+    }
+}
+
+/// Result entry's two web arms from `FUN_004c1b90`. Battle mode
+/// (`0x77ee84 == 2`) skips both; a zero selector takes hot-time and a
+/// nonzero selector takes the ticket page. Only the zero arm was seen
+/// in the three qualified solo boots, so the armed arm keeps its
+/// OPEN title source.
+#[must_use]
+pub const fn result_event_page(mode_word: u32, selector_word: u32) -> Option<NativeEventPage> {
+    if mode_word == RESULT_EVENT_MODE_BATTLE {
+        return None;
+    }
+    if selector_word == 0 {
+        Some(NativeEventPage::HotTime)
+    } else {
+        Some(NativeEventPage::TicketAdd)
+    }
+}
+
+/// Stand-in band for one native event/help notice. No event sheet
+/// rect from the exe is pinned, so the band stays in the top margin
+/// above the Result readouts it must not hide. Presentation is ours
+/// by design (owner decision `e8d01`), and the label says so on
+/// screen.
+pub const NATIVE_EVENT_NOTICE_RECT: Rect = Rect {
+    x: 100,
+    y: 4,
+    w: 600,
+    h: 60,
+};
+pub const NATIVE_EVENT_NOTICE_TONE: u32 = 0x0067_BAF0;
+pub const NATIVE_EVENT_NOTICE_LINE_PITCH: i32 = 16;
+
 /// One hosted sheet. Only host identity, handle and visibility are
 /// modeled: this client has no web bridge, so no page is rendered
 /// (`#948`).
@@ -366,6 +463,13 @@ impl WebSheetHost {
     #[must_use]
     pub const fn qa_rect_shift(&self) -> i32 {
         self.qa_rect_shift
+    }
+
+    /// Whether an opaque handle is stored, the gate the exe's
+    /// `WM_APP+0x31` hide arm tests before calling `0x5a8ba0`.
+    #[must_use]
+    pub const fn has_stored_handle(&self) -> bool {
+        self.handles[0].is_some() || self.handles[1].is_some()
     }
 }
 
@@ -953,5 +1057,44 @@ mod tests {
             UNRECOGNIZED_ERROR_TEXT,
             "an unmapped code keeps the pinned fallback"
         );
+    }
+
+    #[test]
+    fn result_event_selector_names_only_the_pinned_notice_pages() {
+        // Live caller chain (Tier 0 logic): main.rs::run_play ->
+        // connect::connect_and_login_with_transport ->
+        // ScreenGame::enter_screen -> result_event_page. The pure
+        // selector branch is called at Result entry, so this guard
+        // pins the arm's name and its explicit OPEN fields.
+        assert_eq!(result_event_page(0, 0), Some(NativeEventPage::HotTime));
+        assert_eq!(result_event_page(0, 1), Some(NativeEventPage::TicketAdd));
+        assert_eq!(result_event_page(2, 1), None, "battle skips both arms");
+        assert_eq!(
+            NativeEventPage::Bingo.pinned_url(),
+            "http://o2jam.nopp.co.kr/client/event/2009/01/01_bingo/index.asp?USER_INDEX_ID=<id>"
+        );
+        assert_eq!(
+            NativeEventPage::InGameQa.pinned_url(),
+            "http://o2jam.nopp.co.kr/client/mtm/ingame_1n1qna01.phtml?USER_INDEX_ID=<id>"
+        );
+        assert_eq!(
+            NativeEventPage::HotTime.pinned_url(),
+            "http://o2jam.nopp.co.kr/client/event/2009/06_moa/hot_time.php"
+        );
+        assert!(
+            NativeEventPage::HotTime
+                .open_note()
+                .contains("separator/key OPEN"),
+            "the hot-time query must not be invented"
+        );
+        assert!(
+            NativeEventPage::TicketAdd
+                .open_note()
+                .contains("title source OPEN"),
+            "the armed title must not be invented"
+        );
+        assert!(NativeEventPage::InGameQa
+            .open_note()
+            .contains("questions and outbound links OPEN"));
     }
 }

@@ -8,12 +8,20 @@ mod live_web_native_leg_tests {
     use crate::live_leg_support::*;
     use crate::session::OnlineSession;
 
+    use std::collections::HashMap;
+
+    use o2jam_audio::NullBackend;
     use o2jam_net::frame::encode_frame;
     use o2jam_net::rooms::{MusicPlayRankingAnswer, RankDelta, RankEntry, SendMainRoomMessage};
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{JoinRoomResponse, JoinedRoom, Request, WireMessage};
+    use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::LobbyChat;
-    use o2jam_shell::screens::messenger::{WebSheet, WebSheetHost, EXE_SCENE_ROOM};
+    use o2jam_shell::screens::messenger::{
+        result_event_page, NativeEventPage, WebSheet, WebSheetHost, EXE_SCENE_ROOM,
+        NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, PLAYING_QA_UI_EVENT,
+        WM_APP_HIDE_WEB_SHEETS,
+    };
     use o2jam_shell::screens::side::{
         music_shop_action_at, music_shop_top100_rects, MusicShopAction, MusicShopFace, SideScreen,
         MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GENRE_FILTER_FIRST_CODE,
@@ -135,6 +143,66 @@ mod live_web_native_leg_tests {
             port,
             reports,
             join_answer_written,
+            server,
+        }
+    }
+
+    /// Boot-only gateway for the selector arm. The shared boot helper
+    /// records frames only after `GetChannelInfo`, so this one signals
+    /// that answer on the join channel. The Tier 2 guard then drains
+    /// boot frames before staging the selector and can prove that the
+    /// HTTP event page adds no gateway frame.
+    fn spawn_armed_selector_gateway() -> LiveLegGateway {
+        let (reported, reports) = mpsc::channel();
+        let (boot_written_tx, boot_written) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &o2jam_net::AuthResponse {
+                        result_code: 0,
+                        tail: Vec::new(),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(
+                    &o2jam_net::ChannelList {
+                        channels: vec![channel_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &o2jam_net::ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(
+                    &o2jam_net::RoomList {
+                        rooms: vec![room_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            boot_written_tx.send(()).unwrap();
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                reported.send(frame).unwrap();
+            }
+        });
+        LiveLegGateway {
+            port,
+            reports,
+            join_answer_written: boot_written,
             server,
         }
     }
@@ -538,8 +606,176 @@ mod live_web_native_leg_tests {
         assert_ne!(rest, inked, "the notify URL must ink the staged notice row");
     }
 
-    /// A throwaway local mirror under `~/scratch`: no FTP, no game-data
-    /// write. The install folder starts without the bought chart.
+    /// Same boot-to-Result walk as the Result paint leg (#1073), with
+    /// the null audio backend so no sound reaches a speaker. The
+    /// native event surface is armed by `enter_screen(Result)` at the
+    /// end of this walk.
+    fn walk_to_live_result(gateway: &LiveLegGateway) -> OnlineSession {
+        let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        session
+            .game_mut()
+            .with_audio(Box::new(NullBackend::new()), HashMap::new());
+        session
+            .game_mut()
+            .set_selected_music(o2jam_net::play::SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 1,
+            });
+        session
+            .game_mut()
+            .set_loading_status(o2jam_shell::screens::paint::LoadingStatus {
+                progress: 1.0,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+            });
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until_screen(&mut session, Screen::Loading);
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.screen(), Screen::Playing, "the loaded gate opened");
+        session.game_mut().load_chart(vec![(0, 1_000, 7)]);
+        session.game_mut().strike_at(0, 1_000);
+        let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+        let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits usize");
+        session.game_mut().paint_at(
+            &mut Frame {
+                buf: &mut vec![0u32; width * height],
+                w: width,
+                h: height,
+            },
+            1_000_000,
+        );
+        assert_eq!(
+            session.screen(),
+            Screen::Result,
+            "the walk settled in Result"
+        );
+        session
+    }
+
+    /// #1144 Tier 2 armed-selector gateway arm. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg -> ScreenGame::stage_result_event_selector.
+    /// The armed event page is an HTTP GET in the exe, so staging its
+    /// selector must add no gateway frame. Result entry's selector
+    /// branch is pinned by the Tier 0 game seam test and the Tier 3
+    /// zero-selector wire+frame leg.
+    #[test]
+    fn tier_2_armed_result_selector_names_the_ticket_page_without_a_gateway_frame() {
+        let gateway = spawn_armed_selector_gateway();
+        let mut session = boot_live_leg(gateway.port, false);
+        gateway
+            .join_answer_written
+            .recv()
+            .expect("the gateway answered the boot reads");
+        let _ = observed(&gateway.reports);
+
+        session.game_mut().stage_result_event_selector(1);
+
+        let selector = session.game_mut().result_event_selector();
+        let later = observed(&gateway.reports);
+        finish(session, gateway.server);
+
+        assert_eq!(
+            result_event_page(0, 1),
+            Some(NativeEventPage::TicketAdd),
+            "the armed selector names the ticket page"
+        );
+        assert_eq!(selector, 1, "the selector word was staged");
+        assert!(
+            later.is_empty(),
+            "the HTTP event page must never become a gateway frame: {later:?}"
+        );
+    }
+
+    /// #1144 Tier 3 Result wire+frame pair, pinned zero-selector arm:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> walk_to_live_result ->
+    ///   ScreenGame::enter_screen(Result) -> result_event_page ->
+    ///   ScreenGame::paint_at -> paint_native_event_surface.
+    /// The ticket-add request line, the 4018 server answer and the
+    /// second hot-time host are OPEN; this gateway shows the C→S
+    /// tally wire, not an HTTP GET.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn tier_3_result_zero_selector_pairs_the_tally_wire_with_the_hot_time_frame() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_result_back_gateway(joined_room(0, true));
+        let mut session = walk_to_live_result(&gateway);
+        let frame = paint_frame(&mut session);
+        let band = staged_rect_pixels_from(&frame, NATIVE_EVENT_NOTICE_RECT);
+        let page = session.game_mut().native_event_page();
+        let sent: Vec<u16> = observed(&gateway.reports)
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| *id >= 4014)
+            .collect();
+        finish(session, gateway.server);
+
+        assert_eq!(page, Some(NativeEventPage::HotTime));
+        assert!(
+            band.contains(&NATIVE_EVENT_NOTICE_TONE),
+            "the hot-time stand-in must ink the native notice band"
+        );
+        for opcode in [4016, 4041] {
+            assert!(
+                sent.contains(&opcode),
+                "the qualified Result tally wire must carry {opcode}: {sent:?}"
+            );
+        }
+    }
+
+    /// #1145 Tier 3 page-open arm. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> enter_room_by_clicks ->
+    ///   ScreenGame::stage_native_web_ui_event(0x14) ->
+    ///   WebSheetHost::open -> NativeEventPage::InGameQa ->
+    ///   ScreenGame::paint_at -> paint_native_event_surface ->
+    ///   window.rs::web_sheet_visibility_arm ->
+    ///   ScreenGame::hide_native_web_host.
+    /// No page body, question or outbound link is claimed (#948/#1145).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn tier_3_qa_page_open_inks_the_labeled_help_stand_in_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let rest = staged_rect_pixels(&mut session, NATIVE_EVENT_NOTICE_RECT);
+        let opened = session
+            .game_mut()
+            .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
+            .expect("0x14 names the Q&A page");
+        let inked = staged_rect_pixels(&mut session, NATIVE_EVENT_NOTICE_RECT);
+        let page = session.game_mut().native_event_page();
+        let hidden = session
+            .game_mut()
+            .hide_native_web_host(WM_APP_HIDE_WEB_SHEETS);
+        let hidden_pixels = staged_rect_pixels(&mut session, NATIVE_EVENT_NOTICE_RECT);
+        let later = observed(&gateway.reports);
+        finish(session, gateway.server);
+
+        assert!(
+            opened.visible && opened.focused,
+            "the page-open shows/focuses"
+        );
+        assert_eq!(opened.qa_rect_shift, 50, "scene 2 shifts the Q&A rect");
+        assert_eq!(page, Some(NativeEventPage::InGameQa));
+        assert_ne!(inked, rest, "the native help stand-in must ink pixels");
+        assert!(hidden, "the app hide message hides both handles");
+        assert_eq!(hidden_pixels, rest, "the hidden stand-in leaves no ink");
+        assert!(later.is_empty(), "a page-open must send no gateway frame");
+    }
     fn downloaded_chart_dirs(
         name: &str,
     ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
@@ -558,19 +794,6 @@ mod live_web_native_leg_tests {
         (root, music, source)
     }
 
-    /// #520 Tier 3. Live caller chain:
-    ///   main.rs::run_play -> connect::connect_and_login_with_transport
-    ///   -> assemble_online_session -> boot_live_leg_with_art ->
-    ///   GameLoop::ingest_snapshot (splash, room tab, Music Shop tab,
-    ///   row, BUYITEM) -> OnlineSession::flush_music_buy -> C2S 5010 ->
-    ///   S2C 5011 -> stage_music_purchase_completion ->
-    ///   ScreenGame::begin_music_download -> MusicDownload::enqueue ->
-    ///   OnlineSession::poll_music_downloads ->
-    ///   ScreenGame::pump_music_downloads -> MusicDownload::pump ->
-    ///   ScreenGame::set_installed_music -> C2S 5012.
-    /// The exe send site stays OPEN (§5); this pins OUR local path.
-    /// Archives absent -> skip cleanly (CI has no game data).
-    #[test]
     fn tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
@@ -662,7 +885,6 @@ mod live_web_native_leg_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// One 2028 row for the scripted board leg.
     fn ranked_row(rank: i32, nickname: &str) -> RankEntry {
         RankEntry {
             rank,
@@ -675,9 +897,6 @@ mod live_web_native_leg_tests {
         }
     }
 
-    /// Boot gateway that sends the unsolicited 2028 board after the
-    /// leg's deliberate Room chat frame. The chat press gives the leg
-    /// a deterministic point to read pre-answer pixels first.
     fn spawn_top100_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
         let (reported, reports) = mpsc::channel();
         let (join_written_tx, join_answer_written) = mpsc::channel();
@@ -756,17 +975,6 @@ mod live_web_native_leg_tests {
         }
     }
 
-    /// #1132 Tier 3. Live caller chain:
-    ///   main.rs::run_play -> connect::connect_and_login_with_transport ->
-    ///   assemble_online_session -> boot_live_leg_with_art ->
-    ///   enter_room_by_clicks -> staged Room Music Shop tab ->
-    ///   ScreenGame::visit_side -> Room chat Confirm -> 2012 ->
-    ///   OnlineSession::poll_wire_at -> poll_lobby_chat ->
-    ///   drain_lobby_chat -> apply_lobby_frame -> apply_rank_answer ->
-    ///   ScreenGame::stage_lanking_board ->
-    ///   paint_music_shop_top100_board at the staged TOP100 rects.
-    /// Archives absent -> skip cleanly (CI has no game data).
-    #[test]
     fn tier_3_scripted_2028_from_boot_inks_the_native_top100_rows() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
