@@ -800,3 +800,187 @@ mod premium_time_family {
         assert_eq!(session.premium_time_rows[1].song_id, 0x0807);
     }
 }
+
+/// Tier-2 scripted-gateway guards for the 3009 kick notice (#1005).
+/// The exe formats the evicted seat's nickname into the template at
+/// `0x64da3c`; the 3009 body carries only the seat index and action,
+/// so the staged member row is the source of the name.
+mod kick_caption_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::rooms::{RoomSlotState, RoomSlotUpdate};
+    use o2jam_net::WireMessage;
+
+    use super::super::session_tests::{
+        joined_snapshot, joined_waiting_session, member_on_team, paint_until,
+    };
+
+    #[test]
+    fn slot_update_kick_interpolates_the_staged_member_nickname() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
+        // -> apply_waiting_frame -> apply_slot_update ->
+        // ScreenGame::stage_player_kicked_caption -> paint_waiting ->
+        // paint_information_message.
+        let mut room = joined_snapshot();
+        room.slots[1].state_code = RoomSlotState::Occupied as i32;
+        room.slots[1].member = Some(member_on_team("KICKME", false, 1));
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            let update = RoomSlotUpdate {
+                index: 1,
+                action_code: 3,
+            };
+            stream.write_all(&update.encode()).unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            session.game.waiting_wire_caption_text().is_some()
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.waiting_wire_caption_text().as_deref(),
+            Some("[정보] KICKME님이 강퇴 당하셨습니다."),
+            "the kick caption carries the evicted seat's nickname"
+        );
+    }
+}
+
+/// Tier-2 caption guards for 3014 (#1007) and the 4011 settings
+/// mismatch (#1010). Both captions are pinned in `docs/pins/net-b.md`.
+mod caption_arms_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::message::{RoomDisappearedNotice, StartGameAnswer};
+    use o2jam_net::WireMessage;
+
+    use super::super::session_tests::{
+        joined_snapshot, joined_waiting_session, member_on_team, paint_until,
+    };
+    use super::super::*;
+
+    const ROOM_DISAPPEARED: &str = "공연대기실이 사라졌습니다.";
+    const START_CONFIG_ERROR: &str = "게임설정 조작 오류로 게임을 중단합니다..";
+
+    #[test]
+    fn room_disappeared_posts_its_pinned_caption_with_the_seat_clear() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
+        // -> apply_waiting_frame -> apply_room_disappeared_notice ->
+        // ScreenGame::stage_waiting_wire_caption -> waiting_notice.
+        let mut room = joined_snapshot();
+        room.slots[1].state_code = 2;
+        room.slots[1].member = Some(member_on_team("PEER", false, 1));
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&RoomDisappearedNotice.encode()).unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            session.game.waiting_notice() == Some(ROOM_DISAPPEARED)
+                && session.game.staged_waiting_member(1).is_none()
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_notice(), Some(ROOM_DISAPPEARED));
+    }
+
+    /// One 4011 result-zero answer with the staged settings word set to
+    /// `word`. The room's mode 1 / arena 2 expects `1 * 12 + 1 + 2`.
+    fn start_answer_with_settings_word(word: i32) -> (OnlineSession, std::thread::JoinHandle<()>) {
+        let mut room = joined_snapshot();
+        room.difficulty = 1;
+        room.arena = 2;
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream
+                .write_all(&StartGameAnswer { result: 0 }.encode())
+                .unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        session.game.set_room_settings_word(Some(word));
+        (session, server)
+    }
+
+    #[test]
+    fn settings_word_mismatch_on_result_zero_posts_the_config_error_caption() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
+        // -> apply_waiting_frame -> apply_start_game_answer ->
+        // ScreenGame::stage_waiting_wire_caption -> waiting_notice.
+        let (mut session, server) = start_answer_with_settings_word(999);
+        paint_until(&mut session, |session| {
+            session.game.waiting_notice().is_some()
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_notice(), Some(START_CONFIG_ERROR));
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn matching_settings_word_keeps_result_zero_on_the_loading_walk() {
+        // Live chain: same 4011 drain with the settings words equal;
+        // the exe's success arm takes the Loading transition instead.
+        let (mut session, server) = start_answer_with_settings_word(15);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_notice(), None);
+    }
+}
+
+/// Frame leg for the 2026 premium-row painter (#962). The wire decode
+/// and staging guard above pins the packet; this guard proves the
+/// staged song ids ink into the Channel frame. The description text
+/// source stays unpinned, so no prose is asserted.
+mod premium_time_paint_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::frame::encode_frame;
+    use o2jam_net::relay::PREMIUM_TIME_COMMAND;
+
+    use super::super::session_tests::{channel_session, paint_until, painted_game_frame};
+
+    #[test]
+    fn staged_2026_premium_rows_ink_the_channel_description_frame() {
+        // Live chain: main.rs::run_online -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_lobby_chat ->
+        // drain_lobby_chat -> apply_lobby_frame -> apply_premium_time_list
+        // -> (staged row hand-off) -> ScreenGame::set_premium_time_rows
+        // -> paint_channel -> paint_premium_time_rows.
+        // The hand-off is test-side while session.rs edits are limited
+        // to caption wiring; the wire staging is pinned separately.
+        let mut body = 2u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&757u16.to_le_bytes());
+        body.extend_from_slice(&[1, 2, 3, 4, 5]);
+        body.extend_from_slice(&0x1234u16.to_le_bytes());
+        body.extend_from_slice(&[0; 5]);
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream
+                .write_all(&encode_frame(PREMIUM_TIME_COMMAND, &body))
+                .unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            !session.premium_time_rows.is_empty()
+        });
+        let before = painted_game_frame(&mut session);
+        let rows = session.premium_time_rows.clone();
+        session.game.set_premium_time_rows(rows.clone());
+        assert_eq!(session.game.premium_time_rows(), rows.as_slice());
+        server.join().unwrap();
+        let after = painted_game_frame(&mut session);
+        assert!(
+            before != after,
+            "the staged premium rows changed the Channel frame"
+        );
+    }
+}

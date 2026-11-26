@@ -4314,6 +4314,31 @@ impl OnlineSession {
         self.announce_music_state();
     }
 
+    /// Compare the staged START settings word with the exe's room
+    /// formula (VA `0x55f630`, addendum evidence
+    /// `ev_f0cfcdeffc96613dd03eee0446e510efcbd4320631900c4d77159b605ec69917`).
+    /// A non-battle room expects mode `0x7789e7` times 12, plus 1,
+    /// plus arena `0x7789e9`. The battle arm, the arena byte mapping
+    /// onto our wide room word, and the writer of the settings word
+    /// have no staged source here, so all stay OPEN: an unstaged word
+    /// never refuses START.
+    fn start_settings_word_mismatches(&self) -> bool {
+        let Some(settings) = self.game.room_settings_word() else {
+            return false;
+        };
+        let Some(room) = self.joined_room.as_ref() else {
+            return false;
+        };
+        if room.game_mode != 0 {
+            return false;
+        }
+        let expected = i32::from(room.difficulty)
+            .saturating_mul(12)
+            .saturating_add(1)
+            .saturating_add(room.arena);
+        settings != expected
+    }
+
     /// Fold one 4011 answer into the start transition. A zero result
     /// arms the existing Loading walk (`poll_start_at`); the four
     /// pinned refusal codes post their CP949 captions and keep the
@@ -4333,7 +4358,13 @@ impl OnlineSession {
                 }
             }
         };
-        if result == 0 {
+        if result == 0 && self.start_settings_word_mismatches() {
+            // The fifth caption is a local settings mismatch, not a
+            // fifth wire result (popup code `0xffe`, VA `0x64dac0`).
+            self.game
+                .stage_waiting_wire_caption(WaitingWireCaption::StartConfigError);
+            tracing::info!("START refused by the settings-mismatch arm");
+        } else if result == 0 {
             self.game.clear_waiting_notice();
             self.start_announced = true;
         } else if let Some(caption) = Self::start_refusal_caption(result) {
@@ -4546,9 +4577,26 @@ impl OnlineSession {
         let action = update.action();
         if action == Some(RoomSlotAction::PlayerKicked) {
             // VA `0x64da3c`: the exe formats the evicted nickname into
-            // this caption before clearing the seat.
-            self.game
-                .stage_waiting_wire_caption(WaitingWireCaption::PlayerKickedTemplate);
+            // this caption before clearing the seat. The 3009 body names
+            // the seat only, so the staged member row is the name source.
+            let kicked_nickname = self.joined_room.as_ref().and_then(|room| {
+                room.slots
+                    .iter()
+                    .find(|slot| slot.index == update.index)
+                    .and_then(|slot| slot.member.as_ref())
+                    .map(|member| member.nickname.as_str())
+            });
+            match kicked_nickname {
+                Some(nickname) => {
+                    self.game.stage_player_kicked_caption(nickname);
+                }
+                None => {
+                    // No staged member: keep the literal template and
+                    // leave the missing nickname source OPEN.
+                    self.game
+                        .stage_waiting_wire_caption(WaitingWireCaption::PlayerKickedTemplate);
+                }
+            }
         }
         self.slot_actions[usize::from(update.index)] = action;
     }

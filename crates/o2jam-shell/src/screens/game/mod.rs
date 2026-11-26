@@ -78,8 +78,8 @@ use super::paint::{
     paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
     paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
     paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_member_word,
+    paint_planet_scene, paint_playing_backdrop, paint_premium_time_rows, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list, paint_room_member_word,
     paint_room_no_response_dialog, paint_room_scene_with_selection, paint_room_user_panel,
     paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
     paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
@@ -143,7 +143,7 @@ use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT}
 use o2jam_net::gift::{ClaimGift, GiftMessage};
 use o2jam_net::message::RoomUserListEntry;
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
-use o2jam_net::relay::default_equipment_control_ids;
+use o2jam_net::relay::{default_equipment_control_ids, PremiumTimeRow};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -814,6 +814,30 @@ impl WaitingWireCaption {
     }
 }
 
+/// Literal bytes before and after the `%s` in the 3009 kick template
+/// at VA `0x64da3c` (evidence
+/// `ev_7a55.7d5e.89b9.9107.2907.c37d.f40e.d1d3.1001.dee4.e31f.45b5.bdbe.fa65.67ce.4267`).
+/// Kept as bytes because the
+/// caption is posted through the CP949 text queue.
+const KICK_CAPTION_PREFIX_CP949: &[u8] = &[0x5B, 0xC1, 0xA4, 0xBA, 0xB8, 0x5D, 0x20];
+const KICK_CAPTION_SUFFIX_CP949: &[u8] = &[
+    0xB4, 0xD4, 0xC0, 0xCC, 0x20, 0xB0, 0xAD, 0xC5, 0xF0, 0x20, 0xB4, 0xE7, 0xC7, 0xCF, 0xBC, 0xCC,
+    0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+
+/// Build the kick caption's CP949 bytes with `nickname` in the `%s`
+/// slot. Wire nicknames are UTF-8; their legacy encoding on this
+/// interpolation stays OPEN, as on the other name captions.
+fn player_kicked_caption_bytes(nickname: &str) -> Vec<u8> {
+    let mut caption = Vec::with_capacity(
+        KICK_CAPTION_PREFIX_CP949.len() + nickname.len() + KICK_CAPTION_SUFFIX_CP949.len(),
+    );
+    caption.extend_from_slice(KICK_CAPTION_PREFIX_CP949);
+    caption.extend_from_slice(nickname.as_bytes());
+    caption.extend_from_slice(KICK_CAPTION_SUFFIX_CP949);
+    caption
+}
+
 /// Notice for one gate verdict (`None` while the verdict has no box
 /// arm: the exe sends `4034` for a missing song and shows nothing).
 #[must_use]
@@ -1032,6 +1056,18 @@ pub struct ScreenGame {
     /// calls VA `0x478c90`) for the gate refusals
     /// (`docs/music-availability.md` §4a). `None` paints the room title.
     waiting_notice: Option<&'static str>,
+    /// CP949 caption bytes for a wire sheet posted over Waiting. The
+    /// kick notice interpolates a nickname into its pinned template, so
+    /// the painter needs owned bytes rather than a static caption.
+    waiting_wire_sheet: Option<Vec<u8>>,
+    /// Staged value of the exe's START settings word `0x768570`.
+    /// `None` until a source is pinned; the 4011 answer compares it
+    /// with the staged room's mode/arena formula.
+    room_settings_word: Option<i32>,
+    /// 2026 premium-time rows staged for the Channel description
+    /// paint. The exact description prose stays OPEN; only the pinned
+    /// song ids are rendered.
+    premium_time_rows: Vec<PremiumTimeRow>,
     /// Staged song download (§4): the queue a START gate kick fills,
     /// plus the running flag the START control and the waiting scene
     /// read (`state+0x4fc`). Empty until a member lacks the room song.
@@ -1694,6 +1730,9 @@ impl ScreenGame {
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
+            waiting_wire_sheet: None,
+            room_settings_word: None,
+            premium_time_rows: Vec::new(),
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
@@ -4402,6 +4441,7 @@ impl ScreenGame {
             return StartRequest::Nothing;
         }
         let verdict = self.start_gate_verdict();
+        self.clear_waiting_notice();
         self.waiting_notice = waiting_notice_for(verdict);
         match verdict {
             StartGateVerdict::Startable => StartRequest::StartGame,
@@ -4456,6 +4496,7 @@ impl ScreenGame {
     /// start attempt succeeds).
     pub fn clear_waiting_notice(&mut self) -> &mut Self {
         self.waiting_notice = None;
+        self.waiting_wire_sheet = None;
         self
     }
 
@@ -4464,7 +4505,54 @@ impl ScreenGame {
     /// emit a frame, it only owns the notice line the painter reads.
     pub fn stage_waiting_wire_caption(&mut self, caption: WaitingWireCaption) -> &mut Self {
         self.waiting_notice = Some(caption.text());
+        self.waiting_wire_sheet = None;
         self
+    }
+
+    /// Stage the 3009 kick caption with the evicted nickname. The
+    /// pinned template at VA `0x64da3c` has one `%s`; the two literal
+    /// halves are kept as CP949 bytes so the nickname lands at that slot.
+    pub fn stage_player_kicked_caption(&mut self, nickname: &str) -> &mut Self {
+        self.waiting_notice = None;
+        self.waiting_wire_sheet = Some(player_kicked_caption_bytes(nickname));
+        self
+    }
+
+    /// The wire-sheet caption as text, used by guards and the trace
+    /// path. A missing sheet has no caption.
+    #[must_use]
+    pub fn waiting_wire_caption_text(&self) -> Option<String> {
+        self.waiting_wire_sheet
+            .as_deref()
+            .map(o2jam_text::decode_cp949_lossy)
+    }
+
+    /// Stage the value the exe reads from global `0x768570`. The
+    /// writer of that global has no pinned source in this client; a
+    /// caller that supplies it owns the value.
+    pub fn set_room_settings_word(&mut self, word: Option<i32>) -> &mut Self {
+        self.room_settings_word = word;
+        self
+    }
+
+    /// The staged START settings word (`None` while no source staged).
+    #[must_use]
+    pub const fn room_settings_word(&self) -> Option<i32> {
+        self.room_settings_word
+    }
+
+    /// Stage the 2026 premium-time rows for the Channel description
+    /// paint. The caller owns the wire decode; no description prose is
+    /// invented in this seam.
+    pub fn set_premium_time_rows(&mut self, rows: Vec<PremiumTimeRow>) -> &mut Self {
+        self.premium_time_rows = rows;
+        self
+    }
+
+    /// The staged 2026 rows, in wire order.
+    #[must_use]
+    pub fn premium_time_rows(&self) -> &[PremiumTimeRow] {
+        &self.premium_time_rows
     }
 
     /// Effect layer selected in Waiting (exe global `0x7789e0`).
@@ -4697,6 +4785,7 @@ impl ScreenGame {
     /// says to wait for it (§4). Slice 4 replaces this with the download
     /// bar the exe paints.
     pub fn note_waiting_download(&mut self) -> &mut Self {
+        self.clear_waiting_notice();
         self.waiting_notice = Some(WAITING_START_DOWNLOAD_NOTICE);
         self
     }
@@ -5503,6 +5592,7 @@ impl ScreenGame {
         }
         let Some(pick) = chosen else {
             self.waiting_back_armed = true;
+            self.clear_waiting_notice();
             self.waiting_notice = Some(WAITING_AUTO_PICK_MISS_NOTICE);
             return AutoPickOutcome::Missed;
         };
@@ -10213,6 +10303,7 @@ impl ScreenGame {
             self.chat.panel(LobbyChat::Channel).history(),
             rows.len(),
         );
+        paint_premium_time_rows(frame, self.relay_down_art.as_ref(), &self.premium_time_rows);
         // The relay notice opens here, above the channel frame the
         // exe shows behind it (#244 capture, boundary fixed in #348).
         self.paint_planet_modal(frame);
@@ -10650,6 +10741,11 @@ impl ScreenGame {
         if self.is_room_master() {
             self.paint_select_music_art(frame);
             self.paint_select_music_text(frame);
+        }
+        // A wire caption with an interpolated name owns its own sheet;
+        // geometry still comes from the staged Information sheet.
+        if let Some(caption) = self.waiting_wire_sheet.as_deref() {
+            paint_information_message(frame, self.relay_down_art.as_ref(), caption);
         }
     }
 
@@ -36964,6 +37060,19 @@ mod game_tests {
         );
         game.stage_waiting_wire_caption(WaitingWireCaption::RemovedPlain);
         assert_eq!(game.waiting_notice(), Some("당신은 퇴장 당하셨습니다."));
+    }
+
+    #[test]
+    fn kick_caption_interpolates_the_staged_nickname_into_the_pinned_template() {
+        // seam: the caption builder owns interpolation; the wire
+        // caller chain is pinned by the scripted-gateway guard in
+        // `waiting_wire_tests.rs`.
+        let mut game = ScreenGame::new();
+        game.stage_player_kicked_caption("KICKME");
+        assert_eq!(
+            game.waiting_wire_caption_text().as_deref(),
+            Some("[정보] KICKME님이 강퇴 당하셨습니다.")
+        );
     }
 
     #[test]
