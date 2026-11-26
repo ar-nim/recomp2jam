@@ -98,3 +98,16 @@ handler exists in the hub. Whether the Payment chrome consumes BACK
 locally or lets it fall through remains a runtime/capture question.
 
 Evidence: `ev_2d48ffdaaa073cc12ae3f6a5023dc479f5013f24adba4f5e2d8b94069c551297`.
+
+## Payment2 opener contradiction — `0x4f4bd0` is jamcard/coupon, not a gift page (2026-11-25 senior REA pass)
+
+The state-13 rebuild calls `0x4f4bd0`. That opener reads
+`USER_INDEX_ID` from `Identifaction.ini`, then selects on the global
+at `0x76fc5c`: value 0 mounts `client/jamcard.asp`, value 1 mounts
+`client/coupon2/coupon.phtml`. It does not select or mount a gift page.
+The existing row that calls this the "gift URL opener" is therefore a
+story/pin contradiction: the handler is the jamcard/coupon opener.
+The separate gift-page entry frame requested by #469 remains OPEN;
+its actual opener must be found before a capture can be qualified.
+
+Evidence: `ev_d9abcf573e099939d66bcd3b0fd97e3873e1773949e10111f988184fe05b37a7`.
