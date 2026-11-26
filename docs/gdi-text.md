@@ -203,10 +203,11 @@ stack, exe pins placement only).
 4. Strings drawn by the display-level painters `0x42c420` and
    `0x4153b0` (call site `0x4154b4`) — possibly a startup/version
    stamp; not traced to a literal.
-5. Loading-gate font consumers: reads of `+0x524`/`+0x528`/`+0x52c`
-   (which captions take Trebuchet 27×65 vs Arial 7×14 vs Gulimche
-   6×12) are unpinned; the loading bar/caption geometry remains a
-   placeholder per `channel-fill.md` OPEN 5.
+5. Loading-gate font consumers: RESOLVED 2026-11-26. A whole-`.text`
+   search finds no reader of `+0x524`/`+0x528`/`+0x52c`; the three gate
+   fonts are created and released but never used for text
+   (`docs/pins/misc-tail.md`). The loading bar/caption geometry remains
+   a placeholder per `channel-fill.md` OPEN 5.
 6. CCTextBox mode-field writers (`+0x17c`/`+0x190`): the pinned
    setter trio covers `+0x174`/`+0x164`/`+0x178..0x184`; who sets the
    two mode words (and which shipped dialogs use which painter) is
