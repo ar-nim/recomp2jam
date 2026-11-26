@@ -19,7 +19,7 @@ mod live_input_leg_tests {
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
     use std::sync::Mutex;
 
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use o2jam_audio::{AudioBackend, NullBackend, PcmSamples};
     use o2jam_net::frame::encode_frame;
@@ -2610,6 +2610,11 @@ mod live_input_leg_tests {
     const SHOP_PURCHASE_PROBE: u16 = 5000;
     const SHOP_PURCHASE_ANSWER: u16 = 5001;
 
+    /// Wall-clock bound for one scripted wallet answer. Long enough for
+    /// a loaded gateway thread, short enough that a missing reply fails
+    /// the leg instead of hanging it (#1155).
+    const WALLET_ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+
     /// Boot answers shared by every live leg: authorization, channel
     /// list, channel login, room list. Kept separate from the wallet
     /// script so each helper has one reason to change.
@@ -2656,14 +2661,15 @@ mod live_input_leg_tests {
 
     /// Scripted replies after boot: one 3003, two 5029 wallet snapshots
     /// after their 5028 requests, and one 5001 with distinct prefix
-    /// words for the field-index probe.
+    /// words for the field-index probe. Every wallet write signals the
+    /// shared channel so the leg never races the gateway thread (#1155).
     struct WalletReplyScript {
         joined: o2jam_net::JoinedRoom,
         refreshes: std::vec::IntoIter<(i32, i32)>,
         purchase_prefix: [i32; 4],
         purchase_answered: bool,
         join_answer: mpsc::Sender<()>,
-        wallet_answer: mpsc::Sender<()>,
+        wallet_answer_signal: mpsc::Sender<()>,
     }
 
     impl WalletReplyScript {
@@ -2692,7 +2698,7 @@ mod live_input_leg_tests {
                     stream
                         .write_all(&encode_frame(WALLET_REFRESH_ANSWER, &body))
                         .unwrap();
-                    self.wallet_answer.send(()).unwrap();
+                    self.wallet_answer_signal.send(()).unwrap();
                 }
                 SHOP_PURCHASE_PROBE if !self.purchase_answered => {
                     stream
@@ -2701,6 +2707,7 @@ mod live_input_leg_tests {
                             &scripted_purchase_reply_body(self.purchase_prefix),
                         ))
                         .unwrap();
+                    self.wallet_answer_signal.send(()).unwrap();
                     self.purchase_answered = true;
                 }
                 _ => {}
@@ -2709,8 +2716,9 @@ mod live_input_leg_tests {
     }
 
     /// Gateway with the same boot answers as the other live legs plus
-    /// the wallet script. Appended here instead of changing the shared
-    /// boot gateway: sibling lanes own that function this wave.
+    /// the wallet script. Returns the channel that reports each wallet
+    /// write. Appended here instead of changing the shared boot gateway:
+    /// sibling lanes own that function this wave.
     fn spawn_wallet_leg_gateway(
         joined: o2jam_net::JoinedRoom,
         refreshes: Vec<(i32, i32)>,
@@ -2727,7 +2735,7 @@ mod live_input_leg_tests {
                 purchase_prefix,
                 purchase_answered: false,
                 join_answer: join_written_tx,
-                wallet_answer: wallet_written_tx,
+                wallet_answer_signal: wallet_written_tx,
             };
             while let Some(frame) = read_frame_until_eof(&mut stream) {
                 script.answer(&mut stream, &frame);
@@ -2745,17 +2753,6 @@ mod live_input_leg_tests {
         )
     }
 
-    /// Wait for the scripted 5029 write before spending paint budget.
-    /// A gateway thread can be scheduled late under fleet load; the
-    /// signal, not a fixed number of polls, bounds that race (#754).
-    fn wait_for_wallet_answer(signal: &Receiver<()>, label: &str) {
-        match signal.recv_timeout(Duration::from_secs(10)) {
-            Ok(()) => {}
-            Err(RecvTimeoutError::Timeout) => panic!("gateway never wrote {label} within 10s"),
-            Err(RecvTimeoutError::Disconnected) => panic!("gateway closed before {label}"),
-        }
-    }
-
     /// 152-byte purchase reply with distinct prefix words so a staged
     /// cell can identify its source word. The zero tail is the observed
     /// empty-bag shape (`docs/shop.md`), not a new wire format.
@@ -2768,25 +2765,47 @@ mod live_input_leg_tests {
         body
     }
 
-    /// Repaint until a scripted wire answer has folded into the shared
-    /// wallet. Counting paints instead of wall time keeps a loaded gate
-    /// from outrunning the gateway thread (#698).
+    /// Wait for the gateway's write signal, then repaint until its words
+    /// fold into the shared wallet. The signal bounds the thread race;
+    /// one wall-clock deadline bounds both stages so a missing answer
+    /// fails the leg instead of hanging it (#1155).
     fn paint_until_wallet(
         session: &mut OnlineSession,
+        answer_written: &Receiver<()>,
         expected: impl Fn(&o2jam_shell::screens::side::WalletState) -> bool,
         label: &str,
     ) {
-        for attempt in 0..64 {
+        let deadline = Instant::now() + WALLET_ANSWER_TIMEOUT;
+        // A queued 5000 probe is sent by a paint. Prime the wire before
+        // waiting; otherwise the gateway has no request to answer.
+        drop(paint_frame(session));
+        wait_for_wallet_reply(answer_written, label, deadline);
+        loop {
             drop(paint_frame(session));
             if expected(&session.game_mut().wallet()) {
                 return;
             }
-            if attempt == 63 {
-                break;
-            }
+            assert!(
+                Instant::now() < deadline,
+                "wallet {label} never folded within {}s",
+                WALLET_ANSWER_TIMEOUT.as_secs()
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
-        panic!("wallet {label} never folded after 64 paints");
+    }
+
+    /// Block until the gateway reports one written answer, using only
+    /// the time left in the caller's deadline.
+    fn wait_for_wallet_reply(signal: &Receiver<()>, label: &str, deadline: Instant) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match signal.recv_timeout(remaining) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "gateway never wrote {label} within {}s",
+                WALLET_ANSWER_TIMEOUT.as_secs()
+            ),
+            Err(RecvTimeoutError::Disconnected) => panic!("gateway closed before {label}"),
+        }
     }
 
     /// Enter the Item Shop through the staged Room tab; all geometry
@@ -2898,9 +2917,9 @@ mod live_input_leg_tests {
         let entry_cash = wallet_cell_crop(&entry_frame, cash_rect);
 
         leave_item_shop_by_back(&mut session);
-        wait_for_wallet_answer(&wallet_answer_written, "first 5029");
         paint_until_wallet(
             &mut session,
+            &wallet_answer_written,
             |wallet| wallet.gem == Some(15_527) && wallet.cash_point == Some(0),
             "first 5029",
         );
@@ -2927,6 +2946,7 @@ mod live_input_leg_tests {
         session.game_mut().queue_shop_buy_for_reply_probe();
         paint_until_wallet(
             &mut session,
+            &wallet_answer_written,
             |wallet| {
                 wallet.gem == Some(1_111)
                     && wallet.o2_cash == Some(3_333)
@@ -2957,9 +2977,9 @@ mod live_input_leg_tests {
         );
 
         leave_item_shop_by_back(&mut session);
-        wait_for_wallet_answer(&wallet_answer_written, "second 5029");
         paint_until_wallet(
             &mut session,
+            &wallet_answer_written,
             |wallet| wallet.gem == Some(626) && wallet.cash_point == Some(0),
             "second 5029",
         );
@@ -3771,9 +3791,9 @@ mod live_input_leg_tests {
         let shop_aim = room_top_tabs()[1].aim;
         enter_item_shop_from_room(&mut session, shop_aim);
         leave_item_shop_by_back(&mut session);
-        wait_for_wallet_answer(&wallet_answer_written, "wallet refresh");
         paint_until_wallet(
             &mut session,
+            &wallet_answer_written,
             |wallet| wallet.gem == Some(15_527) && wallet.cash_point == Some(0),
             "wallet refresh",
         );
@@ -3784,6 +3804,7 @@ mod live_input_leg_tests {
         session.game_mut().queue_shop_buy_for_reply_probe();
         paint_until_wallet(
             &mut session,
+            &wallet_answer_written,
             |wallet| wallet.o2_cash == Some(3_333),
             "5001 prefix",
         );
