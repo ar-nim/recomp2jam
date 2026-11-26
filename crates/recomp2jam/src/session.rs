@@ -160,10 +160,10 @@ use o2jam_net::relay::{
     PREMIUM_TIME_COMMAND,
 };
 use o2jam_net::rooms::{
-    Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    RoomList, RoomListEntry, RoomSlot, RoomSlotAction, RoomSlotState, RoomSlotUpdate, RoomState,
-    SendMainRoomMessage, SendWaitingMessage, SendWhisper, SendWhisperResponse, WaitingAdminMessage,
-    WaitingUserMessage,
+    Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer,
+    RankNotification, ReceiveWhisper, RoomList, RoomListEntry, RoomSlot, RoomSlotAction,
+    RoomSlotState, RoomSlotUpdate, RoomState, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    SendWhisperResponse, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::shop::{
     EnterShop, EquipItem, EquipItemResponse, ExitShop, MusicPurchaseReply, RefreshBag,
@@ -185,7 +185,7 @@ use o2jam_shell::screens::game::{
     AutoPickOutcome, ChatSendMode, JoinAnswerRefusal, LobbyChat, ResultMemberRecord, SlashCommand,
     StartGateVerdict, StartRequest, WaitingWireCaption,
 };
-use o2jam_shell::screens::paint::WaitingSkillItem;
+use o2jam_shell::screens::paint::{paint_music_shop_top100_board, WaitingSkillItem};
 use o2jam_shell::screens::side::MyRoomNotice;
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -4726,6 +4726,7 @@ impl OnlineSession {
             id if id == ReceiveWhisper::COMMAND => self.apply_lobby_whisper(chat, &frame),
             id if id == Announcement::COMMAND => self.apply_announcement(chat, &frame),
             id if id == RankNotification::COMMAND => self.apply_rank_notice(chat, &frame),
+            id if id == MusicPlayRankingAnswer::COMMAND => self.apply_rank_answer(&frame),
             id if id == RoomCreated::COMMAND => self.apply_room_created(&frame),
             id if id == RoomRemoved::COMMAND => self.apply_room_removed(&frame),
             id if id == RoomList::COMMAND => self.apply_room_list(&frame),
@@ -4824,6 +4825,21 @@ impl OnlineSession {
             return;
         };
         self.game.push_lobby_rank_notification(chat, &notice);
+    }
+
+    /// Drain one 2028 board answer into the native standings board.
+    /// The exe's handler (`0x55b230`, file `0x15b230`) stages the
+    /// self line and the counted rows in wire order; which of its
+    /// vectors feeds the music-shop TOP100 board stays OPEN. Here the
+    /// decoded answer goes to the shared rank board the shell already
+    /// paints, and the music-shop painter reads those same rows.
+    /// Undecodable bodies drop with a trace; no rows are invented.
+    fn apply_rank_answer(&mut self, frame: &Frame) {
+        let Ok(answer) = MusicPlayRankingAnswer::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable 2028 board");
+            return;
+        };
+        self.game.stage_lanking_board(answer);
     }
 
     /// Stage one live 2005 room-create broadcast. A peer already in the
@@ -5151,9 +5167,27 @@ impl OnlineSession {
     fn paint_at_instant(&mut self, frame: &mut o2jam_render::Frame<'_>, now: Instant) {
         self.poll_wire_at(now);
         self.game.paint(frame);
+        self.paint_native_top100_board(frame);
         if self.game.screen() != Screen::Loading {
             self.loaded_sent = false;
         }
+    }
+
+    /// Overlay the decoded 2028 rows on the Music Shop's staged
+    /// TOP100 rects after the shell paints that side. No answer and
+    /// no side means no ink; the board painter owns that empty state.
+    fn paint_native_top100_board(&self, frame: &mut o2jam_render::Frame<'_>) {
+        if self.game.side() != Some(SideScreen::MusicShop) {
+            return;
+        }
+        let self_entry = self.game.lanking_self_entry();
+        let rows = self.game.lanking_visible_ranks();
+        paint_music_shop_top100_board(
+            frame,
+            self.game.staged_side_placements(),
+            self_entry.as_ref(),
+            &rows,
+        );
     }
 }
 

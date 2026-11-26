@@ -47,12 +47,12 @@ use super::side::{
     lanking_genre_caption, lanking_lview_slots, lanking_rank_cells, lanking_rview_slots,
     lanking_tiled_rect, music_shop_buy_caption, music_shop_caption_rect,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_owned_slots,
-    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, planet_action_for_code,
-    planet_band_rect, planet_caption_for_code, planet_plate_clip, shop_bag_page_rects,
-    shop_cart_page_digit_rects, shop_cart_slots, shop_cart_total_rects, wallet_amount_caption,
-    CartRecord, CartTotals, LankingSong, MusicShopFace, MusicShopNotice, MusicShopRow,
-    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel, WalletState,
-    INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
+    music_shop_page_rects, music_shop_slots, music_shop_tiled_rect, music_shop_top100_rects,
+    planet_action_for_code, planet_band_rect, planet_caption_for_code, planet_plate_clip,
+    shop_bag_page_rects, shop_cart_page_digit_rects, shop_cart_slots, shop_cart_total_rects,
+    wallet_amount_caption, CartRecord, CartTotals, LankingSong, MusicShopFace, MusicShopNotice,
+    MusicShopRow, PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, ShopPanel,
+    WalletState, INFORMATION_MESSAGE_CODE, INFORMATION_OK_CODE, LANKING_LVIEW_TEXT_CODES,
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_BOX_FRAME_COUNT,
     MSHOP_BOX_FRAME_FIRST_CODE, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
     MSHOP_CASHFILLUP_FALLBACK_CAPTION, MSHOP_CASH_FILLUP_CODE, MSHOP_CURRENT_PROGRESS_CODE,
@@ -2498,6 +2498,40 @@ pub fn paint_music_shop_face(
         },
         MUSIC_SHOP_FACE_TONE,
     );
+}
+
+/// Ink decoded 2028 standings into the staged TOP100 chrome rects.
+/// The viewer's own line takes the first rect; board rows follow in
+/// wire order. The exe's board-content source is not pinned, so the
+/// row-to-rect mapping is ours-by-design chrome (`#1132`): no rows
+/// are invented when no answer stands. Unstaged rects ink nothing.
+pub fn paint_music_shop_top100_board(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    self_entry: Option<&RankEntry>,
+    entries: &[RankEntry],
+) {
+    let rects = music_shop_top100_rects(placements);
+    let Some((self_rect, board_rects)) = rects.split_first() else {
+        return;
+    };
+    if let Some(entry) = self_entry {
+        paint_top100_line(frame, *self_rect, entry);
+    }
+    for (rect, entry) in board_rects.iter().zip(entries.iter()) {
+        paint_top100_line(frame, *rect, entry);
+    }
+}
+
+/// One standings line: rank and nickname from the decoded row. A
+/// zero-rank fill row has no cells and inks nothing.
+fn paint_top100_line(frame: &mut Frame<'_>, rect: Rect, entry: &RankEntry) {
+    let cells = lanking_rank_cells(entry);
+    let caption = format!("{} {}", cells[0], cells[1]);
+    if caption.trim().is_empty() {
+        return;
+    }
+    paint_text_into_rect(frame, rect, &caption, CP949_INK);
 }
 
 /// Ink the pressed TOP100 board control (if any) at its staged rect.
@@ -6680,6 +6714,52 @@ mod paint_tests {
         paint_music_shop_top100_chrome(&mut frame, &placements, Some(MSHOP_TOP100_LAST_CODE));
         assert_eq!(frame.buf[selectall_band], MUSIC_SHOP_TOP100_TONE);
         assert_eq!(frame.buf[top100_band], 0, "TOP100 button stays unmarked");
+    }
+
+    #[test]
+    fn music_shop_top100_board_inks_only_the_staged_decoded_rows() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> paint_at_instant ->
+        // paint_native_top100_board -> paint_music_shop_top100_board.
+        // The tier-3 leg drives this same chain from boot.
+        use super::super::side::MSHOP_TOP100_CODE;
+        let placements: Vec<_> = (0..8u32)
+            .map(|slot| {
+                shop_placement(
+                    MSHOP_TOP100_CODE + slot,
+                    i32::try_from(10 + slot * 90).unwrap(),
+                    100,
+                    80,
+                    20,
+                )
+            })
+            .collect();
+        let row = |rank: i32, nickname: &str| RankEntry {
+            rank,
+            nickname: nickname.to_owned(),
+            battles: 10,
+            wins: 5,
+            win_rate: 50,
+            delta: o2jam_net::RankDelta::Up,
+            rank_delta: 1,
+        };
+        let self_entry = row(9, "Viewer");
+        let entries = vec![row(1, "Champ"), RankEntry::default()];
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+
+        paint_music_shop_top100_board(&mut frame, &placements, Some(&self_entry), &entries);
+
+        assert!(has_ink_in(&buf, 800, 10, 100, 80, 20), "self line");
+        assert!(has_ink_in(&buf, 800, 100, 100, 80, 20), "first board row");
+        assert!(
+            !has_ink_in(&buf, 800, 190, 100, 80, 20),
+            "blank 2028 row inks nothing"
+        );
     }
 
     #[test]

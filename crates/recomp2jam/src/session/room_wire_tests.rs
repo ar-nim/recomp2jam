@@ -14,7 +14,8 @@ use o2jam_net::message::{
     RoomUserCountChanged, RoomUserList, RoomUserListEntry,
 };
 use o2jam_net::rooms::{
-    MainRoomAdminMessage, MainRoomUserMessage, ReceiveWhisper, SendWhisperResponse,
+    MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankDelta, RankEntry,
+    ReceiveWhisper, SendWhisperResponse,
 };
 use o2jam_net::{Request, RoomListEntry, WireMessage};
 
@@ -695,4 +696,59 @@ fn scripted_3007_leave_broadcast_removes_the_row_and_promotes_the_master() {
     let sheet = session.game.room_user_sheet();
     assert!(sheet.is_empty(), "the departed seat leaves the roster");
     assert_eq!(session.game.room_roster_master(), Some(1));
+}
+
+/// One decoded 2028 line with a known place and nickname.
+fn ranked_row(rank: i32, nickname: &str) -> RankEntry {
+    RankEntry {
+        rank,
+        nickname: nickname.to_owned(),
+        battles: 12,
+        wins: 8,
+        win_rate: 66,
+        delta: RankDelta::Up,
+        rank_delta: 1,
+    }
+}
+
+#[test]
+fn scripted_2028_answer_stages_the_native_top100_rows_from_the_gateway() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // OnlineSession::paint -> poll_wire_at -> poll_lobby_chat ->
+    // drain_lobby_chat -> apply_lobby_frame -> apply_rank_answer ->
+    // ScreenGame::stage_lanking_board -> LankingState::stage_board.
+    // seam: none. The Room lobby drain is the live owner of the music-shop
+    // overlay's wire; a 2028 answer must survive it without a request.
+    let (mut session, server) = room_session(|mut stream| {
+        let answer = MusicPlayRankingAnswer {
+            self_entry: ranked_row(42, "Viewer"),
+            entries: vec![ranked_row(1, "Champ"), ranked_row(2, "Rival")],
+        };
+        stream.write_all(&answer.encode()).unwrap();
+    });
+    paint_until(&mut session, |session| {
+        session.game.lanking_self_entry().is_some()
+    });
+    server.join().unwrap();
+
+    let self_entry = session.game.lanking_self_entry().expect("viewer line");
+    let ranks = session.game.lanking_visible_ranks();
+    let nicknames: Vec<&str> = ranks.iter().map(|row| row.nickname.as_str()).collect();
+    assert_eq!(self_entry.nickname, "Viewer");
+    assert_eq!(nicknames, ["Champ", "Rival"]);
+}
+
+#[test]
+fn absent_2028_answer_leaves_the_native_top100_rows_unstaged() {
+    // Empty state is explicit: no answer means no self line and no rows,
+    // never a synthesized standings table. Live chain checked here:
+    // main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    // poll_lobby_chat -> apply_lobby_frame; with no 2028 frame the
+    // apply_rank_answer arm is never taken, so nothing is staged.
+    let (mut session, server) = room_session(|_stream| {});
+    paint_frame(&mut session);
+    server.join().unwrap();
+
+    assert_eq!(session.game.lanking_self_entry(), None);
+    assert!(session.game.lanking_visible_ranks().is_empty());
 }
