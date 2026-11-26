@@ -12,33 +12,38 @@ use o2jam_net::{
     AcquireMusic, MemberMusicState, MusicState, ReceiveWhisper, RoomRemoved, RoomSlotAction,
     RoomSlotUpdate, SendWhisper, SyncMemberMusicStateEvent, WireMessage,
 };
+use o2jam_render::{NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::screens::game::StartGateVerdict;
-use o2jam_shell::{GameLoop, MenuKey, Screen};
+use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use super::*;
 use crate::live_dual_client_legs::harness::{
     assert_harness_tag, boot_room_client, boot_waiting_client, changed_mask, changed_pixels,
-    count_records, find_record, paint_frame, paint_until, room_chat, room_chat_rect,
-    send_room_whisper, waiting_badge_rect, Direction, DualGateway, ACQUIRE_MUSIC_OPCODE,
-    DISBAND_OPCODE, GUEST_MEMBER_ID, GUEST_NAME, LOADED_CONFIRM_OPCODE, MASTER_MEMBER_ID,
-    MASTER_NAME, MEMBER_STATE_OPCODE, MUSIC_STATE_OPCODE, ROOM_NUMBER, SLOT_UPDATE_OPCODE,
-    START_ANSWER_OPCODE, START_REQUEST_OPCODE, WHISPER_CONTENT, WHISPER_RECEIVE_OPCODE,
-    WHISPER_SENDER, WHISPER_SEND_OPCODE, WHISPER_TARGET,
+    count_records, find_record, paint_frame, paint_until, paint_until_game, room_chat,
+    room_chat_rect, send_room_whisper, waiting_badge_rect, Direction, DualGateway,
+    ACQUIRE_MUSIC_OPCODE, DISBAND_OPCODE, GUEST_MEMBER_ID, GUEST_NAME, LOADED_CONFIRM_OPCODE,
+    MASTER_MEMBER_ID, MASTER_NAME, MEMBER_STATE_OPCODE, MUSIC_STATE_OPCODE, ROOM_NUMBER,
+    SLOT_UPDATE_OPCODE, START_ANSWER_OPCODE, START_REQUEST_OPCODE, WHISPER_CONTENT,
+    WHISPER_RECEIVE_OPCODE, WHISPER_SENDER, WHISPER_SEND_OPCODE, WHISPER_TARGET,
 };
-use crate::live_leg_support::{joined_room, staged_rect_pixels};
+use crate::live_leg_support::{joined_room, paint, staged_rect_pixels};
 use crate::loading::{LoadingGateArm, LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM};
 
 const LOADING_HARNESS_TAG: &str = "dual-loading-4010-4011-4012";
-const LOADING_SCENARIO_EPOCH: u64 = 1;
+// Harness label only, not a field read from the 7.55 client.
+// An independent Memoryer PID and epoch stay OPEN.
+const HARNESS_RUN_ORDINAL: u64 = 1;
 
 /// One clocked paint on the private session seam, without wall sleeps.
 fn paint_loading_frame_at(session: &mut OnlineSession, now: Instant) {
-    let mut buf = vec![0u32; 800 * 600];
+    let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
+    let height = usize::try_from(NATIVE_HEIGHT).expect("native height fits usize");
+    let mut buf = vec![0u32; width * height];
     session.paint_at_instant(
         &mut o2jam_render::Frame {
             buf: &mut buf,
-            w: 800,
-            h: 600,
+            w: width,
+            h: height,
         },
         now,
     );
@@ -96,15 +101,13 @@ fn two_room_clients_drop_the_disbanded_row() {
         "the disband broadcast must reach both booted clients"
     );
 
-    let row_gone = |session: &mut OnlineSession| {
-        session
-            .game_mut()
-            .listed_rooms()
+    let row_gone = |game: &ScreenGame| {
+        game.listed_rooms()
             .iter()
             .all(|room| room.number != ROOM_NUMBER)
     };
-    paint_until(&mut alpha, row_gone);
-    paint_until(&mut beta, row_gone);
+    paint_until_game(&mut alpha, row_gone);
+    paint_until_game(&mut beta, row_gone);
     assert!(changed_pixels(&before_alpha, &paint_frame(&mut alpha)) > 0);
     assert!(changed_pixels(&before_beta, &paint_frame(&mut beta)) > 0);
     assert_eq!(
@@ -176,9 +179,9 @@ fn one_whisper_reaches_both_room_chat_lists() {
         "the whisper fan-out must reach both clients"
     );
 
-    let one_row = |session: &mut OnlineSession| room_chat(session).len() == 1;
-    paint_until(&mut alpha, one_row);
-    paint_until(&mut beta, one_row);
+    let one_row = |game: &ScreenGame| game.room_chat().len() == 1;
+    paint_until_game(&mut alpha, one_row);
+    paint_until_game(&mut beta, one_row);
     let alpha_row = room_chat(&mut alpha).remove(0);
     let beta_row = room_chat(&mut beta).remove(0);
     assert_eq!(alpha_row.sender, WHISPER_SENDER);
@@ -253,16 +256,20 @@ fn master_and_guest_agree_on_badge_and_start_gate() {
         );
     }
 
-    paint_until(&mut master, |session| {
-        session.slot_action(GUEST_MEMBER_ID) == Some(RoomSlotAction::SlotUnlocked)
-            && session.game_mut().member_music_state(GUEST_MEMBER_ID)
-                == Some(MusicState::Downloading.code())
+    paint_until_game(&mut master, |game| {
+        game.member_music_state(GUEST_MEMBER_ID) == Some(MusicState::Downloading.code())
     });
-    paint_until(&mut guest, |session| {
-        session.slot_action(GUEST_MEMBER_ID) == Some(RoomSlotAction::SlotUnlocked)
-            && session.game_mut().member_music_state(MASTER_MEMBER_ID)
-                == Some(MusicState::Downloading.code())
+    paint_until_game(&mut guest, |game| {
+        game.member_music_state(MASTER_MEMBER_ID) == Some(MusicState::Downloading.code())
     });
+    assert_eq!(
+        master.slot_action(GUEST_MEMBER_ID),
+        Some(RoomSlotAction::SlotUnlocked)
+    );
+    assert_eq!(
+        guest.slot_action(GUEST_MEMBER_ID),
+        Some(RoomSlotAction::SlotUnlocked)
+    );
 
     // Rest frames are taken after the wire states stage, before the 4035 arm.
     let master_own_rest = staged_rect_pixels(&mut master, master_own_rect);
@@ -276,9 +283,17 @@ fn master_and_guest_agree_on_badge_and_start_gate() {
         }],
     };
     gateway.broadcast(&[downloading.encode()]);
-    paint_until(&mut guest, |session| {
-        session.game_mut().local_download_badge_armed()
-    });
+    // Paint both clients so each consumes the guest-targeted 4035.
+    paint(&mut master);
+    paint(&mut guest);
+    assert!(
+        !master.game_mut().local_download_badge_armed(),
+        "a guest-targeted 4035 must not arm the master seat"
+    );
+    assert!(
+        guest.game_mut().local_download_badge_armed(),
+        "a guest-targeted 4035 must arm the guest seat"
+    );
 
     for (index, log) in [
         gateway.wire_log(master_index),
@@ -294,8 +309,6 @@ fn master_and_guest_agree_on_badge_and_start_gate() {
         );
     }
 
-    assert!(!master.game_mut().local_download_badge_armed());
-    assert!(guest.game_mut().local_download_badge_armed());
     assert_eq!(
         staged_rect_pixels(&mut master, master_own_rect),
         master_own_rest
@@ -348,12 +361,12 @@ fn master_and_guest_agree_on_badge_and_start_gate() {
         ready_peer_state.encode(),
         ready_peer_music.encode(),
     ]);
-    let cleared = |session: &mut OnlineSession| {
-        !session.game_mut().local_download_badge_armed()
-            && session.game_mut().start_gate_verdict() == StartGateVerdict::Startable
+    let cleared = |game: &ScreenGame| {
+        !game.local_download_badge_armed()
+            && game.start_gate_verdict() == StartGateVerdict::Startable
     };
-    paint_until(&mut master, cleared);
-    paint_until(&mut guest, cleared);
+    paint_until_game(&mut master, cleared);
+    paint_until_game(&mut guest, cleared);
     assert_eq!(
         staged_rect_pixels(&mut guest, guest_own_rect),
         guest_own_rest
@@ -388,7 +401,7 @@ fn both_clients_log_the_start_fanout() {
     ]);
     gateway.set_harness_tag(LOADING_HARNESS_TAG);
     println!(
-        "[{LOADING_HARNESS_TAG}] harness_process_id={} scenario_epoch={LOADING_SCENARIO_EPOCH} dual-socket tap",
+        "[{LOADING_HARNESS_TAG}] harness_process_id={} harness_run_ordinal={HARNESS_RUN_ORDINAL} dual-socket tap",
         DualGateway::harness_process_id()
     );
     let (master_index, mut master) = boot_waiting_client(&gateway, MASTER_NAME);
@@ -462,7 +475,7 @@ fn both_clients_log_the_start_fanout() {
     }
     assert_harness_tag(&[master_log, guest_log], LOADING_HARNESS_TAG);
     println!(
-        "[{LOADING_HARNESS_TAG}] harness_process_id={} scenario_epoch={LOADING_SCENARIO_EPOCH} 4010={} 4011={}/{} 4012={}/{}",
+        "[{LOADING_HARNESS_TAG}] harness_process_id={} harness_run_ordinal={HARNESS_RUN_ORDINAL} 4010={} 4011={}/{} 4012={}/{}",
         DualGateway::harness_process_id(),
         count_records(
             &gateway.wire_log(master_index),
