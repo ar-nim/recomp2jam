@@ -20,10 +20,8 @@ mod live_messenger_leg_tests {
         WindowHandler, BINGO_UI_EVENT, CASH_BILL_UI_EVENT, EXE_SCENE_PLAYING, EXE_SCENE_ROOM,
         PLAYING_QA_UI_EVENT, UHP_SUCCESS_CAPTION,
     };
-    use o2jam_shell::{options::CustomCursorArm, GameLoop, Shell};
-    use o2jam_shell::{
-        screens::messenger::QA_PLAYING_RECT_SHIFT, InputEdge, InputSnapshot, Screen,
-    };
+    use o2jam_shell::{options::CustomCursorArm, Shell};
+    use o2jam_shell::{screens::messenger::QA_PLAYING_RECT_SHIFT, Screen};
 
     /// One synthetic scene bank entry, used only by the NullBackend
     /// leg. No installed audio is read.
