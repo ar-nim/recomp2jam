@@ -376,3 +376,37 @@ value semantics remain OPEN.
 Evidence: `ev_6d732c7df583d4e6a5f8d63d055b7e2701cb6917059946f47ea3a81f9cf1be17`
 (setter), `ev_2286141f913f9ff1c4e4b504a4f9da8f54770ac2eddb3b1930c94e8d12898875`
 (callers).
+
+### Correction: the "member slots" `+0x2130`/`+0x2131`/`+0x217c` are reader objects, not byte cells (2026-11-26 senior REA pass)
+
+The addendum above describes `+0x2131` as a byte cell in a flat member
+record and says no consumer reads it. A direct reader search cannot settle
+that, because the offsets are not cell displacements.
+
+`0x555d20` (VA; file `0x155d20`) is a field reader: it copies `n` bytes
+from the packet buffer (`[this+4]`) into the object at its own cursor
+(`[this+0xc]`), then advances that cursor by `n`. Each of the one-line
+setters `0x541670`, `0x541690` and the music-state sibling passes it the
+address of a sub-object at `+0x2130`, `+0x2131` and `+0x217c`
+respectively, with `n = 1`. Those sub-objects each begin with their own
+`u16` length word (the reader copies it into its `[this]` header on
+entry), so they are per-field reader objects laid out back to back, not
+three adjacent bytes.
+
+Why the earlier search found nothing: a whole-`.text` search for any
+`mov` at displacement `0x2131` returns zero hits, but so does the same
+search for `0x2130`, a field the exe certainly consumes; the raw
+displacement bytes occur nowhere in `.text`. Readers reach these fields
+through the cursor object, never through a constant displacement, so
+"no reader" was an artifact of the search method and is withdrawn.
+
+Consequence for #1000: storage order in wire bytes stays pinned
+(playing-state, then live-extra, then music-state). Value semantics of
+the live-extra field remain OPEN. The next evidence step changes: find the
+code that consumes the reader object at `+0x2131` (its data pointer lives
+past its own header at the cursor the reader advanced), not a load at a
+`+0x2131` displacement.
+
+Evidence: `ev_249bdde1d6aabc01f74e3ddd4c12818dc897a34e5671e2cf5b253a29f488dee4`
+(reader `0x555d20` assembly), `ev_38c0105a671b50ca7ef7c789019e5a89765fff2722d8af8c640a1a21ecc1ad69`
+(sibling setter `0x541670`), plus the setter and caller evidence above.
