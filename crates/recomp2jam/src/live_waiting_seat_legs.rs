@@ -247,6 +247,66 @@ fn ink_in_rect(frame: &[u32], rect: Rect) -> Vec<u32> {
     staged_rect_pixels_from(frame, rect)
 }
 
+/// Synthetic three-song `OJNList.dat` for the picker leg: two ids the
+/// seated members own and one id nobody owns. The records carry the
+/// catalog fields the staged song table reads (title, artist, levels,
+/// container token) so the real dialog paints real row captions.
+fn picker_catalog_blob() -> Vec<u8> {
+    let songs = [
+        (101u32, "OwnFirst".to_owned()),
+        (202u32, "OwnSecond".to_owned()),
+        (303u32, "NotOwned".to_owned()),
+    ];
+    songs
+        .into_iter()
+        .flat_map(|(song_id, title)| {
+            let token = format!("o2ma{song_id}.ojm");
+            let mut record = vec![0u8; 300];
+            record[4..8].copy_from_slice(&song_id.to_le_bytes());
+            record[8..11].copy_from_slice(b"ojn");
+            record[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+            record[24..28].copy_from_slice(&5u32.to_le_bytes());
+            record[28..32].copy_from_slice(&5u32.to_le_bytes());
+            record[112..112 + title.len()].copy_from_slice(title.as_bytes());
+            record[176..180].copy_from_slice(b"Band");
+            record[240..240 + token.len()].copy_from_slice(token.as_bytes());
+            record
+        })
+        .collect()
+}
+
+/// Title cell of each spriteless row band, resolved from the staged
+/// dialog's `EXTEND` and `SET TEXT` rects rather than painted literals.
+fn dialog_title_cells(session: &mut OnlineSession) -> Vec<Rect> {
+    let placements = session
+        .game_mut()
+        .select_music_placements()
+        .expect("the dialog stages its row bands");
+    let template = placements
+        .iter()
+        .find(|placed| placed.id == "IDC_TEXT_DSMUSIC_TITLE")
+        .unwrap_or_else(|| panic!("the dialog stages its row title template"))
+        .rect;
+    let mut bands: Vec<Rect> = placements
+        .iter()
+        .filter(|placed| {
+            placed.sprite.is_none() && placed.id.starts_with("IDC_BUTTON_DSMUSIC_EXTEND")
+        })
+        .map(|placed| placed.rect)
+        .collect();
+    bands.sort_by_key(|rect| rect.y);
+    bands
+        .into_iter()
+        .take(7)
+        .map(|band| Rect {
+            x: band.x.saturating_add(template.x),
+            y: band.y.saturating_add(template.y),
+            w: template.w,
+            h: template.h,
+        })
+        .collect()
+}
+
 /// A 12-record breathing body: each frame inks a different column.
 fn breathing_figure() -> AvatarFigure {
     let mut figure = AvatarFigure::default();
@@ -610,4 +670,86 @@ fn live_waiting_removal_cause_captures_different_notice_pixels() {
         captions[0], captions[1],
         "own-seat state 0 and nonzero must paint different removal captions"
     );
+}
+
+/// #995 Tier 3 pixel leg: after a real boot, a 3003 seat snapshot and
+/// a staged MUSELECT click, the dialog paints only songs the seated
+/// members own. The same catalog with one member owning the third
+/// song still paints that row, so the assertion measures the filter,
+/// not the font.
+///
+/// Live caller chain:
+///   main.rs::run_play -> connect::connect_and_login_with_transport
+///   -> assemble_online_session -> join_waiting_by_click (3003)
+///   -> GameLoop::ingest_snapshot -> click_waiting_button (MUSELECT)
+///   -> load_select_music_scene -> paint_select_music_text
+///   -> select_rows -> select_music_rows_owned_by.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_waiting_picker_paints_only_member_owned_songs_from_boot() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let blob = picker_catalog_blob();
+    let entries = o2jam_file::parse_ojn_list(&blob).expect("picker catalog parses");
+
+    let mut owned_room = scripted_room(0, 1);
+    let peer = owned_room.slots[1]
+        .member
+        .as_mut()
+        .expect("fixture seats the peer");
+    // The high nibble is a category word, not part of the song id.
+    peer.music_ids = vec![0x1000 | 101, 0x1000 | 202];
+    let (mut owned, owned_gateway) = boot_seat_leg(owned_room, Vec::new());
+    owned.game_mut().set_song_catalog(&entries);
+    click_staged(&mut owned, Screen::Waiting, "IDC_BUTTON_SWAIT_MUSELECT");
+    assert!(
+        owned.game_mut().select_music_dialog_open(),
+        "the staged master button mounts the song dialog"
+    );
+    let cells = dialog_title_cells(&mut owned);
+    assert!(
+        cells.len() > 6,
+        "the real dialog stages the unowned song's seventh row band"
+    );
+    let owned_frame = paint_at_ms(&mut owned, 0);
+    let owned_rows: Vec<Vec<u32>> = cells
+        .iter()
+        .map(|cell| ink_in_rect(&owned_frame, *cell))
+        .collect();
+
+    let mut full_room = scripted_room(0, 1);
+    full_room.slots[1]
+        .member
+        .as_mut()
+        .expect("fixture seats the peer")
+        .music_ids = vec![101, 202, 303];
+    let (mut full, full_gateway) = boot_seat_leg(full_room, Vec::new());
+    full.game_mut().set_song_catalog(&entries);
+    click_staged(&mut full, Screen::Waiting, "IDC_BUTTON_SWAIT_MUSELECT");
+    assert!(
+        full.game_mut().select_music_dialog_open(),
+        "the same dialog mounts with the third song owned"
+    );
+    let full_frame = paint_at_ms(&mut full, 0);
+    let full_rows: Vec<Vec<u32>> = cells
+        .iter()
+        .map(|cell| ink_in_rect(&full_frame, *cell))
+        .collect();
+
+    assert_eq!(
+        owned_rows[0], full_rows[0],
+        "the peer's owned row paints the same title in both rooms"
+    );
+    assert_eq!(
+        owned_rows[1], full_rows[1],
+        "the host's owned row paints the same title in both rooms"
+    );
+    assert_ne!(
+        owned_rows[6], full_rows[6],
+        "the unowned row must not paint the title the owned room shows"
+    );
+    finish(owned, owned_gateway.server);
+    finish(full, full_gateway.server);
 }

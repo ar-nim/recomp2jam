@@ -5,7 +5,7 @@
 //! main-flow scenes, these never use flat-color stand-ins: every
 //! view paints real archive art through [`load_scene_figures`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::avatar::{
     avatar_item_by_id, bind_scene_rects, load_archive_sprite, load_scene_figures,
@@ -4237,8 +4237,36 @@ pub fn select_music_rows(
     songs: &[SelectMusicSong],
     filter: SelectMusicFilter,
 ) -> Vec<SelectMusicRow<'_>> {
+    select_music_rows_matching(songs, filter, |_| true)
+}
+
+/// Search-result rows narrowed to one ownership set as well as the
+/// dialog columns. The Waiting picker passes the ids decoded from
+/// seated members' `0x540db0` words; the set holds the low twelve bits
+/// only, because the paired high bits are a category word with no
+/// pinned picker rule (ev `0cb8.7310…0078`).
+#[must_use]
+pub fn select_music_rows_owned_by<'a>(
+    songs: &'a [SelectMusicSong],
+    filter: SelectMusicFilter,
+    owned_ids: &HashSet<u16>,
+) -> Vec<SelectMusicRow<'a>> {
+    select_music_rows_matching(songs, filter, |song| {
+        u16::try_from(song.song_id).is_ok_and(|id| owned_ids.contains(&id))
+    })
+}
+
+/// Shared row walk for the full catalog and the owned-id subset.
+fn select_music_rows_matching(
+    songs: &[SelectMusicSong],
+    filter: SelectMusicFilter,
+    mut keeps_song: impl FnMut(&SelectMusicSong) -> bool,
+) -> Vec<SelectMusicRow<'_>> {
     let mut rows = Vec::with_capacity(songs.len().saturating_mul(OJN_LEVEL_COUNT));
     for song in songs {
+        if !keeps_song(song) {
+            continue;
+        }
         for slot in 0..OJN_LEVEL_COUNT {
             if filter.keeps(song, slot) {
                 rows.push(SelectMusicRow { song, slot });
