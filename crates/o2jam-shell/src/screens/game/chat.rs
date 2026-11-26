@@ -219,6 +219,44 @@ impl LobbyChatPanel {
     }
 }
 
+/// Notify type used by both page-to-game EventBridge arms (`0x12`).
+pub const WEB_NOTIFY_TYPE: u16 = 0x12;
+/// Notify id the billing host sends on document complete (`0x1bbd`).
+pub const WEB_NOTIFY_DOCUMENT_COMPLETE: u16 = 0x1bbd;
+/// Page suffix the billing host compares before forwarding the cached
+/// URL (`0x57f510`, file `0x24ded4`).
+pub const BILLING_BUTTONS_URL_SUFFIX: &str = "billing/imsi/buttons.asp";
+
+/// The cached URL the native billing flow forwards as one `0x12` /
+/// `0x1bbd` report-back. No custom URL protocol is invented here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebDocumentNotify {
+    url: String,
+}
+
+impl WebDocumentNotify {
+    /// A completed navigation becomes a notify only on the pinned
+    /// billing-buttons page; other pages leave the seam quiet.
+    #[must_use]
+    pub fn from_completed_url(url: &str) -> Option<Self> {
+        url.contains(BILLING_BUTTONS_URL_SUFFIX).then(|| Self {
+            url: url.to_owned(),
+        })
+    }
+
+    /// The cached location the exe forwards.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Notify body: the ANSI location bytes, with no order id appended.
+    #[must_use]
+    pub fn payload(&self) -> Vec<u8> {
+        self.url.as_bytes().to_vec()
+    }
+}
+
 /// Which lobby chat panel a call addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LobbyChat {
@@ -545,10 +583,18 @@ pub(super) struct ChatState {
     /// Named rows of a decoded 2011 sheet. Web content stays outside
     /// this client; these are the wire names the local stand-in shows.
     room_user_sheet: Vec<RoomUserListEntry>,
+    /// Master seat from the joined-room/slot broadcasts. The 2011 sheet
+    /// carries no master column, so this word stays beside the rows.
+    room_roster_master: Option<u8>,
     room_user_sheet_gift_on: bool,
     room_user_sheet_url_gift_on: bool,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
+    /// Whisper target staged by the page's `SelectedUserNickName`
+    /// report-back (mode 3 of the room chat sheet).
+    room_whisper_target: Option<String>,
+    /// Last document-complete URL forwarded on the notify seam.
+    last_web_document_url: Option<String>,
     waiting_send_mode: ChatSendMode,
     // `Some` is the local nickname prompt posted by the WHISPER tab;
     // its string is the typed target before the prompt's OK.
@@ -885,9 +931,46 @@ impl ChatState {
         }
     }
 
+    /// Stage the page's selected nickname as the room whisper target.
+    /// An empty name stages nothing; the page's own mode-3 selection
+    /// is represented by the staged target, not by a new draft.
+    pub(super) fn stage_web_whisper_target(&mut self, nickname: &str) -> bool {
+        if nickname.is_empty() {
+            return false;
+        }
+        self.room_whisper_target = Some(nickname.to_owned());
+        self.remember_whisper_peer(nickname);
+        true
+    }
+
+    /// Target staged by the page-to-game nickname report-back.
+    pub(super) fn web_whisper_target(&self) -> Option<&str> {
+        self.room_whisper_target.as_deref()
+    }
+
+    /// Fold one document-complete URL into the named lobby history as
+    /// an announcement row; the URL itself is the whole payload.
+    pub(super) fn stage_web_document_notice(&mut self, chat: LobbyChat, url: &str) {
+        self.panel_mut(chat)
+            .push_row(ChannelChatMessage::announcement(url));
+        self.last_web_document_url = Some(url.to_owned());
+    }
+
+    /// Last URL forwarded on the document-complete notify seam.
+    pub(super) fn last_web_document_url(&self) -> Option<&str> {
+        self.last_web_document_url.as_deref()
+    }
+
     /// Peek one lobby draft through the slash grammar.
     pub(super) fn lobby_slash_command(&self, chat: LobbyChat) -> SlashCommand {
-        parse_slash_draft(self.panel(chat).draft(), self.last_whisper_peer())
+        let command = parse_slash_draft(self.panel(chat).draft(), self.last_whisper_peer());
+        match (chat, command, self.room_whisper_target.as_deref()) {
+            (LobbyChat::Room, SlashCommand::Chat(content), Some(target)) => SlashCommand::Whisper {
+                recipient: target.to_owned(),
+                content,
+            },
+            (_, command, _) => command,
+        }
     }
 
     /// Peek the waiting draft through the same slash grammar.
@@ -979,6 +1062,43 @@ impl ChatState {
     /// Named rows currently staged for the Room user sheet.
     pub(super) fn room_user_sheet(&self) -> &[RoomUserListEntry] {
         &self.room_user_sheet
+    }
+
+    /// Replace the native roster from a joined-room snapshot and keep
+    /// the master seat the snapshot named (#1134).
+    pub(super) fn set_room_roster(&mut self, users: &[RoomUserListEntry], master: Option<u8>) {
+        self.room_user_sheet = users.to_vec();
+        self.room_roster_master = master;
+    }
+
+    /// Put one broadcast member in the seat-keyed roster. A repeated
+    /// seat replaces its row, so a late join echo cannot duplicate it.
+    pub(super) fn seat_room_roster_entry(&mut self, entry: RoomUserListEntry, master: Option<u8>) {
+        if let Some(row) = self
+            .room_user_sheet
+            .iter_mut()
+            .find(|row| row.id == entry.id)
+        {
+            *row = entry;
+        } else {
+            self.room_user_sheet.push(entry);
+        }
+        if master.is_some() {
+            self.room_roster_master = master;
+        }
+    }
+
+    /// Remove a departed seat and stage the master the leave event
+    /// promoted (#1134).
+    pub(super) fn clear_room_roster_entry(&mut self, seat: u8, promoted: u8) {
+        let id = i32::from(seat);
+        self.room_user_sheet.retain(|row| row.id != id);
+        self.room_roster_master = Some(promoted);
+    }
+
+    /// Seat currently marked master by the joined-room/slot broadcasts.
+    pub(super) const fn room_roster_master(&self) -> Option<u8> {
+        self.room_roster_master
     }
 
     /// Stage one 2018 refusal: the exe posts the named failure with

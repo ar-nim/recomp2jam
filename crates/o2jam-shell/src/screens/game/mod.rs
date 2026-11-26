@@ -26,7 +26,8 @@ use self::channel::{ChannelPress, ChannelScene};
 use self::chat::{room_join_refusal_for, ChatState};
 pub use self::chat::{
     ChatSendMode, JoinAnswerRefusal, LobbyChat, LobbyChatPanel, RoomJoinRefusal, SlashCommand,
-    WhisperDelivery,
+    WebDocumentNotify, WhisperDelivery, BILLING_BUTTONS_URL_SUFFIX, WEB_NOTIFY_DOCUMENT_COMPLETE,
+    WEB_NOTIFY_TYPE,
 };
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
@@ -38,7 +39,7 @@ use self::myroom::{
     MyRoomConfirm, MyRoomConfirmAction, SpecialItemKind as MyRoomSpecialKind,
     GIFT_MUSIC_FOLLOWUP_COMMAND, MYROOM_COUNT_CAP,
 };
-use super::side::MyRoomLowerTab;
+use super::side::{MyRoomLowerTab, WebCartAdd};
 
 use self::options::{paint_sound_tab_with_knobs, OptionsDialog};
 use self::planet::PlanetBoardState;
@@ -2859,11 +2860,97 @@ impl ScreenGame {
             .map(default_equipment_control_ids)
     }
 
+    /// One seat-broadcast row. The 3003/3004 bodies carry only a
+    /// display name and level, so the 2011 account-name column stays
+    /// empty instead of inventing an id the wire never sent (#1134).
+    fn room_roster_entry(seat: u8, member: &o2jam_net::RoomMember) -> RoomUserListEntry {
+        RoomUserListEntry {
+            id: i32::from(seat),
+            username: String::new(),
+            nickname: member.nickname.clone(),
+            level: member.level,
+        }
+    }
+
     /// Stage the named rows of a decoded 2011 answer (#970). Web
     /// content stays out of this client; only wire names are shown.
     pub fn set_room_user_sheet(&mut self, users: &[RoomUserListEntry]) -> &mut Self {
         self.chat.set_room_user_sheet(users);
         self
+    }
+
+    /// Replace the native player list from the 3003 joined-room
+    /// snapshot (#1134). Seat index order is the wire's slot order.
+    pub fn set_room_roster_from_joined(&mut self, room: &o2jam_net::JoinedRoom) -> &mut Self {
+        let users: Vec<_> = room
+            .slots
+            .iter()
+            .filter_map(|slot| {
+                slot.member
+                    .as_ref()
+                    .map(|member| Self::room_roster_entry(slot.index, member))
+            })
+            .collect();
+        let master = room
+            .slots
+            .iter()
+            .find(|slot| slot.member.as_ref().is_some_and(|member| member.master))
+            .map(|slot| slot.index);
+        self.chat.set_room_roster(&users, master);
+        self
+    }
+
+    /// Fold one 3004 join broadcast into the native player list (#1134).
+    pub fn seat_room_roster_member(
+        &mut self,
+        seat: u8,
+        member: &o2jam_net::RoomMember,
+    ) -> &mut Self {
+        let master = member.master.then_some(seat);
+        self.chat
+            .seat_room_roster_entry(Self::room_roster_entry(seat, member), master);
+        self
+    }
+
+    /// Fold one 3007 leave broadcast into the native player list and
+    /// stage the master it promoted (#1134).
+    pub fn clear_room_roster_member(&mut self, seat: u8, promoted: u8) -> &mut Self {
+        self.chat.clear_room_roster_entry(seat, promoted);
+        self
+    }
+
+    /// Master seat staged by the joined-room/slot broadcasts.
+    #[must_use]
+    pub fn room_roster_master(&self) -> Option<u8> {
+        self.chat.room_roster_master()
+    }
+
+    /// Stage the page's `SelectedUserNickName` report-back: the room
+    /// chat's whisper target, without sending a wire frame yet (#1150).
+    pub fn stage_web_whisper_target(&mut self, nickname: &str) -> bool {
+        self.chat.stage_web_whisper_target(nickname)
+    }
+
+    /// Whisper target staged by the nickname report-back.
+    #[must_use]
+    pub fn web_whisper_target(&self) -> Option<&str> {
+        self.chat.web_whisper_target()
+    }
+
+    /// Stage a document-complete URL as the pinned `0x12` / `0x1bbd`
+    /// notice. Only the billing-buttons page forwards the cached URL;
+    /// the row text is the URL itself, not invented notice copy.
+    pub fn stage_web_document_complete(&mut self, url: &str) -> Option<WebDocumentNotify> {
+        let notice = WebDocumentNotify::from_completed_url(url)?;
+        let chat = LobbyChat::of_screen(self.flow.current()).unwrap_or(LobbyChat::Room);
+        self.chat.stage_web_document_notice(chat, url);
+        Some(notice)
+    }
+
+    /// Last URL forwarded on the document-complete notify seam.
+    #[must_use]
+    pub fn last_web_document_url(&self) -> Option<&str> {
+        self.chat.last_web_document_url()
     }
 
     /// Named rows currently staged for the Room user sheet.
@@ -9049,6 +9136,16 @@ impl ScreenGame {
         self.music_shop.stage_bag_song(song_id, gem);
     }
 
+    /// Fold one page `mid` + `mflag` report-back into the native cart.
+    /// The `C`/`G` byte picks the price slot; any other byte stages
+    /// nothing, matching the exe's two byte tests (#1150).
+    pub fn stage_web_cart_add(&mut self, payload: &[u8]) -> Option<WebCartAdd> {
+        let add = WebCartAdd::from_payload(payload)?;
+        let gem = add.gem_priced()?;
+        self.music_shop_bag_push(u32::from(add.mid), gem);
+        Some(add)
+    }
+
     /// Pick one catalog song into the cart (id must exist; the
     /// click seam feeds the same cart — this stages restores).
     pub fn music_shop_cart_push(&mut self, song_id: u32) {
@@ -9984,11 +10081,16 @@ impl ScreenGame {
                     // 8 px line inside the staged DESC well.
                     for (offset, user) in self.chat.room_user_sheet().iter().take(3).enumerate() {
                         let step = i32::try_from(offset).unwrap_or(i32::MAX);
+                        let caption = if user.username.is_empty() {
+                            format!("{} L{}", user.nickname, user.level)
+                        } else {
+                            format!("{} ({}) L{}", user.username, user.nickname, user.level)
+                        };
                         draw_text(
                             frame,
                             rect.x,
                             rect.y + step.saturating_mul(8),
-                            &format!("{} ({}) L{}", user.username, user.nickname, user.level),
+                            &caption,
                             o2jam_render::pack_xrgb(0xE6, 0xE6, 0xE6),
                         );
                     }

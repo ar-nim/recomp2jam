@@ -213,7 +213,8 @@ use o2jam_net::message::{RoomParameterChanged, RoomUserList, RoomUserListEntry};
 use o2jam_net::rooms::SendWhisperResponse;
 use o2jam_net::testing::fake_gateway;
 use o2jam_net::{
-    AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, Request, WireMessage,
+    AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, JoinRoomResponse, Request,
+    WireMessage,
 };
 use o2jam_shell::screens::game::LobbyChat;
 
@@ -223,6 +224,99 @@ use o2jam_shell::screens::game::LobbyChat;
 struct RoomGateway {
     port: u16,
     server: JoinHandle<()>,
+}
+
+/// A Room gateway that answers the click's 3002 and still lets the
+/// leg inject later broadcasts. The writer thread owns a cloned
+/// socket; the reader thread answers the one join and records frames.
+struct RosterGateway {
+    port: u16,
+    server: JoinHandle<()>,
+    incoming: Sender<Vec<u8>>,
+    join_answer_written: Receiver<()>,
+}
+
+/// The four boot answers every live Room leg needs, in wire order.
+fn answer_roster_boot(stream: &mut std::net::TcpStream) {
+    let mut answer = |id: u16, body: Vec<u8>| {
+        assert_eq!(read_frame_until_eof(stream).unwrap().id, id);
+        stream.write_all(&body).unwrap();
+    };
+    answer(
+        Request::Authorize.id(),
+        AuthResponse {
+            result_code: 0,
+            tail: Vec::new(),
+        }
+        .encode(),
+    );
+    answer(
+        Request::GetChannelList.id(),
+        ChannelList {
+            channels: vec![channel_row()],
+        }
+        .encode(),
+    );
+    answer(
+        Request::ChannelLogin.id(),
+        ChannelLoginResponse {
+            result_code: 0,
+            restricted: Some(false),
+        }
+        .encode(),
+    );
+    answer(
+        Request::GetChannelInfo.id(),
+        o2jam_net::RoomList {
+            rooms: vec![room_row()],
+        }
+        .encode(),
+    );
+}
+
+fn spawn_roster_gateway(joined: o2jam_net::JoinedRoom) -> RosterGateway {
+    let (incoming, to_send) = mpsc::channel::<Vec<u8>>();
+    let (join_written_tx, join_answer_written) = mpsc::channel();
+    let (port, server) = fake_gateway(move |mut stream| {
+        answer_roster_boot(&mut stream);
+        let mut writer = stream.try_clone().unwrap();
+        let injector = std::thread::spawn(move || {
+            while let Ok(frame) = to_send.recv() {
+                writer.write_all(&frame).unwrap();
+            }
+        });
+        while let Some(frame) = read_frame_until_eof(&mut stream) {
+            if frame.id == Request::JoinWaiting.id() {
+                stream
+                    .write_all(
+                        &JoinRoomResponse {
+                            result_code: 0,
+                            room: Some(joined.clone()),
+                        }
+                        .encode(),
+                    )
+                    .unwrap();
+                join_written_tx.send(()).unwrap();
+            }
+        }
+        injector.join().unwrap();
+    });
+    RosterGateway {
+        port,
+        server,
+        incoming,
+        join_answer_written,
+    }
+}
+
+/// Boot to the Room board with a gateway that can inject later
+/// broadcasts, so the roster leg drives the real socket answers.
+fn boot_roster_leg() -> (crate::session::OnlineSession, RosterGateway) {
+    let gateway = spawn_roster_gateway(joined_room(0, true));
+    let mut session = boot_live_leg_with_art(gateway.port, false);
+    dismiss_splash(&mut session);
+    enter_room_by_clicks(&mut session);
+    (session, gateway)
 }
 
 fn spawn_room_gateway(channel_id: u16) -> (RoomGateway, Sender<Vec<u8>>) {
@@ -401,7 +495,7 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
-    let rest = staged_screen_pixels(&mut session, Screen::Room, "IDC_TEXT_SROOM_DESC");
+    let rest = roster_pixels(&mut session);
     let sheet = RoomUserList {
         users: vec![RoomUserListEntry {
             id: 7,
@@ -521,4 +615,152 @@ fn live_room_2023_high_nibble_reaches_the_painted_member_word() {
     assert_ne!(rest, painted, "the shifted nibble changes the member word");
     drop(send);
     finish(session, gateway.server);
+}
+
+/// One 3004 member body for the roster legs.
+fn roster_join_frame(seat: u8, nickname: &str) -> Vec<u8> {
+    let joined = o2jam_net::rooms::UserJoinedWaiting {
+        member_id: seat,
+        member: o2jam_net::RoomMember {
+            nickname: nickname.to_owned(),
+            level: 14,
+            gender: 0,
+            gem: 0,
+            master: false,
+            team: seat,
+            ready: false,
+            music_state: 0,
+            equipment: [0; 17],
+            music_ids: Vec::new(),
+            cash_point: 0,
+            free_pass: 0,
+            playing_state: 0,
+            administrator: false,
+            super_manager: false,
+        },
+    };
+    joined.encode()
+}
+
+/// Native pixels of the staged DESC well that shows the roster.
+fn roster_pixels(session: &mut crate::session::OnlineSession) -> Vec<u32> {
+    staged_screen_pixels(session, Screen::Room, "IDC_TEXT_SROOM_DESC")
+}
+
+/// Leave Waiting through the staged BACK control, then paint Room.
+fn return_to_room(session: &mut crate::session::OnlineSession) {
+    click_staged(session, Screen::Waiting, "IDC_BUTTON_SWAIT_BACK");
+    paint_until_screen(session, Screen::Room);
+    paint(session);
+}
+
+fn leave_frame(seat: u8, promoted: u8) -> Vec<u8> {
+    o2jam_net::rooms::UserLeftWaiting {
+        member_id: seat,
+        new_master_id: promoted,
+        premium: false,
+        has_super_manager: false,
+    }
+    .encode()
+}
+
+/// #1134 Tier 3. Live caller chain:
+///   main.rs::run_play -> connect::connect_and_login_with_transport ->
+///   assemble_online_session -> enter_room_by_clicks -> join_waiting_by_click
+///   -> OnlineSession::poll_room_join -> resolve_room_join ->
+///   ScreenGame::set_room_roster_from_joined -> paint_at -> paint_room.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_roster_leg();
+    session.game_mut().open_room_user_sheet(false);
+    let rest = roster_pixels(&mut session);
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    return_to_room(&mut session);
+    let inked = roster_pixels(&mut session);
+    let roster = session.game_mut().room_user_sheet().to_vec();
+    drop(gateway.incoming);
+    finish(session, gateway.server);
+
+    assert_eq!(roster.len(), 1, "the 3003 peer is the native roster row");
+    assert_eq!(roster[0].nickname, "peer");
+    assert_ne!(rest, inked, "the staged DESC well inks the joined row");
+}
+
+/// #1134 Tier 3. Live caller chain:
+///   main.rs::run_play -> join_waiting_by_click -> OnlineSession::poll_wire
+///   -> apply_waiting_frame -> apply_user_joined ->
+///   ScreenGame::seat_room_roster_member -> paint_at -> paint_room.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_room_3004_broadcast_repaints_the_added_roster_row() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_roster_leg();
+    session.game_mut().open_room_user_sheet(false);
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    return_to_room(&mut session);
+    let rest = roster_pixels(&mut session);
+
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    gateway
+        .incoming
+        .send(roster_join_frame(2, "NewPeer"))
+        .unwrap();
+    paint_until_room(&mut session, |session| {
+        session.game_mut().room_user_sheet().len() == 2
+    });
+    return_to_room(&mut session);
+    let inked = roster_pixels(&mut session);
+    let roster = session.game_mut().room_user_sheet().to_vec();
+    drop(gateway.incoming);
+    finish(session, gateway.server);
+
+    assert_eq!(roster.len(), 2);
+    assert_eq!(roster[1].nickname, "NewPeer");
+    assert_ne!(rest, inked, "the new seat inks inside the staged well");
+}
+
+/// #1134 Tier 3. Same boot chain, leave arm:
+///   OnlineSession::poll_wire -> apply_waiting_frame -> apply_user_left ->
+///   ScreenGame::clear_room_roster_member -> paint_at -> paint_room.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_roster_leg();
+    session.game_mut().open_room_user_sheet(false);
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    return_to_room(&mut session);
+    let rest = roster_pixels(&mut session);
+
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    gateway
+        .incoming
+        .send(roster_join_frame(2, "NewPeer"))
+        .unwrap();
+    gateway.incoming.send(leave_frame(1, 2)).unwrap();
+    paint_until_room(&mut session, |session| {
+        session.game_mut().room_roster_master() == Some(2)
+    });
+    return_to_room(&mut session);
+    let inked = roster_pixels(&mut session);
+    let roster = session.game_mut().room_user_sheet().to_vec();
+    let master = session.game_mut().room_roster_master();
+    drop(gateway.incoming);
+    finish(session, gateway.server);
+
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0].nickname, "NewPeer", "the promoted peer remains");
+    assert_eq!(master, Some(2));
+    assert_ne!(rest, inked, "the departed row leaves the staged well");
 }
