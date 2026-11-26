@@ -10457,9 +10457,12 @@ mod paint_tests {
         assert_eq!(buf[4], 0, "nothing past the body's own extent");
     }
 
+    // Evidence: docs/pins/misc-tail.md:533 (loading-gate font slots have no reader).
     #[test]
     fn loading_cover_paints_full_bleed_with_no_overlay() {
-        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // seam: a painter-seam frame pair; the boot-to-cover chain is
+        // certified by loading_paints_no_staged_song_caption and
+        // loading_shot_staged_status_changes_no_pixel.
         // The staged OJN cover (2x2 opaque stand-in, distinct corners
         // — geometry only, never real art) paints over the whole frame
         // and nothing paints on top of it: the exe reads none of its
@@ -11772,9 +11775,12 @@ mod paint_tests {
         assert_eq!(loading_fill_width(16, 1.0), 16);
     }
 
+    // Evidence: docs/pins/misc-tail.md:533 (loading-gate font slots have no reader).
     #[test]
     fn loading_scene_paints_no_runtime_song_text() {
-        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // seam: a painter-seam frame pair; the boot-to-cover chain is
+        // certified by loading_paints_no_staged_song_caption and
+        // loading_shot_staged_status_changes_no_pixel.
         // The 7.55 gate creates three fonts (Trebuchet 27x65 at +0x524,
         // Arial 7x14 at +0x528, Gulimche 6x12 at +0x52c) and never
         // reads them: a whole-.text search finds no reader in either

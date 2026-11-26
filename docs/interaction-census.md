@@ -450,7 +450,7 @@ Input edges with no matching ControlList entry:
 |---|---|---|
 | Loading Confirm / gate hold | Confirm holds in Loading until select validation, staging, decrypt, decode and clock arm pass; failures latch (`docs/parity/loading-gate.md`). | OPEN: live Wine validation of the full chain (E2); seam loading_hand_session_holds_then_arms_and_hands_off (Tier 0) |
 | Loading BACK / return to Waiting | Return edge named in `docs/parity/loading-gate.md`; no ControlList rect. | OPEN: live input + wire leg; seam loading_back_returns_to_waiting (Tier 0) |
-| Loading song-title/artist caption | Caption uses the Trebuchet 27×65 cell (`docs/loading-type.md`); no .bnd names the gate. | OPEN: live gate capture of the Arial cell arm; seam loading_caption_routes_through_the_display_cell (Tier 0) |
+| Loading song-title/artist caption | No runtime caption: the exe creates three gate fonts and never reads them (`docs/pins/misc-tail.md`); credits are baked cover ink. Owner ruling 2026-11-26 removed our stand-in line. | VERIFIED (negative): `loading_scene_paints_no_runtime_song_text`, `loading_cover_paints_full_bleed_with_no_overlay`, `loading_paints_no_staged_song_caption`, `loading_shot_staged_status_changes_no_pixel` |
 
 ## Playing
 

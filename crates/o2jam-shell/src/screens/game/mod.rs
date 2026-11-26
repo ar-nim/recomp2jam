@@ -36494,9 +36494,9 @@ mod game_tests {
         assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 
+    // Evidence: docs/pins/misc-tail.md:533 (loading-gate font slots have no reader).
     #[test]
     fn loading_paints_no_staged_song_caption() {
-        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
         // Live chain: main.rs::run_play -> OnlineSession::paint ->
         // ScreenGame::paint_at -> paint_loading ->
         // paint_loading_scene_with_status. The exe reads none of its

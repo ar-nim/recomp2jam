@@ -3978,9 +3978,9 @@ mod tests {
         assert_eq!(status.artist, artist);
     }
 
+    // Evidence: docs/pins/misc-tail.md:533 (loading-gate font slots have no reader).
     #[test]
     fn loading_shot_staged_status_changes_no_pixel() {
-        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
         // The 7.55 gate reads none of its three fonts, so staging the
         // walk status (title, artist, full fraction) changes no pixel
         // on the Loading cover: the bar is hidden and no caption inks.
