@@ -510,6 +510,17 @@ mod tests {
     use super::*;
     use o2jam_file::OjnListEntry;
 
+    /// Real-data test seam: an absent pack prints a named SKIP; a
+    /// present pack with a missing file fails instead of skipping.
+    fn installed_file_bytes(test_name: &str, relative_path: &str) -> Option<Vec<u8>> {
+        let root = o2jam_file::data_root::install_root();
+        let data_dir = o2jam_file::data_root::pack_dir_for_test(&root, test_name)?;
+        let path = data_dir.join(relative_path);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {}: {error}", path.display()));
+        Some(bytes)
+    }
+
     fn catalog_blob() -> Vec<u8> {
         let mut record = vec![0u8; 300];
         record[4..8].copy_from_slice(&757u32.to_le_bytes());
@@ -662,11 +673,12 @@ mod tests {
     #[test]
     fn loading_cover_decodes_the_walked_chart() {
         // Install-guarded: song 757's OJN cover section decodes to the
-        // 800x600 illustration the loading capture pins. Skips when
-        // `install-root` is absent.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(bytes) = std::fs::read(&path) else {
+        // 800x600 illustration the loading capture pins. The pack gate
+        // prints the named SKIP line when `install-root` is absent.
+        let Some(bytes) = installed_file_bytes(
+            stringify!(loading_cover_decodes_the_walked_chart),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let figure = loading_cover_figure(&bytes).expect("the walked cover decodes");
@@ -678,11 +690,12 @@ mod tests {
 
     #[test]
     fn loading_cover_feed_reaches_the_shell_scene() {
-        // The gate step hands walked bytes to the shell staging.
-        // Skips when `install-root` is absent.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(bytes) = std::fs::read(&path) else {
+        // The gate step hands walked bytes to the shell staging. The
+        // pack gate prints the named SKIP line when data is absent.
+        let Some(bytes) = installed_file_bytes(
+            stringify!(loading_cover_feed_reaches_the_shell_scene),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let mut game = ScreenGame::new();

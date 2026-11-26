@@ -3960,6 +3960,17 @@ mod live_play_tests {
     use o2jam_render::{has_ink_near, near_xrgb};
     use std::collections::HashMap;
 
+    /// Real-data test seam: an absent pack prints a named SKIP; a
+    /// present pack with a missing archive fails instead of skipping.
+    fn installed_file_bytes(test_name: &str, relative_path: &str) -> Option<Vec<u8>> {
+        let root = o2jam_file::data_root::install_root();
+        let data_dir = o2jam_file::data_root::pack_dir_for_test(&root, test_name)?;
+        let path = data_dir.join(relative_path);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {}: {error}", path.display()));
+        Some(bytes)
+    }
+
     /// Pinned ink box of the exe's right life band at 800x600.
     const LIFE_BAND_INK: Rect = Rect {
         x: 241,
@@ -4079,10 +4090,10 @@ mod live_play_tests {
         // -> pinned_placements -> paint_foreground_placements.
         // The #843 clone must land the staged band at its pinned rect;
         // a clone whose rect includes the record anchor blits it twice.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Playing1.opi");
-        let Ok(archive) = std::fs::read(&path) else {
-            println!("skip: missing install-root Playing1.opi");
+        let Some(archive) = installed_file_bytes(
+            stringify!(life_band_paints_orange_ink_inside_the_pinned_rect),
+            "Image/Playing1.opi",
+        ) else {
             return;
         };
         let figure =
@@ -4147,10 +4158,10 @@ mod live_play_tests {
         // guard replays that same pass order against the staged Playing
         // art; the seam suffices because the bug is entirely in the
         // staged label's placement relative to the gauge fill.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Playing1.opi");
-        let Ok(archive) = std::fs::read(&path) else {
-            println!("skip: missing install-root Playing1.opi");
+        let Some(archive) = installed_file_bytes(
+            stringify!(jam_label_ink_lands_in_the_paired_rows_when_the_gauge_is_staged),
+            "Image/Playing1.opi",
+        ) else {
             return;
         };
         let report = crate::staging::stage_state(
@@ -6328,9 +6339,10 @@ mod live_play_tests {
 
     #[test]
     fn from_archive_binds_all_seven_lanes() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Playing1.opi");
-        let Ok(archive) = std::fs::read(&path) else {
+        let Some(archive) = installed_file_bytes(
+            stringify!(from_archive_binds_all_seven_lanes),
+            "Image/Playing1.opi",
+        ) else {
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -6350,9 +6362,10 @@ mod live_play_tests {
 
     #[test]
     fn from_archive_binds_the_hud_number_fonts() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Playing1.opi");
-        let Ok(archive) = std::fs::read(&path) else {
+        let Some(archive) = installed_file_bytes(
+            stringify!(from_archive_binds_the_hud_number_fonts),
+            "Image/Playing1.opi",
+        ) else {
             return;
         };
         let Some(skin) = PlaySkin::from_archive(&archive) else {
@@ -6375,8 +6388,7 @@ mod live_play_tests {
 
     #[test]
     fn from_archive_binds_the_note_click_burst() {
-        let Some(skin) = staged_skin() else {
-            println!("skip: missing Playing1.opi");
+        let Some(skin) = staged_skin(stringify!(from_archive_binds_the_note_click_burst)) else {
             return;
         };
         // The `.oja` bare arm of `_Note_Click` stages the burst
@@ -6390,8 +6402,8 @@ mod live_play_tests {
 
     #[test]
     fn from_archive_binds_the_jam_flash_and_hold_rings() {
-        let Some(skin) = staged_skin() else {
-            println!("skip: missing Playing1.opi");
+        let Some(skin) = staged_skin(stringify!(from_archive_binds_the_jam_flash_and_hold_rings))
+        else {
             return;
         };
         // Verified 7.55 `Playing_Effect_Jam.oja`: ten 300x300 flash
@@ -6411,8 +6423,7 @@ mod live_play_tests {
 
     #[test]
     fn from_archive_binds_the_kit_lane_beams() {
-        let Some(skin) = staged_skin() else {
-            println!("skip: missing Playing1.opi");
+        let Some(skin) = staged_skin(stringify!(from_archive_binds_the_kit_lane_beams)) else {
             return;
         };
         // Verified 7.55 `KeyEffect_7Key1_1..7.ojs` (kit 1 pairs
@@ -6429,12 +6440,10 @@ mod live_play_tests {
         );
     }
 
-    /// Read the pinned archive and stage the full skin (`None` test
-    /// skip when the git-ignored game data is absent).
-    fn staged_skin() -> Option<PlaySkin> {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Playing1.opi");
-        let archive = std::fs::read(&path).ok()?;
+    /// Stage the pinned skin; a named SKIP line replaces a silent
+    /// skip when the git-ignored game data is absent.
+    fn staged_skin(test_name: &str) -> Option<PlaySkin> {
+        let archive = installed_file_bytes(test_name, "Image/Playing1.opi")?;
         PlaySkin::from_archive(&archive)
     }
 
@@ -6473,8 +6482,9 @@ mod live_play_tests {
         // play-time digits, so the staged font must not paint at all.
         // Skins differing only in the play-time font must paint
         // identical frames.
-        let Some(skin) = staged_skin() else {
-            println!("skip: missing Playing1.opi");
+        let Some(skin) = staged_skin(stringify!(
+            play_time_digits_paint_nowhere_without_a_verified_anchor
+        )) else {
             return;
         };
         assert!(skin.play_time_font().is_some(), "font stages");
@@ -6494,8 +6504,9 @@ mod live_play_tests {
         // blits 1:1 so the ink lands on the photo-pinned box
         // (91,282)-(165,291): every plate ink pixel of a lone blit must
         // appear unchanged in the over-art layer's frame.
-        let Some(skin) = staged_skin() else {
-            println!("skip: missing Playing1.opi");
+        let Some(skin) = staged_skin(stringify!(
+            long_combo_caption_paints_the_staged_plate_on_the_photo_box
+        )) else {
             return;
         };
         let plate = skin.long_combo_plate().expect("Note_LongCombo.ojt plate");

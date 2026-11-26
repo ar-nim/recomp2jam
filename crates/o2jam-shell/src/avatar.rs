@@ -2420,36 +2420,24 @@ fn part_variant_slot(part: usize, variant: usize, sex_offset: usize) -> usize {
 /// every slot painted those poses on top of each other at one anchor:
 /// the stacked ghost hands of ticket #222.
 ///
-/// Pinned selection (`docs/equip.md`): the exe reads the pose variant
-/// the kit's instrument declares for every block, so a torso, its
-/// sleeves and the hair always wear the same letter. A block that
-/// carries no art in that pose falls back to its other sex parity, and
-/// then to its first non-empty wearer-parity slot, so a garment never
-/// vanishes; the exe draws nothing when the exact slot is empty (that
-/// divergence is recorded in `docs/equip.md`).
+/// Pinned selection (`docs/equip.md`, ADR-0016): the exe reads the
+/// pose variant the kit's instrument declares for every block, in the
+/// wearer's parity, and returns null when that exact slot is empty.
+/// No other parity or pose stands in, so a block can draw nothing.
 #[must_use]
 pub fn pick_wear_sprites(
     row: &o2jam_file::AvatarItemRow,
     male: bool,
     pose: AvatarPose,
 ) -> Vec<String> {
-    let (wearer, other) = if male {
-        (MALE_SLOT_OFFSET, FEMALE_SLOT_OFFSET)
+    let wearer_parity = if male {
+        MALE_SLOT_OFFSET
     } else {
-        (FEMALE_SLOT_OFFSET, MALE_SLOT_OFFSET)
+        FEMALE_SLOT_OFFSET
     };
     let variant = pose.variant();
     (0..ITEM_PART_BLOCKS)
-        .filter_map(|part| {
-            body_in_part(row, part, variant, wearer)
-                .or_else(|| body_in_part(row, part, variant, other))
-                .or_else(|| {
-                    (0..PART_VARIANT_SLOTS).find_map(|fallback| {
-                        body_in_part(row, part, fallback, wearer)
-                            .or_else(|| body_in_part(row, part, fallback, other))
-                    })
-                })
-        })
+        .filter_map(|part| body_in_part(row, part, variant, wearer_parity))
         .map(str::to_owned)
         .collect()
 }
@@ -2621,14 +2609,9 @@ mod avatar_figure_tests {
                 "armr-G.oji".to_owned()
             ]
         );
-        assert_eq!(
-            pick_wear_sprites(&row, true, AvatarPose::Drum),
-            vec![
-                "torso-I.oji".to_owned(),
-                "arml-I.oji".to_owned(),
-                "armr-I.oji".to_owned()
-            ],
-            "a block without the kit pose keeps a wear body"
+        assert!(
+            pick_wear_sprites(&row, true, AvatarPose::Drum).is_empty(),
+            "a block without the kit pose draws nothing (ADR-0016)"
         );
     }
 
@@ -2652,20 +2635,78 @@ mod avatar_figure_tests {
         assert_eq!(worn_pose([&drum]), AvatarPose::Drum);
     }
 
+    /// 7.55 selector VA `0x52e730` returns null on an empty exact slot
+    /// (ADR-0016); no other parity or pose stands in.
     #[test]
-    fn wear_falls_back_when_parity_empty() {
+    fn empty_pose_slot_selector_returns_no_body() {
+        // seam: ADR-0016 defines this picker contract; `load_worn_figure`
+        // stacks only the bodies returned here, so no body means no
+        // substitute pixels from any other parity or pose.
         let row = wear_row(vec![
             (1, "icon.oji"),
             (1, "icon.oji"),
             (1, ""),
-            (1, "uni.oji"),
+            (1, "other-parity.oji"),
+            (1, "other-pose.oji"),
         ]);
-        assert_eq!(
-            pick_wear_sprites(&row, true, AvatarPose::Idle),
-            vec!["uni.oji".to_owned()]
+        assert!(
+            pick_wear_sprites(&row, true, AvatarPose::Idle).is_empty(),
+            "an empty idle male slot must not draw the female or guitar body"
         );
-        let bare = wear_row(vec![(1, "icon.oji"), (1, "icon.oji")]);
-        assert!(pick_wear_sprites(&bare, false, AvatarPose::Idle).is_empty());
+    }
+
+    /// Ticket #913: the worn figure must not paint a stand-in body when
+    /// the item row has no sprite in the kit's pose and wearer parity.
+    /// The 7.55 selector at VA `0x52e730` returns null there (ADR-0016).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> stage_online_identity
+    ///   -> connect::stack_worn_figure -> o2jam_shell::load_worn_figure
+    ///   -> compose_worn_rows -> pick_wear_sprites -> AvatarFigure::paint.
+    /// Archives absent -> N/A (synthetic archive and table).
+    #[test]
+    fn empty_pose_slot_stages_no_substitute_body() {
+        let other_parity = sprite55_blob(1, 0, 1, 1, &[0xE0, 0x03]);
+        let other_pose = sprite55_blob(1, 0, 1, 1, &[0x1F, 0x00]);
+        let archive = opa_blob(&[
+            ("other-parity.ojs", &other_parity),
+            ("other-pose.ojs", &other_pose),
+        ]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![item_row(
+                5,
+                &[
+                    "icon.oji",
+                    "icon.oji",
+                    "",
+                    "other-parity.oji",
+                    "other-pose.oji",
+                ],
+            )],
+        };
+
+        let figure = load_worn_figure(&archive, &table, &[5], true);
+
+        assert!(
+            figure.is_empty(),
+            "the empty idle male slot stages no body at all"
+        );
+    }
+
+    #[test]
+    fn empty_pose_slot_ignores_the_male_parity_for_a_female_wearer() {
+        // seam: ADR-0016 defines this picker contract; no caller
+        // substitutes a body when the exact slot is empty.
+        let row = wear_row(vec![
+            (1, "icon.oji"),
+            (1, "icon.oji"),
+            (1, "male-body.oji"),
+            (1, ""),
+        ]);
+        assert!(
+            pick_wear_sprites(&row, false, AvatarPose::Idle).is_empty(),
+            "a female wearer must not draw the male body from that pose"
+        );
     }
 
     #[test]
