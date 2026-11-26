@@ -548,7 +548,16 @@ Consequence: no runtime text is drawn through the three gate fonts. The
 Loading credits and caption are baked JPEG ink only. `docs/gdi-text.md`
 OPEN 5 is closed statically; no font-consumer leg is owed.
 
-Evidence: `ev_8bfe450075a5a6fa5aa48610383c1829e98bbb495d4a7e89a51a3c6cd97a37e8`
+A sibling constructor `0x4eb8a0` (file `0xeb8a0`) makes the same three
+fonts into the same three slots for the six-step Loading class and
+also draws no text through them; its release path `0x4ebe50` frees
+them. The whole-`.text` search above covers this class range as well.
+The font-maker's direct callers (`0x41c860`, release `0x41cb20`) name
+no other Loading-range owner.
+
+Evidence: `ev_b9463ff71c69fc77404ea181ba54478f6075c312c16aeec05590ce2d38026947`
+(sibling constructor `0x4eb8a0` and release `0x4ebe50`),
+`ev_8bfe450075a5a6fa5aa48610383c1829e98bbb495d4a7e89a51a3c6cd97a37e8`
 (constructor pseudocode), `ev_2b565920968953407045d808c6bb8c9c3ddc93ef527015c5bce200bf48be8a6d`
 (constructor assembly), `ev_55249cee006ad35f6677f3e538145019cc8de945112603db9dfbd9ae56438ff7`
 (destructor `0x4e50b0` and neighbours), `ev_491d9aa65e12fce028c33105abfa0fd2e57aec077fa792948f738d35c6a61509`
