@@ -892,3 +892,85 @@ fn tier_2_native_purchase_feedback_waits_for_the_5016_then_5011_notices() {
         "the 5016 notice must ink before the 5011 verdict: {feedback:?}"
     );
 }
+
+// --- Download-arm regression (#1130, senior review) --------------------
+//
+// The exe's 5011 handler rebuilds ownership flags; it never re-downloads
+// the whole owned catalog. Only a paired buy may queue its own cart ids,
+// and even then only ids the reply confirms as owned.
+
+/// One bought song plus two already-owned songs in the same 5011.
+fn purchase_reply_with_other_owned_songs() -> o2jam_net::shop::SyncMusicPurchaseResponse {
+    use o2jam_net::shop::MusicEntry;
+    let mut reply = native_purchase_reply();
+    let bought = reply.music_list[0].clone();
+    for music_id in [758, 759] {
+        reply.music_list.push(MusicEntry { music_id, ..bought });
+    }
+    reply
+}
+
+/// Song ids left queued by one shell, in enqueue order.
+fn queued_download_ids(session: &OnlineSession) -> Vec<u16> {
+    session
+        .game
+        .music_download()
+        .requests()
+        .iter()
+        .map(|request| request.song_id)
+        .collect()
+}
+
+#[test]
+fn tier_2_unsolicited_5011_rebuilds_ownership_without_queueing_downloads() {
+    // Live caller chain (pin VA `0x560d70`, ev_d8644600…):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    //   apply_waiting_frame -> 5011 rebuild ->
+    //   ScreenGame::apply_music_purchase_response -> owned rows only.
+    // Three owned entries arrive with no 5010 attempt; an account sync
+    // must not start three transfers.
+    let reply = purchase_reply_with_other_owned_songs();
+    let (port, server) = payment_gateway(vec![(5011, reply.encode_body())]);
+    let mut session = payment_session(native_purchase_game(), port);
+    settle_payment(&mut session);
+    let queued = queued_download_ids(&session);
+    let owned = session
+        .game
+        .music_shop_visible_rows()
+        .iter()
+        .any(|row| row.listed && row.song.song_id == 757);
+    drop(session);
+    server.join().unwrap();
+
+    assert!(owned, "the unsolicited 5011 must still rebuild ownership");
+    assert!(
+        queued.is_empty(),
+        "an account sync must not download its owned catalog: {queued:?}"
+    );
+}
+
+#[test]
+fn tier_2_paired_5011_queues_only_the_bought_id_from_the_cart() {
+    // Live caller chain:
+    //   OnlineSession::paint -> flush_music_buy -> C2S 5010 ->
+    //   drain_music_buy -> Completed -> MusicBuyAttempt::purchased_ids
+    //   (captured from the cart before the send) ->
+    //   MusicDownload::enqueue for confirmed ids only ->
+    //   ScreenGame::apply_music_purchase_response.
+    // The reply owns 757, 758 and 759; only 757 was in the cart.
+    let reply = purchase_reply_with_other_owned_songs();
+    let (port, server) = payment_gateway(vec![(5011, reply.encode_body())]);
+    let mut session = payment_session(native_purchase_game(), port);
+    session.ingest_snapshot(&InputSnapshot::click_at(350, 160));
+    session.game.stage_music_buy_reply_probe();
+    settle_payment(&mut session);
+    let queued = queued_download_ids(&session);
+    drop(session);
+    server.join().unwrap();
+
+    assert_eq!(
+        queued,
+        vec![757],
+        "only the bought id may download: {queued:?}"
+    );
+}

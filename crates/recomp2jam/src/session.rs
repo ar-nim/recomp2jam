@@ -464,10 +464,28 @@ struct ShopBuyAttempt {
 /// Pending song-shop buy attempt (ticket #202): the 5010 send plus
 /// the 5011 answer resolve on the per-frame poll. A timeout clears
 /// the attempt so the next buy retries it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct MusicBuyAttempt {
     /// When the silent server stops getting the benefit of the doubt.
     deadline: Instant,
+    /// Song ids in the cart when the buy was sent. Only these may
+    /// start a transfer when the paired 5011 confirms ownership.
+    purchased_ids: Vec<u16>,
+}
+
+/// Narrow the staged cart (`Vec<u32>`) to distinct wire-sized song ids.
+/// An out-of-range id names no 7.55 chart, so it cannot be fetched.
+fn purchased_song_ids(cart: Vec<u32>) -> Vec<u16> {
+    let mut ids = Vec::new();
+    for song_id in cart {
+        let Ok(song_id) = u16::try_from(song_id) else {
+            continue;
+        };
+        if !ids.contains(&song_id) {
+            ids.push(song_id);
+        }
+    }
+    ids
 }
 
 /// Pending equip apply (ticket #419): the 5004 send plus its 5005
@@ -3038,12 +3056,16 @@ impl OnlineSession {
         if self.music_buy_attempt.is_some() {
             return;
         }
+        // The cart is the only staged source naming what this buy
+        // intends to own; capture it before draining the outbox.
+        let purchased_ids = purchased_song_ids(self.game.music_shop_cart());
         if self.game.take_music_buy().is_some() {
             if let Err(source) = self.gateway.send_frame(SyncMusicPurchase::COMMAND, &[]) {
                 tracing::warn!(%source, "music buy send failed");
             } else {
                 self.music_buy_attempt = Some(MusicBuyAttempt {
                     deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                    purchased_ids,
                 });
             }
         }
@@ -3075,16 +3097,26 @@ impl OnlineSession {
         });
     }
 
-    /// Fold one completed 5011 into the shell: the pinned rebuild
-    /// names owned songs, and each one joins the Music Shop transfer
-    /// queue. `enqueue` ignores an id already waiting, so a repeated
-    /// sync cannot duplicate the fetch (#1130).
+    /// Fold one completed 5011 into the shell. The pinned handler
+    /// rebuilds ownership flags for every listed song; a transfer is
+    /// started only for ids from the paired cart that this reply
+    /// confirms. An unsolicited account sync passes `None` and
+    /// queues nothing (#1130).
     fn stage_music_purchase_completion(
         &mut self,
         response: &o2jam_net::shop::SyncMusicPurchaseResponse,
+        purchased_ids: Option<&[u16]>,
     ) {
-        for entry in &response.music_list {
-            self.game.begin_music_download(entry.music_id);
+        if let Some(ids) = purchased_ids {
+            for song_id in ids {
+                if response
+                    .music_list
+                    .iter()
+                    .any(|entry| entry.music_id == *song_id)
+                {
+                    self.game.begin_music_download(*song_id);
+                }
+            }
         }
         self.game.apply_music_purchase_response(response);
     }
@@ -3098,7 +3130,10 @@ impl OnlineSession {
                 Ok(frame) if frame.id == 5011 => {
                     match MusicPurchaseReply::decode_body(&frame.payload) {
                         Ok(MusicPurchaseReply::Completed(response)) => {
-                            self.stage_music_purchase_completion(&response);
+                            self.stage_music_purchase_completion(
+                                &response,
+                                Some(&attempt.purchased_ids),
+                            );
                         }
                         Ok(MusicPurchaseReply::Failure) => {
                             // SCRIPTED-GATEWAY body only. No server
@@ -3664,7 +3699,7 @@ impl OnlineSession {
             // The paired buy attempt owns its own drain above.
             5011 => match o2jam_net::shop::MusicPurchaseReply::decode_body(&frame.payload) {
                 Ok(o2jam_net::shop::MusicPurchaseReply::Completed(response)) => {
-                    self.stage_music_purchase_completion(&response);
+                    self.stage_music_purchase_completion(&response, None);
                 }
                 Ok(o2jam_net::shop::MusicPurchaseReply::Failure) => {
                     self.game.post_music_purchase_failure_notice();
