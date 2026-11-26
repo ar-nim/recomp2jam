@@ -6,6 +6,7 @@
 
 use image::codecs::jpeg::JpegEncoder;
 use image::ExtendedColorType;
+use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -630,17 +631,33 @@ impl UiNotice {
 /// Bit of the state word the double-click helper tests.
 pub const DOUBLE_CLICK_STATE_BIT: u16 = 1 << 2;
 
-/// Win32 generates `WM_LBUTTONDBLCLK` from the system settings; the
-/// hub `0x5a5190` only forwards the press coordinates. These are the
-/// documented Windows defaults, used here because winit has no
-/// double-click event (`GetDoubleClickTime` / `SM_CXDOUBLECLK`).
+/// Windows system default for `GetDoubleClickTime`. The exe hub
+/// `0x5a5190` applies the OS rule and has no timer of its own; there
+/// is no exe byte pin for either number. winit has no double-click
+/// event, so this client restates the OS default explicitly.
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(500);
+/// Windows system default double-click rectangle (`SM_CXDOUBLECLK` /
+/// `SM_CYDOUBLECLK`), in native pixels. No exe pin; the hub applies
+/// the OS rule rather than carrying its own numbers.
 pub const DOUBLE_CLICK_RECT: i32 = 4;
 
 /// Mode word the exe's dialog-show helpers write (`0x433c90` writes
 /// `0x304`, its hide helper `0x433d60` writes zero); bit 2 is the
 /// gate the double-click notice helper reads.
-const DIALOG_HOST_MODE_WORD: u16 = 0x304;
+pub(crate) const DIALOG_HOST_MODE_WORD: u16 = 0x304;
+
+thread_local! {
+    /// Control-mode word published by the real dialog host on this
+    /// thread. `Shell` owns the game as `dyn GameLoop`, so the window
+    /// arm reads this in-process bridge instead of a guessed field.
+    static UI_DIALOG_HOST_MODE_WORD: Cell<u16> = const { Cell::new(0) };
+}
+
+/// Publish the real dialog host's control-mode word for the window
+/// arm. Called only by `ScreenGame` host mutations.
+pub(crate) fn publish_ui_dialog_host_mode_word(word: u16) {
+    UI_DIALOG_HOST_MODE_WORD.set(word);
+}
 
 /// One left press the double-click arm can pair with a later press.
 #[derive(Debug, Clone, Copy)]
@@ -717,11 +734,11 @@ pub struct WindowHandler {
     error_popup: Option<ErrorPopup>,
     /// Most recent left press, used only by the double-click arm.
     last_left_press: Option<LeftPress>,
-    /// UI notices staged by the window's double-click arm. The exe
-    /// posts the same `(10,3,0)` record into its input ring
-    /// (`0x5429b0` -> `0x545910`); this client has no further pump
-    /// for internal key 10, phase 3, so the staged record is the sink.
-    staged_notices: Vec<UiNotice>,
+    /// Queued-notice mirror: the exe appends `(10,3,0)` to its UI
+    /// input ring (`0x5429b0` -> `0x545910`). This mirror holds the
+    /// same record; the exe's ring consumer is unpinned, so no
+    /// delivery, caption, or pixel sink is claimed here.
+    queued_notice_mirror: Vec<UiNotice>,
 }
 
 impl WindowHandler {
@@ -746,7 +763,7 @@ impl WindowHandler {
             screenshot_counter: ScreenShotCounter::new(0),
             error_popup: None,
             last_left_press: None,
-            staged_notices: Vec::new(),
+            queued_notice_mirror: Vec::new(),
         }
     }
 
@@ -1010,14 +1027,22 @@ impl WindowHandler {
     /// edge keeps the `click x y` log line the capture harness
     /// already replays; the up edge logs its own `click-up` line.
     /// Queued only — the next freeze delivers it (ADR-0013).
-    fn route_mouse_edge(&mut self, down: bool, cursor_x: f64, cursor_y: f64) {
+    fn route_mouse_edge(&mut self, down: bool, cursor_x: f64, cursor_y: f64) -> Option<(i32, i32)> {
+        let native = self
+            .surface_size
+            .and_then(|(width, height)| window_to_native(width, height, cursor_x, cursor_y));
+        self.queue_mouse_edge(down, native);
+        native
+    }
+
+    /// Queue the press/release edge from one already-mapped native
+    /// point. The mapping happens once per window event, whether it
+    /// comes from the winit arm or a headless live leg.
+    fn queue_mouse_edge(&mut self, down: bool, native: Option<(i32, i32)>) {
         // Press feedback arms on down and fires on release-inside
         // (pinned #111): the changed frame owes one repaint.
         self.input_dirty = true;
-        let Some((window_w, window_h)) = self.surface_size else {
-            return;
-        };
-        if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
+        if let Some((x, y)) = native {
             if down {
                 self.log_event(&format!("click {x} {y}"));
                 self.pending_edges.push(InputEdge::PointerDown { x, y });
@@ -1043,10 +1068,11 @@ impl WindowHandler {
         self.input_dirty = true;
     }
 
-    /// UI notices staged by the window's double-click arm, in post order.
+    /// Queued-notice mirror in post order. The exe's ring consumer is
+    /// unpinned; these records are staged, not delivered.
     #[must_use]
-    pub fn staged_ui_notices(&self) -> &[UiNotice] {
-        &self.staged_notices
+    pub fn queued_ui_notices(&self) -> &[UiNotice] {
+        &self.queued_notice_mirror
     }
 
     /// Set the window surface for a headless leg. The real event loop
@@ -1080,10 +1106,7 @@ impl WindowHandler {
         let Some((cursor_x, cursor_y)) = self.cursor else {
             return;
         };
-        let native = self
-            .surface_size
-            .and_then(|(width, height)| window_to_native(width, height, cursor_x, cursor_y));
-        self.route_mouse_edge(down, cursor_x, cursor_y);
+        let native = self.route_mouse_edge(down, cursor_x, cursor_y);
         if down {
             match native {
                 Some((x, y)) => self.stage_double_click_at_native(x, y),
@@ -1107,21 +1130,17 @@ impl WindowHandler {
             .is_some_and(|first| is_double_click_pair(first, press))
         {
             if let Some(notice) = double_click_notice(self.control_mode_word(), x, y) {
-                self.staged_notices.push(notice);
+                self.queued_notice_mirror.push(notice);
             }
         }
         self.last_left_press = Some(press);
     }
 
-    /// Mode word of the dialog host that owns this window. The exe's
-    /// show helpers set bit 2 and the hide helpers clear the word;
-    /// our one-OK host is the same writer.
+    /// Mode word published by the real dialog host. The exe's show
+    /// helpers set bit 2 and its hide helpers clear the word; the
+    /// in-process bridge carries that state from `ScreenGame`.
     fn control_mode_word(&self) -> u16 {
-        if self.error_popup.is_some() {
-            DIALOG_HOST_MODE_WORD
-        } else {
-            0
-        }
+        UI_DIALOG_HOST_MODE_WORD.get()
     }
 
     /// Freeze the frame's input snapshot and deliver it to the game:
@@ -1522,6 +1541,7 @@ mod tests {
     use super::*;
     use crate::screens::messenger::UNRECOGNIZED_ERROR_TEXT;
     use crate::screens::paint::LoadingStatus;
+    use crate::screens::side::MyRoomNotice;
     use o2jam_audio::NullBackend;
     use o2jam_net::play::SetRoomMusic;
     use o2jam_net::JoinedRoom;
@@ -1682,6 +1702,24 @@ mod tests {
         let probe = Rc::new(RefCell::new(InputProbe::default()));
         let shell = Shell::new(Box::new(probe.clone()));
         (WindowHandler::new(shell), probe)
+    }
+
+    /// One window around the real one-OK host: the same
+    /// `apply_myroom_notice` call the 5035 wire arm uses, not a test
+    /// error popup or a hand-set mode word.
+    fn dialog_host_handler() -> WindowHandler {
+        let mut game = ScreenGame::new();
+        game.apply_myroom_notice(MyRoomNotice::PenaltyCleared);
+        let mut handler = WindowHandler::new(Shell::new(Box::new(game)));
+        handler.set_window_surface_size(800, 600);
+        handler
+    }
+
+    /// One window whose real host has no dialog up.
+    fn bare_game_handler() -> WindowHandler {
+        let mut handler = WindowHandler::new(Shell::new(Box::new(ScreenGame::new())));
+        handler.set_window_surface_size(800, 600);
+        handler
     }
 
     #[test]
@@ -2727,81 +2765,90 @@ mod tests {
     }
 
     #[test]
-    fn window_double_click_stages_the_pinned_notice_when_the_bit_is_set() {
+    fn window_double_click_queues_the_pinned_notice_when_the_bit_is_set() {
         // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
         // `WindowHandler::window_event` -> `WindowHandler::route_mouse_input`
         // -> `WindowHandler::stage_double_click_at_native` ->
         // `is_double_click_pair` -> `double_click_notice` ->
-        // `WindowHandler::staged_ui_notices`.
-        let (mut handler, _probe) = probed_handler();
-        handler.set_window_surface_size(800, 600);
-        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+        // `WindowHandler::queued_ui_notices`. Bit 2 comes from the real
+        // `ScreenGame::apply_myroom_notice` host, not a test flag.
+        let mut handler = dialog_host_handler();
 
         handler.route_window_left_press(21.0, 42.0);
         handler.route_window_left_press(21.0, 42.0);
 
         assert_eq!(
-            handler.staged_ui_notices(),
+            handler.queued_ui_notices(),
             &[UiNotice::new(10, 3, 0, 21, 42)]
         );
     }
 
     #[test]
-    fn one_left_press_stages_no_double_click_notice() {
+    fn one_left_press_queues_no_double_click_notice() {
         // seam: the Win32 hub only gets `WM_LBUTTONDBLCLK` after a
         // second press; this arm is the whole winit-side rule.
-        let (mut handler, _probe) = probed_handler();
-        handler.set_window_surface_size(800, 600);
-        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+        let mut handler = dialog_host_handler();
 
         handler.route_window_left_press(21.0, 42.0);
 
-        assert!(handler.staged_ui_notices().is_empty());
+        assert!(handler.queued_ui_notices().is_empty());
     }
 
     #[test]
-    fn presses_outside_the_window_stage_no_double_click_notice() {
+    fn presses_outside_the_window_queue_no_double_click_notice() {
         // seam: `window_to_native` rejects letterbox/outside points,
         // so no exe-equivalent double-click can be formed there.
-        let (mut handler, _probe) = probed_handler();
-        handler.set_window_surface_size(800, 600);
-        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+        let mut handler = dialog_host_handler();
 
         handler.route_window_left_press(-20.0, -20.0);
         handler.route_window_left_press(-20.0, -20.0);
 
-        assert!(handler.staged_ui_notices().is_empty());
+        assert!(handler.queued_ui_notices().is_empty());
     }
 
     #[test]
-    fn slow_press_pair_stages_no_double_click_notice() {
-        // seam: Win32 forms a double-click only inside the system
-        // time window; the hub has no timer of its own.
-        let (mut handler, _probe) = probed_handler();
-        handler.set_window_surface_size(800, 600);
-        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+    fn far_apart_press_pair_queues_no_double_click_notice() {
+        // seam: the exe hub applies the OS double-click rectangle;
+        // this client restates the Windows default because the hub
+        // carries no rectangle of its own (no exe number is pinned).
+        // A pair 10 px apart exceeds the 4 px default.
+        let mut handler = dialog_host_handler();
+
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(31.0, 42.0);
+
+        assert!(handler.queued_ui_notices().is_empty());
+    }
+
+    #[test]
+    fn slow_press_pair_queues_no_double_click_notice() {
+        // seam: the exe hub applies the OS double-click time; this
+        // client restates the Windows 500 ms default because the hub
+        // has no timer of its own (no exe number is pinned). A
+        // 600 ms pair is outside that window.
+        let mut handler = dialog_host_handler();
         handler.last_left_press = Some(LeftPress {
-            at: Instant::now() - DOUBLE_CLICK_TIME - Duration::from_millis(1),
+            at: Instant::now() - Duration::from_millis(600),
             x: 21,
             y: 42,
         });
 
         handler.route_window_left_press(21.0, 42.0);
 
-        assert!(handler.staged_ui_notices().is_empty());
+        assert!(handler.queued_ui_notices().is_empty());
     }
 
     #[test]
-    fn press_pair_with_a_clear_bit_stages_no_double_click_notice() {
+    fn press_pair_with_a_clear_bit_queues_no_double_click_notice() {
         // seam: the exe's `0x548b10` reads bit 2 of the control mode
-        // word before it posts anything; no dialog host means no bit.
-        let (mut handler, _probe) = probed_handler();
-        handler.set_window_surface_size(800, 600);
+        // word before it posts anything; no real dialog host means
+        // no bit.
+        let mut handler = bare_game_handler();
 
         handler.route_window_left_press(21.0, 42.0);
         handler.route_window_left_press(21.0, 42.0);
 
-        assert!(handler.staged_ui_notices().is_empty());
+        assert!(handler.queued_ui_notices().is_empty());
     }
 
     #[test]

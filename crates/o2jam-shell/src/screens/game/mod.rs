@@ -1699,7 +1699,7 @@ impl ScreenGame {
     /// drive splash timing with explicit clocks).
     #[must_use]
     pub fn new() -> Self {
-        Self {
+        let game = Self {
             flow: ScreenFlow::new(),
             playing: LivePlay::new(&[]),
             song_anchor_sample: 0,
@@ -1849,7 +1849,24 @@ impl ScreenGame {
             dialog_frames: DialogFrameState::default(),
             shopping_bag_add_art: None,
             scene_art: std::array::from_fn(|_| None),
-        }
+        };
+        game.publish_dialog_host_mode();
+        game
+    }
+
+    /// Publish whether the real one-OK/Information host owns input.
+    /// The exe's show helpers write `0x304` into the control mode word
+    /// (`0x433c90`) and its hide helpers write zero (`0x433d60`); bit 2
+    /// gates the double-click notice arm (`0x548b10`). `Shell` stores
+    /// the game as `dyn GameLoop`, so the window reads the published
+    /// word through the in-crate bridge.
+    fn publish_dialog_host_mode(&self) {
+        let word = if self.dialog_owns_input() {
+            crate::window::DIALOG_HOST_MODE_WORD
+        } else {
+            0
+        };
+        crate::window::publish_ui_dialog_host_mode_word(word);
     }
 
     /// Load the result-screen avatar figure.
@@ -2423,6 +2440,7 @@ impl ScreenGame {
     pub fn open_relay_down_dialog(&mut self) -> &mut Self {
         self.relay_down_notice_pending = false;
         self.planet_board.open_modal(PlanetModal::RelayDown);
+        self.publish_dialog_host_mode();
         self
     }
 
@@ -2460,6 +2478,7 @@ impl ScreenGame {
         self.planet_board.close_modal();
         let channels = std::mem::take(&mut self.relay_down_pending_channels);
         self.set_channels(channels);
+        self.publish_dialog_host_mode();
         true
     }
 
@@ -2471,6 +2490,7 @@ impl ScreenGame {
         self.channel_refusal_message = Some(message);
         self.planet_board
             .open_modal(PlanetModal::ChannelEnterRefused);
+        self.publish_dialog_host_mode();
         self
     }
 
@@ -2495,6 +2515,7 @@ impl ScreenGame {
         }
         self.planet_board.close_modal();
         self.channel_refusal_message = None;
+        self.publish_dialog_host_mode();
         true
     }
 
@@ -2631,6 +2652,7 @@ impl ScreenGame {
     /// an old one; the sheet owns input until its OK is pressed.
     pub fn post_myroom_notice(&mut self, notice: MyRoomNotice) {
         self.myroom_notice = Some(notice);
+        self.publish_dialog_host_mode();
     }
 
     /// Stage the caption the UHP sequence chose. The literal comes
@@ -2682,6 +2704,7 @@ impl ScreenGame {
     /// also calls this through [`Self::click_dispatch`].
     pub fn dismiss_myroom_notice(&mut self) {
         self.myroom_notice = None;
+        self.publish_dialog_host_mode();
     }
 
     /// Drain the MyRoom request queue for the session bridge.
@@ -11665,6 +11688,9 @@ impl GameLoop for ScreenGame {
                 InputEdge::Menu { key, down } => self.menu_key(key, down),
             }
         }
+        // One live refresh per freeze covers every host mutation the
+        // window could not publish directly (planet/room modals).
+        self.publish_dialog_host_mode();
     }
 
     fn quit_requested(&self) -> bool {
