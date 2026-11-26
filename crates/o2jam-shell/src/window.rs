@@ -100,6 +100,36 @@ pub const SCREENSHOT_QUALITY: u32 = 80;
 /// States in which `0x418dc0` skips the screenshot writer.
 pub const PRINT_SCREEN_SUPPRESSED_STATES: [u32; 2] = [10, 11];
 
+/// Scene words the activation handler `0x5a4b90` inspects on a
+/// Playing focus exit (`docs/pins/net-c2.md`, ev `3f40.f126…`).
+pub const FOCUS_LOADING_SCENE: u32 = 10;
+pub const FOCUS_PLAYING_SCENE: u32 = 11;
+
+/// Captions the same handler posts to the UI queue. The bytes sit at
+/// VA `0x650d68` (ev `09d7.e5ca…`), `0x650d38` (ev `fe5d.5722…`) and
+/// `0x650d08` (ev `89ce.132c…`), decoded here as UTF-8 text.
+pub const FOCUS_ROOM_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 Room으로 나왔습니다.";
+pub const FOCUS_LOBBY_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 로비로 나왔습니다.";
+pub const FOCUS_WAITING_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 대기실로 나왔습니다.";
+
+/// Caption the exe's Playing focus-exit arm posts for the scene it
+/// returns to: the Loading scene leaves to Room; a Playing scene in a
+/// joined room leaves to Waiting, otherwise to the Lobby. Other
+/// scenes post no exit notice. `room_open` is the session's joined-room
+/// mirror, not a new wire fact.
+#[must_use]
+pub const fn focus_exit_caption(scene_word: u32, room_open: bool) -> Option<&'static str> {
+    match scene_word {
+        FOCUS_LOADING_SCENE => Some(FOCUS_ROOM_EXIT_CAPTION),
+        FOCUS_PLAYING_SCENE => Some(if room_open {
+            FOCUS_WAITING_EXIT_CAPTION
+        } else {
+            FOCUS_LOBBY_EXIT_CAPTION
+        }),
+        _ => None,
+    }
+}
+
 /// Numbered file name pinned at `0x6447d0`. Rust's `{:03}`
 /// keeps the C `ScreenShot%03d.jpg` shape for counters above 999.
 #[must_use]
@@ -641,6 +671,14 @@ impl WindowHandler {
         self.shell.game.text_input(&clean);
     }
 
+    /// Deliver one activation edge to the game. The winit `Focused`
+    /// event stands in for `WM_ACTIVATEAPP`; `GameLoop::focus_changed`
+    /// is the same hole the exe's hub `0x5a5190` fills by calling the
+    /// activation handler `0x5a4b90`.
+    fn route_focus_change(&mut self, active: bool) {
+        self.shell.game.focus_changed(active);
+    }
+
     /// Erase one draft character (Backspace press).
     fn route_erase(&mut self) {
         self.route_key(winit::keyboard::KeyCode::Backspace, true);
@@ -884,9 +922,10 @@ impl ApplicationHandler for WindowHandler {
                     QuitDisposition::ExitLoop => event_loop.exit(),
                 }
             }
-            WindowEvent::Focused(_focused) => {
+            WindowEvent::Focused(focused) => {
                 self.log_message_arm(WM_ACTIVATE_APP);
                 self.input_dirty = true;
+                self.route_focus_change(focused);
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -1500,6 +1539,59 @@ mod tests {
             Some(super::super::screens::game::QuitConfirmOutcome::Confirmed)
         );
         assert!(should_exit_after_frame(handler.shell.game.as_ref()));
+    }
+
+    /// A window focus probe: only the activation edge matters here,
+    /// so the other `GameLoop` methods are deliberately inert.
+    struct FocusProbe(Rc<RefCell<Vec<bool>>>);
+
+    impl GameLoop for FocusProbe {
+        fn lane_key(&mut self, _lane: usize, _down: bool) {}
+        fn ingest_snapshot(&mut self, _snapshot: &super::super::InputSnapshot) {}
+        fn focus_changed(&mut self, active: bool) {
+            self.0.borrow_mut().push(active);
+        }
+        fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
+    }
+
+    #[test]
+    fn focus_arm_forwards_both_activation_edges_to_the_game_loop() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` (Focused) -> `route_focus_change`
+        // -> `GameLoop::focus_changed`. The winit event stands in for
+        // `WM_ACTIVATEAPP`; Tier 4 real-window capture stays OPEN.
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut handler = WindowHandler::new(Shell::new(Box::new(FocusProbe(Rc::clone(&seen)))));
+
+        handler.route_focus_change(false);
+        handler.route_focus_change(true);
+
+        assert_eq!(*seen.borrow(), [false, true], "off and on both reached");
+    }
+
+    #[test]
+    fn playing_focus_exit_selects_the_three_pinned_scene_captions() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` -> `GameLoop::focus_changed` ->
+        // `ScreenGame::apply_focus_change` -> `focus_exit_caption`.
+        // Scene ids come from the exe's pinned screen-name words.
+        let loading = crate::options::f8_scene_id_of("loading");
+        let playing = crate::options::f8_scene_id_of("playing");
+        assert_eq!(loading, Some(FOCUS_LOADING_SCENE));
+        assert_eq!(playing, Some(FOCUS_PLAYING_SCENE));
+        assert_eq!(
+            focus_exit_caption(FOCUS_LOADING_SCENE, true),
+            Some(FOCUS_ROOM_EXIT_CAPTION)
+        );
+        assert_eq!(
+            focus_exit_caption(FOCUS_PLAYING_SCENE, true),
+            Some(FOCUS_WAITING_EXIT_CAPTION)
+        );
+        assert_eq!(
+            focus_exit_caption(FOCUS_PLAYING_SCENE, false),
+            Some(FOCUS_LOBBY_EXIT_CAPTION)
+        );
+        assert_eq!(focus_exit_caption(2, true), None, "Room is not an exit");
     }
 
     #[test]

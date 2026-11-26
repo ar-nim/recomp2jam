@@ -1198,3 +1198,114 @@ fn tier_2_paired_5011_queues_only_the_bought_id_from_the_cart() {
         "only the bought id may download: {queued:?}"
     );
 }
+
+/// A second synthetic song joins the purchase catalog so the 5011
+/// guard can tell a preserved song-table row from a rebuilt owned row.
+fn two_song_purchase_game() -> ScreenGame {
+    let mut game = native_purchase_game();
+    let first = native_purchase_catalog_blob();
+    let mut second = first.clone();
+    second[4..8].copy_from_slice(&758u32.to_le_bytes());
+    second[112..117].copy_from_slice(b"Secnd");
+    let mut blob = first;
+    blob.extend_from_slice(&second);
+    game.set_song_catalog(&o2jam_file::parse_ojn_list(&blob).unwrap());
+    game.stage_music_shop_board(o2jam_net::play::MusicListAnswer {
+        entries: [757, 999]
+            .into_iter()
+            .map(|id| o2jam_net::play::MusicListEntry {
+                id,
+                notes_ex: 0,
+                notes_nx: 0,
+                notes_hx: 0,
+            })
+            .collect(),
+        free_music: false,
+    });
+    game
+}
+
+#[test]
+fn tier_2_5011_rebuilds_owned_rows_without_clearing_the_song_table() {
+    // Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    // -> `poll_wire_at` -> `apply_waiting_frame` -> 5011 ->
+    // `stage_music_purchase_completion` ->
+    // `ScreenGame::apply_music_purchase_response`. The exe's
+    // `0x560d70` (ev d864.4600…) resets the owned list once and never
+    // clears the catalog: row 999 must vanish, catalog song 758 stays.
+    let reply = native_purchase_reply();
+    let (port, server) = payment_gateway(vec![(5011, reply.encode_body())]);
+    let mut session = payment_session(two_song_purchase_game(), port);
+    settle_payment(&mut session);
+    let owned: Vec<u16> = session
+        .game
+        .music_shop_owned_rows()
+        .iter()
+        .map(|row| row.song_id)
+        .collect();
+    let catalog: Vec<u32> = session
+        .game
+        .select_songs()
+        .iter()
+        .map(|song| song.song_id)
+        .collect();
+    drop(session);
+    server.join().unwrap();
+
+    assert_eq!(owned, vec![757], "the owned list is rebuilt from the reply");
+    assert_eq!(catalog, vec![757, 758], "the song table is never cleared");
+}
+
+#[test]
+fn tier_2_4035_posts_one_ui_event_per_row_and_one_for_an_empty_list() {
+    // Live caller chain: `main.rs::run_play` -> `OnlineSession::paint`
+    // -> `poll_wire_at` -> `drain_waiting_chat` ->
+    // `apply_acquire_music` -> `playing_wire_tests::observe`. The
+    // `0x5598b0` pin (ev 6f2d.0208…) posts no caption: each event
+    // carries (0x12, 4035, member, original_count); the empty answer
+    // carries (0x12, 4035, 0, 0). The shell has no UI-event consumer,
+    // so the generic test observation seam is the whole contract.
+    use super::playing_wire_tests::{
+        clear_observations, take_observations, PlayingWireObservation,
+    };
+    use o2jam_net::play::{AcquireMusic, MemberMusicState, MusicState};
+
+    clear_observations();
+    let acquired = AcquireMusic {
+        members: vec![
+            MemberMusicState {
+                member_id: 0,
+                state: MusicState::Ready,
+            },
+            MemberMusicState {
+                member_id: 1,
+                state: MusicState::Downloading,
+            },
+        ],
+    };
+    let empty = AcquireMusic {
+        members: Vec::new(),
+    };
+    let (port, server) = payment_gateway(vec![
+        (4035, acquired.encode_body()),
+        (4035, empty.encode_body()),
+    ]);
+    let mut session = payment_session(waiting_game(), port);
+    settle_payment(&mut session);
+    let observed = take_observations();
+    drop(session);
+    server.join().unwrap();
+
+    let events: Vec<(u32, u16, u8, u32)> = observed
+        .iter()
+        .filter_map(|step| match step {
+            PlayingWireObservation::UiEvent(event) => Some(*event),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![(0x12, 4035, 0, 2), (0x12, 4035, 1, 2), (0x12, 4035, 0, 0)],
+        "one event per acquired row, plus one for the empty answer"
+    );
+}

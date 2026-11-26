@@ -3890,10 +3890,38 @@ impl OnlineSession {
             tracing::debug!(id = frame.id, "dropping undecodable acquire music");
             return;
         };
+        self.post_acquire_music_ui_events(&event);
         for member in &event.members {
             self.stage_member_music_state(member.member_id, member.state.code());
         }
         self.answer_acquire_music(&event);
+    }
+
+    /// Post the `0x5598b0` event contract (ev `6f2d.0208…`): one
+    /// `(0x12, 4035, 0, 0)` event for an empty answer, otherwise one
+    /// event per acquired row carrying the original count. The exe
+    /// posts no caption and both class arms call the same state
+    /// setter (senior REA `ev_9856c8ae…`); the shell has no UI-event
+    /// consumer, so the generic observation seam records the events.
+    fn post_acquire_music_ui_events(&self, event: &AcquireMusic) {
+        let count = u32::from(u8::try_from(event.members.len()).unwrap_or(u8::MAX));
+        if event.members.is_empty() {
+            playing_wire_tests::observe(playing_wire_tests::PlayingWireObservation::UiEvent((
+                0x12,
+                AcquireMusic::COMMAND,
+                0,
+                0,
+            )));
+            return;
+        }
+        for member in &event.members {
+            playing_wire_tests::observe(playing_wire_tests::PlayingWireObservation::UiEvent((
+                0x12,
+                AcquireMusic::COMMAND,
+                member.member_id,
+                count,
+            )));
+        }
     }
 
     /// The exe's 4035 arms (VA `0x4b1d42` normal mode, `0x4aba51` live
@@ -5078,6 +5106,10 @@ impl OnlineSession {
 impl GameLoop for OnlineSession {
     fn lane_key(&mut self, lane: usize, down: bool) {
         self.game.lane_key(lane, down);
+    }
+
+    fn focus_changed(&mut self, active: bool) {
+        self.game.focus_changed(active);
     }
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
