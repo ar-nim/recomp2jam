@@ -18,26 +18,42 @@ pipeline drift). The `STATE_WAITING` music-select row flips to PASS with guards 
 photo rows above carry the corrected residuals.
 
 - Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.
-- Re-audit 2026-11-12 (ticket #49): **57 dimension cells — 34
-  PASS, 13 OPEN, 1 FAIL, 9 N/A.** Every cell carries a tier
+- Historical re-audit 2026-11-12 (ticket #49, superseded 2026-11-26):
+  **57 dimension cells — 34 PASS, 13 OPEN, 1 FAIL, 9 N/A.** Every cell carries a tier
   (R / G / R+G), an evidence pointer, and a last-verified commit.
   Every OPEN names its next step; every N/A names why no guard
   applies. The consistency check (ledger-check) reports 0
   violations.
+- Re-audit 2026-11-26 (parity-ledger): **60 dimension cells — 41
+  PASS-led, 11 OPEN-led, 8 N/A, 0 FAIL.** PLAYING.COMP is now PASS
+  with named OPEN arms; the shell-side life bar is wired
+  (`life_bar_fill_tracks_live_life`), and the item mixer has named
+  guards. `ledger-check --report` exits 0 with 0 hard violations.
+  Measured this pass: v3 paired pack re-scored 15 states (planet
+  0.9971 and tutorial 0.9944 PASS at 0.99; every other v3 state FAIL,
+  values in `docs/parity/measure-2026-11-26/README.md`); qualified
+  #878 musicshop/myroom pairs re-scored 0.9911/0.9912 PASS and #885
+  channel-popup 0.9956 PASS. Lanking and itemshop rows were left to
+  their owning lanes. Playing has no exe frame in the v3 pack, so its
+  verdict rests on the region ink check plus named guards, not on a
+  claimed SSIM.
 - PASS: boot-into-splash, 800×600 default (`SetWindowPos` file
   `0x14b4c`/`0x14baf`), all 13 documented transition edges (plus
   rejections — `flow_allows_every_documented_edge`,
   `flow_rejects_jumps_the_client_never_makes`). No-timing scenes
   read N/A, never PASS.
-- FAIL: 1 composition cell — `STATE_PLAYING` composition (gauge
-  appended full-canvas over the bound window, combo/word/long-note
-  digits on invented anchors; next steps named in-row: `rea`
-  trace of the digit-frame setters, scroll-map and curtain pins).
+- FAIL at the 2026-11-12 audit only: 1 composition cell —
+  `STATE_PLAYING` composition. The invented-anchor arm was closed by
+  #104 (digit setters), #105 (pinned digit paint) and #107
+  (play-time digits ruled negative); the 2026-11-26 re-shoot and
+  four-region ink check are in `docs/parity/playing.md`. No FAIL cell
+  remains.
 - OPEN-led: 9 cells — Avi input/timing (dismiss key + hold
   duration), Waiting timing (Loading gate legs), Waiting gameplay
   (member→slot convention), Loading timing (gate-leg pacing),
-  Playing input/timing/gameplay (key-up routing, bg-effect loop,
-  shell-side life/score), Result input (relay ticket/call shapes).
+  Playing input/timing/music/gameplay (key-up routing, live-device
+  divergence, mixer device number, scoring arms B46/B47/B49/B48),
+  Result input (web-seam decision, relay ticket/call shapes).
   Each names its rig next step in-row.
 - PASS-with-OPEN-arms: 7 cells — Channel input, Room
   composition/input, Waiting composition/input/music-select,
