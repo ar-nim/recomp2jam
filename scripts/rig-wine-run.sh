@@ -80,7 +80,8 @@ OBSERVE_WAITING_SECONDS=0
 CUE_DISCOVER_SECONDS=0
 HOST_START_DELAY=20
 WIRE_TAP_PORT="${RIG_WIRE_TAP_PORT:-15012}"
-GATEWAY_PORT=15010
+GATEWAY_UPSTREAM_PORT=15010
+GATEWAY_PORT="$GATEWAY_UPSTREAM_PORT"
 USER_INDEX_ID=1
 HOST_USER_INDEX_ID=3
 CROSS_DIR=""
@@ -203,11 +204,11 @@ phase_mint() {
 
 phase_wire_tap() {
   [ "$WIRE_TAP" -eq 1 ] || return 0
-  note "phase wire-tap on 127.0.0.1:$WIRE_TAP_PORT -> $GATEWAY_PORT"
+  note "phase wire-tap on 127.0.0.1:$WIRE_TAP_PORT -> $GATEWAY_UPSTREAM_PORT"
   mkdir -p "$OUT_DIR/wire"
   python3 "$SCRIPT_DIR/wine-room-host.py" --wire-tap \
     --out-dir "$OUT_DIR/wire" --wire-log "$WIRE_LOG" \
-    --listen-port "$WIRE_TAP_PORT" --upstream-port 15010 \
+    --listen-port "$WIRE_TAP_PORT" --upstream-port "$GATEWAY_UPSTREAM_PORT" \
     > "$OUT_DIR/wire/tap.log" 2>&1 &
   echo "$!" > "$WIRE_PID_FILE"
   local tries=0
@@ -232,7 +233,9 @@ join_outcome_fields() {
     opcode=present
   fi
   if [ -s "$OUT_DIR/drive.log" ]; then
-    press_count="$(grep -c 'inject send-press ' "$OUT_DIR/drive.log" || true)"
+    # Both join stimuli are pressures: hover-press sends one press, dclick
+    # sends one double-click and logs that line instead of a press line.
+    press_count="$(grep -Ec 'inject send-(press|double-click) ' "$OUT_DIR/drive.log" || true)"
   fi
   printf 'join_0BBA=%s join_press_count=%s' "$opcode" "$press_count"
 }
@@ -261,6 +264,16 @@ phase_boot() {
   return 0
 }
 
+# An observation leg refuses to claim the Waiting scene by design: the
+# drive logs the stage it saw but leaves the scene unlabelled. That line,
+# not a scene label, is the success condition for this leg only.
+observation_only_waiting_reached() {
+  [ "$OBSERVE_WAITING_SECONDS" -gt 0 ] &&
+    [ "$TARGET" = "waiting" ] &&
+    grep -qF 'stage waiting NOT claimed reason=observation-only' \
+      "$OUT_DIR/drive.log" 2>/dev/null
+}
+
 phase_drive() {
   note "phase drive (target $TARGET)"
   timeout "$RIG_WINE_DRIVE_TIMEOUT" python3 "$SCRIPT_DIR/wine-scene.py" \
@@ -277,6 +290,10 @@ phase_drive() {
   reached="$(bash "$SCRIPT_DIR/scene-probe.sh" "$OUT_DIR/drive.log" 2>/dev/null || echo none)"
   note "drive reached '$reached'"
   if [ "$reached" = "$TARGET" ]; then
+    return 0
+  fi
+  if observation_only_waiting_reached; then
+    note "drive waiting observed but NOT claimed (observation-only)"
     return 0
   fi
   note "drive FAILED to reach '$TARGET' (see drive.log)"

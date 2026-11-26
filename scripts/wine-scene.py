@@ -1180,6 +1180,37 @@ def board_ready(frames: Frames) -> bool:
     return frames.board_is_up()
 
 
+class ObservationRecorder:
+    """Save one PNG per distinct pixel digest during one observation leg.
+
+    Live caller chain: rig-wine-run.sh phase_drive -> wine-scene.py drive ->
+    observe_waiting_transition / StartCueObserver.poll. A visual state can
+    return after another one, so the comparison set holds every saved frame,
+    not just the most recent one.
+    """
+
+    def __init__(self, frames: Frames, shots: Path, prefix: str) -> None:
+        self.frames = frames
+        self.shots = shots
+        self.prefix = prefix
+        self.saved_digests: set[str] = set()
+        self.count = 0
+
+    def save_if_new(self) -> str:
+        """Name the saved PNG, or empty when these pixels were already saved."""
+        digest = hashlib.sha256(self.frames.grab().tobytes()).hexdigest()
+        if digest in self.saved_digests:
+            return ""
+        self.count += 1
+        name = f"{self.prefix}-{self.count:03}.png"
+        self.frames.capture(self.shots / name)
+        # capture() re-grabs: hash the pixels actually saved, so a
+        # byte-identical PNG is never written twice into the pack.
+        self.saved_digests.add(
+            hashlib.sha256(self.frames.last.tobytes()).hexdigest())
+        return name
+
+
 def observe_waiting_transition(frames: Frames, wire: WireTapLog,
                                log: SceneLog, shots: Path, timeout: float,
                                interval: float = 1.0) -> None:
@@ -1189,22 +1220,12 @@ def observe_waiting_transition(frames: Frames, wire: WireTapLog,
     repeated frame is not saved twice. The wire view names every frame since
     the join so a later transition can be timed against the exe's own traffic.
     """
+    recorder = ObservationRecorder(frames, shots, "waiting-observe")
     started = time.time()
-    last_digest = ""
-    capture_count = 0
     while time.time() - started < timeout:
-        frame = frames.grab()
         elapsed = time.time() - started
-        digest = hashlib.sha256(frame.tobytes()).hexdigest()
-        shot = ""
-        if digest != last_digest:
-            capture_count += 1
-            name = f"waiting-observe-{capture_count:03}.png"
-            frames.capture(shots / name)
-            shot = f" shot={name}"
-            # capture() re-grabs: hash the pixels actually saved, so a
-            # byte-identical PNG is never written twice into the pack.
-            last_digest = hashlib.sha256(frames.last.tobytes()).hexdigest()
+        name = recorder.save_if_new()
+        shot = f" shot={name}" if name else ""
         opcodes = ",".join(wire.opcodes_since(3002))
         log.event(
             f"waiting observe t=+{elapsed:.1f}s label={frames.scene_label()} "
@@ -1442,24 +1463,18 @@ class StartCueObserver:
         self.log = log
         self.shots = shots
         self.started_at = time.time()
-        self.last_digest = ""
-        self.captures = 0
+        self.observations = ObservationRecorder(frames, shots, "waiting-cue")
         self.ready_sent = False
         self.host_started = False
         self.gate_logged = False
 
+    @property
+    def captures(self) -> int:
+        return self.observations.count
+
     def poll(self, elapsed: float) -> None:
-        frame = self.frames.grab()
-        digest = hashlib.sha256(frame.tobytes()).hexdigest()
-        shot = ""
-        if digest != self.last_digest:
-            self.captures += 1
-            name = f"waiting-cue-{self.captures:03}.png"
-            self.frames.capture(self.shots / name)
-            shot = f" shot={name}"
-            # capture() re-grabs, so hash the bytes actually saved.
-            self.last_digest = hashlib.sha256(
-                self.frames.last.tobytes()).hexdigest()
+        name = self.observations.save_if_new()
+        shot = f" shot={name}" if name else ""
         opcodes = ",".join(self.wire.opcodes_since(3002))
         self.log.event(
             f"cue t=+{elapsed:.1f}s label={self.frames.scene_label()} "
