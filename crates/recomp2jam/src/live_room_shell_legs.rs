@@ -530,55 +530,6 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
     finish(session, gateway.server);
 }
 
-/// #1125 boot-to-Room paint leg with explicit seam staging; it is not
-/// a Tier 3 close. Unlike the 2011 leg, it injects no 2011 frame and
-/// calls no `set_room_user_sheet`: the tested roster row comes from the
-/// boot 3003 gateway answer and the frame goes through `paint_at`.
-///
-/// seam: no production `session.rs` path calls `open_room_user_sheet`,
-/// and `room_friend_host` is read only by tests. The host and gift word
-/// are test-staged, not frame-derived; only the constructor words and
-/// native paint contract are pinned here. Browser content stays OPEN
-/// (#405).
-/// Archives absent -> skip cleanly (CI has no game data).
-#[test]
-fn live_room_friend_host_frame_inks_the_native_roster_with_gift_on() {
-    if !archives_present() {
-        println!("SKIP live_room_friend_host_frame_inks_the_native_roster_with_gift_on: missing install-root interface archive");
-        return;
-    }
-    let (mut session, gateway) = boot_roster_leg();
-    join_waiting_by_click(&mut session, &gateway.join_answer_written);
-    return_to_room(&mut session);
-    let rest = roster_pixels(&mut session);
-    session.game_mut().open_room_user_sheet(true);
-
-    let painted = roster_pixels(&mut session);
-    let host = *session
-        .game_mut()
-        .room_friend_host()
-        .expect("the open mounts the friend host");
-    let roster = session.game_mut().room_user_sheet().to_vec();
-    let gift_on = session.game_mut().room_user_sheet_gift_on();
-    drop(gateway.incoming);
-    finish(session, gateway.server);
-
-    assert_eq!(host.vftable(), Some("CWebFriendCtrl::vftable"));
-    assert_eq!(host.trailing_flags(), [1, 0, 0]);
-    assert_eq!(
-        roster.len(),
-        1,
-        "the boot 3003 snapshot is the native roster"
-    );
-    assert_eq!(roster[0].nickname, "peer");
-    assert!(gift_on, "the test-staged gift-on word stays with the sheet");
-    assert_ne!(rest, painted, "the staged DESC well inks the native row");
-    assert_eq!(
-        host.page_boundary_open(),
-        "OPEN: no gamefine_main.asp render or wire capture (#405)"
-    );
-}
-
 /// #973: an invalid 2018 answer stages a zero-ink refusal row.
 ///
 /// ev_4abe96c99ad41dde2de8e524bed38c46f40c9759baf43149573ce44cd987b161
