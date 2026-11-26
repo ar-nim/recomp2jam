@@ -74,6 +74,7 @@ use crate::options::{OptionsSettings, WindowCursorStage};
 use crate::staging::ShopPriceFonts;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
+use o2jam_net::relay::PremiumTimeRow;
 use o2jam_net::{
     rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
     KeyMode, MemberRole, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
@@ -4158,6 +4159,58 @@ pub fn paint_myroom_confirm(frame: &mut Frame<'_>, art: Option<&SceneArt>, messa
     }
 }
 
+/// The one staged Information message cell, or its archive-less
+/// fallback. Geometry always comes from the `.bnd` placement.
+fn staged_information_message_rect(art: Option<&SceneArt>) -> Rect {
+    art.filter(|art| art.has_figures())
+        .and_then(|art| {
+            let origin = dialog_origin(&art.placements);
+            art.placements
+                .iter()
+                .find(|placement| placement.code == INFORMATION_MESSAGE_CODE)
+                .map(|placement| Rect {
+                    x: placement.rect.x + origin.0,
+                    y: placement.rect.y + origin.1,
+                    w: placement.rect.w,
+                    h: placement.rect.h,
+                })
+        })
+        .unwrap_or_else(|| quit_fallback_rects().0)
+}
+
+/// Paint the pinned 2026 premium-time rows in a staged description
+/// rect. Song ids are wire values; the description text and status
+/// byte meanings stay OPEN, so no prose is invented here. The exe's
+/// own description rect is unpinned; the staged Information cell is
+/// our presentation seam, not an exe geometry claim.
+pub fn paint_premium_time_rows(
+    frame: &mut Frame<'_>,
+    art: Option<&SceneArt>,
+    rows: &[PremiumTimeRow],
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let staged_rect = staged_information_message_rect(art);
+    let rect = scale_rect_to_frame(&staged_rect, frame.w, frame.h);
+    let line_height = usize::try_from(rect.h).unwrap_or(0) / rows.len();
+    if line_height == 0 {
+        return;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let top = index.saturating_mul(line_height);
+        let cell = Rect {
+            x: rect.x,
+            y: rect
+                .y
+                .saturating_add(i32::try_from(top).unwrap_or(i32::MAX)),
+            w: rect.w,
+            h: u32::try_from(line_height).unwrap_or(0),
+        };
+        paint_text_into_rect(frame, cell, &row.song_id.to_string(), CP949_INK);
+    }
+}
+
 /// One-OK sheet painter shared by the relay notice, the Room fuse, and
 /// the refused channel enter (#717). The caller owns the exact CP949
 /// bytes; geometry comes only from the staged `.bnd` rects or the
@@ -5198,6 +5251,45 @@ mod paint_tests {
         blob.extend_from_slice(&pixels);
         let sprite = o2jam_file::parse_sprite55(&blob).expect("synthetic pose frame");
         AvatarFigure::from_sprite55_frame(&sprite, 0)
+    }
+
+    #[test]
+    fn premium_time_rows_ink_only_the_staged_song_ids() {
+        // seam: the painter consumes staged rows and staged rects; the
+        // 2026 wire staging is pinned by `premium_time_2026_stages_its_rows_on_the_scripted_gateway`.
+        let rows = [
+            PremiumTimeRow {
+                song_id: 757,
+                status: [0; 5],
+            },
+            PremiumTimeRow {
+                song_id: 900,
+                status: [1, 2, 3, 4, 5],
+            },
+        ];
+        let mut pixels = vec![0u32; 800 * 600];
+        {
+            let mut frame = Frame {
+                buf: &mut pixels,
+                w: 800,
+                h: 600,
+            };
+            paint_premium_time_rows(&mut frame, None, &[]);
+        }
+        let blank = pixels.clone();
+        {
+            let mut frame = Frame {
+                buf: &mut pixels,
+                w: 800,
+                h: 600,
+            };
+            paint_premium_time_rows(&mut frame, None, &rows);
+        }
+        assert!(blank.iter().all(|pixel| *pixel == 0));
+        assert!(
+            pixels != blank,
+            "staged song ids must ink inside the description rect"
+        );
     }
 
     #[test]

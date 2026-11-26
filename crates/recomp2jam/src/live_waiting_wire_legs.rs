@@ -10,8 +10,11 @@ use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
-use o2jam_net::message::{ExitWaitingAnswer, MusicLoaded, StartGameAnswer, WaitingMemberRows};
+use o2jam_net::message::{
+    ExitWaitingAnswer, MusicLoaded, RoomDisappearedNotice, StartGameAnswer, WaitingMemberRows,
+};
 use o2jam_net::play::MemberReadyStateChanged;
+use o2jam_net::rooms::RoomSlotUpdate;
 use o2jam_net::testing::{fake_gateway, read_frame};
 use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
@@ -317,6 +320,135 @@ fn live_4009_echo_lights_the_peer_ready_mark_from_boot() {
         before,
         paint_frame(&mut session),
         "the ready mark repainted"
+    );
+    finish(session, gateway);
+}
+
+#[test]
+fn live_3009_kick_shows_the_staged_member_nickname_from_boot() {
+    // Live caller chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> OnlineSession::paint -> poll_waiting_chat
+    // -> drain_waiting_chat -> apply_waiting_frame -> apply_slot_update ->
+    // ScreenGame::stage_player_kicked_caption -> paint_waiting ->
+    // paint_information_message.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let mut room = joined_room(0, true);
+    room.slots[1]
+        .member
+        .as_mut()
+        .expect("the join answer seats the peer")
+        .nickname = "KICKME".to_owned();
+    let gateway = spawn_waiting_wire_gateway(room);
+    let mut session = boot_into_waiting(&gateway);
+    let before = paint_frame(&mut session);
+    gateway.push(
+        RoomSlotUpdate {
+            index: 1,
+            action_code: 3,
+        }
+        .encode(),
+    );
+    for _ in 0..MAX_SCREEN_PAINTS {
+        if session.game_mut().waiting_wire_caption_text().is_some() {
+            break;
+        }
+        paint(&mut session);
+    }
+    assert_eq!(
+        session.game_mut().waiting_wire_caption_text().as_deref(),
+        Some("[정보] KICKME님이 강퇴 당하셨습니다."),
+        "the kick sheet names the evicted seat"
+    );
+    assert_ne!(
+        before,
+        paint_frame(&mut session),
+        "the kick sheet inked into the frame"
+    );
+    finish(session, gateway);
+}
+
+#[test]
+fn live_3014_shows_the_room_disappeared_caption_from_boot() {
+    // Live caller chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> OnlineSession::paint -> poll_waiting_chat
+    // -> drain_waiting_chat -> apply_waiting_frame ->
+    // apply_room_disappeared_notice -> ScreenGame::stage_waiting_wire_caption
+    // -> paint_waiting -> WaitingCaptions notice.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
+    let mut session = boot_into_waiting(&gateway);
+    let before = paint_frame(&mut session);
+    gateway.push(RoomDisappearedNotice.encode());
+    for _ in 0..MAX_SCREEN_PAINTS {
+        if session.game_mut().waiting_notice() == Some("공연대기실이 사라졌습니다.") {
+            break;
+        }
+        paint(&mut session);
+    }
+    assert_eq!(
+        session.game_mut().waiting_notice(),
+        Some("공연대기실이 사라졌습니다."),
+        "the pinned 3014 caption is staged"
+    );
+    assert!(
+        session.game_mut().staged_waiting_member(1).is_none(),
+        "3014 released the staged peer seat"
+    );
+    assert_ne!(
+        before,
+        paint_frame(&mut session),
+        "the notice repainted the Waiting line"
+    );
+    finish(session, gateway);
+}
+
+#[test]
+fn live_4011_settings_mismatch_posts_the_config_error_sheet_from_boot() {
+    // Live caller chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> OnlineSession::paint -> poll_waiting_chat
+    // -> drain_waiting_chat -> apply_waiting_frame ->
+    // apply_start_game_answer -> start_settings_word_mismatches ->
+    // ScreenGame::stage_waiting_wire_caption -> paint_waiting ->
+    // paint_information_message.
+    // The writer of the exe's 0x768570 settings word stays OPEN; this
+    // leg stages a mismatching value before the wire answer.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
+    let mut session = boot_into_waiting(&gateway);
+    session.game_mut().set_room_settings_word(Some(999));
+    let before = paint_frame(&mut session);
+    gateway.push(StartGameAnswer { result: 0 }.encode());
+    for _ in 0..MAX_SCREEN_PAINTS {
+        if session.game_mut().waiting_notice().is_some() {
+            break;
+        }
+        paint(&mut session);
+    }
+    assert_eq!(
+        session.game_mut().waiting_notice(),
+        Some("게임설정 조작 오류로 게임을 중단합니다.."),
+        "the fifth 4011 caption is the local settings mismatch"
+    );
+    assert_eq!(session.screen(), o2jam_shell::Screen::Waiting);
+    assert_ne!(
+        before,
+        paint_frame(&mut session),
+        "the refusal sheet inked into the frame"
     );
     finish(session, gateway);
 }
