@@ -1833,11 +1833,14 @@ mod tests {
 
     #[test]
     fn room_friend_host_constructor_installs_the_pinned_vftable_and_flags() {
-        // seam: no production path opens the Room user-list sheet; the
-        // host and gift words are test-staged, not frame-derived. The
-        // pin defines these constructor words and nothing about page
-        // content, which stays OPEN (#405). Expected values are
-        // independent literals, not the constants feeding the code.
+        // seam: no production path opens the Room user-list sheet
+        // (`open_room_user_sheet` has test callers only) and no
+        // production code reads `room_friend_host()`; both facts are
+        // why a seam suffices for the host consumer. This guard stages
+        // only the constructor words. The pin defines these words and
+        // nothing about page content, which stays OPEN (#405). Expected
+        // values are independent literals, not the constants feeding
+        // the code.
         let host = NativeRoomFriendHost::mount();
         assert_eq!(host.vftable(), "CWebFriendCtrl::vftable");
         assert_eq!(host.trailing_flags(), [1, 0, 0]);
