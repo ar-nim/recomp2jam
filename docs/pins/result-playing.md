@@ -304,3 +304,18 @@ the rank-byte-to-seat mapping needed by the gauge/rank-row story.
 Evidence: `ev_f5391cd3192dfca5a48e2442a0d68e1ca601a606bb720a92618202df8c338de4`
 (handler), `ev_859d8bd1b6241dbf33b2f25b409a91d866cdfb32490750ec60c9925d83d37c4a`
 (position setter).
+
+### NoteTail table and consumer addendum (2026-11-25 senior REA pass)
+
+The four float pairs at `0x67fe8c` are `(0.0, 0.0)`, `(16.0, 3.5)`,
+`(30.0, 25.0)`, `(42.5, 50.0)`. `0x56bf40` reads `NoteTail` from
+`option.ini`, defaults to 2, accepts only 0..=3, then copies the
+selected pair to game-object `+0x6c` and `+0x70`. `0x56bed0` computes
+`((level_at_+0x68 - 1) * pair_y + pair_x) * speed_at_+0x64 / 160.0`,
+rounds it, and clamps the result to 0..=120 at game-object `+0x4`.
+This is the hold-art width consumer; the table has FOUR pairs, not five.
+
+Evidence: `ev_1c52f27d69e25d6b48296d5f9d3193f7db8ff24fcdf9479d44bdc9b6ffb5c905`
+(option reader), `ev_e49803a5403b329bae6b8021736dba3745a82376b07e2149d3879a5d2d496b19`
+(table bytes), `ev_c097a9284e8d5db1949b349dd1a173a8b24bbbd550f027243cf2a2ee3c09577a`
+(width consumer).
