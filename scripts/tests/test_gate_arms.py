@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ import unittest
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPTS_DIR.parent
 GATE_SCRIPT = SCRIPTS_DIR / "gate-check.sh"
 PRESENT_CANARY_OK = (
     "test live_art::live_art_tests::"
@@ -205,6 +207,55 @@ class GateArmTest(unittest.TestCase):
         self.assertTrue(suite_calls, "the gate must run a workspace suite")
         for call in suite_calls:
             self.assertIn("--show-output", call, call)
+
+
+def function_body(source: str, name: str) -> str:
+    """One test function's body, from its opening brace."""
+    start = source.index(f"fn {name}(")
+    opening = source.index("{", start)
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening:index + 1]
+    raise AssertionError(f"unbalanced braces in {name}")
+
+
+class RealDataSkipTest(unittest.TestCase):
+    """Seam: gate routing is source behavior, not a player-visible path."""
+
+    ROUTED_TESTS = (
+        ("crates/recomp2jam/src/loading.rs",
+         "loading_cover_decodes_the_walked_chart"),
+        ("crates/o2jam-shell/src/playing.rs",
+         "from_archive_binds_all_seven_lanes"),
+        ("crates/o2jam-shell/src/screens/game/mod.rs",
+         "staged_catalog_and_selection_load_the_walked_cover"),
+    )
+
+    def test_named_real_data_tests_route_through_the_pack_gate(self) -> None:
+        # Gate chain: cargo test --workspace -> real-data test ->
+        # o2jam_file::data_root::pack_dir_for_test -> `SKIP <test name>`
+        # -> gate log (`--show-output`). A silent `return` hides the
+        # reason, so it fails this guard.
+        for relative_path, test_name in self.ROUTED_TESTS:
+            with self.subTest(test=test_name):
+                source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+                body = function_body(source, test_name)
+                self.assertIn("installed_file_bytes(", body)
+                self.assertIn(f"stringify!({test_name})", body,
+                              "the SKIP label must name the test function")
+                self.assertNotRegex(
+                    body, r"let Ok\([^)]*\) = std::fs::read",
+                    "a missing pack must report SKIP, not return silently",
+                )
+                self.assertIn("pack_dir_for_test(&root, test_name)", source,
+                              "the local helper must reach the shared pack gate")
+                self.assertIn("PACK GAP {test_name}", source,
+                              "a present pack with a missing file must fail")
 
 
 if __name__ == "__main__":

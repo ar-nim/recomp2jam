@@ -1,11 +1,13 @@
-# ADR-0016: Keep the missing-pose-slot fallback and record the draw-nothing divergence
+# ADR-0016: Land exe parity for a missing pose slot
 
-Date: 2026-11-20
+Date: 2026-11-20; parity landed 2026-11-26 (ticket #913).
 
 ## Status
 
-Accepted (ticket #909) before any code change. Parity remains OPEN with
-a named next step; no guard is claimed for this ticket.
+Landed parity. The picker reads only the exact pose slot of the wearer's
+parity and returns no body when it is empty. Guards cover the selector,
+the staged figure, and the female wearer's male-slot case. The earlier
+fallback and its divergence were an OPEN record, not the final behavior.
 
 ## Context
 
@@ -29,37 +31,26 @@ and
 Oracle: `OTwo.exe`, 5,029,888 B, SHA-256
 `83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`.
 
-A parity patch was tried first, TDD style: three new guards failed on the
-old picker, then passed after the picker read only the exact pose and
-parity slot. The full workspace gate then failed five guards in
-`crates/recomp2jam/src/connect.rs` (`avatar_io_tests`:
-`stacks_figure_from_memory_without_disk`,
-`character_equipment_selects_worn_layers`,
-`male_and_other_heroes_both_stack`; `connect_flow_tests`:
-`builds_worn_figure_from_archive`,
-`stacks_worn_avatar_from_local_archive`). Those fixtures build a one-row
-item table with art only in male slot 2 and call the stacker for a female
-wearer; they expect the cross-parity body. That file is outside this
-ticket's owned paths, so the patch and its guards were withdrawn rather
-than land a red workspace.
+A parity patch was first tried, TDD style: three new guards failed on the
+old picker, then passed after the change. The full workspace gate then
+failed five `connect.rs` fixtures that gave a female wearer only a male
+pose slot. Ticket #913 fixed those fixtures first: each wearer now has
+its own pose sprite. It then reapplied the picker change and the three
+guards in one integrated commit.
 
 ## Decision
 
-Keep the existing `pick_wear_sprites` fallback for now and record the
-difference from the exe as an OPEN divergence. Do not claim parity for
-an empty pose slot and do not ship a guard that pins the wrong behavior.
-The ADR lands before any code change; no code change lands in this
-ticket.
+`pick_wear_sprites` reads one slot per part block: the kit's pose variant
+at the wearer's parity offset. It does not try the other parity or an
+other pose. An empty exact slot contributes no body, matching the exe's
+null return at selector VA `0x52e730`. The old fallback is removed.
 
 ## Consequences
 
-- A kit whose item row lacks the kit's pose can still show another pose
-  or parity as a stand-in. This is a known FAIL against the exe, not a
-  silent choice; `docs/equip.md` divergence 1 points here.
-- Next evidence step: hand the five `connect.rs` fixtures to the lane that
-  owns that file, change them to give each wearer parity its own sprite,
-  then reapply the withdrawn picker change and its three guards in one
-  integrated commit. The patch is kept at
-  `~/scratch/lane-avatar-guards/parity-attempt.patch` for that handoff.
+- A kit whose item row lacks the kit's pose paints nothing for that
+  block. This now matches the exe pin; `docs/equip.md` divergence 1 is
+  resolved for the missing-pose-slot case.
+- The five `connect.rs` fixtures give each wearer parity its own sprite;
+  they no longer pin the withdrawn fallback.
 - The default naked-kit fallback (#243/#375) is unchanged: it composes
   missing *equipment rows*, not missing pose slots.

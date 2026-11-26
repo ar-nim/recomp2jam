@@ -11264,6 +11264,20 @@ mod game_tests {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
+    /// Real-data test seam: an absent pack prints a named SKIP; a
+    /// present pack with a missing artifact fails instead of skipping.
+    fn installed_data_dir(test_name: &str) -> Option<PathBuf> {
+        let root = o2jam_file::data_root::install_root();
+        o2jam_file::data_root::pack_dir_for_test(&root, test_name)
+    }
+
+    fn installed_file_bytes(test_name: &str, relative_path: &str) -> Option<Vec<u8>> {
+        let path = installed_data_dir(test_name)?.join(relative_path);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {}: {error}", path.display()));
+        Some(bytes)
+    }
+
     #[test]
     fn loaded_chart_scales_notes_down_the_highway() {
         let mut game = ScreenGame::new();
@@ -16674,11 +16688,12 @@ mod game_tests {
     fn staged_catalog_and_selection_load_the_walked_cover() {
         // End to end on a real install: the 757 token maps to
         // `Music/o2ma757.ojn`, whose OJN cover section decodes to the
-        // 800x600 album art (docs/file-formats/ojn.md). Skips when
-        // `install-root` is absent.
-        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(_) = std::fs::read(&chart) else {
+        // 800x600 album art (docs/file-formats/ojn.md). The pack gate
+        // prints the named SKIP line when `install-root` is absent.
+        let Some(_bytes) = installed_file_bytes(
+            stringify!(staged_catalog_and_selection_load_the_walked_cover),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let mut game = ScreenGame::new();
@@ -16762,16 +16777,18 @@ mod game_tests {
     }
 
     /// Walk one chart from boot staging to a painted Result frame and
-    /// return its cover word, pane hash, and pixels. `None` means the
-    /// install does not carry that chart (CI skips cleanly).
+    /// return its cover word, pane hash, and pixels. A missing chart in
+    /// a present pack is a PACK GAP, not a silent skip.
     fn walked_result_pane(
         root: &Path,
         art: &SceneArt,
         music_id: u16,
         file: &str,
         token: &str,
-    ) -> Option<(u16, u64, Vec<u32>)> {
-        let bytes = std::fs::read(root.join("Music").join(format!("{file}.ojn"))).ok()?;
+    ) -> (u16, u64, Vec<u32>) {
+        let chart_path = root.join("Music").join(format!("{file}.ojn"));
+        let bytes = std::fs::read(&chart_path)
+            .unwrap_or_else(|error| panic!("PACK GAP: {}: {error}", chart_path.display()));
         let jpeg = o2jam_file::ojn_cover_jpeg(&bytes).unwrap();
         let cover = cover_image(&o2jam_file::decode_ojn_cover(&jpeg).unwrap()).unwrap();
         let mut game = ScreenGame::new();
@@ -16816,7 +16833,7 @@ mod game_tests {
             result_pane_hash(&later),
             "the staged pane stays OPI ink over time for {file}"
         );
-        Some((cover.words[0], result_pane_hash(&frame), frame))
+        (cover.words[0], result_pane_hash(&frame), frame)
     }
 
     #[test]
@@ -16828,19 +16845,22 @@ mod game_tests {
         // The exe fills `0x17100001` and selects `0x17500004`, never a
         // chart cover (`ev_531d1dedc876922b6d86bcb6cb798fac950bcc0f81e1314c3917e10e292131b1`,
         // `ev_30a0db95887dd5efb982f643480cabc628f80d0b7f9a6f932491351ee00d908e`).
-        // Two walked covers must leave the pane identical. Skips without
-        // `install-root` (CI has no game data).
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam");
-        let Ok(interface) = std::fs::read(root.join("Image/Interface1.opi")) else {
+        // Two walked covers must leave the pane identical. The pack gate
+        // prints the named SKIP line without game data (CI arm).
+        let test_name = stringify!(result_music_pane_uses_staged_opi_not_the_walked_ojn_cover);
+        let Some(root) = installed_data_dir(test_name) else {
             return;
         };
+        let interface_path = root.join("Image/Interface1.opi");
+        let interface = std::fs::read(&interface_path).unwrap_or_else(|error| {
+            panic!(
+                "PACK GAP {test_name}: {}: {error}",
+                interface_path.display()
+            )
+        });
         let art = result_scene_art(&interface);
-        let Some(first) = walked_result_pane(&root, &art, 757, "o2ma757", "o2ma757.ojm") else {
-            return;
-        };
-        let Some(second) = walked_result_pane(&root, &art, 100, "o2ma100", "o2ma100.ojm") else {
-            return;
-        };
+        let first = walked_result_pane(&root, &art, 757, "o2ma757", "o2ma757.ojm");
+        let second = walked_result_pane(&root, &art, 100, "o2ma100", "o2ma100.ojm");
         assert_ne!(first.0, second.0, "the two covers differ");
         assert_eq!(
             first.1, second.1,
@@ -26950,9 +26970,9 @@ mod game_tests {
         use crate::screens::side::CREATE_ROOM_CREATE_CODE;
         use crate::staging::{stage_dialog, Dialog, StageContext};
         let mut game = ScreenGame::new();
-        let Ok(bytes) = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        let Some(bytes) = installed_file_bytes(
+            stringify!(create_room_create_clicks_the_parent_offset_rect_with_real_bytes),
+            "Image/Interface1.opi",
         ) else {
             return;
         };
@@ -26996,9 +27016,9 @@ mod game_tests {
     fn staged_create_password_edit_feeds_the_committed_lock_flag() {
         use crate::screens::side::CREATE_ROOM_PASSWORD_CODE;
         use crate::staging::{stage_dialog, Dialog, StageContext};
-        let Ok(bytes) = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        let Some(bytes) = installed_file_bytes(
+            stringify!(staged_create_password_edit_feeds_the_committed_lock_flag),
+            "Image/Interface1.opi",
         ) else {
             return;
         };
@@ -30395,14 +30415,11 @@ mod game_tests {
         // proves the live kit, never a stand-in.
         use super::super::paint::paint_shop_avatar;
         use super::super::side::SHOP_AVATAR_CODE;
-        let archive_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/avatar.opa");
-        let archive = match std::fs::read(&archive_path) {
-            Ok(archive) => archive,
-            Err(_) => {
-                println!("skip: missing install-root avatar.opa");
-                return;
-            }
+        let Some(archive) = installed_file_bytes(
+            stringify!(shop_avatar_pane_stacks_equipped_figure_from_installed_avatar),
+            "Image/avatar.opa",
+        ) else {
+            return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("avatar.opa parses");
         let entry = entries
@@ -35511,10 +35528,11 @@ mod game_tests {
     fn loading_cover_stages_the_walked_chart() {
         // End to end on a real install: song 757's walked bytes decode
         // to the 800x600 illustration, staged beside the planet body.
-        // Skips when `install-root` is absent.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(bytes) = std::fs::read(&path) else {
+        // The pack gate prints the named SKIP line when data is absent.
+        let Some(bytes) = installed_file_bytes(
+            stringify!(loading_cover_stages_the_walked_chart),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
@@ -35539,10 +35557,12 @@ mod game_tests {
     #[test]
     fn loading_cover_miss_clears_a_staged_cover() {
         // A later miss drops the earlier cover (stale art must never
-        // hide the planet fallback). Skips when `install-root` is absent.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(bytes) = std::fs::read(&path) else {
+        // hide the planet fallback). The pack gate prints the named
+        // SKIP line when `install-root` is absent.
+        let Some(bytes) = installed_file_bytes(
+            stringify!(loading_cover_miss_clears_a_staged_cover),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
@@ -35560,10 +35580,12 @@ mod game_tests {
     fn selecting_the_walked_song_stages_its_loading_cover() {
         // Catalog + selection resolve reads the same walked bytes the
         // gate walks, so real loads feed the loading scene with no
-        // extra call. Skips when `install-root` is absent.
-        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
-        let Ok(_) = std::fs::read(&chart) else {
+        // extra call. The pack gate prints the named SKIP line when
+        // `install-root` is absent.
+        let Some(_bytes) = installed_file_bytes(
+            stringify!(selecting_the_walked_song_stages_its_loading_cover),
+            "Music/o2ma757.ojn",
+        ) else {
             return;
         };
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
@@ -36884,10 +36906,10 @@ mod game_tests {
             }
         }
 
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music/Tutorial.ojm");
-        let Ok(bytes) = std::fs::read(&path) else {
-            println!("skip: no install-root Tutorial.ojm");
+        let Some(bytes) = installed_file_bytes(
+            stringify!(firststep_tutorial_entry_cues_the_pinned_tutorial_ojm_record),
+            "Music/Tutorial.ojm",
+        ) else {
             return;
         };
         let tables = o2jam_file::parse_new_variant_entries(&bytes).expect("parse Tutorial.ojm");
@@ -37853,10 +37875,12 @@ mod game_tests {
         // Install-guarded (ticket #34): the parsed 7.55 `STATE_ROOM`
         // block pairs `IDC_BUTTON_SROOM_FIRSTSTEP` (`0x13200032`) with
         // its `.bnd` rect; the click dispatch hit-tests exactly that
-        // staged rect. Skips when `install-root` is absent.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Image/Interface1.opi");
-        let Ok(bytes) = std::fs::read(&path) else {
+        // staged rect. The pack gate prints the named SKIP line when
+        // `install-root` is absent.
+        let Some(bytes) = installed_file_bytes(
+            stringify!(staged_firststep_rect_matches_the_room_block_rect),
+            "Image/Interface1.opi",
+        ) else {
             return;
         };
         let report = crate::staging::stage_state(
@@ -37869,7 +37893,7 @@ mod game_tests {
             .placements
             .iter()
             .find(|placement| placement.code == 0x1320_0032)
-            .unwrap_or_else(|| panic!("{}: FIRSTSTEP placement stages", path.display()));
+            .unwrap_or_else(|| panic!("FIRSTSTEP placement stages from the packed OPI"));
         // The parsed block is the oracle (owner rule `f38f3`):
         // `GLOSSARY.md` pins FIRSTSTEP at (660,1)-(720,33); the
         // `docs/hover.md` pixel box (660,1)-(718,32) is the changed-art
@@ -38070,20 +38094,16 @@ mod game_tests {
         }
     }
 
-    /// Stage one real `Dialog_Option_*` sheet (skips without
-    /// install-root): the genuine 7.55 block + `.bnd` pairing through
-    /// the staging declaration, like the live client stages it. The
-    /// placements stay readable for dialog-relative click centers.
+    /// Stage one real `Dialog_Option_*` sheet. The caller's test name
+    /// produces a named SKIP line without game data; the genuine 7.55
+    /// block + `.bnd` pairing is the staged live-client path.
     fn stage_real_option_sheet(
         game: &mut ScreenGame,
         tab: PlanetOptionTab,
+        test_name: &str,
     ) -> Option<Vec<ScenePlacement>> {
         use crate::staging::{stage_dialog, StageContext};
-        let bytes = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image/Interface1.opi"),
-        )
-        .ok()?;
+        let bytes = installed_file_bytes(test_name, "Image/Interface1.opi")?;
         let dialog = match tab {
             PlanetOptionTab::Key => crate::staging::Dialog::PlanetOption,
             PlanetOptionTab::Sound => crate::staging::Dialog::PlanetOptionSound,
@@ -38120,7 +38140,11 @@ mod game_tests {
         // (dead SAVE) guarded at the exact staged geometry (#15/#16
         // dispatch chain on top of real dialog geometry).
         let mut game = ScreenGame::new();
-        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+        let Some(placements) = stage_real_option_sheet(
+            &mut game,
+            PlanetOptionTab::Key,
+            stringify!(options_save_click_commits_ini_at_the_staged_rect),
+        ) else {
             return;
         };
         let root = std::env::temp_dir().join(format!("recomp2jam-opt-save-{}", std::process::id()));
@@ -38144,7 +38168,11 @@ mod game_tests {
         // Real 7.55 bytes (skips without install-root): the staged
         // EXIT button closes the dialog without saving (#131).
         let mut game = ScreenGame::new();
-        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+        let Some(placements) = stage_real_option_sheet(
+            &mut game,
+            PlanetOptionTab::Key,
+            stringify!(options_exit_click_closes_at_the_staged_rect),
+        ) else {
             return;
         };
         open_options(&mut game);
@@ -38160,10 +38188,13 @@ mod game_tests {
         // staged SOUNDSET header flips the sheet — the #131 "key tab
         // cannot be changed" leg at the real geometry.
         let mut game = ScreenGame::new();
-        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+        let test_name =
+            stringify!(options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects);
+        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key, test_name)
+        else {
             return;
         };
-        stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
+        stage_real_option_sheet(&mut game, PlanetOptionTab::Sound, test_name);
         open_options(&mut game);
         game.switch_option_tab(PlanetOptionTab::Key);
         game.options_mut().set_three_key(false);
@@ -38173,11 +38204,8 @@ mod game_tests {
         // the rect carries ink only when the glyph paints there;
         // broken paint piles the glyph at the dialog origin and leaves
         // this rect empty.
-        let archive = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../install-root/O2Jam/Image/Interface1.opi"),
-        );
-        if let Ok(archive) = archive {
+        let archive = installed_file_bytes(test_name, "Image/Interface1.opi");
+        if let Some(archive) = archive {
             use crate::staging::{stage_dialog, StageContext};
             let art = stage_dialog(
                 &archive,
