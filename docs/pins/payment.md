@@ -135,3 +135,16 @@ This does not prove the URL cannot be built from fragments, but it
 means there is no direct literal to pin. #1147's parameter shape and
 native purchase/check semantics remain OPEN; no encrypted parameter
 contract may be invented from the archived PHP failure alone.
+
+## Hot-time/ticket event URL addendum (2026-11-25 senior REA pass)
+
+`0x4f5730` first calls the state/eligibility helper `0x48a060`; failure
+posts error the pinned negative error code through `0x5a8840`. Success sets state word 8,
+then opens exactly
+`http://o2jam.nopp.co.kr/client/event/2009/06_moa/hot_time.php`
+with no query string. The earlier Result-time `0x4c1b90` path is the one
+that appends `USER_INDEX_ID`, `&title=`, and the ticket-add branch; the
+separator/key source for that path remains the room-title string already
+pinned in `docs/gdi-text.md`, not a new invented parameter.
+
+Evidence: `ev_fdf4d3e0996e039f0f065cab829d622a59f008fe27fd2d3c46d14a025429a6fb`.
