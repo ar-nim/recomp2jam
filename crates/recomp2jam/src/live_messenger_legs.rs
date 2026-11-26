@@ -359,6 +359,7 @@ mod live_messenger_leg_tests {
     /// #1119 Tier 3. seam: no production caller reaches the induced
     /// failure hook; code zero takes the exe's silent arm before paint.
     /// Archives absent -> skip cleanly.
+    // Evidence: docs/pins/input-msg.md:337 (0x5a36d0 shows the box only for a nonzero code).
     #[test]
     fn live_zero_error_code_leaves_the_boot_frame_unchanged() {
         if !archives_present() {

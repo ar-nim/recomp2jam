@@ -2593,6 +2593,7 @@ mod tests {
         );
     }
 
+    // Evidence: docs/pins/input-msg.md:337 (0x5a36d0 shows the box only for a nonzero code).
     #[test]
     fn zero_error_code_leaves_the_window_frame_unchanged() {
         // seam: the popup-or-close helper's silent arm has no winit
