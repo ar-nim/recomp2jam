@@ -8,22 +8,26 @@
 //! skip the leg cleanly (CI has no game data, #0a3ba). The two-client
 //! live-battle Playing legs remain OPEN; this file does not fake them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
+use o2jam_audio::NullBackend;
 use o2jam_net::frame::encode_frame;
 use o2jam_net::testing::{fake_gateway, read_frame};
 use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
-    WireMessage,
+    SetRoomMusic, WireMessage,
 };
+use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
-    join_waiting_by_click, joined_room, paint, paint_frame, read_frame_until_eof, room_row,
-    MAX_SCREEN_PAINTS,
+    join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
+    read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
 };
+use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
 use crate::session::OnlineSession;
 
 /// Boot gateway plus the scripted S2C writer a live wire leg needs.
@@ -110,6 +114,12 @@ fn spawn_playing_wire_gateway(room: o2jam_net::JoinedRoom) -> PlayingWireGateway
                     .unwrap();
                 join_tx.send(()).unwrap();
             }
+            if frame.id == Request::StartGame.id() {
+                stream.write_all(&encode_frame(4011, &[])).unwrap();
+            }
+            if frame.id == Request::ConfirmMusicLoaded.id() {
+                stream.write_all(&encode_frame(4013, &[1, 1])).unwrap();
+            }
             let _ = reported_tx.send(frame);
         }
         writer.join().unwrap();
@@ -132,11 +142,79 @@ fn boot_into_playing_wire(gateway: &PlayingWireGateway) -> OnlineSession {
     session
 }
 
+/// Arm the Loading gate the same way the session tests do: a
+/// validated pick, the armed status caption, and a null audio rig.
+fn stage_armed_loading(game: &mut ScreenGame) {
+    game.set_selected_music(SetRoomMusic {
+        music_id: 757,
+        difficulty: 0,
+        speed: 0,
+    });
+    game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+    if let Some(status) = loading_phase_status(LOADING_GATE_STEPS, "Song", "Band") {
+        game.set_loading_status(status);
+    }
+}
+
+/// Walk the boot gateway from Planet to the Playing screen through
+/// the staged Waiting and Loading confirms. The same scripted answers
+/// as the session tests drive the 4011/4013 handoff.
+fn enter_playing_wire_from_boot(gateway: &PlayingWireGateway) -> OnlineSession {
+    let mut session = boot_into_playing_wire(gateway);
+    session.menu_key(MenuKey::Confirm, true);
+    paint_until_screen(&mut session, Screen::Loading);
+    stage_armed_loading(session.game_mut());
+    session.menu_key(MenuKey::Confirm, true);
+    paint_until_screen(&mut session, Screen::Playing);
+    session
+}
+
 /// Close the socket first so the writer thread can end before join.
 fn finish(session: OnlineSession, gateway: PlayingWireGateway) {
     drop(session);
     drop(gateway.script);
     gateway.server.join().unwrap();
+}
+
+#[test]
+fn live_4015_rank_exchange_seats_both_member_places_from_boot() {
+    // Live chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> Waiting Confirm -> Loading Confirm ->
+    // OnlineSession::paint -> poll_wire_at -> poll_stats ->
+    // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange ->
+    // ScreenGame::apply_rank_exchange -> PeerBars::apply_rank_broadcast.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_playing_wire_gateway(joined_room(0, true));
+    let mut session = enter_playing_wire_from_boot(&gateway);
+    assert_eq!(session.screen(), Screen::Playing);
+    gateway.push(encode_frame(
+        4015,
+        &[1u8, 1, 0, 1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+    ));
+    for _ in 0..MAX_SCREEN_PAINTS {
+        if session.game_mut().live_play().peers().rank_row(1) == Some(0)
+            && session.game_mut().live_play().peers().rank_row(0) == Some(1)
+        {
+            break;
+        }
+        paint(&mut session);
+    }
+    assert_eq!(
+        session.game_mut().live_play().peers().rank_row(1),
+        Some(0),
+        "member 1 must hold the zero-based place 0 after the boot exchange"
+    );
+    assert_eq!(
+        session.game_mut().live_play().peers().rank_row(0),
+        Some(1),
+        "member 0 must hold the zero-based place 1 after the boot exchange"
+    );
+    finish(session, gateway);
 }
 
 #[test]
