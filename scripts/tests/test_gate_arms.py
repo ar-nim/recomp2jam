@@ -23,6 +23,7 @@ PRESENT_CANARY_OK = (
 )
 REQUIRED_MARKER = "GATE_REQUIRE_ARCHIVES=1"
 UNSET_MARKER = "GATE_REQUIRE_ARCHIVES=unset"
+FAKE_SKIP_LINE = "SKIP some_real_data_test: install-root absent (unreachable)"
 
 
 class GateArmTest(unittest.TestCase):
@@ -60,6 +61,11 @@ class GateArmTest(unittest.TestCase):
             "\"$*\" >> \"$FAKE_CARGO_LOG\"\n"
             "if [ -n \"${FAKE_CANARY_LINE:-}\" ]; then\n"
             "  printf '%s\\n' \"$FAKE_CANARY_LINE\"\n"
+            "fi\n"
+            "if [ -n \"${FAKE_SKIP_LINE:-}\" ]; then\n"
+            "  case \" $* \" in\n"
+            "    *' --show-output '*) printf '%s\\n' \"$FAKE_SKIP_LINE\" ;;\n"
+            "  esac\n"
             "fi\n",
             encoding="utf-8",
         )
@@ -69,6 +75,7 @@ class GateArmTest(unittest.TestCase):
         self.env.update(PATH=f"{self.bin}:{self.env['PATH']}", FAKE_CARGO_LOG=str(self.log))
         self.env.pop("GATE_REQUIRE_ARCHIVES", None)
         self.env.pop("FAKE_CANARY_LINE", None)
+        self.env.pop("FAKE_SKIP_LINE", None)
 
     def run_gate(
         self, *args: str, fake_canary: bool = True
@@ -173,6 +180,31 @@ class GateArmTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.workspace_suite_markers(), [UNSET_MARKER])
+
+    def test_gate_output_shows_named_skip_lines_from_the_workspace_suite(self) -> None:
+        # Live chain: scripts/gate-check.sh --arm hidden ->
+        # cargo test --workspace -- --show-output -> captured SKIP line.
+        # Without --show-output cargo hides printed SKIP lines, so the
+        # official gate log cannot show why a real-data test skipped.
+        env = dict(self.env)
+        env["FAKE_SKIP_LINE"] = FAKE_SKIP_LINE
+        result = subprocess.run(
+            ["bash", str(self.repo / "scripts" / "gate-check.sh"),
+             "--no-push", "--arm", "hidden"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=self.repo,
+            timeout=60,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(FAKE_SKIP_LINE, result.stdout)
+        suite_calls = [line for line in self.log.read_text(encoding="utf-8").splitlines()
+                       if "test --workspace" in line]
+        self.assertTrue(suite_calls, "the gate must run a workspace suite")
+        for call in suite_calls:
+            self.assertIn("--show-output", call, call)
 
 
 if __name__ == "__main__":
