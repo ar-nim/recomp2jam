@@ -267,7 +267,7 @@ mod live_web_native_leg_tests {
             .find_map(|package| names.into_iter().find(|engine| *engine == package))
     }
 
-    /// #1137 Tier 3 build guard. seam: no browser engine can be
+    /// #1137 policy guard. seam: no browser engine can be
     /// reached from a headless leg; the dependency graph and the
     /// already-merged native host (#948/#1114) are the whole property.
     /// A `WebSheetHost` keeps only handle and visibility words: no
