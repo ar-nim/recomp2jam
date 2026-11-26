@@ -217,6 +217,7 @@ use o2jam_net::{
     RoomListEntry, WireMessage,
 };
 use o2jam_shell::screens::game::LobbyChat;
+use o2jam_shell::screens::messenger::{ROOM_FRIEND_TRAILING_FLAGS, ROOM_FRIEND_VFTABLE};
 
 /// Boot gateway for a Room-board leg with a chosen channel id and a
 /// scripted-frame queue. The frame queue keeps each leg free of wall-
@@ -528,6 +529,60 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
     assert_eq!(session.game_mut().room_user_sheet().len(), 1);
     drop(send);
     finish(session, gateway.server);
+}
+
+/// #1125 Tier 3: the booted Room user-list frame keeps the native
+/// roster and gift word beside the friend-host constructor words.
+///
+/// Live caller chain up to the staged DESC well:
+///   main.rs::run_play -> connect::connect_and_login_with_transport
+///   -> assemble_online_session -> enter_room_by_clicks -> OnlineSession::poll_wire
+///   -> note_room_user_list -> ScreenGame::set_room_user_sheet
+///   -> ScreenGame::paint_at -> paint_room.
+/// seam: the 2011 frame is injected through the scripted socket, and
+/// `ScreenGame::open_room_user_sheet` is the session.rs hand-off that
+/// mounts the host; neither edits session.rs. Browser content from
+/// `gamefine_main.asp` stays OPEN (#405).
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_room_friend_host_frame_inks_the_native_roster_with_gift_on() {
+    if !archives_present() {
+        println!("SKIP live_room_friend_host_frame_inks_the_native_roster_with_gift_on: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway, send) = boot_room_leg(2);
+    let rest = roster_pixels(&mut session);
+    let sheet = RoomUserList {
+        users: vec![RoomUserListEntry {
+            id: 7,
+            username: "alice".to_owned(),
+            nickname: "Alice".to_owned(),
+            level: 42,
+        }],
+    };
+    send.send(sheet.encode()).unwrap();
+    paint_until_room(&mut session, |session| {
+        session.game_mut().room_user_sheet().len() == 1
+    });
+    session.game_mut().open_room_user_sheet(true);
+
+    let painted = roster_pixels(&mut session);
+    let host = *session.game_mut().room_friend_host();
+    let roster = session.game_mut().room_user_sheet().to_vec();
+    let gift_on = session.game_mut().room_user_sheet_gift_on();
+    drop(send);
+    finish(session, gateway.server);
+
+    assert_eq!(host.vftable(), Some(ROOM_FRIEND_VFTABLE));
+    assert_eq!(host.trailing_flags(), ROOM_FRIEND_TRAILING_FLAGS);
+    assert_eq!(roster.len(), 1, "the 2011 wire row is the native roster");
+    assert_eq!(roster[0].nickname, "Alice");
+    assert!(gift_on, "the user-list frame keeps the gift-on word");
+    assert_ne!(rest, painted, "the staged DESC well inks the native row");
+    assert!(
+        host.page_boundary_open().contains("OPEN"),
+        "no browser render is claimed"
+    );
 }
 
 /// #973: an invalid 2018 answer stages a zero-ink refusal row.

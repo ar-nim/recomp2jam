@@ -94,6 +94,61 @@ pub const MESSENGER_HOSTS: [MessengerHost; 5] = [
     MessengerHost::MusicShop,
 ];
 
+/// Vftable identity written by the Room friend-list constructor.
+/// Exe `0x57f5f0` / file `0x17f5f0`, REA evidence
+/// `b8a0.bed9.8a19.eb11.ff6a.69c3.df8e.c533.3861.6cee.1cc2.6a1c.2b73.f8b1.4d1c.5704`.
+pub const ROOM_FRIEND_VFTABLE: &str = "CWebFriendCtrl::vftable";
+
+/// Three trailing dwords the same constructor writes at object dword
+/// slots `0x407`/`0x408`/`0x409` (byte offsets `0x101c`/`0x1020`/
+/// `0x1024`): one, then two zeros.
+pub const ROOM_FRIEND_TRAILING_FLAGS: [u32; 3] = [1, 0, 0];
+
+/// The hosted page itself stays outside this client. No
+/// `gamefine_main.asp` document, script variable, or wire capture is
+/// claimed; the next evidence step is `#405` in `docs/web-surfaces.md`.
+pub const ROOM_FRIEND_PAGE_BOUNDARY_OPEN: &str =
+    "OPEN: no gamefine_main.asp render or wire capture (#405)";
+
+/// Native stand-in for the exe's Room friend-list host. Only the
+/// pinned constructor words are represented: roster rows and gift-on
+/// state stay in `ChatState`, and the browser page is not rendered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeRoomFriendHost {
+    vftable: Option<&'static str>,
+    trailing_flags: [u32; 3],
+}
+
+impl NativeRoomFriendHost {
+    /// Install the friend vftable identity and write the three trailing
+    /// flags in the order pinned at exe `0x57f5f0`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            vftable: Some(ROOM_FRIEND_VFTABLE),
+            trailing_flags: ROOM_FRIEND_TRAILING_FLAGS,
+        }
+    }
+
+    /// Vftable installed by the constructor, if this host is mounted.
+    #[must_use]
+    pub const fn vftable(&self) -> Option<&'static str> {
+        self.vftable
+    }
+
+    /// Trailing flag words in object-slot order.
+    #[must_use]
+    pub const fn trailing_flags(&self) -> [u32; 3] {
+        self.trailing_flags
+    }
+
+    /// Explicit evidence boundary for the page this client does not host.
+    #[must_use]
+    pub const fn page_boundary_open(&self) -> &'static str {
+        ROOM_FRIEND_PAGE_BOUNDARY_OPEN
+    }
+}
+
 /// `DIALOG_MESSENGER_MAIN` block: 77 parsed rects.
 pub const MESSENGER_MAIN_BLOCK: &str = "DIALOG_MESSENGER_MAIN";
 
@@ -1771,5 +1826,18 @@ mod tests {
         assert!(NativeEventPage::InGameQa
             .open_note()
             .contains("questions and outbound links OPEN"));
+    }
+
+    #[test]
+    fn room_friend_host_constructor_installs_the_pinned_vftable_and_flags() {
+        // seam: the pin defines these constructor words and nothing
+        // about page content; the hosted document stays OPEN (#405).
+        let host = NativeRoomFriendHost::new();
+        assert_eq!(host.vftable(), Some(ROOM_FRIEND_VFTABLE));
+        assert_eq!(host.trailing_flags(), ROOM_FRIEND_TRAILING_FLAGS);
+        assert!(
+            host.page_boundary_open().contains("OPEN"),
+            "the browser boundary must stay labeled"
+        );
     }
 }

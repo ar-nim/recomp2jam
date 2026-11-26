@@ -6,6 +6,7 @@ pub use super::super::paint::ChatSendMode;
 use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
 use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
 use crate::screen::Screen;
+use crate::screens::messenger::NativeRoomFriendHost;
 use o2jam_net::message::{KeyMode, RoomUserListEntry};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
@@ -581,6 +582,9 @@ pub(super) struct ChatState {
     room_roster_master: Option<u8>,
     room_user_sheet_gift_on: bool,
     room_user_sheet_url_gift_on: bool,
+    /// Friend-list host constructed when the Room user sheet mounts.
+    /// It owns no page or roster; both stay with the existing seam.
+    room_friend_host: NativeRoomFriendHost,
     waiting_draft: String,
     waiting_history: Vec<WaitingChatMessage>,
     /// Whisper target staged by the page's `SelectedUserNickName`
@@ -1102,9 +1106,12 @@ impl ChatState {
     }
 
     /// Mount the local stand-in for the exe's web user-list sheet.
+    /// The host is constructed here, as the exe's Room-enter builder
+    /// constructs `CWebFriendCtrl`; no page content is created.
     pub(super) fn open_room_user_sheet(&mut self, gift_on: bool) {
         self.room_user_sheet_open = true;
         self.room_user_sheet_gift_on = gift_on;
+        self.room_friend_host = NativeRoomFriendHost::new();
     }
 
     /// Close the sheet and rebuild its URL word from the gift-on flag
@@ -1124,5 +1131,11 @@ impl ChatState {
 
     pub(super) fn room_user_sheet_url_gift_on(&self) -> bool {
         self.room_user_sheet_url_gift_on
+    }
+
+    /// Friend host mounted with the user sheet, or the unmounted
+    /// default before the first open.
+    pub(super) const fn room_friend_host(&self) -> &NativeRoomFriendHost {
+        &self.room_friend_host
     }
 }
