@@ -856,6 +856,28 @@ fn teams_startable(self_team: u8, peers: &[&o2jam_net::RoomMember]) -> bool {
     used.len() > 1 && used.iter().all(|count| *count == used[0])
 }
 
+/// One 4015 rank exchange at the shell seam: the helper forward and
+/// the member slots reached by the eight place bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankExchangeOutcome {
+    /// `(0x12, rank, member, 0)` from rank `0`/`1`, if the member is known.
+    pub queue: Option<QueueEvent>,
+    /// One delivery per known member id, in wire place order.
+    pub deliveries: Vec<RankDelivery>,
+}
+
+/// Sentinel rank held by no member: it keeps an unnamed id from
+/// matching the identity holders seeded for the place broadcast.
+const RANK_EXCHANGE_UNMATCHED: u8 = 8;
+/// Place byte that cannot match a wire id (`0xff` marks empty places).
+const RANK_EXCHANGE_NO_ID: u8 = 0xff;
+
+/// Member-slot index for a rank byte naming one of the eight seats.
+fn rank_member_slot(member: u8) -> Option<usize> {
+    let slot = usize::from(member);
+    (slot < PEER_SLOT_COUNT).then_some(slot)
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -6412,6 +6434,63 @@ impl ScreenGame {
         (queue, ranks)
     }
 
+    /// Apply the 4015 rank-exchange form (handler VA `0x55fa20`,
+    /// ev `f5391cd3…`; place setter VA `0x5414a0`, ev `859d8bd1…`).
+    /// Rank `0`/`1` selects the life/jam helper for the local member;
+    /// each known id is then delivered its zero-based place, while an
+    /// unknown id writes nothing.
+    pub fn apply_rank_exchange(
+        &mut self,
+        member: u8,
+        rank: u16,
+        ranked_members: [u8; PEER_SLOT_COUNT],
+    ) -> RankExchangeOutcome {
+        let queue = self.select_rank_helper(member, rank);
+        let deliveries = self.seat_ranked_members(ranked_members);
+        RankExchangeOutcome { queue, deliveries }
+    }
+
+    /// Select the pinned helper and forward its queue event. The
+    /// addendum names the selector only, so the staged channel word
+    /// is zero: no gate value is invented for this wire form.
+    fn select_rank_helper(&mut self, member: u8, rank: u16) -> Option<QueueEvent> {
+        rank_member_slot(member)?;
+        match rank {
+            o2jam_game::STAT_LIFE | o2jam_game::STAT_JAM => {
+                self.playing.apply_peer_stats(member, rank, 0)
+            }
+            _ => None,
+        }
+    }
+
+    /// Deliver each place byte to the member holding it. The rank
+    /// mirror matches packet bytes against member-held ranks, so the
+    /// members are temporarily seeded with their own id; the broadcast
+    /// then writes the zero-based place into that member's slot.
+    fn seat_ranked_members(&mut self, ranked_members: [u8; PEER_SLOT_COUNT]) -> Vec<RankDelivery> {
+        let mut holders = [RANK_EXCHANGE_UNMATCHED; PEER_SLOT_COUNT];
+        for (slot, holder) in holders.iter_mut().enumerate() {
+            *holder = u8::try_from(slot).unwrap_or(RANK_EXCHANGE_UNMATCHED);
+        }
+        self.playing.set_rank_holders(RANK_EXCHANGE_NO_ID, holders);
+        let mut places = [RANK_EXCHANGE_UNMATCHED; PEER_SLOT_COUNT];
+        let mut deliveries = Vec::with_capacity(PEER_SLOT_COUNT);
+        for (index, member) in ranked_members.into_iter().enumerate() {
+            let (Some(slot), Some(place)) = (rank_member_slot(member), u8::try_from(index).ok())
+            else {
+                continue;
+            };
+            places[slot] = place;
+            deliveries.push(RankDelivery {
+                position: place,
+                rank: member,
+                slot: Some(slot),
+            });
+        }
+        let _ = self.playing.apply_peer_ranks(places);
+        deliveries
+    }
+
     /// Rank-1 battle verdict for the claimed local team, if known.
     #[must_use]
     pub fn battle_verdict(&self) -> Option<BattleVerdict> {
@@ -11815,6 +11894,106 @@ mod game_tests {
         game.load_chart(vec![(0, 1000, 7), (0, 2000, 7)]);
         game.strike_at(0, 1000);
         assert_eq!(game.life(), game.live_play().score().life.life());
+    }
+
+    #[test]
+    fn rank_exchange_rank_one_posts_the_pinned_helper_event() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange.
+        // Pin: rank 1 selects the jam helper and posts
+        // `(0x12, 1, member, 0)` (VA `0x55fa20`, ev `f5391cd3…`).
+        let mut game = ScreenGame::new();
+        let outcome = game.apply_rank_exchange(2, 1, [0xff; PEER_SLOT_COUNT]);
+        assert_eq!(
+            outcome.queue,
+            Some(QueueEvent {
+                category: 0x12,
+                stat_kind: 1,
+                slot: 2,
+                flag: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn rank_exchange_rank_zero_posts_the_life_helper_event() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange (rank 0 selects life).
+        let mut game = ScreenGame::new();
+        let outcome = game.apply_rank_exchange(3, 0, [0xff; PEER_SLOT_COUNT]);
+        assert_eq!(
+            outcome.queue.map(|event| event.stat_kind),
+            Some(o2jam_game::STAT_LIFE)
+        );
+    }
+
+    #[test]
+    fn rank_exchange_ignores_an_unhandled_rank_word() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange (unknown rank: no helper).
+        let mut game = ScreenGame::new();
+        let outcome = game.apply_rank_exchange(2, 2, [0xff; PEER_SLOT_COUNT]);
+        assert_eq!(outcome.queue, None);
+    }
+
+    #[test]
+    fn rank_exchange_ignores_an_out_of_range_member() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange (seat guard first).
+        let mut game = ScreenGame::new();
+        let outcome = game.apply_rank_exchange(8, 1, [0xff; PEER_SLOT_COUNT]);
+        assert_eq!(outcome.queue, None);
+    }
+
+    #[test]
+    fn rank_exchange_delivers_each_known_member_at_its_place() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange.
+        // Pin: each known id reaches its member slot with the zero-based
+        // place as notify argument (setter VA `0x5414a0`, ev `859d8bd1…`).
+        let mut game = ScreenGame::new();
+        let ids = [1u8, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let outcome = game.apply_rank_exchange(0, 0, ids);
+        assert_eq!(
+            outcome.deliveries,
+            vec![
+                RankDelivery {
+                    position: 0,
+                    rank: 1,
+                    slot: Some(1),
+                },
+                RankDelivery {
+                    position: 1,
+                    rank: 0,
+                    slot: Some(0),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rank_exchange_seats_the_place_byte_in_each_member_slot() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame -> apply_rank_exchange
+        // -> ScreenGame::apply_rank_exchange.
+        // Pin: `+0x217d` is mirrored as the member slot's rank-row
+        // byte; unknown ids must leave their row alone.
+        let mut game = ScreenGame::new();
+        game.apply_rank_exchange(0, 1, [1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(game.live_play().peers().rank_row(1), Some(0));
+        assert_eq!(game.live_play().peers().rank_row(0), Some(1));
+        assert_eq!(game.live_play().peers().rank_row(2), Some(0));
     }
 
     #[test]

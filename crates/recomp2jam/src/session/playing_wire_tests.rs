@@ -505,6 +505,28 @@ mod wire_guards {
     }
 
     #[test]
+    fn rank_exchange_4015_posts_the_helper_event_and_seats_both_places() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_rank_exchange ->
+        // ScreenGame::apply_rank_exchange -> PeerBars::apply_rank_broadcast.
+        let body = [1u8, 1, 0, 1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let (mut session, server, written) =
+            playing_gateway_session(joined_snapshot(), move |stream| {
+                stream.write_all(&encode_frame(4015, &body)).unwrap();
+            });
+        written.recv_timeout(Duration::from_secs(5)).unwrap();
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(
+            take_observations(),
+            vec![PlayingWireObservation::UiEvent((0x12, 1, 1, 0))]
+        );
+        assert_eq!(session.game.live_play().peers().rank_row(1), Some(0));
+        assert_eq!(session.game.live_play().peers().rank_row(0), Some(1));
+    }
+
+    #[test]
     fn playing_speed_4050_two_writes_land_in_the_self_result_slot() {
         // Live chain: main.rs::run_play -> assemble_online_session ->
         // OnlineSession::paint -> poll_wire_at -> poll_stats ->

@@ -154,6 +154,7 @@ use o2jam_net::message::{
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
+use o2jam_net::play::{RankExchange, RANK_EXCHANGE_BODY_LEN};
 use o2jam_net::relay::{
     decode_premium_time_rows, stored_team_from_wire, LiveStateResponse, MemberInfo,
     PREMIUM_TIME_COMMAND,
@@ -2531,7 +2532,7 @@ impl OnlineSession {
     fn drain_peer_echoes(&mut self) {
         loop {
             match self.gateway.next_frame() {
-                Ok(frame) if frame.id == GameStatsUpdate::COMMAND => self.apply_echo(&frame),
+                Ok(frame) if frame.id == GameStatsUpdate::COMMAND => self.apply_4015_frame(&frame),
                 // Playing/battle forwarders (VAs `0x563d10`, `0x563d30`,
                 // `0x563d50`). The exe reads no field: empty and padded
                 // frames must yield the same one UI forward. The shell
@@ -2629,6 +2630,40 @@ impl OnlineSession {
                 }
                 Err(_) => break,
             }
+        }
+    }
+
+    /// Route 4015 by body width: Memoryer's 13-byte echo keeps the
+    /// peer-bar fold, while the pinned 11-byte rank form takes the
+    /// rank-exchange arm. Undecodable bodies drop in the chosen arm.
+    fn apply_4015_frame(&mut self, frame: &Frame) {
+        if frame.payload.len() == RANK_EXCHANGE_BODY_LEN {
+            self.apply_rank_exchange(frame);
+            return;
+        }
+        self.apply_echo(frame);
+    }
+
+    /// Fold the pinned rank exchange into the shell: rank `0`/`1`
+    /// selects its helper and posts `(0x12, rank, member, 0)`; the
+    /// eight ids seat their zero-based place at each member slot.
+    fn apply_rank_exchange(&mut self, frame: &Frame) {
+        let Ok(exchange) = RankExchange::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable rank exchange");
+            return;
+        };
+        let outcome = self.game.apply_rank_exchange(
+            exchange.member_id,
+            exchange.rank,
+            exchange.ranked_members,
+        );
+        if let Some(event) = outcome.queue {
+            playing_wire_tests::observe(playing_wire_tests::PlayingWireObservation::UiEvent((
+                event.category,
+                event.stat_kind,
+                event.slot,
+                event.flag,
+            )));
         }
     }
 

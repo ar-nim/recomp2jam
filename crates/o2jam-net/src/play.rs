@@ -443,6 +443,65 @@ impl WireMessage for GameStatsUpdate {
     }
 }
 
+/// Rank-remap form of 4015, pinned by the senior REA pass on handler
+/// VA `0x55fa20` (file `0x15fa20`, ev `f5391cd3…`). Body: local
+/// member `u8`, rank word `u16`, then eight member ids in place order.
+/// The member must name one of the eight seats. Rank `0`/`1` selects
+/// the pinned helper and posts `(0x12, rank, member, 0)`; any other
+/// word leaves the helper uncalled. This form coexists with the
+/// 13-byte [`GameStatsUpdate`] wire image captured from Memoryer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RankExchange {
+    /// Local member slot the exchange names.
+    pub member_id: u8,
+    /// Helper selector; `0`/`1` are handled, others are ignored.
+    pub rank: u16,
+    /// Member id at each leaderboard place, in order.
+    pub ranked_members: [u8; 8],
+}
+
+/// Body length of [`RankExchange`]: `1 + 2 + 8`.
+pub const RANK_EXCHANGE_BODY_LEN: usize = 11;
+/// Highest valid member slot in the eight-seat member table.
+const RANK_EXCHANGE_SEAT_LIMIT: u8 = 8;
+
+impl WireMessage for RankExchange {
+    const COMMAND: u16 = 4015;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(RANK_EXCHANGE_BODY_LEN);
+        body.push(self.member_id);
+        body.extend_from_slice(&self.rank.to_le_bytes());
+        body.extend_from_slice(&self.ranked_members);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < RANK_EXCHANGE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: RANK_EXCHANGE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > RANK_EXCHANGE_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - RANK_EXCHANGE_BODY_LEN));
+        }
+        if body[0] >= RANK_EXCHANGE_SEAT_LIMIT {
+            return Err(Error::InvalidField {
+                field: "rank-exchange member slot",
+                reason: "not below 8",
+            });
+        }
+        let mut ranked_members = [0u8; 8];
+        ranked_members.copy_from_slice(&body[3..RANK_EXCHANGE_BODY_LEN]);
+        Ok(Self {
+            member_id: body[0],
+            rank: word_at(body, 1),
+            ranked_members,
+        })
+    }
+}
+
 /// Read one little-endian `u16` at `at` (bounds checked by callers).
 fn word_at(body: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([body[at], body[at + 1]])
@@ -2226,6 +2285,93 @@ mod song_sync_tests {
         assert_eq!(
             GameStatsUpdate::decode_body(&[0x01; 12]),
             Err(Error::TruncatedMessage { need: 13, have: 12 })
+        );
+    }
+
+    #[test]
+    fn rank_exchange_round_trips_the_pinned_handler_body() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame ->
+        // RankExchange::decode_body (handler VA `0x55fa20`,
+        // file `0x15fa20`, ev `f5391cd3…`).
+        let body = [3u8, 1, 0, 2, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let exchange = RankExchange::decode_body(&body).unwrap();
+        assert_eq!(exchange.member_id, 3);
+        assert_eq!(exchange.rank, 1);
+        assert_eq!(
+            exchange.ranked_members,
+            [2, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(exchange.encode_body(), body);
+        let frame = decode_frame(&exchange.encode()).unwrap();
+        assert_eq!(frame.id, 4015);
+        assert_eq!(RankExchange::decode_frame(&frame), Ok(exchange));
+    }
+
+    #[test]
+    fn rank_exchange_rejects_member_slot_outside_the_seat_table() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame ->
+        // RankExchange::decode_body (member-seat guard).
+        let mut body = [0u8; RANK_EXCHANGE_BODY_LEN];
+        body[0] = 8;
+        assert_eq!(
+            RankExchange::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "rank-exchange member slot",
+                reason: "not below 8",
+            })
+        );
+    }
+
+    #[test]
+    fn rank_exchange_rejects_short_body() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame ->
+        // RankExchange::decode_body (body-width guard).
+        assert_eq!(
+            RankExchange::decode_body(&[0u8; RANK_EXCHANGE_BODY_LEN - 1]),
+            Err(Error::TruncatedMessage {
+                need: RANK_EXCHANGE_BODY_LEN,
+                have: RANK_EXCHANGE_BODY_LEN - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn rank_exchange_rejects_trailing_bytes() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame ->
+        // RankExchange::decode_body (body-width guard).
+        let body = [0u8; RANK_EXCHANGE_BODY_LEN + 1];
+        assert_eq!(
+            RankExchange::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn rank_exchange_keeps_an_unhandled_rank_word_raw() {
+        // Live caller chain: main.rs::run_play -> assemble_online_session
+        // -> OnlineSession::paint -> poll_wire_at -> poll_stats ->
+        // drain_peer_echoes -> apply_4015_frame ->
+        // RankExchange::decode_body. The handler ignores ranks other
+        // than 0/1, so the codec reports the raw word.
+        let mut body = [0xffu8; RANK_EXCHANGE_BODY_LEN];
+        body[0] = 0;
+        body[1] = 2;
+        body[2] = 0;
+        assert_eq!(
+            RankExchange::decode_body(&body).unwrap(),
+            RankExchange {
+                member_id: 0,
+                rank: 2,
+                ranked_members: [0xff; 8],
+            }
         );
     }
 
