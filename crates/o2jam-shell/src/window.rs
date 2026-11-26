@@ -54,6 +54,134 @@ pub(crate) const fn fatal_path_disposition(ui_flag: bool) -> FatalPathDispositio
     }
 }
 
+/// State words the window hub reads before a billing rebuild
+/// (`0x5a5190`, message `0x232`): `STATE_PAYMENT` and `STATE_PAYMENT2`.
+pub const BILLING_PAYMENT_STATE_WORD: u32 = 12;
+pub const BILLING_PAYMENT2_STATE_WORD: u32 = 13;
+
+/// The billing rebuild arm a window message selects. No rebuild
+/// happens without the UI message, a billing state, and a stored
+/// web handle (`docs/pins/misc-tail.md`, `0x4f3d00`/`0x4f5020`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingWindowArm {
+    /// No billing web view is touched.
+    None,
+    /// Close the stored web window and rebuild Payment.
+    RebuildPayment,
+    /// Close the stored web window and rebuild Payment2.
+    RebuildGift,
+}
+
+/// Decode one window-hub message into a billing rebuild arm.
+#[must_use]
+pub const fn billing_window_arm(
+    message: u32,
+    state_word: u32,
+    web_handle_set: bool,
+) -> BillingWindowArm {
+    if message != WM_APP_UI_EVENT || !web_handle_set {
+        return BillingWindowArm::None;
+    }
+    match state_word {
+        BILLING_PAYMENT_STATE_WORD => BillingWindowArm::RebuildPayment,
+        BILLING_PAYMENT2_STATE_WORD => BillingWindowArm::RebuildGift,
+        _ => BillingWindowArm::None,
+    }
+}
+
+/// Suffix of the Print Screen folder under My Pictures. The exe
+/// stores the CP949 bytes at `0x64427c`; this is their text
+/// form, not a claim about byte encoding on a modern host.
+pub const SCREENSHOT_FOLDER_SUFFIX: &str = "오투잼_스크린샷";
+/// Frame size requested from the JPEG writer `0x57d800`.
+pub const SCREENSHOT_DIMENSIONS: (u32, u32) = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
+/// Quality word passed by the screenshot writer (`0x57d800`).
+pub const SCREENSHOT_QUALITY: u32 = 80;
+/// States in which `0x418dc0` skips the screenshot writer.
+pub const PRINT_SCREEN_SUPPRESSED_STATES: [u32; 2] = [10, 11];
+
+/// Numbered file name pinned at `0x6447d0`. Rust's `{:03}`
+/// keeps the C `ScreenShot%03d.jpg` shape for counters above 999.
+#[must_use]
+pub fn print_screen_file_name(counter: u32) -> String {
+    format!("ScreenShot{counter:03}.jpg")
+}
+
+/// Path below My Pictures, in the exe's backslash form. The root is
+/// supplied by the host OS, so only the suffix and name are pinned.
+#[must_use]
+pub fn print_screen_relative_path(counter: u32) -> String {
+    format!(
+        "{SCREENSHOT_FOLDER_SUFFIX}\\{}",
+        print_screen_file_name(counter)
+    )
+}
+
+/// What one Print Screen press does. `Write` carries the pinned
+/// name and writer settings; no JPEG bytes are produced here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrintScreenAction {
+    /// States 10 and 11 write nothing.
+    Suppressed { state: u32 },
+    /// The writer receives a numbered 800x600 JPEG request.
+    Write {
+        file_name: String,
+        width: u32,
+        height: u32,
+        quality: u32,
+    },
+    /// The remaining-shot word is zero: the UI queue is posted.
+    Notice,
+}
+
+/// The session's used-name counter and remaining-shot word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenShotCounter {
+    used: u32,
+    remaining: u32,
+}
+
+impl ScreenShotCounter {
+    /// Start of a session with `remaining` shots available.
+    #[must_use]
+    pub const fn new(remaining: u32) -> Self {
+        Self { used: 0, remaining }
+    }
+
+    /// Take one press: suppress it in states 10/11, post a notice
+    /// when no shots remain, otherwise consume the next name.
+    pub fn press(&mut self, state_word: u32) -> PrintScreenAction {
+        if PRINT_SCREEN_SUPPRESSED_STATES.contains(&state_word) {
+            return PrintScreenAction::Suppressed { state: state_word };
+        }
+        if self.remaining == 0 {
+            return PrintScreenAction::Notice;
+        }
+        let file_name = print_screen_file_name(self.used);
+        self.used = self.used.saturating_add(1);
+        self.remaining -= 1;
+        let (width, height) = SCREENSHOT_DIMENSIONS;
+        PrintScreenAction::Write {
+            file_name,
+            width,
+            height,
+            quality: SCREENSHOT_QUALITY,
+        }
+    }
+
+    /// Number of names the session has consumed.
+    #[must_use]
+    pub const fn used(&self) -> u32 {
+        self.used
+    }
+
+    /// Shots still available before the notice branch.
+    #[must_use]
+    pub const fn remaining(&self) -> u32 {
+        self.remaining
+    }
+}
+
 /// The exe handler a window message reaches. Our client has no
 /// Win32 `WndProc`; the winit arms below call the same message
 /// decoder so a guard can name arm -> handler without a real window.

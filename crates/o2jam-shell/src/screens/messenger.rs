@@ -12,8 +12,12 @@ use super::side::{myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE}
 // The window module is private to `o2jam-shell`; re-export the arms
 // this family's live legs drive through the public messenger seam.
 pub use crate::window::{
-    display_mode_plan, double_click_notice, error_popup_from_code, error_popup_from_supplied,
-    window_close_disposition, ErrorPopup, QuitDisposition, WindowHandler,
+    billing_window_arm, display_mode_plan, double_click_notice, error_popup_from_code,
+    error_popup_from_supplied, print_screen_file_name, print_screen_relative_path,
+    window_close_disposition, BillingWindowArm, ErrorPopup, PrintScreenAction, QuitDisposition,
+    ScreenShotCounter, WindowHandler, BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD,
+    PRINT_SCREEN_SUPPRESSED_STATES, SCREENSHOT_DIMENSIONS, SCREENSHOT_FOLDER_SUFFIX,
+    SCREENSHOT_QUALITY,
 };
 
 /// One lobby hosting the Messenger control family. The five codes
@@ -347,6 +351,133 @@ impl WebSheetHost {
     #[must_use]
     pub const fn qa_rect_shift(&self) -> i32 {
         self.qa_rect_shift
+    }
+}
+
+/// Host of the payment, gift and jamcard page literals pinned in
+/// `docs/web-url-archive-audit.md` (`0x24b638`–`0x24b87c`).
+pub const BILLING_HOST: &str = "game1.o2jam.com";
+/// Host of the coupon page literal (`0x24b844`).
+pub const COUPON_HOST: &str = "o2jam.nopp.co.kr";
+/// Path of the five cash-bill landing pages opened by `0x45e010`.
+pub const CASH_BILL_PATH: &str = "client/cash_bill/index.phtml";
+/// Publisher hosts of the cash-bill literal set (files `0x2466d0`–
+/// `0x2467b8`). The exe's host-selection condition is unpinned, so
+/// this is a table, not a chosen URL.
+pub const CASH_BILL_HOSTS: [&str; 5] = [
+    "o2jam.monawa.com",
+    "o2jam.gameangel.com",
+    "o2jam.gameon.nate.com",
+    "o2jam.pdbox.co.kr",
+    "o2jam.nopp.co.kr",
+];
+
+/// One billing page literal. The exe joins `USER_INDEX_ID` from
+/// `Identifaction.ini` onto each URL (`0x4f3b30`, `0x4f4bd0`); the
+/// jamcard-versus-coupon branch is supplied by the caller because
+/// its gate stays unpinned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingWebPage {
+    /// `STATE_PAYMENT` entry page.
+    Payment,
+    /// `STATE_PAYMENT2` gift input page.
+    GiftInput,
+    /// Payment2 jamcard branch.
+    JamCard,
+    /// Payment2 coupon branch.
+    Coupon,
+}
+
+impl BillingWebPage {
+    /// Host named by the pinned URL literal.
+    #[must_use]
+    pub const fn host(self) -> &'static str {
+        match self {
+            Self::Coupon => COUPON_HOST,
+            Self::Payment | Self::GiftInput | Self::JamCard => BILLING_HOST,
+        }
+    }
+
+    /// Path named by the pinned URL literal, without the leading slash.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Payment => "np/billing/payment/payment_input.aspx",
+            Self::GiftInput => "np/billing/gift/gift_input.aspx",
+            Self::JamCard => "client/jamcard.asp",
+            Self::Coupon => "client/coupon2/coupon.phtml",
+        }
+    }
+
+    /// The URL the exe opens for this page and session id.
+    #[must_use]
+    pub fn url(self, user_index_id: &str) -> String {
+        format!(
+            "http://{}/{}?USER_INDEX_ID={}",
+            self.host(),
+            self.path(),
+            user_index_id
+        )
+    }
+}
+
+/// One observable step of a billing web rebuild. `0x4f3d00` and
+/// `0x4f5020` close a stored window handle before calling their
+/// URL opener; the order is the behavior under guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BillingWebEvent {
+    /// The stored handle was closed and cleared.
+    ClosedPrevious(u16),
+    /// The rebuilt URL was mounted on a new handle.
+    Mounted { handle: u16, url: String },
+}
+
+/// The one billing web-window handle word, held across rebuilds.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BillingWebHandle {
+    handle: Option<u16>,
+}
+
+impl BillingWebHandle {
+    /// No stored window yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed the handle word before a rebuild. The exe only takes the
+    /// close arm when this word is set.
+    #[must_use]
+    pub const fn with_handle(handle: u16) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    /// Close the stored handle, rebuild the URL from the session id,
+    /// then mount it. Returns the steps in the order they occurred.
+    pub fn rebuild(
+        &mut self,
+        page: BillingWebPage,
+        user_index_id: &str,
+        handle: u16,
+    ) -> Vec<BillingWebEvent> {
+        let mut steps = Vec::with_capacity(2);
+        if let Some(previous) = self.handle.take() {
+            steps.push(BillingWebEvent::ClosedPrevious(previous));
+        }
+        self.handle = Some(handle);
+        steps.push(BillingWebEvent::Mounted {
+            handle,
+            url: page.url(user_index_id),
+        });
+        steps
+    }
+
+    /// The handle the host currently holds.
+    #[must_use]
+    pub const fn handle(&self) -> Option<u16> {
+        self.handle
     }
 }
 
