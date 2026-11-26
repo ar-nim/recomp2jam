@@ -85,3 +85,16 @@ the counter, and decrements the remaining word. The #1102
 is the exact event code, not popup text.
 
 Evidence: `ev_c03ce8c9615cd035da6ff9a8b8046c4af72a85938a908b3ecf67ec3ba33094c8`.
+
+## Payment BACK dispatch — static result (2026-11-25 senior REA pass)
+
+The window hub `0x5a5190` has no dedicated Payment/Payment2 BACK
+arm. Its only state-12/13 web actions are on `WM_APP+0x232`: state 12
+calls `0x4f3d00` (close + rebuild Payment), state 13 calls `0x4f5020`
+(close + rebuild gift), each gated by the stored `+0xf6c` handle.
+Key-down goes to `0x5a50d0`; close goes through `0x5a5600`. Therefore
+the static half of #467 is answered: no separate BACK-to-web-handle
+handler exists in the hub. Whether the Payment chrome consumes BACK
+locally or lets it fall through remains a runtime/capture question.
+
+Evidence: `ev_2d48ffdaaa073cc12ae3f6a5023dc479f5013f24adba4f5e2d8b94069c551297`.
