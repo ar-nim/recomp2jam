@@ -284,14 +284,10 @@ mod live_messenger_leg_tests {
         finish(session, gateway.server);
     }
 
-    /// #1118 Tier 3. Live caller chain (headless induced failure):
-    ///   main.rs::run_play -> connect::connect_and_login_with_transport
-    ///   -> boot_live_leg -> dismiss_splash -> WindowHandler::new
-    ///   -> induced failure hook WindowHandler::raise_error_from_supplied
-    ///   -> error_popup_from_supplied -> fatal_path_disposition
-    ///   -> paint_error_popup -> paint_information_message.
-    /// No Win32 MessageBox exists; the hook stands in for the missing
-    /// fatal-error caller. Archives absent -> skip cleanly.
+    /// #1118 Tier 3. seam: no production caller reaches the induced
+    /// failure hook; it stands in for the missing fatal-error caller.
+    /// The boot session and the window redraw paint path from the hook
+    /// to pixels are real. Archives absent -> skip cleanly.
     #[test]
     fn live_supplied_error_paints_a_popup_over_the_boot_frame() {
         if !archives_present() {
@@ -299,28 +295,35 @@ mod live_messenger_leg_tests {
             return;
         }
         let (mut handler, server) = boot_error_leg();
-        let before = paint_handler_frame(&mut handler);
+        let scene = paint_handler_frame(&mut handler);
         let decision = handler.raise_error_from_supplied("display driver failed", true);
         assert_eq!(
             decision,
             ErrorPopup::ShowMessage("display driver failed".to_owned())
         );
-        let after = paint_handler_frame(&mut handler);
+        let first = paint_handler_frame(&mut handler);
+        assert!(scene != first, "the supplied error must paint a popup");
+
+        handler.raise_error_from_supplied("surface lock failed", true);
+        let second = paint_handler_frame(&mut handler);
         assert!(
-            after != before,
-            "the supplied error must change boot pixels"
+            first != second,
+            "distinct supplied strings must paint distinct boot ink"
+        );
+
+        handler.raise_error_from_supplied("", true);
+        let empty = paint_handler_frame(&mut handler);
+        assert!(
+            first != empty && second != empty,
+            "supplied text must differ from an empty-message popup"
         );
         drop(handler);
         server.join().unwrap();
     }
 
-    /// #1119 Tier 3. Live caller chain (headless induced failure):
-    ///   main.rs::run_play -> connect::connect_and_login_with_transport
-    ///   -> boot_live_leg -> dismiss_splash -> WindowHandler::new
-    ///   -> induced failure hook WindowHandler::raise_error_from_code
-    ///   -> error_popup_from_code -> error_text_for_code ->
-    ///   fatal_path_disposition -> paint_error_popup ->
-    ///   paint_information_message.
+    /// #1119 Tier 3. seam: no production caller reaches the induced
+    /// failure hook; it stands in for the missing fatal-error caller.
+    /// The code map and the window redraw paint path are real.
     /// Archives absent -> skip cleanly.
     #[test]
     fn live_mapped_error_code_paints_the_pinned_text_over_the_boot_frame() {
@@ -353,8 +356,8 @@ mod live_messenger_leg_tests {
         server.join().unwrap();
     }
 
-    /// #1119 Tier 3. Live caller chain as the mapped-code leg, with
-    /// code zero taking the exe's silent arm before any paint.
+    /// #1119 Tier 3. seam: no production caller reaches the induced
+    /// failure hook; code zero takes the exe's silent arm before paint.
     /// Archives absent -> skip cleanly.
     #[test]
     fn live_zero_error_code_leaves_the_boot_frame_unchanged() {

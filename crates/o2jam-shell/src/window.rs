@@ -2532,32 +2532,40 @@ mod tests {
 
     #[test]
     fn supplied_error_paints_a_popup_over_the_window_frame() {
-        // Live chain (Tier 1): main.rs::run_play -> Shell::run ->
-        // WindowHandler::window_event -> induced-failure hook
-        // WindowHandler::raise_error_from_supplied -> error_popup_from_supplied
-        // -> fatal_path_disposition -> paint_error_popup ->
-        // paint_information_message.
+        // seam: no production caller reaches `raise_error_from_supplied`;
+        // the induced failure hook stands in for the missing fatal-error
+        // caller. The hook -> window redraw paint path is real, and the
+        // frame pair below pins the supplied ink.
         let mut handler = WindowHandler::new(Shell::new(Box::new(FlatFrameGame)));
-        let before = paint_handler_frame(&mut handler);
+        let scene = paint_handler_frame(&mut handler);
         let decision = handler.raise_error_from_supplied("surface failed", true);
         assert_eq!(
             decision,
             ErrorPopup::ShowMessage("surface failed".to_owned())
         );
-        let after = paint_handler_frame(&mut handler);
+        let first = paint_handler_frame(&mut handler);
+        assert!(scene != first, "the supplied error must paint a popup");
+
+        handler.raise_error_from_supplied("texture allocation failed", true);
+        let second = paint_handler_frame(&mut handler);
         assert!(
-            before != after,
-            "the supplied error must paint popup pixels"
+            first != second,
+            "distinct supplied strings must paint distinct ink"
+        );
+
+        handler.raise_error_from_supplied("", true);
+        let empty = paint_handler_frame(&mut handler);
+        assert!(
+            first != empty && second != empty,
+            "supplied text must differ from an empty-message popup"
         );
     }
 
     #[test]
     fn mapped_error_code_paints_its_pinned_text_in_the_popup() {
-        // Live chain (Tier 1): main.rs::run_play -> Shell::run ->
-        // WindowHandler::window_event -> induced-failure hook
-        // WindowHandler::raise_error_from_code -> error_popup_from_code ->
-        // error_text_for_code -> fatal_path_disposition ->
-        // paint_error_popup -> paint_information_message.
+        // seam: no production caller reaches `raise_error_from_code`; the
+        // induced failure hook stands in for the missing fatal-error
+        // caller. The code map and the window paint path are real.
         let mut handler = WindowHandler::new(Shell::new(Box::new(FlatFrameGame)));
         let before = paint_handler_frame(&mut handler);
         let decision = handler
