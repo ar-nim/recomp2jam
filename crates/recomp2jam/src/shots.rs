@@ -3971,26 +3971,28 @@ mod tests {
             Ordering::Equal,
             "the armed clock reads full"
         );
-        let caption = status
-            .caption()
-            .expect("armed status captions the staged song");
-        assert!(
-            caption.contains(&title) && caption.contains(&artist),
-            "caption `{caption}` names the staged song"
-        );
+        // The armed status still carries the staged song names for
+        // the live legs; no runtime caption is drawn from them
+        // (`docs/pins/misc-tail.md`).
+        assert_eq!(status.title, title);
+        assert_eq!(status.artist, artist);
     }
 
     #[test]
-    fn loading_shot_paints_staged_fraction_and_caption() {
-        // The staged walk status reaches the paint: the captioned
-        // frame differs from the cleared indeterminate frame, so
-        // `loading.png` proves the `with_status` path, not the bare
-        // full bar.
+    fn loading_shot_staged_status_changes_no_pixel() {
+        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // The 7.55 gate reads none of its three fonts, so staging the
+        // walk status (title, artist, full fraction) changes no pixel
+        // on the Loading cover: the bar is hidden and no caption inks.
+        // Live chain: main.rs::run_play -> OnlineSession::paint ->
+        // ScreenGame::paint_at -> paint_loading_scene_with_status.
         if std::fs::read(install_root().join(MUSICSELECT_CATALOG))
             .ok()
             .is_none()
         {
-            println!("SKIP loading_shot_paints_staged_fraction_and_caption: missing {MUSICSELECT_CATALOG}");
+            println!(
+                "SKIP loading_shot_staged_status_changes_no_pixel: missing {MUSICSELECT_CATALOG}"
+            );
             return;
         }
         let mut game = seeded_game();
@@ -4005,7 +4007,7 @@ mod tests {
         game.clear_loading();
         let mut bare = native_probe();
         paint_probe(&mut bare, |frame| game.paint_at(frame, 0));
-        assert_ne!(staged, bare, "staged caption changed no pixels");
+        assert_eq!(staged, bare, "the staged status must not ink the cover");
     }
 
     #[test]

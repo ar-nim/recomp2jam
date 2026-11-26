@@ -36492,8 +36492,13 @@ mod game_tests {
     }
 
     #[test]
-    fn loading_paints_the_staged_song_caption() {
-        // Song row sits one placeholder row below the bar (y36).
+    fn loading_paints_no_staged_song_caption() {
+        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // Live chain: main.rs::run_play -> OnlineSession::paint ->
+        // ScreenGame::paint_at -> paint_loading ->
+        // paint_loading_scene_with_status. The exe reads none of its
+        // three gate fonts, so the staged title/artist inks nothing at
+        // the old caption row (y36); the credits are baked cover ink.
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
@@ -36508,7 +36513,10 @@ mod game_tests {
             },
             0,
         );
-        assert!(white_near(&buf, 64, 48, (16, 36)));
+        assert!(
+            !white_near(&buf, 64, 48, (16, 36)),
+            "no runtime caption on the gate"
+        );
     }
 
     #[test]

@@ -79,7 +79,8 @@ use o2jam_net::{
     rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
     KeyMode, MemberRole, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
 };
-use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
+#[cfg(test)]
+use o2jam_render::font::{text_width_cell, Cell};
 use o2jam_render::{
     blit_rgb555, blit_rgb555_scaled, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
     scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
@@ -4667,20 +4668,6 @@ impl LoadingStatus {
             self.progress.clamp(0.0, 1.0)
         }
     }
-
-    /// `TITLE - ARTIST` caption (`None` while both are blank:
-    /// nothing paints rather than a wrong line).
-    #[must_use]
-    pub fn caption(&self) -> Option<String> {
-        let title = self.title.trim();
-        let artist = self.artist.trim();
-        match (title.is_empty(), artist.is_empty()) {
-            (true, true) => None,
-            (false, true) => Some(title.to_owned()),
-            (true, false) => Some(artist.to_owned()),
-            (false, false) => Some(format!("{title} - {artist}")),
-        }
-    }
 }
 
 /// Width of the live fill inside a `track_w` track at `progress`:
@@ -4718,13 +4705,6 @@ fn loading_track_origin(frame: &Frame<'_>) -> (i32, i32) {
 /// of the measured bar bodies above is the loading fill).
 fn loading_track_width(frame: &Frame<'_>) -> u32 {
     u32::try_from(frame.w as i32 / 2).unwrap_or(0)
-}
-
-/// Song-caption origin: one row below the OPEN placeholder bar
-/// (`w / 4, h / 2 + 12` — no verified caption rect; the cover art
-/// carries baked credits, not a caption sub-rect).
-fn loading_song_origin(frame: &Frame<'_>) -> (i32, i32) {
-    (frame.w as i32 / 4, frame.h as i32 / 2 + 12)
 }
 
 /// Visibility gate for the OPEN loading-bar placeholder.
@@ -4778,32 +4758,6 @@ fn paint_loading_bar_with_progress(frame: &mut Frame<'_>, progress: f32) {
             pack_xrgb(0x30, 0xB0, 0x30),
         );
     }
-}
-
-/// Song title/artist line below the bar (OPEN placeholder row):
-/// dark scrim plus white ink at the gate display face
-/// (`Cell::Loading`, Trebuchet MS 27x65 per `docs/loading-type.md`).
-/// Which caption takes the display face is the spec's
-/// recommendation, not an exe pin. Blank captions paint nothing.
-fn paint_loading_song(frame: &mut Frame<'_>, status: &LoadingStatus) {
-    let Some(caption) = status.caption() else {
-        return;
-    };
-    let (x, y) = loading_song_origin(frame);
-    let advance = text_width_cell(&caption, Cell::Loading);
-    let scrim_w = u32::try_from(advance).unwrap_or(u32::MAX).saturating_add(8);
-    let scrim_h = Cell::Loading.size().1.saturating_add(4);
-    fill_rect(
-        frame,
-        &Rect {
-            x: x - 4,
-            y: y - 2,
-            w: scrim_w,
-            h: scrim_h,
-        },
-        scrim_color(),
-    );
-    draw_text_cell(frame, x, y, &caption, art_title_ink(), Cell::Loading);
 }
 
 /// Paint the loading gate scene. The OPEN bar stays hidden; see
@@ -4873,7 +4827,8 @@ pub fn paint_loading_scene_with_status(
     if LOADING_BAR_VISIBLE {
         paint_loading_bar_with_progress(frame, status.clamped_progress());
     }
-    paint_loading_song(frame, status);
+    // No runtime caption: the exe reads none of its three gate fonts
+    // (`docs/pins/misc-tail.md`); the credits are baked cover ink.
 }
 
 /// Paint staged loading art (`MusicLoading.ojs`) with no visible bar:
@@ -10507,10 +10462,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn loading_cover_paints_full_bleed_behind_caption() {
+    fn loading_cover_paints_full_bleed_with_no_overlay() {
         // Staged OJN cover (2x2 opaque stand-in, distinct corners —
         // geometry only, never real art) stretches over the whole
-        // frame while the caption ink paints on top. The OPEN bar
+        // frame with nothing on top: the exe reads none of its three
+        // gate fonts (`docs/pins/misc-tail.md`), so no caption scrim
+        // and no title ink cover the baked credits. The OPEN bar
         // stays hidden.
         let art = SceneArt {
             placements: Vec::new(),
@@ -10536,16 +10493,19 @@ mod paint_tests {
         assert_eq!(buf[47 * 64], pack_xrgb(0, 0, 255), "cover bottom-left");
         assert_eq!(
             buf[47 * 64 + 63],
-            scrim_color(),
-            "69-row Loading scrim covers the bottom-right on 64x48"
+            pack_xrgb(255, 255, 255),
+            "cover bottom-right (the fixture's white corner)"
         );
         assert!(
             !buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
             "OPEN bar fill stays off the cover"
         );
+        // The fixture's own white corner equals the title ink, so ink
+        // absence is proved by `loading_scene_paints_no_runtime_song_text`
+        // on the plain backdrop; here the scrim is the tell.
         assert!(
-            buf.contains(&art_title_ink()),
-            "caption survives over the cover"
+            !buf.contains(&scrim_color()),
+            "no caption scrim over the cover"
         );
     }
 
@@ -11820,59 +11780,50 @@ mod paint_tests {
     }
 
     #[test]
-    fn loading_caption_joins_title_and_artist() {
-        // Song-table walk names the song: both halves join, one
-        // half alone still names itself, blank paints nothing.
-        let both = LoadingStatus {
-            progress: 0.0,
-            title: "Title".to_owned(),
-            artist: "Artist".to_owned(),
-        };
-        assert_eq!(both.caption(), Some("Title - Artist".to_owned()));
-        let title_only = LoadingStatus {
-            title: "Title".to_owned(),
-            ..LoadingStatus::default()
-        };
-        assert_eq!(title_only.caption(), Some("Title".to_owned()));
-        assert_eq!(LoadingStatus::default().caption(), None);
-    }
-
-    #[test]
-    fn loading_scene_paints_the_song_caption() {
-        // Caption row below the bar (placeholder row 32x24: x8,
-        // y24 clipped — so use 64x48: song at y36, scrim behind).
+    fn loading_scene_paints_no_runtime_song_text() {
+        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // The 7.55 gate creates three fonts (Trebuchet 27x65 at +0x524,
+        // Arial 7x14 at +0x528, Gulimche 6x12 at +0x52c) and never
+        // reads them: a whole-.text search finds no reader in either
+        // Loading class. Every credit line is baked into the OJN cover,
+        // so a staged title/artist changes no pixel on the cover.
         let art = SceneArt::default();
-        let status = LoadingStatus {
+        let named = LoadingStatus {
             progress: 1.0,
             title: "Title".to_owned(),
             artist: "Artist".to_owned(),
         };
-        let mut buf = vec![0u32; 64 * 48];
+        let mut with_names = vec![0u32; 64 * 48];
         paint_loading_scene_with_status(
             &mut Frame {
-                buf: &mut buf,
+                buf: &mut with_names,
                 w: 64,
                 h: 48,
             },
             &art,
-            &status,
+            &named,
         );
-        assert!(has_ink_near(&buf, art_title_ink()), "caption ink paints");
-        assert!(buf.contains(&scrim_color()), "caption scrim paints");
-        let blank = vec![0u32; 64 * 48];
-        let mut probe = blank.clone();
+        let mut without_names = vec![0u32; 64 * 48];
         paint_loading_scene_with_status(
             &mut Frame {
-                buf: &mut probe,
+                buf: &mut without_names,
                 w: 64,
                 h: 48,
             },
             &art,
             &LoadingStatus::default(),
         );
+        assert_eq!(
+            with_names, without_names,
+            "a staged title/artist must not ink a runtime caption"
+        );
         assert!(
-            !probe.contains(&art_title_ink()),
-            "blank caption paints no white ink"
+            !with_names.contains(&art_title_ink()),
+            "no title ink on the gate"
+        );
+        assert!(
+            !with_names.contains(&scrim_color()),
+            "no caption scrim on the gate"
         );
     }
 
@@ -11892,14 +11843,14 @@ mod paint_tests {
         };
         assert_eq!(loading_track_origin(&frame), (16, 16));
         assert_eq!(loading_track_width(&frame), 32);
-        assert_eq!(loading_song_origin(&frame), (16, 36));
     }
 
     #[test]
     fn loading_placeholders_clear_every_measured_bar_body() {
         // Honest-OPEN negative pin (read-only 7.55 sprite-55 walks):
-        // the centered placeholder track/caption match none of the
-        // measured bar/panel bodies, so none can ground them.
+        // the centered placeholder track matches none of the measured
+        // bar/panel bodies, so none can ground it. The caption row is
+        // gone with its painter (`loading_scene_paints_no_runtime_song_text`).
         let frame = Frame {
             buf: &mut vec![0u32; 800 * 600],
             w: 800,
@@ -11907,8 +11858,7 @@ mod paint_tests {
         };
         let track = loading_track_origin(&frame);
         let width = loading_track_width(&frame);
-        let song = loading_song_origin(&frame);
-        assert_eq!((track, width, song), ((200, 292), 400, (200, 312)));
+        assert_eq!((track, width), ((200, 292), 400));
         for measured in [
             ((0, 0), (134, 37)),
             ((0, 0), (65, 7)),
@@ -11917,7 +11867,6 @@ mod paint_tests {
             ((410, 210), (197, 179)),
         ] {
             assert_ne!((track, (width, 16)), measured);
-            assert_ne!(song, measured.0);
         }
     }
 
