@@ -272,6 +272,8 @@ mod live_web_native_leg_tests {
     /// already-merged native host (#948/#1114) are the whole property.
     /// A `WebSheetHost` keeps only handle and visibility words: no
     /// page bytes, URL or renderer exists in the client.
+    /// next evidence step: #916 / #1137 — keep the native-host policy
+    /// guard and re-audit the dependency graph when a web surface lands.
     #[test]
     fn no_browser_engine_dependency_or_rendered_page_in_the_client() {
         let lock_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock");
