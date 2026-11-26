@@ -12,10 +12,14 @@ mod tests {
     use o2jam_audio::NullBackend;
     use o2jam_net::SetRoomMusic;
     use o2jam_render::{
-        expand_rgb555, frame_image_for_words, pack_xrgb, staged_frame_table_for_count, Frame,
+        expand_rgb555, frame_image_for_words, pack_xrgb, staged_frame_table_for_count, Frame, Rect,
         Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
     };
     use o2jam_shell::avatar::{paint_placement_layer, AvatarFigure, FigureLayer, ScenePlacement};
+    use o2jam_shell::options::DEFAULT_NOTE_TAIL;
+    use o2jam_shell::playing::{
+        clear_hold_art_inputs, note_tail_width, set_hold_art_inputs, HighwayGeometry,
+    };
     use o2jam_shell::screens::paint::LoadingStatus;
     use o2jam_shell::staging::{
         read_install_archives, stage_state, StageContext, StagedArt, State,
@@ -49,7 +53,13 @@ mod tests {
     /// -> `assemble_online_session` -> `GameLoop::ingest_snapshot` ->
     /// `ScreenGame::enter_screen(Playing)`. The gateway answers master
     /// START with the bare 4011 broadcast; the null rig arms Loading.
-    fn boot_playing_render_leg() -> (OnlineSession, LiveLegGateway) {
+    /// A hold chart is staged with the selected option and the two
+    /// float inputs the exe's width consumer multiplies.
+    fn boot_playing_hold_leg(
+        note_tail: u8,
+        inputs: Option<(f32, f32)>,
+        hold: (u8, u64, u64, u32),
+    ) -> (OnlineSession, LiveLegGateway) {
         let gateway = spawn_result_back_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -68,24 +78,39 @@ mod tests {
             "START never armed Loading"
         );
 
-        let game = session.game_mut();
-        game.set_selected_music(SetRoomMusic {
-            music_id: 757,
-            difficulty: 0,
-            speed: 0,
-        });
-        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
-        game.set_loading_status(LoadingStatus {
-            progress: 1.0,
-            title: "Song".to_owned(),
-            artist: "Band".to_owned(),
-        });
-        // A far-future hold keeps the life bar alive without inventing
-        // a note judgement; no sound is produced by the null rig.
-        game.load_chart_holds(vec![(0, 100_000, 150_000, 7)]);
+        {
+            let game = session.game_mut();
+            game.options_mut().set_note_tail(i32::from(note_tail));
+            if let Some((chart_scale, speed)) = inputs {
+                set_hold_art_inputs(chart_scale, speed);
+            } else {
+                clear_hold_art_inputs();
+            }
+            game.set_selected_music(SetRoomMusic {
+                music_id: 757,
+                difficulty: 0,
+                speed: 0,
+            });
+            game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+            game.set_loading_status(LoadingStatus {
+                progress: 1.0,
+                title: "Song".to_owned(),
+                artist: "Band".to_owned(),
+            });
+            // A far-future hold keeps the life bar alive without inventing
+            // a note judgement; no sound is produced by the null rig.
+            game.load_chart_holds(vec![hold]);
+        }
+        // Chart load rebuilds the play state; re-stage the archive skin
+        // so the paint leg observes the installed hold art.
+        session.stage_live_art();
         session.ingest_snapshot(&confirm_snapshot());
         paint_until_screen(&mut session, Screen::Playing);
         (session, gateway)
+    }
+
+    fn boot_playing_render_leg() -> (OnlineSession, LiveLegGateway) {
+        boot_playing_hold_leg(DEFAULT_NOTE_TAIL, None, (0, 100_000, 150_000, 7))
     }
 
     /// Re-stage the same Playing art live boot installed. The oracle
@@ -112,6 +137,43 @@ mod tests {
             .iter()
             .find(|placed| placed.id == id)
             .unwrap_or_else(|| panic!("no staged placement {id}"))
+    }
+
+    /// Paint one Playing frame at an explicit song instant. The leg
+    /// samples the same instant before and after the option change.
+    fn paint_playing_at(session: &mut OnlineSession, now_ms: u64) -> Vec<u32> {
+        let (width, height) = native_size();
+        let mut buf = vec![0u32; width * height];
+        session.game_mut().paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            now_ms,
+        );
+        buf
+    }
+
+    /// Widest row where two frames disagree inside one staged lane
+    /// column. The hold beam is the only action-layer ink that moves
+    /// when the `NoteTail` selection changes at a fixed song instant.
+    fn widest_hold_diff(before: &[u32], after: &[u32], column: Rect) -> usize {
+        let (width, height) = native_size();
+        let left = usize::try_from(column.x.max(0)).unwrap_or(0);
+        let right = usize::try_from(
+            (column.x + i32::try_from(column.w).unwrap_or(0))
+                .clamp(0, i32::try_from(width).unwrap_or(0)),
+        )
+        .unwrap_or(width);
+        (0..height)
+            .map(|row| {
+                (left..right.min(width))
+                    .filter(|x| before[row * width + x] != after[row * width + x])
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     fn figure_named<'a>(art: &'a StagedArt, placed: &ScenePlacement) -> &'a AvatarFigure {
@@ -475,6 +537,49 @@ mod tests {
         let painted = paint_frame(&mut session);
         let shown = expected_layer_pixels(&art, placed, 1);
         assert_ink_matches(&painted, &shown, "count-bounded EXIT control", 80);
+        finish(session, gateway.server);
+    }
+
+    #[test]
+    fn live_staged_hold_art_width_follows_the_selected_note_tail_pair() {
+        // Live chain: main.rs::run_play -> connect::connect_and_login_with_transport
+        // -> assemble_online_session -> stage_live_art ->
+        // GameLoop::ingest_snapshot -> ScreenGame::enter_screen(Playing) ->
+        // ScreenGame::paint_at -> ScreenGame::paint_playing ->
+        // LivePlay::paint_hold_tails -> LivePlay::paint_tail_span.
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !playing_render_archives_present() {
+            return;
+        }
+        let hold = (3, 150_000, 151_000, 7);
+        let (mut session, gateway) = boot_playing_hold_leg(0, Some((1.0, 80.0)), hold);
+        // The same staged Playing art is present in both samples.
+        let _art = stage_playing_art(&mut session);
+        let narrow = paint_playing_at(&mut session, 149_500);
+
+        session.game_mut().options_mut().set_note_tail(3);
+        session.game_mut().load_chart_holds(vec![hold]);
+        session.stage_live_art();
+        let wide = paint_playing_at(&mut session, 149_500);
+
+        let (width, height) = native_size();
+        let lane = HighwayGeometry::centered(width, height).lane_rect(3);
+        let measured = widest_hold_diff(&narrow, &wide, lane);
+        let expected = usize::try_from(note_tail_width(3, 1.0, 80.0)).expect("width fits usize");
+        assert!(
+            measured > 0,
+            "pair 0 and pair 3 must change the staged hold width"
+        );
+        assert!(
+            measured <= expected,
+            "the changed ink must stay inside the {expected}-px hold width, got {measured}"
+        );
+
+        clear_hold_art_inputs();
+        session
+            .game_mut()
+            .options_mut()
+            .set_note_tail(i32::from(DEFAULT_NOTE_TAIL));
         finish(session, gateway.server);
     }
 }

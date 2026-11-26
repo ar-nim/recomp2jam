@@ -44,8 +44,9 @@
 //!   static hunt: zero-vs-nonzero branch file `0x171480`).
 //! - `NOTE`/`NoteTail` ← `option.ini`, default 2; values above 3
 //!   are rewritten to 2 (`0x43a630`) into the global at `0x67feac`
-//!   (file `0x16bf47`), indexing a five-slot double table at
-//!   `0x67fe8c`.
+//!   (file `0x16bf47`), indexing the four float pairs at `0x67fe8c`.
+//!   The bytes after the table are the option global, not a fifth pair
+//!   (`docs/pins/result-playing.md`, senior pass 2026-11-25).
 //! - `LONGNOTEMODE`/`LongnoteMode` ← `Option.ini`, default 3,
 //!   snapshotted into the play object at `+0x17d8` at song setup
 //!   (file `0x16fb06`); the one consumer tests equality with 1
@@ -72,6 +73,7 @@
 //!   BlendHalf 1) follow the exe's load rewrites. The raw values 0,
 //!   3 and 3 exist only before those rewrites.
 
+use std::cell::Cell;
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -179,6 +181,22 @@ pub const DEFAULT_NOTE_TYPE: u8 = 0;
 
 /// Exe default `NOTE`/`NoteTail` (file `0x16bf47`).
 pub const DEFAULT_NOTE_TAIL: u8 = 2;
+
+thread_local! {
+    /// Mirror of the exe's `0x67feac` selection global. Thread-local
+    /// so concurrent headless legs cannot overwrite each other's choice.
+    static NOTE_TAIL_SELECTION: Cell<u8> = const { Cell::new(DEFAULT_NOTE_TAIL) };
+}
+
+/// Read the exe-mirrored `NoteTail` selection global (`0x67feac`).
+#[must_use]
+pub fn selected_note_tail() -> u8 {
+    NOTE_TAIL_SELECTION.with(Cell::get)
+}
+
+fn stage_note_tail(note_tail: u8) {
+    NOTE_TAIL_SELECTION.with(|selection| selection.set(note_tail));
+}
 
 /// Effective default `NoteScreen`/`BlendHalf`: the exe reads raw
 /// default 3 (`0x1a4798`) and its load path rewrites 3 to 1
@@ -457,9 +475,9 @@ pub enum NoteGuide {
     Long,
 }
 
-/// Guide button lit for a raw `NoteTail` value (`None`: the fifth
-/// value 4, which no button names — OPEN with the five-capture
-/// rig list as its next step).
+/// Guide button lit for a raw `NoteTail` value. Values outside
+/// 0..=3 are rejected by the exe readers and the setter, so no
+/// button is lit for them.
 #[must_use]
 pub const fn guide_of_note_tail(note_tail: u8) -> Option<NoteGuide> {
     match note_tail {
@@ -852,6 +870,7 @@ impl OptionsSettings {
             0..=3,
             DEFAULT_NOTE_TAIL,
         );
+        stage_note_tail(settings.note_tail);
         settings.longnote_mode = profile_int(&sections, "LONGNOTEMODE", "LongnoteMode", 3);
         if settings.longnote_mode == 3 {
             settings.longnote_mode = DEFAULT_LONGNOTE_MODE;
@@ -1081,7 +1100,7 @@ impl OptionsSettings {
         self.note_type
     }
 
-    /// `NOTE`/`NoteTail` (always 0–4: clamped on load and set).
+    /// `NOTE`/`NoteTail` (always 0..=3: clamped on load and set).
     #[must_use]
     pub const fn note_tail(&self) -> u8 {
         self.note_tail
@@ -1106,8 +1125,8 @@ impl OptionsSettings {
         shape_arm_of_note_type(self.note_type)
     }
 
-    /// Guide button lit for the current `NoteTail` (`None`: the
-    /// fifth value, which no button names).
+    /// Guide button lit for the current `NoteTail` (`None` outside
+    /// the exe's accepted 0..=3 range).
     #[must_use]
     pub const fn guide(&self) -> Option<NoteGuide> {
         guide_of_note_tail(self.note_tail)
@@ -1122,13 +1141,14 @@ impl OptionsSettings {
         };
     }
 
-    /// Set `NoteTail` with the exe clamp (0–4, else 2).
+    /// Set `NoteTail` with the exe clamp (0..=3, else 2).
     pub fn set_note_tail(&mut self, note_tail: i32) {
-        self.note_tail = if (0..=4).contains(&note_tail) {
+        self.note_tail = if (0..=3).contains(&note_tail) {
             u8::try_from(note_tail).unwrap_or(DEFAULT_NOTE_TAIL)
         } else {
             DEFAULT_NOTE_TAIL
         };
+        stage_note_tail(self.note_tail);
     }
 
     /// Set the long-note switch raw value (Used→1, None→0; the
@@ -1343,8 +1363,23 @@ mod tests {
     }
 
     #[test]
-    // OPEN: this negative assertion is not yet exe-pinned.
-    // next evidence step: statics pin + live-input guard; re-pin against the exe per #916.
+    fn set_note_tail_keeps_only_the_four_exe_supported_values() {
+        // seam: pure option clamp (0x56bf40 / 0x56bfb0 accept 0..=3).
+        let mut settings = OptionsSettings::default();
+        settings.set_note_tail(3);
+        assert_eq!(settings.note_tail(), 3);
+        settings.set_note_tail(4);
+        assert_eq!(
+            settings.note_tail(),
+            DEFAULT_NOTE_TAIL,
+            "value 4 is not a tail style"
+        );
+        settings.set_note_tail(-1);
+        assert_eq!(settings.note_tail(), DEFAULT_NOTE_TAIL);
+        settings.set_note_tail(i32::from(DEFAULT_NOTE_TAIL));
+    }
+
+    #[test]
     fn fifth_tail_value_lights_no_guide_button() {
         assert_eq!(guide_of_note_tail(0), Some(NoteGuide::NoUse));
         assert_eq!(guide_of_note_tail(3), Some(NoteGuide::Long));
