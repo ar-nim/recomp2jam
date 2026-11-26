@@ -111,3 +111,15 @@ The separate gift-page entry frame requested by #469 remains OPEN;
 its actual opener must be found before a capture can be qualified.
 
 Evidence: `ev_d9abcf573e099939d66bcd3b0fd97e3873e1773949e10111f988184fe05b37a7`.
+
+## Music-shop web query contract — `mids`/`nid`/`hid`/`wid` (2026-11-25 senior REA pass)
+
+`0x4d3170` builds a query in this exact order:
+`mids=<comma-separated decimal ids>&nid=<comma-separated decimal ids>&hid=<comma-separated decimal ids>&wid=<comma-separated decimal ids>`.
+Each list is a vector of 32-bit ids rendered with base-10 `itoa`, with
+commas between elements and no trailing comma. Empty vectors produce an
+empty value after the key. The four vectors are selected from the song
+records before serialization; the HTTP method and target page are not
+chosen in this function, so they remain OPEN rather than invented.
+
+Evidence: `ev_e9b08097360cb2aad493a6e5426189e29c9a1f4c0aa30643a947acb572dfefe9`.
