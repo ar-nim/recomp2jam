@@ -651,3 +651,17 @@ three captions already landed; the missing behavior is the activation
 transition. A local pause flag alone is not parity.
 
 Evidence: `ev_029802374255012a8839d968da6743c2d91da5ca03fbe050fbff865e78a8cf49`.
+
+### `0x58d580` UHP caption addendum (2026-11-25 senior REA pass)
+
+The failure caption at `0x64e2b0` is the ASCII string
+`UHP Start 실패` (CP949 bytes for the final word); the success caption
+is the inline literal `UDP Hole Punching Success~!!`. Both go through
+the `0x58ff70` text sink. Success also sets object `+0x101bc = 1`.
+After either caption the handler waits for readiness in 300 ms sleeps,
+then sends an empty 4046 body. This resolves #1117's failure-caption
+hand-off; the missing Rust UHP worker/relay caller remains OPEN.
+
+Evidence: `ev_abb7e445d3cb19d8867f4f305425871fb9ae8418621438466e44f3d05646af98`
+(handler), `ev_1c5ffbc24bf892c088e3876580e0985c74e59d23a0f8373383cc23ee7dc44dac`
+(caption bytes).
