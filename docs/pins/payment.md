@@ -148,3 +148,27 @@ separator/key source for that path remains the room-title string already
 pinned in `docs/gdi-text.md`, not a new invented parameter.
 
 Evidence: `ev_fdf4d3e0996e039f0f065cab829d622a59f008fe27fd2d3c46d14a025429a6fb`.
+
+## Coupon registration form — archived body contract (2026-11-25 senior web pass)
+
+The surviving `coupon_in.phtml?myid=` capture at
+the 2008-09-01 14:07:16 capture was fetched as raw EUC-KR HTML and decoded locally.
+Raw body SHA-256:
+`a283a1d95fe293ab43a485ee925b9eedfbcbc7c157c63fc9fa3fc6368d8aaa67`.
+Local evidence: `/home/arnim/scratch/impl-2026-11-25/web-evidence/coupon_in-2008-09-01.html`
+and its UTF-8 view.
+
+The form is named `frmCouponCheck`. It submits by POST to the relative
+`coupon_in_proc.phtml`. Fields are `cp_id` (select) and `frmCouponNum`
+(text, maximum 30 characters, uppercased on key-up). The select values are
+`KHCJR`, `TRGDB`, `TRKWJ`, `TRIYG`, and `VILIV`. The coupon number must
+contain a hyphen, have length 11 or 17, and match either
+`[A-Za-z0-9]{5}-[A-Za-z0-9]{5}` or
+`[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{5}`.
+The page shows a local error when `myid` is absent. This is an adjacent
+2008 page, not proof of the 7.55 landing page's script, but it pins the
+surviving form contract for a native replacement.
+
+Consequence for #1146: a native coupon form can implement these fields,
+uppercasing, validation and a body-ignoring submit/report-back seam. It
+must not claim that the dead host accepted a coupon.
