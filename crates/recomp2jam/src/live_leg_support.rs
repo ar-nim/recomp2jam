@@ -41,8 +41,16 @@ static LIVE_LEG_LOCK: Mutex<()> = Mutex::new(());
 
 /// Hold this guard for a whole leg, after its archive check. The guard
 /// releases the lock on every exit, including a panic or a SKIP return.
+///
+/// A poisoned lock is recovered, not propagated: one failing leg must
+/// report as ONE failure. Propagating the poison turned a single
+/// wallet-leg timeout into 118 failures on 2026-11-26 and hid which
+/// leg actually broke. The lock guards no data (it is `()`), so there
+/// is no inconsistent state to protect.
 pub(crate) fn hold_live_leg_lock() -> MutexGuard<'static, ()> {
-    LIVE_LEG_LOCK.lock().expect("live leg lock")
+    LIVE_LEG_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Live boot rows: one channel (the resident one) and one room.
