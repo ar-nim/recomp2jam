@@ -280,3 +280,12 @@ Result sections of `docs/interaction-census.md`.
   a shell caption. Guard the exact empty/nonempty event sequences; do not
   invent notice pixels.
 - **Evidence**: `ev_9856c8aed1ea517462b8c4505b6eea444ef72aba7b0f2e05db78f821c9d94dad`.
+
+### `0x541580` speed-setter addendum (2026-11-25 senior REA pass)
+
+`0x541580` stores its byte argument at the game object's `+0x2168`.
+The Result board's member-speed read is therefore the low byte of that
+word; the 4050 handler's two writes leave the second write as the final
+speed. No extra transformation is applied by this setter.
+
+Evidence: `ev_98b8a43fc02d90d285c7c80eec3233d2656562f010e80490bab0417c2dbaec30`.
