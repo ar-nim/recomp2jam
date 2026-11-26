@@ -8,31 +8,28 @@ use std::time::Instant;
 
 use o2jam_net::frame::encode_frame;
 use o2jam_net::message::MemberStateChanged;
-use o2jam_net::rooms::SendWhisper;
 use o2jam_net::{
     AcquireMusic, MemberMusicState, MusicState, ReceiveWhisper, RoomRemoved, RoomSlotAction,
-    RoomSlotUpdate, SyncMemberMusicStateEvent, WireMessage,
+    RoomSlotUpdate, SendWhisper, SyncMemberMusicStateEvent, WireMessage,
 };
-use o2jam_render::Rect;
 use o2jam_shell::screens::game::StartGateVerdict;
-use o2jam_shell::Keymap;
-use winit::keyboard::KeyCode;
+use o2jam_shell::{GameLoop, MenuKey, Screen};
 
 use super::*;
 use crate::live_dual_client_legs::harness::{
-    boot_room_client, boot_waiting_client, paint_until, Direction, DualGateway, WireRecord,
+    assert_harness_tag, boot_room_client, boot_waiting_client, changed_mask, changed_pixels,
+    count_records, find_record, paint_frame, paint_until, room_chat, room_chat_rect,
+    send_room_whisper, waiting_badge_rect, Direction, DualGateway, ACQUIRE_MUSIC_OPCODE,
+    DISBAND_OPCODE, GUEST_MEMBER_ID, GUEST_NAME, LOADED_CONFIRM_OPCODE, MASTER_MEMBER_ID,
+    MASTER_NAME, MEMBER_STATE_OPCODE, MUSIC_STATE_OPCODE, ROOM_NUMBER, SLOT_UPDATE_OPCODE,
+    START_ANSWER_OPCODE, START_REQUEST_OPCODE, WHISPER_CONTENT, WHISPER_RECEIVE_OPCODE,
+    WHISPER_SENDER, WHISPER_SEND_OPCODE, WHISPER_TARGET,
 };
-use crate::live_leg_support::{
-    archives_present, joined_room, paint_frame, route_raw_key, staged_rect_pixels,
-};
+use crate::live_leg_support::{joined_room, staged_rect_pixels};
 use crate::loading::{LoadingGateArm, LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM};
 
-/// Shared identifier for the two wire legs in #592.
-pub(crate) const LOADING_TRACE_ID: &str = "dual-loading-4010-4011-4012";
-
-/// Harness-local ordinal recorded with the trace id. It is test metadata,
-/// not a field read from the 7.55 client.
-pub(crate) const LOADING_SCENARIO_EPOCH: u64 = 1;
+const LOADING_HARNESS_TAG: &str = "dual-loading-4010-4011-4012";
+const LOADING_SCENARIO_EPOCH: u64 = 1;
 
 /// One clocked paint on the private session seam, without wall sleeps.
 fn paint_loading_frame_at(session: &mut OnlineSession, now: Instant) {
@@ -47,98 +44,28 @@ fn paint_loading_frame_at(session: &mut OnlineSession, now: Instant) {
     );
 }
 
-/// Count one direction/opcode pair in a client's wire leg.
-fn count(log: &[WireRecord], direction: Direction, id: u16) -> usize {
-    log.iter()
-        .filter(|record| record.direction == direction && record.id == id)
-        .count()
-}
-
-/// First record of one direction/opcode pair in a client's wire leg.
-fn find(log: &[WireRecord], direction: Direction, id: u16) -> &WireRecord {
-    log.iter()
-        .find(|record| record.direction == direction && record.id == id)
-        .unwrap_or_else(|| panic!("no {direction:?} {id} record in the wire leg"))
-}
-
-/// Every record in both legs must carry the one scenario trace id.
-fn assert_shared_trace(legs: &[Vec<WireRecord>], trace_id: &str) {
-    for (index, log) in legs.iter().enumerate() {
-        assert!(
-            log.iter().all(|record| record.trace_id == trace_id),
-            "client {index} has records outside trace {trace_id}"
-        );
+/// Tier-2 skip notice. CI has no game data (#0a3ba).
+fn skip_if_no_archives(guard: &str) -> bool {
+    if crate::live_leg_support::archives_present() {
+        return false;
     }
+    println!("SKIP {guard}: missing install-root interface archive");
+    true
 }
 
-/// Native pixels that differ between two painted frames.
-fn changed_pixels(before: &[u32], after: &[u32]) -> usize {
-    before
-        .iter()
-        .zip(after)
-        .filter(|(was, now)| was != now)
-        .count()
-}
-
-/// Absolute staged rect of one Waiting seat's DOWNLOADING sprite.
-fn waiting_badge_rect(session: &mut OnlineSession, seat: u8) -> Rect {
-    let parent_id = format!("IDC_BUTTON_SWAIT_EXTEND{}", seat + 1);
-    session
-        .game_mut()
-        .scene_placements(Screen::Waiting)
-        .iter()
-        .find(|placed| {
-            placed.id == parent_id && placed.sprite.as_deref() == Some("Wait_Downloding.ojs")
-        })
-        .map(|placed| placed.rect)
-        .unwrap_or_else(|| panic!("no staged DOWNLOADING sprite for {parent_id}"))
-}
-
-/// Absolute staged rect of the Room chat list.
-fn room_list_rect(session: &mut OnlineSession) -> Rect {
-    session
-        .game_mut()
-        .scene_placements(Screen::Room)
-        .iter()
-        .find(|placed| placed.id == "IDC_LIST_SROOM_CHAT")
-        .map(|placed| placed.rect)
-        .expect("staged Room chat list")
-}
-
-/// Drive the real Room chat grammar: `/w Beta psst` then Enter.
-fn send_room_whisper(session: &mut OnlineSession) {
-    let mut keymap = Keymap::new();
-    for (code, text) in [
-        (KeyCode::Slash, "/"),
-        (KeyCode::KeyW, "w"),
-        (KeyCode::Space, " "),
-        (KeyCode::KeyB, "b"),
-        (KeyCode::KeyE, "e"),
-        (KeyCode::KeyT, "t"),
-        (KeyCode::KeyA, "a"),
-        (KeyCode::Space, " "),
-        (KeyCode::KeyP, "p"),
-        (KeyCode::KeyS, "s"),
-        (KeyCode::KeyS, "s"),
-        (KeyCode::KeyT, "t"),
-    ] {
-        let _ = route_raw_key(session, &mut keymap, code, Some(text));
-    }
-    let _ = route_raw_key(session, &mut keymap, KeyCode::Enter, None);
-}
-
-/// #967 tier-2 wire half. Live caller chain:
-/// `main.rs::run_play` -> `connect::connect_and_login_with_transport` ->
-/// `assemble_online_session` -> `OnlineSession::paint` -> `poll_lobby_chat`
-/// -> `apply_lobby_frame` -> `apply_room_removed` -> `ScreenGame::remove_room`
-/// -> `paint_room_list`. Pin VA `0x55bc60` / file `0x15bc60`, 2007.
+/// #967 Tier 2. Live chain: `main.rs::run_play` → connect → assembly →
+/// `OnlineSession::paint` → `poll_lobby_chat` → `apply_room_removed` →
+/// `ScreenGame::remove_room` → `paint_room_list`.
 #[test]
-fn two_booted_room_clients_drop_the_same_row_when_the_gateway_broadcasts_2007() {
-    let trace_id = "two-room-clients-2007";
-    let gateway = DualGateway::spawn(joined_room(0, true));
-    gateway.set_trace_id(trace_id);
-    let (alpha_index, mut alpha) = boot_room_client(&gateway, "Alpha");
-    let (beta_index, mut beta) = boot_room_client(&gateway, "Beta");
+fn two_room_clients_drop_the_disbanded_row() {
+    let guard = "two_room_clients_drop_the_disbanded_row";
+    if skip_if_no_archives(guard) {
+        return;
+    }
+    let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
+    gateway.set_harness_tag(guard);
+    let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
+    let (beta_index, mut beta) = boot_room_client(&gateway, GUEST_NAME);
 
     let before_alpha = paint_frame(&mut alpha);
     let before_beta = paint_frame(&mut beta);
@@ -146,286 +73,360 @@ fn two_booted_room_clients_drop_the_same_row_when_the_gateway_broadcasts_2007() 
         .game_mut()
         .listed_rooms()
         .iter()
-        .any(|room| room.number == 3));
+        .any(|room| room.number == ROOM_NUMBER));
     assert!(beta
         .game_mut()
         .listed_rooms()
         .iter()
-        .any(|room| room.number == 3));
+        .any(|room| room.number == ROOM_NUMBER));
 
-    gateway.broadcast(&[RoomRemoved { number: 3 }.encode()]);
-    let alpha_log = gateway.wire_log(alpha_index);
-    let beta_log = gateway.wire_log(beta_index);
-    assert_eq!(count(&alpha_log, Direction::ServerToClient, 2007), 1);
-    assert_eq!(
-        count(&beta_log, Direction::ServerToClient, 2007),
-        1,
-        "the disband broadcast must reach both booted clients"
-    );
-
-    paint_until(&mut alpha, |session| {
-        session
-            .game_mut()
-            .listed_rooms()
-            .iter()
-            .all(|room| room.number != 3)
-    });
-    paint_until(&mut beta, |session| {
-        session
-            .game_mut()
-            .listed_rooms()
-            .iter()
-            .all(|room| room.number != 3)
-    });
-    assert!(changed_pixels(&before_alpha, &paint_frame(&mut alpha)) > 0);
-    assert!(changed_pixels(&before_beta, &paint_frame(&mut beta)) > 0);
-    assert_eq!(
-        find(&alpha_log, Direction::ServerToClient, 2007).payload,
-        3i32.to_le_bytes()
-    );
-    assert_eq!(
-        find(&beta_log, Direction::ServerToClient, 2007).payload,
-        3i32.to_le_bytes()
-    );
-    assert_shared_trace(&[alpha_log, beta_log], trace_id);
-    gateway.finish(vec![alpha, beta]);
-}
-
-/// #974 tier-2 wire half. Live caller chain:
-/// `main.rs::run_play` -> `InputSnapshot` keys -> `OnlineSession::flush_room_chat_action`
-/// -> C2S 2017 -> fake Memoryer -> S2C 2019 -> `OnlineSession::paint` ->
-/// `poll_lobby_chat` -> `apply_lobby_whisper` -> `ScreenGame::push_lobby_whisper`
-/// -> `paint_room_chat`. Pin VA `0x55c280` / file `0x15c280`, 2019.
-#[test]
-fn a_room_whisper_sent_by_one_client_paints_the_sender_and_local_recipient_on_both_lists() {
-    let trace_id = "two-room-clients-2019";
-    let gateway = DualGateway::spawn(joined_room(0, true));
-    gateway.set_trace_id(trace_id);
-    let (alpha_index, mut alpha) = boot_room_client(&gateway, "Alpha");
-    let (beta_index, mut beta) = boot_room_client(&gateway, "Beta");
-
-    let alpha_list = room_list_rect(&mut alpha);
-    let beta_list = room_list_rect(&mut beta);
-    let alpha_rest = staged_rect_pixels(&mut alpha, alpha_list);
-    let beta_rest = staged_rect_pixels(&mut beta, beta_list);
-    send_room_whisper(&mut alpha);
-    gateway.wait_for_request(alpha_index, 2017);
-
-    let alpha_sent = gateway.wire_log(alpha_index);
-    let whisper = find(&alpha_sent, Direction::ClientToServer, 2017);
-    assert_eq!(
-        SendWhisper::decode_body(&whisper.payload).unwrap(),
-        SendWhisper {
-            recipient: "beta".to_owned(),
-            content: "psst".to_owned(),
-        },
-        "one typed Room whisper reached the gateway"
-    );
-
-    gateway.broadcast(&[ReceiveWhisper {
-        sender: "Alpha".to_owned(),
-        content: "psst".to_owned(),
+    gateway.broadcast(&[RoomRemoved {
+        number: ROOM_NUMBER,
     }
     .encode()]);
     let alpha_log = gateway.wire_log(alpha_index);
     let beta_log = gateway.wire_log(beta_index);
-    assert_eq!(count(&alpha_log, Direction::ServerToClient, 2019), 1);
     assert_eq!(
-        count(&beta_log, Direction::ServerToClient, 2019),
+        count_records(&alpha_log, Direction::ServerToClient, DISBAND_OPCODE),
+        1
+    );
+    assert_eq!(
+        count_records(&beta_log, Direction::ServerToClient, DISBAND_OPCODE),
+        1,
+        "the disband broadcast must reach both booted clients"
+    );
+
+    let row_gone = |session: &mut OnlineSession| {
+        session
+            .game_mut()
+            .listed_rooms()
+            .iter()
+            .all(|room| room.number != ROOM_NUMBER)
+    };
+    paint_until(&mut alpha, row_gone);
+    paint_until(&mut beta, row_gone);
+    assert!(changed_pixels(&before_alpha, &paint_frame(&mut alpha)) > 0);
+    assert!(changed_pixels(&before_beta, &paint_frame(&mut beta)) > 0);
+    assert_eq!(
+        find_record(&alpha_log, Direction::ServerToClient, DISBAND_OPCODE).payload,
+        ROOM_NUMBER.to_le_bytes()
+    );
+    assert_eq!(
+        find_record(&beta_log, Direction::ServerToClient, DISBAND_OPCODE).payload,
+        ROOM_NUMBER.to_le_bytes()
+    );
+    assert_harness_tag(&[alpha_log, beta_log], guard);
+    gateway.finish(vec![alpha, beta]);
+}
+
+/// #974 Tier 2. Live chain: Room chat keys → `flush_room_chat_action` →
+/// C2S 2017 → fake Memoryer → S2C 2019 → `poll_lobby_chat` →
+/// `apply_lobby_whisper` → `paint_room_chat`. The painted sender equals the
+/// wire sender; our client has no friend-record display-name lookup
+/// (docs/pins/net-b.md:338-344), so that lookup stays OPEN.
+#[test]
+fn one_whisper_reaches_both_room_chat_lists() {
+    let guard = "one_whisper_reaches_both_room_chat_lists";
+    if skip_if_no_archives(guard) {
+        return;
+    }
+    let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
+    gateway.set_harness_tag(guard);
+    let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
+    let (beta_index, mut beta) = boot_room_client(&gateway, GUEST_NAME);
+
+    let alpha_list = room_chat_rect(&mut alpha);
+    let beta_list = room_chat_rect(&mut beta);
+    let alpha_rest = staged_rect_pixels(&mut alpha, alpha_list);
+    let beta_rest = staged_rect_pixels(&mut beta, beta_list);
+    send_room_whisper(&mut alpha);
+    gateway.wait_for_request(alpha_index, WHISPER_SEND_OPCODE);
+    let alpha_sent_log = gateway.wire_log(alpha_index);
+    let sent = find_record(
+        &alpha_sent_log,
+        Direction::ClientToServer,
+        WHISPER_SEND_OPCODE,
+    );
+    assert_eq!(
+        SendWhisper::decode_body(&sent.payload).unwrap(),
+        SendWhisper {
+            recipient: WHISPER_TARGET.to_owned(),
+            content: WHISPER_CONTENT.to_owned(),
+        }
+    );
+
+    gateway.broadcast(&[ReceiveWhisper {
+        sender: WHISPER_SENDER.to_owned(),
+        content: WHISPER_CONTENT.to_owned(),
+    }
+    .encode()]);
+    let alpha_log = gateway.wire_log(alpha_index);
+    let beta_log = gateway.wire_log(beta_index);
+    assert_eq!(
+        count_records(
+            &alpha_log,
+            Direction::ServerToClient,
+            WHISPER_RECEIVE_OPCODE
+        ),
+        1
+    );
+    assert_eq!(
+        count_records(&beta_log, Direction::ServerToClient, WHISPER_RECEIVE_OPCODE),
         1,
         "the whisper fan-out must reach both clients"
     );
 
-    paint_until(&mut alpha, |session| {
-        session.game_mut().room_chat().len() == 1
-    });
-    paint_until(&mut beta, |session| {
-        session.game_mut().room_chat().len() == 1
-    });
-    for (session, recipient) in [(&mut alpha, "Alpha"), (&mut beta, "Beta")] {
-        let row = &session.game_mut().room_chat()[0];
-        assert_eq!(
-            row.sender, "Alpha",
-            "the wire sender is the painted display name"
-        );
-        assert_eq!(row.whisper_recipient.as_deref(), Some(recipient));
-    }
-    let alpha_painted = staged_rect_pixels(&mut alpha, alpha_list);
-    let beta_painted = staged_rect_pixels(&mut beta, beta_list);
-    assert!(changed_pixels(&alpha_rest, &alpha_painted) > 0);
-    assert!(changed_pixels(&beta_rest, &beta_painted) > 0);
-    assert_shared_trace(&[alpha_log, beta_log], trace_id);
+    let one_row = |session: &mut OnlineSession| room_chat(session).len() == 1;
+    paint_until(&mut alpha, one_row);
+    paint_until(&mut beta, one_row);
+    let alpha_row = room_chat(&mut alpha).remove(0);
+    let beta_row = room_chat(&mut beta).remove(0);
+    assert_eq!(alpha_row.sender, WHISPER_SENDER);
+    assert_eq!(beta_row.sender, WHISPER_SENDER);
+    assert_eq!(alpha_row.whisper_recipient.as_deref(), Some(MASTER_NAME));
+    assert_eq!(beta_row.whisper_recipient.as_deref(), Some(GUEST_NAME));
+    assert!(changed_pixels(&alpha_rest, &staged_rect_pixels(&mut alpha, alpha_list)) > 0);
+    assert!(changed_pixels(&beta_rest, &staged_rect_pixels(&mut beta, beta_list)) > 0);
+    assert_harness_tag(&[alpha_log, beta_log], guard);
     gateway.finish(vec![alpha, beta]);
 }
 
-/// #559 tier-2 wire half. Live caller chain:
-/// `main.rs::run_play` -> `OnlineSession::paint` -> `poll_waiting_chat` ->
-/// `drain_waiting_chat` -> `apply_acquire_music` / `apply_member_state_changed` /
-/// `apply_member_music_state` / `apply_slot_update` -> `ScreenGame` seat mirror
-/// and `paint_waiting_seat_marks` -> `start_gate_verdict`.
-/// 4026/4037/3009 stay wire-only; 4035 is the pinned badge paint arm
-/// (`docs/music-availability.md` §2). Pin pack hashes
-/// `0580bc8d…cbd636dd` / `20fbe170…cff6`.
+/// #559 Tier 2. Live chain: Waiting join → `poll_waiting_chat` → 4035 guest
+/// badge arm / 4026 / 4037 / 3009 → `paint_waiting_seat_marks` →
+/// `start_gate_verdict`. 4026/4037/3009 stay wire-only; 4035 is the pinned
+/// paint arm. Two Rust frames are compared to each other only; comparison
+/// to the exe A/B badge slice stays OPEN.
 #[test]
-fn two_waiting_clients_compare_the_downloading_badge_slice_then_agree_on_ready_and_start() {
-    if !archives_present() {
-        println!("SKIP two_waiting_clients_compare_the_downloading_badge_slice_then_agree_on_ready_and_start: missing install-root interface archive");
+fn master_and_guest_agree_on_badge_and_start_gate() {
+    let guard = "master_and_guest_agree_on_badge_and_start_gate";
+    if skip_if_no_archives(guard) {
         return;
     }
-    let trace_id = "two-waiting-clients-4026-4037-3009";
-    let gateway = DualGateway::spawn(joined_room(0, true));
-    gateway.set_trace_id(trace_id);
-    let (alpha_index, mut alpha) = boot_waiting_client(&gateway, "Alpha");
-    let (beta_index, mut beta) = boot_waiting_client(&gateway, "Beta");
+    let gateway = DualGateway::spawn_with_rooms(vec![
+        joined_room(MASTER_MEMBER_ID, true),
+        joined_room(GUEST_MEMBER_ID, true),
+    ]);
+    gateway.set_harness_tag(guard);
+    let (master_index, mut master) = boot_waiting_client(&gateway, MASTER_NAME);
+    let (guest_index, mut guest) = boot_waiting_client(&gateway, GUEST_NAME);
 
-    let badge_rect = waiting_badge_rect(&mut alpha, 0);
-    let alpha_rest = staged_rect_pixels(&mut alpha, badge_rect);
-    let beta_rest = staged_rect_pixels(&mut beta, badge_rect);
-
-    let downloading = AcquireMusic {
-        members: vec![MemberMusicState {
-            member_id: 0,
-            state: MusicState::Downloading,
-        }],
-    };
-    let state = MemberStateChanged {
-        member_id: 1,
+    let master_own_rect = waiting_badge_rect(&mut master, MASTER_MEMBER_ID);
+    let guest_own_rect = waiting_badge_rect(&mut guest, GUEST_MEMBER_ID);
+    let master_peer_state = MemberStateChanged {
+        member_id: MASTER_MEMBER_ID,
         playing_state: 0,
         music_state: MusicState::Downloading.code(),
     };
-    let music = SyncMemberMusicStateEvent {
-        member_id: 1,
+    let guest_peer_music = SyncMemberMusicStateEvent {
+        member_id: GUEST_MEMBER_ID,
         state: MusicState::Downloading,
     };
     let slot = RoomSlotUpdate {
-        index: 1,
+        index: GUEST_MEMBER_ID,
         action_code: RoomSlotAction::SlotUnlocked as u8,
     };
     gateway.broadcast(&[
-        downloading.encode(),
-        state.encode(),
-        music.encode(),
+        master_peer_state.encode(),
+        guest_peer_music.encode(),
         slot.encode(),
     ]);
 
-    let alpha_log = gateway.wire_log(alpha_index);
-    let beta_log = gateway.wire_log(beta_index);
-    for (index, log) in [&alpha_log, &beta_log].into_iter().enumerate() {
+    for (index, log) in [
+        gateway.wire_log(master_index),
+        gateway.wire_log(guest_index),
+    ]
+    .iter()
+    .enumerate()
+    {
         let sequence: Vec<u16> = log
             .iter()
             .filter(|record| record.direction == Direction::ServerToClient)
-            .filter(|record| [4026, 4037, 3009].contains(&record.id))
+            .filter(|record| {
+                [MEMBER_STATE_OPCODE, MUSIC_STATE_OPCODE, SLOT_UPDATE_OPCODE].contains(&record.id)
+            })
             .map(|record| record.id)
             .collect();
         assert_eq!(
             sequence,
-            vec![4026, 4037, 3009],
-            "client {index} must receive the same wire sequence"
+            vec![MEMBER_STATE_OPCODE, MUSIC_STATE_OPCODE, SLOT_UPDATE_OPCODE],
+            "client {index} missed the wire sequence"
         );
     }
 
-    for session in [&mut alpha, &mut beta] {
-        paint_until(session, |session| {
-            session.slot_action(1) == Some(RoomSlotAction::SlotUnlocked)
-                && session.game_mut().member_music_state(1) == Some(MusicState::Downloading.code())
-                && session.game_mut().local_download_badge_armed()
-        });
+    paint_until(&mut master, |session| {
+        session.slot_action(GUEST_MEMBER_ID) == Some(RoomSlotAction::SlotUnlocked)
+            && session.game_mut().member_music_state(GUEST_MEMBER_ID)
+                == Some(MusicState::Downloading.code())
+    });
+    paint_until(&mut guest, |session| {
+        session.slot_action(GUEST_MEMBER_ID) == Some(RoomSlotAction::SlotUnlocked)
+            && session.game_mut().member_music_state(MASTER_MEMBER_ID)
+                == Some(MusicState::Downloading.code())
+    });
+
+    // Rest frames are taken after the wire states stage, before the 4035 arm.
+    let master_own_rest = staged_rect_pixels(&mut master, master_own_rect);
+    let guest_master_rest = staged_rect_pixels(&mut guest, master_own_rect);
+    let guest_own_rest = staged_rect_pixels(&mut guest, guest_own_rect);
+
+    let downloading = AcquireMusic {
+        members: vec![MemberMusicState {
+            member_id: GUEST_MEMBER_ID,
+            state: MusicState::Downloading,
+        }],
+    };
+    gateway.broadcast(&[downloading.encode()]);
+    paint_until(&mut guest, |session| {
+        session.game_mut().local_download_badge_armed()
+    });
+
+    for (index, log) in [
+        gateway.wire_log(master_index),
+        gateway.wire_log(guest_index),
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            count_records(log, Direction::ServerToClient, ACQUIRE_MUSIC_OPCODE),
+            1,
+            "client {index} must receive the guest-only 4035 paint arm"
+        );
     }
-    let alpha_badge = staged_rect_pixels(&mut alpha, badge_rect);
-    let beta_badge = staged_rect_pixels(&mut beta, badge_rect);
+
+    assert!(!master.game_mut().local_download_badge_armed());
+    assert!(guest.game_mut().local_download_badge_armed());
     assert_eq!(
-        alpha_badge, beta_badge,
-        "the 07E8 badge slice agrees pixel-for-pixel"
+        staged_rect_pixels(&mut master, master_own_rect),
+        master_own_rest
     );
     assert_ne!(
-        alpha_badge, alpha_rest,
-        "the downloading badge actually inked the slice"
+        staged_rect_pixels(&mut guest, guest_own_rect),
+        guest_own_rest
     );
-    assert_ne!(
-        beta_badge, beta_rest,
-        "the second client's badge actually inked the slice"
+    // Two Rust frames agree on the master seat's change mask. Raw pixels
+    // differ by role, and comparison to the exe A/B crop stays OPEN.
+    assert_eq!(
+        changed_mask(&paint_frame(&mut master), &master_own_rest, master_own_rect),
+        changed_mask(
+            &paint_frame(&mut guest),
+            &guest_master_rest,
+            master_own_rect
+        ),
+        "the two Rust frames must agree before the verdict"
     );
-    for session in [&mut alpha, &mut beta] {
+    for session in [&mut master, &mut guest] {
         assert_eq!(
             session.game_mut().start_gate_verdict(),
-            StartGateVerdict::MusicDownloading,
-            "a downloading peer closes START on both clients"
+            StartGateVerdict::MusicDownloading
         );
     }
 
     let ready = AcquireMusic {
         members: vec![
             MemberMusicState {
-                member_id: 0,
+                member_id: MASTER_MEMBER_ID,
                 state: MusicState::Ready,
             },
             MemberMusicState {
-                member_id: 1,
+                member_id: GUEST_MEMBER_ID,
                 state: MusicState::Ready,
             },
         ],
     };
-    let ready_music = SyncMemberMusicStateEvent {
-        member_id: 1,
+    let ready_peer_state = MemberStateChanged {
+        member_id: GUEST_MEMBER_ID,
+        playing_state: 0,
+        music_state: MusicState::Ready.code(),
+    };
+    let ready_peer_music = SyncMemberMusicStateEvent {
+        member_id: MASTER_MEMBER_ID,
         state: MusicState::Ready,
     };
-    gateway.broadcast(&[ready.encode(), ready_music.encode()]);
-    for session in [&mut alpha, &mut beta] {
-        paint_until(session, |session| {
-            session.game_mut().member_music_state(1) == Some(MusicState::Ready.code())
-                && !session.game_mut().local_download_badge_armed()
-        });
-    }
-    assert_eq!(staged_rect_pixels(&mut alpha, badge_rect), alpha_rest);
-    assert_eq!(staged_rect_pixels(&mut beta, badge_rect), beta_rest);
-    for session in [&mut alpha, &mut beta] {
-        assert_eq!(
-            session.game_mut().start_gate_verdict(),
-            StartGateVerdict::Startable
-        );
-    }
-    assert_shared_trace(
-        &[gateway.wire_log(alpha_index), gateway.wire_log(beta_index)],
-        trace_id,
+    gateway.broadcast(&[
+        ready.encode(),
+        ready_peer_state.encode(),
+        ready_peer_music.encode(),
+    ]);
+    let cleared = |session: &mut OnlineSession| {
+        !session.game_mut().local_download_badge_armed()
+            && session.game_mut().start_gate_verdict() == StartGateVerdict::Startable
+    };
+    paint_until(&mut master, cleared);
+    paint_until(&mut guest, cleared);
+    assert_eq!(
+        staged_rect_pixels(&mut guest, guest_own_rect),
+        guest_own_rest
     );
-    gateway.finish(vec![alpha, beta]);
+    assert_eq!(
+        staged_rect_pixels(&mut master, master_own_rect),
+        master_own_rest
+    );
+    assert_harness_tag(
+        &[
+            gateway.wire_log(master_index),
+            gateway.wire_log(guest_index),
+        ],
+        guard,
+    );
+    gateway.finish(vec![master, guest]);
 }
 
-/// #592 tier-2 wire leg. Live caller chain:
-/// `main.rs::run_play` -> master `menu_key(Confirm)` -> C2S 4010 ->
-/// fake Memoryer -> S2C 4011 to both -> `OnlineSession::poll_start` ->
-/// Loading -> master Loading Confirm and guest paced gate -> C2S 4012
-/// from both sockets. No scene state is direct-set.
+/// #592 Tier 2. Live chain: master Confirm → C2S 4010 → fake Memoryer →
+/// S2C 4011 to both → `poll_start` → Loading → master Confirm and guest
+/// paced gate → C2S 4012 from both. `harness_tag` is a harness label only;
+/// a reserved trace id and an independent Memoryer PID/epoch stay OPEN.
 #[test]
-fn two_wire_legs_share_one_trace_id_for_the_4010_4011_4012_fanout() {
-    if !archives_present() {
-        println!("SKIP two_wire_legs_share_one_trace_id_for_the_4010_4011_4012_fanout: missing install-root chart");
+fn both_clients_log_the_start_fanout() {
+    let guard = "both_clients_log_the_start_fanout";
+    if skip_if_no_archives(guard) {
         return;
     }
-    let gateway = DualGateway::spawn_with_rooms(vec![joined_room(0, true), joined_room(1, true)]);
-    gateway.set_trace_id(LOADING_TRACE_ID);
+    let gateway = DualGateway::spawn_with_rooms(vec![
+        joined_room(MASTER_MEMBER_ID, true),
+        joined_room(GUEST_MEMBER_ID, true),
+    ]);
+    gateway.set_harness_tag(LOADING_HARNESS_TAG);
     println!(
-        "[{LOADING_TRACE_ID}] server_pid={} scenario_epoch={LOADING_SCENARIO_EPOCH} dual-socket tap",
-        DualGateway::server_pid()
+        "[{LOADING_HARNESS_TAG}] harness_process_id={} scenario_epoch={LOADING_SCENARIO_EPOCH} dual-socket tap",
+        DualGateway::harness_process_id()
     );
-    let (master_index, mut master) = boot_waiting_client(&gateway, "Alpha");
-    let (guest_index, mut guest) = boot_waiting_client(&gateway, "Beta");
+    let (master_index, mut master) = boot_waiting_client(&gateway, MASTER_NAME);
+    let (guest_index, mut guest) = boot_waiting_client(&gateway, GUEST_NAME);
 
     master.menu_key(MenuKey::Confirm, true);
-    gateway.wait_for_logged_request(master_index, 4010);
-    gateway.broadcast(&[encode_frame(4011, &[])]);
-
-    let master_log = gateway.wire_log(master_index);
-    let guest_log = gateway.wire_log(guest_index);
+    gateway.wait_for_logged_request(master_index, START_REQUEST_OPCODE);
+    gateway.broadcast(&[encode_frame(START_ANSWER_OPCODE, &[])]);
     assert_eq!(
-        count(&master_log, Direction::ClientToServer, 4010),
-        1,
-        "one master START request drives the fan-out"
+        count_records(
+            &gateway.wire_log(master_index),
+            Direction::ClientToServer,
+            START_REQUEST_OPCODE
+        ),
+        1
     );
-    assert_eq!(count(&guest_log, Direction::ClientToServer, 4010), 0);
-    assert_eq!(count(&master_log, Direction::ServerToClient, 4011), 1);
     assert_eq!(
-        count(&guest_log, Direction::ServerToClient, 4011),
+        count_records(
+            &gateway.wire_log(guest_index),
+            Direction::ClientToServer,
+            START_REQUEST_OPCODE
+        ),
+        0
+    );
+    assert_eq!(
+        count_records(
+            &gateway.wire_log(master_index),
+            Direction::ServerToClient,
+            START_ANSWER_OPCODE
+        ),
+        1
+    );
+    assert_eq!(
+        count_records(
+            &gateway.wire_log(guest_index),
+            Direction::ServerToClient,
+            START_ANSWER_OPCODE
+        ),
         1,
         "the guest's wire leg carries its own 4011"
     );
@@ -433,7 +434,7 @@ fn two_wire_legs_share_one_trace_id_for_the_4010_4011_4012_fanout() {
     paint_until(&mut master, |session| session.screen() == Screen::Loading);
     paint_until(&mut guest, |session| session.screen() == Screen::Loading);
     master.menu_key(MenuKey::Confirm, true);
-    gateway.wait_for_logged_request(master_index, 4012);
+    gateway.wait_for_logged_request(master_index, LOADED_CONFIRM_OPCODE);
 
     let LoadingGateArm::ChartArmed { entered_at, .. } = guest.loading_pacing.arm_state() else {
         panic!("the joined guest must arm its chart from the 4011 broadcast");
@@ -448,26 +449,46 @@ fn two_wire_legs_share_one_trace_id_for_the_4010_4011_4012_fanout() {
         &mut guest,
         entered_at + LOADING_CONFIRM_AFTER_START + LOADING_PLAYING_AFTER_CONFIRM,
     );
-    gateway.wait_for_logged_request(guest_index, 4012);
+    gateway.wait_for_logged_request(guest_index, LOADED_CONFIRM_OPCODE);
 
     let master_log = gateway.wire_log(master_index);
     let guest_log = gateway.wire_log(guest_index);
-    for (index, log) in [&master_log, &guest_log].into_iter().enumerate() {
+    for (index, log) in [&master_log, &guest_log].iter().enumerate() {
         assert_eq!(
-            count(log, Direction::ClientToServer, 4012),
+            count_records(log, Direction::ClientToServer, LOADED_CONFIRM_OPCODE),
             1,
-            "client {index} must post its own 4012"
+            "client {index} must log its own 4012"
         );
     }
-    assert_shared_trace(&[master_log, guest_log], LOADING_TRACE_ID);
+    assert_harness_tag(&[master_log, guest_log], LOADING_HARNESS_TAG);
     println!(
-        "[{LOADING_TRACE_ID}] server_pid={} scenario_epoch={LOADING_SCENARIO_EPOCH} 4010={} 4011={}/{} 4012={}/{}",
-        DualGateway::server_pid(),
-        count(&gateway.wire_log(master_index), Direction::ClientToServer, 4010),
-        count(&gateway.wire_log(master_index), Direction::ServerToClient, 4011),
-        count(&gateway.wire_log(guest_index), Direction::ServerToClient, 4011),
-        count(&gateway.wire_log(master_index), Direction::ClientToServer, 4012),
-        count(&gateway.wire_log(guest_index), Direction::ClientToServer, 4012),
+        "[{LOADING_HARNESS_TAG}] harness_process_id={} scenario_epoch={LOADING_SCENARIO_EPOCH} 4010={} 4011={}/{} 4012={}/{}",
+        DualGateway::harness_process_id(),
+        count_records(
+            &gateway.wire_log(master_index),
+            Direction::ClientToServer,
+            START_REQUEST_OPCODE
+        ),
+        count_records(
+            &gateway.wire_log(master_index),
+            Direction::ServerToClient,
+            START_ANSWER_OPCODE
+        ),
+        count_records(
+            &gateway.wire_log(guest_index),
+            Direction::ServerToClient,
+            START_ANSWER_OPCODE
+        ),
+        count_records(
+            &gateway.wire_log(master_index),
+            Direction::ClientToServer,
+            LOADED_CONFIRM_OPCODE
+        ),
+        count_records(
+            &gateway.wire_log(guest_index),
+            Direction::ClientToServer,
+            LOADED_CONFIRM_OPCODE
+        ),
     );
     gateway.finish(vec![master, guest]);
 }
