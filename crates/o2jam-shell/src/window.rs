@@ -9,6 +9,7 @@ use image::ExtendedColorType;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
@@ -629,9 +630,40 @@ impl UiNotice {
 /// Bit of the state word the double-click helper tests.
 pub const DOUBLE_CLICK_STATE_BIT: u16 = 1 << 2;
 
+/// Win32 generates `WM_LBUTTONDBLCLK` from the system settings; the
+/// hub `0x5a5190` only forwards the press coordinates. These are the
+/// documented Windows defaults, used here because winit has no
+/// double-click event (`GetDoubleClickTime` / `SM_CXDOUBLECLK`).
+pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(500);
+pub const DOUBLE_CLICK_RECT: i32 = 4;
+
+/// Mode word the exe's dialog-show helpers write (`0x433c90` writes
+/// `0x304`, its hide helper `0x433d60` writes zero); bit 2 is the
+/// gate the double-click notice helper reads.
+const DIALOG_HOST_MODE_WORD: u16 = 0x304;
+
+/// One left press the double-click arm can pair with a later press.
+#[derive(Debug, Clone, Copy)]
+struct LeftPress {
+    at: Instant,
+    x: i32,
+    y: i32,
+}
+
+/// Whether a second press forms the system double-click pair: inside
+/// the time window and inside the rectangle around the first press.
+fn is_double_click_pair(first: LeftPress, second: LeftPress) -> bool {
+    let Some(elapsed) = second.at.checked_duration_since(first.at) else {
+        return false;
+    };
+    elapsed <= DOUBLE_CLICK_TIME
+        && (second.x - first.x).abs() <= DOUBLE_CLICK_RECT
+        && (second.y - first.y).abs() <= DOUBLE_CLICK_RECT
+}
+
 /// Decide one double-click arm. The winit loop has no Win32
-/// `WM_LBUTTONDBLCLK`; the notice is the pinned contract until that
-/// arm is wired by a lane that owns the game's notice queue.
+/// `WM_LBUTTONDBLCLK`; the window arm supplies the press pair and
+/// this helper pins the exe's notice words.
 #[must_use]
 pub fn double_click_notice(state_word: u16, x: i32, y: i32) -> Option<UiNotice> {
     (state_word & DOUBLE_CLICK_STATE_BIT != 0).then(|| UiNotice::new(10, 3, 0, x, y))
@@ -683,6 +715,13 @@ pub struct WindowHandler {
     /// Popup staged by the induced fatal-error hook. `None` paints no
     /// box; the close arm stages nothing.
     error_popup: Option<ErrorPopup>,
+    /// Most recent left press, used only by the double-click arm.
+    last_left_press: Option<LeftPress>,
+    /// UI notices staged by the window's double-click arm. The exe
+    /// posts the same `(10,3,0)` record into its input ring
+    /// (`0x5429b0` -> `0x545910`); this client has no further pump
+    /// for internal key 10, phase 3, so the staged record is the sink.
+    staged_notices: Vec<UiNotice>,
 }
 
 impl WindowHandler {
@@ -706,6 +745,8 @@ impl WindowHandler {
             screenshot_root: None,
             screenshot_counter: ScreenShotCounter::new(0),
             error_popup: None,
+            last_left_press: None,
+            staged_notices: Vec::new(),
         }
     }
 
@@ -1002,6 +1043,28 @@ impl WindowHandler {
         self.input_dirty = true;
     }
 
+    /// UI notices staged by the window's double-click arm, in post order.
+    #[must_use]
+    pub fn staged_ui_notices(&self) -> &[UiNotice] {
+        &self.staged_notices
+    }
+
+    /// Set the window surface for a headless leg. The real event loop
+    /// sets the same geometry in its `Resized` arm; live legs have no
+    /// winit window but must still map window pixels to native pixels.
+    pub fn set_window_surface_size(&mut self, width: u32, height: u32) {
+        self.surface_size = Some((width, height));
+    }
+
+    /// Drive one full left click through the same motion and
+    /// `MouseInput` helpers the winit event arms call. Headless live
+    /// legs use it because winit emits no double-click event.
+    pub fn route_window_left_press(&mut self, window_x: f64, window_y: f64) {
+        self.track_motion(window_x, window_y);
+        self.route_mouse_input(true);
+        self.route_mouse_input(false);
+    }
+
     /// Queue one left-button edge from the `MouseInput` window-event
     /// arm. The edge position is the cursor tracked from prior
     /// motion/enter events: `MouseInput` carries no position (X11
@@ -1014,8 +1077,50 @@ impl WindowHandler {
     /// the open desktop chain live in `docs/window-input-seam.md`.
     /// Queued only — the next freeze delivers it (ADR-0013).
     fn route_mouse_input(&mut self, down: bool) {
-        if let Some((x, y)) = self.cursor {
-            self.route_mouse_edge(down, x, y);
+        let Some((cursor_x, cursor_y)) = self.cursor else {
+            return;
+        };
+        let native = self
+            .surface_size
+            .and_then(|(width, height)| window_to_native(width, height, cursor_x, cursor_y));
+        self.route_mouse_edge(down, cursor_x, cursor_y);
+        if down {
+            match native {
+                Some((x, y)) => self.stage_double_click_at_native(x, y),
+                None => self.last_left_press = None,
+            }
+        }
+    }
+
+    /// Mirror the exe's `WM_LBUTTONDBLCLK` arm (`0x5a5190` ->
+    /// `0x5a50b0` -> `0x548b10`) for a second press inside the window:
+    /// read the live dialog-host mode word and post the pinned notice
+    /// into the window's input ring.
+    fn stage_double_click_at_native(&mut self, x: i32, y: i32) {
+        let press = LeftPress {
+            at: Instant::now(),
+            x,
+            y,
+        };
+        if self
+            .last_left_press
+            .is_some_and(|first| is_double_click_pair(first, press))
+        {
+            if let Some(notice) = double_click_notice(self.control_mode_word(), x, y) {
+                self.staged_notices.push(notice);
+            }
+        }
+        self.last_left_press = Some(press);
+    }
+
+    /// Mode word of the dialog host that owns this window. The exe's
+    /// show helpers set bit 2 and the hide helpers clear the word;
+    /// our one-OK host is the same writer.
+    fn control_mode_word(&self) -> u16 {
+        if self.error_popup.is_some() {
+            DIALOG_HOST_MODE_WORD
+        } else {
+            0
         }
     }
 
@@ -2619,6 +2724,84 @@ mod tests {
             None,
             "clear bit stays silent"
         );
+    }
+
+    #[test]
+    fn window_double_click_stages_the_pinned_notice_when_the_bit_is_set() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` -> `WindowHandler::route_mouse_input`
+        // -> `WindowHandler::stage_double_click_at_native` ->
+        // `is_double_click_pair` -> `double_click_notice` ->
+        // `WindowHandler::staged_ui_notices`.
+        let (mut handler, _probe) = probed_handler();
+        handler.set_window_surface_size(800, 600);
+        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(21.0, 42.0);
+
+        assert_eq!(
+            handler.staged_ui_notices(),
+            &[UiNotice::new(10, 3, 0, 21, 42)]
+        );
+    }
+
+    #[test]
+    fn one_left_press_stages_no_double_click_notice() {
+        // seam: the Win32 hub only gets `WM_LBUTTONDBLCLK` after a
+        // second press; this arm is the whole winit-side rule.
+        let (mut handler, _probe) = probed_handler();
+        handler.set_window_surface_size(800, 600);
+        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+
+        handler.route_window_left_press(21.0, 42.0);
+
+        assert!(handler.staged_ui_notices().is_empty());
+    }
+
+    #[test]
+    fn presses_outside_the_window_stage_no_double_click_notice() {
+        // seam: `window_to_native` rejects letterbox/outside points,
+        // so no exe-equivalent double-click can be formed there.
+        let (mut handler, _probe) = probed_handler();
+        handler.set_window_surface_size(800, 600);
+        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+
+        handler.route_window_left_press(-20.0, -20.0);
+        handler.route_window_left_press(-20.0, -20.0);
+
+        assert!(handler.staged_ui_notices().is_empty());
+    }
+
+    #[test]
+    fn slow_press_pair_stages_no_double_click_notice() {
+        // seam: Win32 forms a double-click only inside the system
+        // time window; the hub has no timer of its own.
+        let (mut handler, _probe) = probed_handler();
+        handler.set_window_surface_size(800, 600);
+        handler.raise_error_from_supplied(UNRECOGNIZED_ERROR_TEXT, true);
+        handler.last_left_press = Some(LeftPress {
+            at: Instant::now() - DOUBLE_CLICK_TIME - Duration::from_millis(1),
+            x: 21,
+            y: 42,
+        });
+
+        handler.route_window_left_press(21.0, 42.0);
+
+        assert!(handler.staged_ui_notices().is_empty());
+    }
+
+    #[test]
+    fn press_pair_with_a_clear_bit_stages_no_double_click_notice() {
+        // seam: the exe's `0x548b10` reads bit 2 of the control mode
+        // word before it posts anything; no dialog host means no bit.
+        let (mut handler, _probe) = probed_handler();
+        handler.set_window_surface_size(800, 600);
+
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(21.0, 42.0);
+
+        assert!(handler.staged_ui_notices().is_empty());
     }
 
     #[test]

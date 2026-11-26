@@ -43,6 +43,8 @@ mod live_stats;
 mod live_waiting_seat_legs;
 mod live_waiting_wire_legs;
 mod live_web_native_legs;
+#[cfg(test)]
+mod live_window_legs;
 mod loading;
 mod menu_trace_replay;
 mod relay_gate;
