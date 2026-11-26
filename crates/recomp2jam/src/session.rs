@@ -145,11 +145,11 @@ use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
 use o2jam_net::gift::{GiftClaimReply, GiftType};
 use o2jam_net::message::{
-    ExitWaitingAnswer, FreeMusicStatusAnswer, MemberStateChanged, MusicLoaded, RoomClosedNotice,
-    RoomDescriptorChanged, RoomDisappearedNotice, RoomParameterChanged, RoomSkillChanged,
-    RoomStateChanged, RoomUserCountChanged, RoomUserList, SetRoomMusicEcho, StartGameAnswer,
-    SyncMemberMusicList, WaitingMemberRows, WaitingSkillChanged, WaitingSkillExChanged,
-    WaitingValueMemberEvent,
+    ExitWaitingAnswer, FreeMusicStatusAnswer, KeyModeDescriptorChanged, MemberStateChanged,
+    MusicLoaded, RoomClosedNotice, RoomDescriptorChanged, RoomDisappearedNotice,
+    RoomParameterChanged, RoomSkillChanged, RoomStateChanged, RoomUserCountChanged, RoomUserList,
+    SetRoomMusicEcho, StartGameAnswer, SyncMemberMusicList, WaitingMemberRows, WaitingSkillChanged,
+    WaitingSkillExChanged, WaitingValueMemberEvent,
 };
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
@@ -183,7 +183,7 @@ use o2jam_net::{
 };
 use o2jam_shell::screens::game::{
     AutoPickOutcome, ChatSendMode, JoinAnswerRefusal, LobbyChat, ResultMemberRecord, SlashCommand,
-    StartGateVerdict, StartRequest, WaitingWireCaption,
+    StartGateVerdict, StartRequest, WaitingRoomDescriptor, WaitingWireCaption,
 };
 use o2jam_shell::screens::paint::{paint_music_shop_top100_board, WaitingSkillItem};
 use o2jam_shell::screens::side::MyRoomNotice;
@@ -4673,12 +4673,41 @@ impl OnlineSession {
         }
     }
 
-    /// Fold one 3001 key-mode change event. The exe's master arm
-    /// (case `0xbb9` of `FUN_004b0a50`, EV `ev_e1395126…`) clears the
-    /// select vectors, mirrors the song nibble and re-sends 4000; a
-    /// peer only learns the new room key mode. The wire body is OPEN,
-    /// so only the first byte (the new mode) is decoded.
+    /// Fold one 3001 frame. The wire handler (`0x55ca00`) rewrites
+    /// the Waiting descriptor and ORs the flag word's shifted high
+    /// nibble into the member word. The earlier one-byte body is kept
+    /// as the pre-pin placeholder for the separate UI key-mode arm
+    /// (`FUN_004b0a50` case `0xbb9`); it is not claimed as an exe body.
     fn apply_key_mode_changed(&mut self, frame: &Frame) {
+        if let Ok(change) = KeyModeDescriptorChanged::decode_frame(frame) {
+            self.stage_key_mode_descriptor(change);
+            return;
+        }
+        self.apply_placeholder_key_mode_change(frame);
+    }
+
+    /// Hand the pinned 3001 descriptor fields to the shell. The room
+    /// number comes from the join attempt, as it does for 2023; with
+    /// no staged number the raw bytes still reach the descriptor.
+    fn stage_key_mode_descriptor(&mut self, change: KeyModeDescriptorChanged) {
+        if !self.joined_waiting || self.game.screen() != Screen::Waiting {
+            return;
+        }
+        self.game.stage_waiting_descriptor(WaitingRoomDescriptor {
+            first_string: change.first_string,
+            second_string: change.second_string,
+            flag_bytes: change.flag_bytes,
+        });
+        if let Some(number) = self.game.waiting_room_number() {
+            self.game
+                .stage_room_member_word(number, change.member_word_flag);
+        }
+    }
+
+    /// Fold the old one-byte key-mode placeholder. The exe's master
+    /// arm clears the select vectors, mirrors the song nibble and
+    /// re-sends 4000; a peer only learns the new room key mode.
+    fn apply_placeholder_key_mode_change(&mut self, frame: &Frame) {
         let Ok(change) = KeyModeChanged::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable key-mode change");
             return;

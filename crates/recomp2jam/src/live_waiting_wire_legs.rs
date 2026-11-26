@@ -10,8 +10,10 @@ use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
+use o2jam_net::frame::encode_frame;
 use o2jam_net::message::{
-    ExitWaitingAnswer, MusicLoaded, RoomDisappearedNotice, StartGameAnswer, WaitingMemberRows,
+    ExitWaitingAnswer, FreeMusicStatusAnswer, KeyModeDescriptorChanged, MusicLoaded,
+    RoomDisappearedNotice, StartGameAnswer, WaitingMemberRows,
 };
 use o2jam_net::play::MemberReadyStateChanged;
 use o2jam_net::rooms::RoomSlotUpdate;
@@ -20,6 +22,7 @@ use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
     WireMessage,
 };
+use o2jam_shell::screens::game::WaitingRoomDescriptor;
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
@@ -156,6 +159,38 @@ fn finish(session: OnlineSession, gateway: WaitingWireGateway) {
     drop(session);
     drop(gateway.script);
     gateway.server.join().unwrap();
+}
+
+/// Paint until a staged wire field reaches `ready`. Counting frames,
+/// not wall time, keeps a loaded fleet out of the assertion.
+fn paint_until(session: &mut OnlineSession, ready: impl Fn(&mut OnlineSession) -> bool) {
+    for _ in 0..MAX_SCREEN_PAINTS {
+        if ready(session) {
+            return;
+        }
+        paint(session);
+    }
+    panic!("live wire leg never staged the scripted fields");
+}
+
+/// Two synthetic OJNList rows: the first has level 20, the second
+/// level 5. The 2035 cap is the only source that can reject the first
+/// row before the auto-pick arm walks to the second.
+fn two_level_catalog() -> Vec<u8> {
+    [(757u32, 20u32), (758, 5)]
+        .into_iter()
+        .flat_map(|(song_id, level)| {
+            let mut record = vec![0u8; 300];
+            record[4..8].copy_from_slice(&song_id.to_le_bytes());
+            record[8..11].copy_from_slice(b"ojn");
+            record[20..24].copy_from_slice(&124f32.to_le_bytes());
+            record[24..28].copy_from_slice(&level.to_le_bytes());
+            record[112..117].copy_from_slice(b"First");
+            record[176..180].copy_from_slice(b"Band");
+            record[240..251].copy_from_slice(b"o2ma757.ojm");
+            record
+        })
+        .collect()
 }
 
 #[test]
@@ -320,6 +355,109 @@ fn live_4009_echo_lights_the_peer_ready_mark_from_boot() {
         before,
         paint_frame(&mut session),
         "the ready mark repainted"
+    );
+    finish(session, gateway);
+}
+
+#[test]
+fn live_3001_descriptor_frame_stages_the_waiting_room_descriptor_from_boot() {
+    // Live caller chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> OnlineSession::paint -> poll_waiting_chat
+    // -> drain_waiting_chat -> apply_waiting_frame -> apply_key_mode_changed
+    // -> stage_key_mode_descriptor -> ScreenGame::stage_waiting_descriptor
+    // + ScreenGame::stage_room_member_word.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("SKIP live_3001_descriptor_frame_stages_the_waiting_room_descriptor_from_boot: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
+    let mut session = boot_into_waiting(&gateway);
+    gateway.push(
+        KeyModeDescriptorChanged {
+            first_string: "WireRoom".to_owned(),
+            second_string: "WireSong".to_owned(),
+            flag_bytes: [1, 2, 3, 4, 5],
+            member_word_flag: 0xF123,
+        }
+        .encode(),
+    );
+    paint_until(&mut session, |session| {
+        session.game_mut().waiting_descriptor().first_string == "WireRoom"
+    });
+
+    let expected = WaitingRoomDescriptor {
+        first_string: "WireRoom".to_owned(),
+        second_string: "WireSong".to_owned(),
+        flag_bytes: [1, 2, 3, 4, 5],
+    };
+    assert_eq!(session.game_mut().waiting_descriptor(), &expected);
+    assert_eq!(
+        session.game_mut().room_member_word(3),
+        Some(0x000F_0123),
+        "the flag word keeps the pinned high-nibble member write"
+    );
+    let pixels = paint_frame(&mut session);
+    assert!(
+        pixels.iter().any(|pixel| *pixel != 0),
+        "the Waiting board painted after the descriptor frame"
+    );
+    finish(session, gateway);
+}
+
+#[test]
+fn live_2035_cap_changes_the_auto_picked_row_from_boot() {
+    // Live caller chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> OnlineSession::paint -> poll_waiting_chat
+    // -> drain_waiting_chat -> apply_waiting_frame ->
+    // apply_free_music_status -> ScreenGame::set_auto_pick_level_cap;
+    // then a 3007 leave -> apply_auto_pick_after_seat_change ->
+    // ScreenGame::auto_pick_waiting_song -> pending 4000.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("SKIP live_2035_cap_changes_the_auto_picked_row_from_boot: missing install-root interface archive");
+        return;
+    }
+    let mut room = joined_room(0, true);
+    room.music_id = 0;
+    let gateway = spawn_waiting_wire_gateway(room);
+    let mut session = boot_into_waiting(&gateway);
+    let catalog_blob = two_level_catalog();
+    let catalog = o2jam_file::parse_ojn_list(&catalog_blob).unwrap();
+    session.game_mut().set_song_catalog(&catalog);
+
+    let leave = encode_frame(3007, &[1, 0, 0, 0, 0, 0, 0, 0]);
+    gateway.push(leave.clone());
+    paint_until(&mut session, |session| {
+        session.game_mut().room_music_id() == Some(757)
+    });
+    assert_eq!(
+        session.game_mut().room_music_id(),
+        Some(757),
+        "without a ceiling the first catalog row wins"
+    );
+    // The 4000 echo is pinned by the seam guard; consume the outbox
+    // here so its select-attempt drain cannot swallow the scripted
+    // cap frame that follows.
+    assert!(session.game_mut().take_music_send().is_some());
+
+    gateway.push(
+        FreeMusicStatusAnswer {
+            result: 0,
+            level_cap: Some(7),
+        }
+        .encode(),
+    );
+    gateway.push(leave);
+    paint_until(&mut session, |session| {
+        session.game_mut().room_music_id() == Some(758)
+    });
+    assert_eq!(
+        session.game_mut().room_music_id(),
+        Some(758),
+        "the 2035 ceiling rejects level 20 and picks the level 5 row"
     );
     finish(session, gateway);
 }

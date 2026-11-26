@@ -1538,6 +1538,54 @@ impl WireMessage for WaitingValueMemberEvent {
     }
 }
 
+/// 3001 key-mode change body at VA `0x55ca00` / file `0x15ca00`
+/// (REA `ev_ae9d.da90…`, addendum `ev_cd7e22b9…`): two default-cap
+/// strings, five raw descriptor bytes, then one u16 flag word. The
+/// five bytes have no pinned meaning, so they stay raw; the flag word
+/// feeds the high-nibble member-word write in the session drain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyModeDescriptorChanged {
+    /// First descriptor string, staged at the room record's `+0x54`.
+    pub first_string: String,
+    /// Second descriptor string, staged at the room record's `+0x94`.
+    pub second_string: String,
+    /// Five raw descriptor bytes in wire order; meanings are OPEN.
+    pub flag_bytes: [u8; DESCRIPTOR_FLAG_BYTE_COUNT],
+    /// Flag word whose high nibble reaches the staged member word.
+    pub member_word_flag: u16,
+}
+
+/// Count of raw bytes between the two strings and the flag word.
+const DESCRIPTOR_FLAG_BYTE_COUNT: usize = 5;
+
+impl WireMessage for KeyModeDescriptorChanged {
+    const COMMAND: u16 = 3001;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = encode_null_terminated(&self.first_string, MAX_STRING_LEN);
+        body.extend_from_slice(&encode_null_terminated(&self.second_string, MAX_STRING_LEN));
+        body.extend_from_slice(&self.flag_bytes);
+        body.extend_from_slice(&self.member_word_flag.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let first_string = reader.read_string()?;
+        let second_string = reader.read_string()?;
+        let mut flag_bytes = [0u8; DESCRIPTOR_FLAG_BYTE_COUNT];
+        flag_bytes.copy_from_slice(reader.take(DESCRIPTOR_FLAG_BYTE_COUNT)?);
+        let member_word_flag = reader.read_u16()?;
+        reader.finish()?;
+        Ok(Self {
+            first_string,
+            second_string,
+            flag_bytes,
+            member_word_flag,
+        })
+    }
+}
+
 /// Waiting skill list from 4024 (`0x5602a0`) or 4058 (`0x560600`):
 /// a wide item-id count, the ids, then a wide seat value and member
 /// byte. The catalog byte lookup behind each id stays OPEN; the raw
@@ -2581,6 +2629,56 @@ mod waiting_wire_codec_tests {
                 .unwrap()
                 .value,
             9
+        );
+    }
+
+    #[test]
+    fn key_mode_descriptor_3001_round_trips_the_pinned_body_shape() {
+        // seam: pure codec; 0x55ca00 is a wire parser with no UI caller
+        // beyond the decode hand-off.
+        let change = KeyModeDescriptorChanged {
+            first_string: "room".to_owned(),
+            second_string: "song".to_owned(),
+            flag_bytes: [0x11, 0x22, 0x33, 0x44, 0x55],
+            member_word_flag: 0xABCD,
+        };
+        let expected = [
+            b'r', b'o', b'o', b'm', 0x00, b's', b'o', b'n', b'g', 0x00, 0x11, 0x22, 0x33, 0x44,
+            0x55, 0xCD, 0xAB,
+        ];
+        assert_eq!(change.encode_body(), expected);
+        assert_eq!(KeyModeDescriptorChanged::decode_body(&expected), Ok(change));
+    }
+
+    #[test]
+    fn key_mode_descriptor_3001_rejects_a_truncated_flag_word() {
+        // seam: pure codec; the reader must not invent the second byte.
+        let body = [b'r', 0x00, b's', 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0xCD];
+        assert!(matches!(
+            KeyModeDescriptorChanged::decode_body(&body),
+            Err(Error::TruncatedMessage { .. })
+        ));
+    }
+
+    #[test]
+    fn key_mode_descriptor_3001_rejects_trailing_bytes() {
+        // seam: pure codec; the exe reads exactly one u16 flag word.
+        let body = [
+            b'r', 0x00, b's', 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0xCD, 0xAB, 0x00,
+        ];
+        assert_eq!(
+            KeyModeDescriptorChanged::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn key_mode_descriptor_3001_rejects_a_foreign_command() {
+        // seam: pure codec; the frame id check belongs to the codec.
+        let frame = decode_frame(&GetChannelList.encode()).unwrap();
+        assert_eq!(
+            KeyModeDescriptorChanged::decode_frame(&frame),
+            Err(Error::UnknownCommand(1002))
         );
     }
 }
