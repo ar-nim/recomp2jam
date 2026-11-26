@@ -99,7 +99,7 @@ mod live_shop_control_tests {
     #[test]
     fn live_gift_pager_wraps_clamps_and_clears_the_picked_row_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_gift_pager_wraps_clamps_and_clears_the_picked_row_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -202,7 +202,7 @@ mod live_shop_control_tests {
     #[test]
     fn live_select_music_row_filter_narrows_the_dialog_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_select_music_row_filter_narrows_the_dialog_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));

@@ -29,7 +29,9 @@ fn shop_entry_stages_the_exe_shop_master_mascot_in_the_bottom_right_pane() {
     // -> live_art::stage_interface_scenes -> stage_state(State::Shop)
     // -> stage_shop_master_mascot -> ScreenGame::load_scene(Screen::Shop, ...)
     // -> ScreenGame::visit_side -> ScreenGame::mount_staged_side_art.
-    let Some(art) = stage_shop_art("shop_entry_stages_the_exe_shop_master_mascot") else {
+    let Some(art) = stage_shop_art(stringify!(
+        shop_entry_stages_the_exe_shop_master_mascot_in_the_bottom_right_pane
+    )) else {
         return;
     };
 
@@ -57,7 +59,9 @@ fn shop_master_mascot_paints_at_the_exe_anchor_on_the_live_stage() {
     // -> ScreenGame::load_scene(Screen::Shop, ...)
     // -> ScreenGame::visit_side -> ScreenGame::mount_staged_side_art
     // -> ScreenGame::paint_side -> paint_side_scene_selected.
-    let Some(art) = stage_shop_art("shop_master_mascot_paints_at_the_exe_anchor") else {
+    let Some(art) = stage_shop_art(stringify!(
+        shop_master_mascot_paints_at_the_exe_anchor_on_the_live_stage
+    )) else {
         return;
     };
 
@@ -92,7 +96,9 @@ fn shop_master_mascot_hides_while_the_shortfall_message_sheet_is_up() {
     // Red proof before the gate: the mascot pixels stayed unchanged
     // across the BUYITEM shortfall sheet; the v8 exe cart frame hides
     // them while the MESSAGE sheet is up (#877).
-    let Some(art) = stage_shop_art("shop_master_mascot_hides_while_message_sheet_is_up") else {
+    let Some(art) = stage_shop_art(stringify!(
+        shop_master_mascot_hides_while_the_shortfall_message_sheet_is_up
+    )) else {
         return;
     };
     let mascot = art

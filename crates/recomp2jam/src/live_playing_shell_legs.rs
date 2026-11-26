@@ -81,7 +81,7 @@ mod tests {
     // Archives absent -> skip cleanly (CI has no game data).
     fn live_playing_shell_scene_cues_replace_the_active_record_from_boot() {
         if !archives_present() {
-            println!("skip: install archives absent");
+            println!("SKIP live_playing_shell_scene_cues_replace_the_active_record_from_boot: install archives absent");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, false));
@@ -117,7 +117,7 @@ mod tests {
     // Archives absent -> skip cleanly (CI has no game data).
     fn live_playing_shell_flash_frames_change_across_paint_at_from_boot() {
         if !archives_present() {
-            println!("skip: install archives absent");
+            println!("SKIP live_playing_shell_flash_frames_change_across_paint_at_from_boot: install archives absent");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, false));

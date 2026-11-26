@@ -226,18 +226,20 @@ fn cite(run: &RunDir, claim: &str) -> Output {
     )
 }
 
-fn skip_without_script_tools() -> bool {
+fn skip_without_script_tools(test_name: &str) -> bool {
     if have("bash") && have("python3") {
         return false;
     }
-    eprintln!("SKIP: bash or python3 is missing; rig provenance guards need both");
+    eprintln!("SKIP {test_name}: bash or python3 is missing; rig provenance guards need both");
     true
 }
 
 #[test]
 fn emitting_from_a_rig_run_dir_fills_every_manifest_field_without_hand_editing() {
     // Chain: scripts/rig-run.sh run -> pids/env.sh/claims -> rig-provenance.sh emit.
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        emitting_from_a_rig_run_dir_fills_every_manifest_field_without_hand_editing
+    )) {
         return;
     }
     let run = RunDir::new("emit-fields");
@@ -286,7 +288,9 @@ fn emitting_from_a_rig_run_dir_fills_every_manifest_field_without_hand_editing()
 #[test]
 fn verify_rejects_a_capture_without_a_provenance_entry() {
     // Chain: scripts/rig-run.sh run -> scripts/run-manifest.sh verify.
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        verify_rejects_a_capture_without_a_provenance_entry
+    )) {
         return;
     }
     let run = RunDir::new("no-provenance");
@@ -307,7 +311,9 @@ fn verify_rejects_a_capture_without_a_provenance_entry() {
 
 #[test]
 fn verify_rejects_provenance_that_omits_a_captured_artifact() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        verify_rejects_provenance_that_omits_a_captured_artifact
+    )) {
         return;
     }
     let run = RunDir::new("omitted-artifact");
@@ -329,7 +335,9 @@ fn verify_rejects_provenance_that_omits_a_captured_artifact() {
 
 #[test]
 fn verify_rejects_a_capture_whose_bytes_changed_after_emitting() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        verify_rejects_a_capture_whose_bytes_changed_after_emitting
+    )) {
         return;
     }
     let run = RunDir::new("tampered-capture");
@@ -351,7 +359,9 @@ fn verify_rejects_a_capture_whose_bytes_changed_after_emitting() {
 
 #[test]
 fn verify_rejects_a_provenance_manifest_missing_the_exe_version() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        verify_rejects_a_provenance_manifest_missing_the_exe_version
+    )) {
         return;
     }
     let run = RunDir::new("no-exe-version");
@@ -370,7 +380,7 @@ fn verify_rejects_a_provenance_manifest_missing_the_exe_version() {
 
 #[test]
 fn verify_accepts_a_complete_provenance_manifest() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(verify_accepts_a_complete_provenance_manifest)) {
         return;
     }
     let run = RunDir::new("complete");
@@ -399,7 +409,7 @@ fn verify_accepts_a_complete_provenance_manifest() {
 fn citing_an_exe_display_claim_needs_exe_provenance() {
     // The #278 check: "the exe shows X" cannot be printed without a
     // manifest-backed exe capture.
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(citing_an_exe_display_claim_needs_exe_provenance)) {
         return;
     }
     let run = RunDir::new("cite-exe");
@@ -441,7 +451,7 @@ fn citing_an_exe_display_claim_needs_exe_provenance() {
 
 #[test]
 fn citing_a_run_without_any_manifest_fails() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(citing_a_run_without_any_manifest_fails)) {
         return;
     }
     let run = RunDir::new("cite-unmanifested");
@@ -458,7 +468,7 @@ fn citing_a_run_without_any_manifest_fails() {
 
 #[test]
 fn verify_still_accepts_a_run_without_captures() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(verify_still_accepts_a_run_without_captures)) {
         return;
     }
     let run = RunDir::new("no-captures");
@@ -480,7 +490,9 @@ fn verify_still_accepts_a_run_without_captures() {
 
 #[test]
 fn emitting_refuses_a_producer_that_does_not_match_the_pinned_hash() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        emitting_refuses_a_producer_that_does_not_match_the_pinned_hash
+    )) {
         return;
     }
     let run = RunDir::new("pinned-hash");
@@ -497,7 +509,9 @@ fn emitting_refuses_a_producer_that_does_not_match_the_pinned_hash() {
 
 #[test]
 fn duplicate_capture_check_still_fails_with_provenance_present() {
-    if skip_without_script_tools() {
+    if skip_without_script_tools(stringify!(
+        duplicate_capture_check_still_fails_with_provenance_present
+    )) {
         return;
     }
     let run = RunDir::new("duplicate");

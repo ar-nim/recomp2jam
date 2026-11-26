@@ -185,7 +185,7 @@ fn press_refused_row_and_await_answer(session: &mut OnlineSession, gateway: &Tai
 #[test]
 fn live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
@@ -218,7 +218,7 @@ fn live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot() {
 #[test]
 fn live_3003_refusal_ok_dismisses_the_sheet_without_a_new_wire_frame() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_3003_refusal_ok_dismisses_the_sheet_without_a_new_wire_frame: missing install-root interface archive");
         return;
     }
     let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
@@ -262,7 +262,7 @@ fn live_4026_three_byte_state_marks_the_peer_seat_from_boot() {
     // ScreenGame::seat_waiting_member -> paint_waiting_seat_marks.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4026_three_byte_state_marks_the_peer_seat_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_tail_wire_gateway(joined_room(0, true));

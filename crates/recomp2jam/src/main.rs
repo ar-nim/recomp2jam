@@ -2307,7 +2307,9 @@ mod cli_build_tests {
         let archive = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi");
         if !archive.exists() {
-            println!("skip: missing install-root Interface1.opi");
+            println!(
+                "SKIP setup_splash_defaults_to_installed_logo: missing install-root Interface1.opi"
+            );
             return;
         }
         let mut staged = o2jam_shell::ScreenGame::new();
@@ -2566,6 +2568,7 @@ mod cli_build_tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/o2ma757.ojn");
         if !path.is_file() {
+            println!("SKIP walked_cover_paints_the_windowed_loading_scene: install-root absent");
             return;
         }
         let mut game = o2jam_shell::ScreenGame::new();
@@ -2695,7 +2698,7 @@ mod cli_build_tests {
         // stays empty. Skips when install-root is absent.
         let avatar_relative = o2jam_shell::avatar_source::AVATAR_ARCHIVE_RELATIVE;
         if !install_root().join(avatar_relative).exists() {
-            println!("skip: missing install-root {avatar_relative}");
+            println!("SKIP staged_online_identity_paints_the_room_avatar_slot: missing install-root {avatar_relative}");
             return;
         }
         // The live tester2 row (`t_o2jam_item` USER_INDEX_ID=2,
@@ -2866,7 +2869,10 @@ mod scene_bgm_tests {
         assert_eq!(RESULT_WORKER_RECORD_ORDINAL, 6);
         let path = boot_bank_path(RESULT_WORKER_BANK_INDEX);
         if !path.exists() {
-            println!("skip: missing {}", path.display());
+            println!(
+                "SKIP result_cue_plays_bg_result_from_the_winter_worker_bank: missing {}",
+                path.display()
+            );
             return;
         }
         let bytes = std::fs::read(&path).expect("winter bank readable");
@@ -2931,7 +2937,10 @@ mod scene_bgm_tests {
         // skipping cleanly without game data (CI rule).
         let path = boot_bank_path(SCENE_BGM_BANK_INDEX);
         if !path.exists() {
-            println!("skip: missing {}", path.display());
+            println!(
+                "SKIP shipped_bank_records_select_the_shipped_tracks: missing {}",
+                path.display()
+            );
             return;
         }
         let bank = load_scene_bgm_bank();
@@ -2955,7 +2964,7 @@ mod scene_bgm_tests {
         // worktree; no fallback sample is invented for a missing bank.
         let bank = load_tutorial_ojm_bank();
         if bank.is_empty() {
-            println!("skip: no install-root Tutorial.ojm");
+            println!("SKIP tutorial_bank_decodes_the_twelve_shipped_mode3_records: no install-root Tutorial.ojm");
             return;
         }
         assert_eq!(bank.len(), 12, "bgsplit-01..12 in fetch order");
@@ -3009,7 +3018,10 @@ mod ui_effect_tests {
         // `bgEffect` entries 2/3/6/10/36 by fetch ordinal.
         let path = boot_bank_path(UI_EFFECT_BANK_INDEX);
         if !path.exists() {
-            println!("skip: missing {}", path.display());
+            println!(
+                "SKIP installed_effect_bank_decodes_the_first_cluster_slots: missing {}",
+                path.display()
+            );
             return;
         }
         let bank = load_ui_effect_bank();
@@ -3047,12 +3059,18 @@ mod offline_music_board_tests {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(_) => {
-                println!("skip: missing {}", path.display());
+                println!(
+                    "SKIP offline_boot_stages_music_shop_and_lanking_boards: missing {}",
+                    path.display()
+                );
                 return;
             }
         };
         if o2jam_file::parse_ojn_list(&bytes).is_err() {
-            println!("skip: unparsable {}", path.display());
+            println!(
+                "SKIP offline_boot_stages_music_shop_and_lanking_boards: unparsable {}",
+                path.display()
+            );
             return;
         }
         let mut game = o2jam_shell::ScreenGame::new();
@@ -3082,12 +3100,12 @@ mod offline_music_board_tests {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(_) => {
-                println!("skip: missing {}", path.display());
+                println!("SKIP online_identity_without_character_stages_music_shop_and_lanking_boards: missing {}", path.display());
                 return;
             }
         };
         if o2jam_file::parse_ojn_list(&bytes).is_err() {
-            println!("skip: unparsable {}", path.display());
+            println!("SKIP online_identity_without_character_stages_music_shop_and_lanking_boards: unparsable {}", path.display());
             return;
         }
         let mut game = o2jam_shell::ScreenGame::new();

@@ -164,7 +164,7 @@ fn live_3006_answer_returns_the_waiting_room_to_the_board_from_boot() {
     // apply_exit_waiting_answer -> ScreenGame::enter_screen(Room).
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_3006_answer_returns_the_waiting_room_to_the_board_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
@@ -186,7 +186,7 @@ fn live_4011_answer_enters_loading_from_boot() {
     // apply_start_game_answer -> poll_start_at -> Screen::Loading.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4011_answer_enters_loading_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
@@ -208,7 +208,7 @@ fn live_4013_stages_the_peer_loaded_state_from_boot() {
     // ScreenGame::set_member_music_state -> paint_waiting_members.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4013_stages_the_peer_loaded_state_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
@@ -246,7 +246,7 @@ fn live_4029_stages_counted_member_rows_from_boot() {
     // paint_waiting_members.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4029_stages_counted_member_rows_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
@@ -286,7 +286,7 @@ fn live_4009_echo_lights_the_peer_ready_mark_from_boot() {
     // ScreenGame::set_member_ready -> paint_waiting_members.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4009_echo_lights_the_peer_ready_mark_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_waiting_wire_gateway(joined_room(0, false));

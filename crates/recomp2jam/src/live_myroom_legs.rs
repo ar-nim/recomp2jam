@@ -119,7 +119,7 @@ mod live_myroom_leg_tests {
     #[test]
     fn live_master_role_myroom_toggles_faces_and_keeps_selection_local() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_master_role_myroom_toggles_faces_and_keeps_selection_local: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_master_myroom();

@@ -147,7 +147,7 @@ mod tests {
     fn repeated_identity_landings_share_one_decoded_avatar() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
         if !root.join(AVATAR_ARCHIVE_RELATIVE).is_file() {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP repeated_identity_landings_share_one_decoded_avatar: missing install-root avatar.opa");
             return;
         }
         let first = read_installed_avatar(&root).expect("installed avatar decodes");

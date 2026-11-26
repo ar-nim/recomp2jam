@@ -1114,7 +1114,10 @@ mod sprite55_prefixed_tests {
         ];
         for case in cases {
             let name = case.body;
-            let Some(bytes) = install_archive(case.archive, "repeated-y walk") else {
+            let Some(bytes) = install_archive(
+                case.archive,
+                stringify!(repeated_y_oji_bodies_walk_from_the_archives),
+            ) else {
                 return; // gate printed SKIP
             };
             let entries = parse_opi(&bytes).expect("archive table parses");
@@ -1525,7 +1528,10 @@ mod oja55_tests {
     /// when `install-root` is absent.
     #[test]
     fn oja_click_bodies_decode_from_the_archive() {
-        let Some(archive) = install_archive("Playing1.opi", "oja click bodies") else {
+        let Some(archive) = install_archive(
+            "Playing1.opi",
+            stringify!(oja_click_bodies_decode_from_the_archive),
+        ) else {
             return; // gate printed SKIP
         };
         let click = archive_body(&archive, "Note_Click.oja");
@@ -1590,7 +1596,10 @@ mod oja55_tests {
     /// Skips when `install-root` is absent.
     #[test]
     fn oja_jam_body_decodes_from_the_archive() {
-        let Some(archive) = install_archive("Playing1.opi", "oja jam body") else {
+        let Some(archive) = install_archive(
+            "Playing1.opi",
+            stringify!(oja_jam_body_decodes_from_the_archive),
+        ) else {
             return; // gate printed SKIP
         };
         let body = archive_body(&archive, "Playing_Effect_Jam.oja");

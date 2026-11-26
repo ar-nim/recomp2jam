@@ -60,7 +60,10 @@ fn e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path() {
     // not claim a live chain; OS injection stays a rig leg.
     let chart_path = installed_chart();
     if !chart_path.is_file() {
-        println!("skip: missing installed chart {}", chart_path.display());
+        println!(
+            "SKIP e864_replay_judges_every_parsed_chart_note_through_the_lane_input_path: missing installed chart {}",
+            chart_path.display()
+        );
         return;
     }
     let bytes = std::fs::read(&chart_path).expect("read shipped 864 chart");

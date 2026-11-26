@@ -77,7 +77,7 @@ fn time<F: FnOnce()>(label: &str, operation: F) -> Duration {
 fn shop_open_profile_records_stage_durations() {
     let source = Instant::now();
     let Some((archive, table)) = read_avatar_source() else {
-        println!("skip: missing or unparsable install-root avatar.opa");
+        println!("SKIP shop_open_profile_records_stage_durations: missing or unparsable install-root avatar.opa");
         return;
     };
     println!(
@@ -153,7 +153,7 @@ fn assert_staged_source(game: &ScreenGame, expected: &Arc<AvatarSource>, attempt
 #[test]
 fn repeated_identity_staging_survives_forced_avatar_cache_eviction() {
     if !avatar_path().is_file() {
-        println!("skip: missing install-root avatar.opa");
+        println!("SKIP repeated_identity_staging_survives_forced_avatar_cache_eviction: missing install-root avatar.opa");
         return;
     }
     let hero = bench_character();
@@ -186,7 +186,7 @@ fn second_identity_landing_and_shop_open_stay_under_budget() {
     //   -> ScreenGame::set_decoded_avatar_source -> visit_side(Shop)
     //   -> ScreenGame::restage_shop_avatar.
     if !avatar_path().is_file() {
-        println!("skip: missing install-root avatar.opa");
+        println!("SKIP second_identity_landing_and_shop_open_stay_under_budget: missing install-root avatar.opa");
         return;
     }
     let hero = bench_character();

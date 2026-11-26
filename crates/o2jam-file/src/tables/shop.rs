@@ -298,7 +298,7 @@ mod tests {
     fn installed_new_arrival_rows_carry_the_exe_card_percentages() {
         let Some(data_dir) = crate::data_root::pack_dir_for_test(
             &crate::data_root::install_root(),
-            "new arrival card percentages",
+            stringify!(installed_new_arrival_rows_carry_the_exe_card_percentages),
         ) else {
             return; // gate printed SKIP
         };

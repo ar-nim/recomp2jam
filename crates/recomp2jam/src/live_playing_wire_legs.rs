@@ -186,7 +186,7 @@ fn live_4015_rank_exchange_seats_both_member_places_from_boot() {
     // ScreenGame::apply_rank_exchange -> PeerBars::apply_rank_broadcast.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4015_rank_exchange_seats_both_member_places_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_playing_wire_gateway(joined_room(0, true));
@@ -227,7 +227,7 @@ fn live_4035_answer_arms_the_local_download_badge_from_boot() {
     // ScreenGame::arm_local_download_badge -> paint_waiting_seat_marks.
     // Archives absent -> skip cleanly (CI has no game data).
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_4035_answer_arms_the_local_download_badge_from_boot: missing install-root interface archive");
         return;
     }
     let gateway = spawn_playing_wire_gateway(joined_room(0, true));

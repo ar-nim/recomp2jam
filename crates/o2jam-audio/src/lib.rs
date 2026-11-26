@@ -917,7 +917,7 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Music/BGM.ojm");
         let Ok(bytes) = std::fs::read(&path) else {
-            println!("skip: missing {}", path.display());
+            println!("SKIP decodes_real_bgm_sample: missing {}", path.display());
             return;
         };
         let blob = &bytes[128..128 + 2_381_130];

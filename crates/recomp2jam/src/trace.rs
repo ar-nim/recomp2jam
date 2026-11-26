@@ -404,7 +404,10 @@ mod tests {
             .join("../..")
             .join("fixtures/input-trace/u1-windowed-online.json");
         if !path.exists() {
-            println!("skip: missing {}", path.display());
+            println!(
+                "SKIP the_committed_u1_fixture_validates: missing {}",
+                path.display()
+            );
             return;
         }
         let loaded = load_validated(&path).unwrap();

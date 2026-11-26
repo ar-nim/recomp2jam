@@ -88,7 +88,7 @@ mod tests {
     // captures the raw key, so no lane, menu edge, or chat text leaks.
     fn f8_key_arm_persists_the_cursor_value_in_the_room_scene() {
         if !profile_root_available() {
-            println!("skip: install root unreachable");
+            println!("SKIP f8_key_arm_persists_the_cursor_value_in_the_room_scene: install root unreachable");
             return;
         }
         let _lock = OPTION_INI_LOCK
@@ -113,7 +113,7 @@ mod tests {
     // the exe's scene-id table. The song scene never reaches the write arm.
     fn f8_key_arm_is_silent_during_a_song() {
         if !profile_root_available() {
-            println!("skip: install root unreachable");
+            println!("SKIP f8_key_arm_is_silent_during_a_song: install root unreachable");
             return;
         }
         let _backup = OptionIniBackup::capture();
@@ -133,7 +133,9 @@ mod tests {
     // Archives absent -> skip cleanly (CI has no game data).
     fn f8_from_boot_room_flips_the_persisted_mouse_cursor() {
         if !profile_root_available() || !archives_present() {
-            println!("skip: install root unreachable");
+            println!(
+                "SKIP f8_from_boot_room_flips_the_persisted_mouse_cursor: install root unreachable"
+            );
             return;
         }
         let _lock = OPTION_INI_LOCK

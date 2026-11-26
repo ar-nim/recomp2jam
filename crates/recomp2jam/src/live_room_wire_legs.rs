@@ -113,6 +113,9 @@ fn live_room_wire_2009_user_count_repaints_the_row_from_boot() {
     // drain_lobby_chat -> apply_lobby_frame -> apply_room_user_count ->
     // rewrite_room_row -> ScreenGame::upsert_room -> paint_room_list.
     if !archives_present() {
+        println!(
+            "SKIP live_room_wire_2009_user_count_repaints_the_row_from_boot: install-root absent"
+        );
         return;
     }
     let (gateway, send) = spawn_wire_gateway();
@@ -155,6 +158,9 @@ fn live_room_wire_2018_answer_stages_a_delivery_line_from_boot() {
     // drain_lobby_chat -> apply_lobby_frame -> apply_whisper_answer ->
     // ScreenGame::push_lobby_user_message -> Room chat list.
     if !archives_present() {
+        println!(
+            "SKIP live_room_wire_2018_answer_stages_a_delivery_line_from_boot: install-root absent"
+        );
         return;
     }
     let (gateway, send) = spawn_wire_gateway();
@@ -185,6 +191,7 @@ fn live_room_wire_2020_state_and_2025_skills_change_the_row_from_boot() {
     // apply_lobby_frame -> apply_room_state / apply_room_skills ->
     // rewrite_room_row -> ScreenGame::upsert_room -> Room badges.
     if !archives_present() {
+        println!("SKIP live_room_wire_2020_state_and_2025_skills_change_the_row_from_boot: install-root absent");
         return;
     }
     let (gateway, send) = spawn_wire_gateway();
@@ -234,6 +241,7 @@ fn live_room_wire_2008_descriptor_rewrite_reaches_the_painted_board() {
     // apply_lobby_frame -> apply_room_descriptor -> rewrite_room_row ->
     // ScreenGame::upsert_room -> paint_room_list.
     if !archives_present() {
+        println!("SKIP live_room_wire_2008_descriptor_rewrite_reaches_the_painted_board: install-root absent");
         return;
     }
     let (gateway, send) = spawn_wire_gateway();

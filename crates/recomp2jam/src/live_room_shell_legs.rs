@@ -137,7 +137,7 @@ fn staged_pixels(session: &mut crate::session::OnlineSession, id: &str) -> Vec<u
 #[test]
 fn live_room_nonzero_gender_byte_paints_the_paired_seat_figure() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_nonzero_gender_byte_paints_the_paired_seat_figure: missing install-root interface archive");
         return;
     }
     let (mut female, female_gateway) = boot_shell_leg(scripted_shell_room(0, 0, false));
@@ -178,7 +178,7 @@ fn live_room_nonzero_gender_byte_paints_the_paired_seat_figure() {
 #[test]
 fn live_room_derived_team_plate_differs_from_the_raw_wire_seat_team() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_derived_team_plate_differs_from_the_raw_wire_seat_team: missing install-root interface archive");
         return;
     }
     assert_eq!(
@@ -448,7 +448,7 @@ fn paint_until_room(
 #[test]
 fn live_room_channel_button_pair_uses_the_default_control_ids() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_channel_button_pair_uses_the_default_control_ids: missing install-root interface archive");
         return;
     }
     let (mut normal, normal_gateway, _) = boot_room_leg(2);
@@ -491,7 +491,7 @@ fn live_room_channel_button_pair_uses_the_default_control_ids() {
 #[test]
 fn live_room_2011_rows_populate_the_staged_user_sheet() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2011_rows_populate_the_staged_user_sheet: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -537,7 +537,7 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
 #[test]
 fn live_room_2018_refusal_inks_no_pixels_in_the_room_chat() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2018_refusal_inks_no_pixels_in_the_room_chat: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -584,7 +584,7 @@ fn live_room_2018_refusal_inks_no_pixels_in_the_room_chat() {
 #[test]
 fn live_room_2023_high_nibble_reaches_the_painted_member_word() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2023_high_nibble_reaches_the_painted_member_word: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -673,7 +673,7 @@ fn leave_frame(seat: u8, promoted: u8) -> Vec<u8> {
 #[test]
 fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3003_snapshot_inks_the_native_player_list_from_boot: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();
@@ -699,7 +699,7 @@ fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
 #[test]
 fn live_room_3004_broadcast_repaints_the_added_roster_row() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3004_broadcast_repaints_the_added_roster_row: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();
@@ -734,7 +734,7 @@ fn live_room_3004_broadcast_repaints_the_added_roster_row() {
 #[test]
 fn live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();

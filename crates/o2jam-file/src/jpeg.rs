@@ -368,7 +368,7 @@ mod tests {
     fn real_ojn_covers_extract_and_decode() {
         let Some(data_dir) = crate::data_root::pack_dir_for_test(
             &crate::data_root::install_root(),
-            "real OJN covers",
+            stringify!(real_ojn_covers_extract_and_decode),
         ) else {
             return; // gate printed SKIP
         };
@@ -417,7 +417,7 @@ mod tests {
     fn real_album_art_bodies_decode_and_paint() {
         let Some(data_dir) = crate::data_root::pack_dir_for_test(
             &crate::data_root::install_root(),
-            "real album art bodies",
+            stringify!(real_album_art_bodies_decode_and_paint),
         ) else {
             return; // gate printed SKIP
         };

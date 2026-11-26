@@ -74,7 +74,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_click_result_back_sends_4021_and_installs_waiting_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_click_result_back_sends_4021_and_installs_waiting_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_result_back_gateway(joined_room(0, true));
@@ -164,7 +164,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -236,7 +236,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_click_waiting_back_sends_the_room_leave_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_click_waiting_back_sends_the_room_leave_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -290,7 +290,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_click_rejoin_after_back_sends_a_second_join_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_click_rejoin_after_back_sends_a_second_join_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -349,7 +349,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_click_dialog_ok_releases_the_held_channel_rows() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_click_dialog_ok_releases_the_held_channel_rows: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -400,13 +400,14 @@ mod live_input_leg_tests {
     ///   -> flush_waiting_exit -> ExitWaiting 3005.
     /// Archives absent -> skip cleanly (CI has no game data).
     fn waiting_lifecycle_by_clicks(
+        test_name: &str,
         member_id: u8,
         peer_ready: bool,
         confirm_id: &str,
         expect_id: u16,
     ) {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP {test_name}: missing install-root interface archive");
             return;
         }
         let joined = joined_room(member_id, peer_ready);
@@ -445,12 +446,24 @@ mod live_input_leg_tests {
 
     #[test]
     fn live_click_guest_ready_then_back_from_boot() {
-        waiting_lifecycle_by_clicks(1, true, "IDC_BUTTON_SWAIT_READY", Request::Ready.id());
+        waiting_lifecycle_by_clicks(
+            stringify!(live_click_guest_ready_then_back_from_boot),
+            1,
+            true,
+            "IDC_BUTTON_SWAIT_READY",
+            Request::Ready.id(),
+        );
     }
 
     #[test]
     fn live_click_master_start_then_back_from_boot() {
-        waiting_lifecycle_by_clicks(0, true, "IDC_BUTTON_SWAIT_START", Request::StartGame.id());
+        waiting_lifecycle_by_clicks(
+            stringify!(live_click_master_start_then_back_from_boot),
+            0,
+            true,
+            "IDC_BUTTON_SWAIT_START",
+            Request::StartGame.id(),
+        );
     }
 
     /// One staged top tab and the exe aim that lands inside its
@@ -566,7 +579,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_top_tabs_pair_by_bnd_ordinal_and_queue_enter_shop() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_top_tabs_pair_by_bnd_ordinal_and_queue_enter_shop: missing install-root interface archive");
             return;
         }
         for tab in room_top_tabs() {
@@ -614,7 +627,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_itemshop_routes_with_a_pending_join_intent() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_itemshop_routes_with_a_pending_join_intent: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -742,7 +755,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_itemshop_entry_mounts_the_exe_shop_state_from_room_and_myroom() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_itemshop_entry_mounts_the_exe_shop_state_from_room_and_myroom: missing install-root interface archive");
             return;
         }
         let samples = staged_shop_samples();
@@ -811,7 +824,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_quickjoin_click_posts_3002_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_quickjoin_click_posts_3002_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -939,7 +952,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_wa_tabs_toggle_the_selection_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_wa_tabs_toggle_the_selection_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -1069,7 +1082,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_shop_browse_scroll_tabs_and_grid_change_goods_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_shop_browse_scroll_tabs_and_grid_change_goods_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -1175,7 +1188,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_shop_go_myroom_enters_myroom_without_an_exit_send() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_shop_go_myroom_enters_myroom_without_an_exit_send: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -1231,7 +1244,12 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane() {
-        assert_options_key_capture_from(OptionsEntry::Room);
+        assert_options_key_capture_from(
+            stringify!(
+                live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane
+            ),
+            OptionsEntry::Room,
+        );
     }
 
     /// Planet twin of the Room leg: the exe has one dialog and one
@@ -1249,7 +1267,12 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane() {
-        assert_options_key_capture_from(OptionsEntry::Planet);
+        assert_options_key_capture_from(
+            stringify!(
+                live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane
+            ),
+            OptionsEntry::Planet,
+        );
     }
 
     /// All seven 7K cells answer their mapped DIK through the live
@@ -1306,9 +1329,9 @@ mod live_input_leg_tests {
         }
     }
 
-    fn assert_options_key_capture_from(entry: OptionsEntry) {
+    fn assert_options_key_capture_from(test_name: &str, entry: OptionsEntry) {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP {test_name}: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -1417,7 +1440,7 @@ mod live_input_leg_tests {
     #[test]
     fn options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames: missing install-root interface archive");
             return;
         }
         for entry in [OptionsEntry::Room, OptionsEntry::Planet] {
@@ -1504,7 +1527,7 @@ mod live_input_leg_tests {
     #[test]
     fn options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries: missing install-root interface archive");
             return;
         }
         // Staged Key-tab footer codes from exe click arm 0x4383d0.
@@ -1768,7 +1791,7 @@ mod live_input_leg_tests {
     fn live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot() {
         let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -1875,7 +1898,7 @@ mod live_input_leg_tests {
     fn my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot() {
         let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -2028,7 +2051,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_cart_face_keeps_set_item_prices_dark_and_the_alarm_popup_bodyless_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cart_face_keeps_set_item_prices_dark_and_the_alarm_popup_bodyless_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -2266,7 +2289,7 @@ mod live_input_leg_tests {
         use o2jam_net::rooms::SendWhisper;
 
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_waiting_chat_tabs_keep_addressed_rows_and_send_with_the_selected_mode_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_chat_tabs_gateway(joined_room(0, true));
@@ -2500,7 +2523,7 @@ mod live_input_leg_tests {
     #[test]
     fn the_message_sheet_rest_face_keeps_the_baked_gray_buttons() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP the_message_sheet_rest_face_keeps_the_baked_gray_buttons: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -2846,7 +2869,7 @@ mod live_input_leg_tests {
     #[test]
     fn the_wallet_cell_ink_follows_the_pinned_word() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP the_wallet_cell_ink_follows_the_pinned_word: missing install-root interface archive");
             return;
         }
         // Distinct words: word 1 only the gem, word 3 the W cell,
@@ -3064,7 +3087,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_waiting_back_rest_inks_the_staged_exe_plate_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_waiting_back_rest_inks_the_staged_exe_plate_from_boot: missing install-root interface archive");
             return;
         }
         assert_waiting_hot_back_records_intact();
@@ -3155,7 +3178,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_itemshop_click_mounts_the_shop_side_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_itemshop_click_mounts_the_shop_side_from_boot: missing install-root interface archive");
             return;
         }
         let samples = staged_shop_samples();
@@ -3211,7 +3234,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_room_myroom_click_mounts_the_myroom_side_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_myroom_click_mounts_the_myroom_side_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -3320,7 +3343,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_cart_row_price_inks_the_pinned_currency_suffix_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cart_row_price_inks_the_pinned_currency_suffix_from_boot: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_live_item_shop();
@@ -3398,7 +3421,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_cart_totals_and_pager_follow_the_local_cart_vector_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cart_totals_and_pager_follow_the_local_cart_vector_from_boot: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_live_item_shop();
@@ -3471,7 +3494,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_cart_buy_plate_follows_the_face_flag_and_an_empty_click_is_silent() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cart_buy_plate_follows_the_face_flag_and_an_empty_click_is_silent: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_live_item_shop();
@@ -3594,7 +3617,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_music_shop_buy_sends_one_5015_and_sort_pager_stay_wire_quiet() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_music_shop_buy_sends_one_5015_and_sort_pager_stay_wire_quiet: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -3734,7 +3757,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_wallet_digits_yield_to_the_message_sheet_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_wallet_digits_yield_to_the_message_sheet_from_boot: missing install-root interface archive");
             return;
         }
         let (gateway, wallet_answer_written) = spawn_wallet_leg_gateway(
@@ -3843,7 +3866,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_cart_pager_total_uses_the_full_vector_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_cart_pager_total_uses_the_full_vector_from_boot: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_live_item_shop();
@@ -3905,7 +3928,7 @@ mod live_input_leg_tests {
     #[test]
     fn live_repeated_row_picks_append_cart_rows_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_repeated_row_picks_append_cart_rows_from_boot: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_live_item_shop();
