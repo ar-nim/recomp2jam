@@ -307,8 +307,8 @@ Evidence: `ev_f5391cd3192dfca5a48e2442a0d68e1ca601a606bb720a92618202df8c338de4`
 
 ### NoteTail table and consumer addendum (2026-11-25 senior REA pass)
 
-The four float pairs at `0x67fe8c` are `(0.0, 0.0)`, `(16.0, 3.5)`,
-`(30.0, 25.0)`, `(42.5, 50.0)`. `0x56bf40` reads `NoteTail` from
+The four float pairs at `0x67fe8c` are `(0.0, 0.0)`, `(16.0, 14.0)`,
+`(30.0, 25.0)`, `(54.0, 50.0)`. `0x56bf40` reads `NoteTail` from
 `option.ini`, defaults to 2, accepts only 0..=3, then copies the
 selected pair to game-object `+0x6c` and `+0x70`. `0x56bed0` computes
 `((level_at_+0x68 - 1) * pair_y + pair_x) * speed_at_+0x64 / 160.0`,
