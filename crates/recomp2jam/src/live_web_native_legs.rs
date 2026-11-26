@@ -11,12 +11,14 @@ mod live_web_native_leg_tests {
     use o2jam_net::frame::encode_frame;
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{JoinRoomResponse, JoinedRoom, Request, WireMessage};
+    use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::screens::messenger::{WebSheet, WebSheetHost, EXE_SCENE_ROOM};
     use o2jam_shell::screens::side::{
-        music_shop_action_at, MusicShopAction, SideScreen, MSHOP_CART_BUY_CODE,
-        MSHOP_EX_FIRST_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
+        music_shop_action_at, MusicShopAction, MusicShopFace, SideScreen, MSHOP_CART_BUY_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_TAB_DELETE_CODE,
+        ROOM_MUSICSHOP_BUTTON_CODE,
     };
-    use o2jam_shell::{GameLoop, InputSnapshot, Screen};
+    use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen};
     use std::io::Write;
     use std::sync::mpsc;
 
@@ -391,5 +393,147 @@ mod live_web_native_leg_tests {
             start_at < verdict_at,
             "5016 must ink before 5011: {feedback:?}"
         );
+    }
+
+    /// #1150 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> enter_room_by_clicks ->
+    ///   ScreenGame::stage_web_whisper_target (synthesized
+    ///   SelectedUserNickName) -> set_lobby_input -> menu_key(Confirm) ->
+    ///   OnlineSession::room_chat_took_enter -> flush_room_chat_action ->
+    ///   ScreenGame::lobby_slash_command -> C2S 2017.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_web_nickname_report_back_sends_the_2017_chat_frame() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let edit_rect = session
+            .game_mut()
+            .scene_placements(Screen::Room)
+            .iter()
+            .find(|placed| placed.id == "IDC_EDIT_SROOM_CHAT")
+            .unwrap_or_else(|| panic!("no staged Room chat edit rect"))
+            .rect;
+        let rest = staged_rect_pixels(&mut session, edit_rect);
+        assert!(session.game_mut().stage_web_whisper_target("WebPeer"));
+        session
+            .game_mut()
+            .set_lobby_input(LobbyChat::Room, "hello from page");
+        let typed = staged_rect_pixels(&mut session, edit_rect);
+        session.menu_key(MenuKey::Confirm, true);
+        let body = wait_for_opcode(&gateway.reports, 2017);
+        let whisper = o2jam_net::rooms::SendWhisper::decode_body(&body).unwrap();
+        let target = session.game_mut().web_whisper_target().map(str::to_owned);
+        finish(session, gateway.server);
+
+        assert_eq!(whisper.recipient, "WebPeer");
+        assert_eq!(whisper.content, "hello from page");
+        assert_eq!(target.as_deref(), Some("WebPeer"));
+        assert_ne!(
+            rest, typed,
+            "the staged whisper draft must ink the chat rect"
+        );
+    }
+
+    /// One synthetic catalog with the id the cart report-back names.
+    fn catalog_blob_for(song_id: u32) -> Vec<u8> {
+        let mut blob = purchase_catalog_blob();
+        blob[4..8].copy_from_slice(&song_id.to_le_bytes());
+        blob
+    }
+
+    /// #1150 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> enter_room_by_clicks -> staged Music Shop tab ->
+    ///   ScreenGame::stage_web_cart_add (synthesized mid + mflag) ->
+    ///   MusicShopState::stage_bag_song -> paint_at -> paint_music_shop_cart.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_web_cart_report_back_adds_the_packed_mid_to_the_cart_frame() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_purchase_gateway(joined_room(0, true), false);
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let (x, y) = staged_code_centre(&mut session, Screen::Room, ROOM_MUSICSHOP_BUTTON_CODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        paint(&mut session);
+        assert_eq!(session.game_mut().side(), Some(SideScreen::MusicShop));
+        let (x, y) = staged_action_point(&mut session, MSHOP_TAB_DELETE_CODE, |action| {
+            action == MusicShopAction::Face(MusicShopFace::Cart)
+        });
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        paint(&mut session);
+        assert_eq!(session.game_mut().music_shop_face(), MusicShopFace::Cart);
+
+        let blob = catalog_blob_for(733);
+        let catalog = o2jam_file::parse_ojn_list(&blob).unwrap();
+        session.game_mut().set_song_catalog(&catalog);
+        session
+            .game_mut()
+            .stage_music_shop_prices(&[o2jam_file::OjnMidParamEntry {
+                song_id: 733,
+                param_a: 0,
+                param_b: 40,
+                anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+            }]);
+        let before = paint_frame(&mut session);
+        let payload = [0xDD, 0x02, b'G'];
+        let add = session.game_mut().stage_web_cart_add(&payload);
+        let after = paint_frame(&mut session);
+        let cart = session.game_mut().music_shop_cart().to_vec();
+        finish(session, gateway.server);
+
+        assert_eq!(add.unwrap().payload(), payload);
+        assert_eq!(cart, vec![733], "packed mid 733 reaches the native cart");
+        assert_ne!(before, after, "the added cart row must re-ink the frame");
+    }
+
+    /// #1150 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> enter_room_by_clicks ->
+    ///   ScreenGame::stage_web_document_complete (synthesized browser
+    ///   navigation) -> ChatState::stage_web_document_notice ->
+    ///   paint_at -> paint_room_chat -> staged chat list row.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_web_document_complete_report_back_inks_the_notice_frame() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let list_rect = session
+            .game_mut()
+            .scene_placements(Screen::Room)
+            .iter()
+            .find(|placed| placed.id == "IDC_LIST_SROOM_CHAT")
+            .unwrap_or_else(|| panic!("no staged Room chat list rect"))
+            .rect;
+        let rest = staged_rect_pixels(&mut session, list_rect);
+        let url = "http://game1.o2jam.com/billing/imsi/buttons.asp";
+        let notify = session.game_mut().stage_web_document_complete(url).unwrap();
+        let inked = staged_rect_pixels(&mut session, list_rect);
+        let cached = session
+            .game_mut()
+            .last_web_document_url()
+            .map(str::to_owned);
+        finish(session, gateway.server);
+
+        assert_eq!(notify.payload(), url.as_bytes());
+        assert_eq!(cached.as_deref(), Some(url));
+        assert_ne!(rest, inked, "the notify URL must ink the staged notice row");
     }
 }

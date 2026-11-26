@@ -2082,6 +2082,7 @@ impl OnlineSession {
         self.pending_room = None;
         self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
+        self.game.set_room_roster_from_joined(&room);
         self.game.set_joined_room(room);
         self.joined_waiting = true;
         restage_live_playing(&mut self.game);
@@ -2297,6 +2298,7 @@ impl OnlineSession {
                             if let Some(room) = response.room {
                                 self.resident_room = Some(room.title.clone());
                                 self.joined_room = Some(room.clone());
+                                self.game.set_room_roster_from_joined(&room);
                                 self.game.set_joined_room(room);
                                 self.joined_waiting = true;
                                 restage_live_playing(&mut self.game);
@@ -4528,6 +4530,8 @@ impl OnlineSession {
         };
         self.game
             .seat_waiting_member(joined.member_id, joined.member.clone());
+        self.game
+            .seat_room_roster_member(joined.member_id, &joined.member);
         if let Some(room) = self.joined_room.as_mut() {
             room.seat_member(joined.member_id, joined.member);
         }
@@ -4600,6 +4604,8 @@ impl OnlineSession {
         );
         self.game.clear_waiting_member_seat(left.member_id);
         self.game.promote_waiting_master(left.new_master_id);
+        self.game
+            .clear_room_roster_member(left.member_id, left.new_master_id);
         if let Some(room) = self.joined_room.as_mut() {
             room.clear_member(left.member_id);
             for slot in &mut room.slots {

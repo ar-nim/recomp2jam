@@ -1657,6 +1657,62 @@ pub struct MusicShopBagTotals {
     pub gem: Option<u32>,
 }
 
+/// The three-byte `0x1bbe` payload the page's `mid` and `mflag`
+/// properties produce: short result id, then the flag byte
+/// (`FUN_005816e0`, file `0x24e080`/`0x24e084`). No order id is
+/// appended on this seam (#1150).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebCartAdd {
+    /// Low sixteen bits of the page's decimal `mid`.
+    pub mid: u16,
+    /// First byte of the page's `mflag` string.
+    pub mflag: u8,
+}
+
+impl WebCartAdd {
+    /// Cash-price flag byte.
+    pub const FLAG_CASH: u8 = b'C';
+    /// Gem-price flag byte.
+    pub const FLAG_GEM: u8 = b'G';
+
+    /// Synthesize the exe payload from the two page properties.
+    #[must_use]
+    pub fn from_page_properties(mid: &str, mflag: &str) -> Option<Self> {
+        let value = mid.trim().parse::<u32>().ok()?;
+        let mid = u16::try_from(value & u32::from(u16::MAX)).unwrap_or_default();
+        let mflag = *mflag.as_bytes().first()?;
+        Some(Self { mid, mflag })
+    }
+
+    /// Read the payload the notify carries.
+    #[must_use]
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        let bytes: [u8; 3] = payload.get(..3)?.try_into().ok()?;
+        Some(Self {
+            mid: u16::from_le_bytes([bytes[0], bytes[1]]),
+            mflag: bytes[2],
+        })
+    }
+
+    /// The exact notify body: little-endian short id then flag byte.
+    #[must_use]
+    pub fn payload(self) -> [u8; 3] {
+        let [low, high] = self.mid.to_le_bytes();
+        [low, high, self.mflag]
+    }
+
+    /// Price slot selected by the flag; `None` when the byte is not
+    /// one of the exe's two tests.
+    #[must_use]
+    pub const fn gem_priced(self) -> Option<bool> {
+        match self.mflag {
+            Self::FLAG_CASH => Some(false),
+            Self::FLAG_GEM => Some(true),
+            _ => None,
+        }
+    }
+}
+
 /// Staged gates around the music-shop BUYITEM/GIFTITEM arm
 /// (`ev_26ac6479…`, file `0xc7f70`).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

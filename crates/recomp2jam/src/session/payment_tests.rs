@@ -1309,3 +1309,140 @@ fn tier_2_4035_posts_one_ui_event_per_row_and_one_for_an_empty_list() {
         "one event per acquired row, plus one for the empty answer"
     );
 }
+
+/// A gateway that records every C2S frame so a synthesized report-back
+/// payload can be compared byte for byte with the exe pin.
+type ReportedGateway = (
+    u16,
+    std::sync::mpsc::Receiver<(u16, Vec<u8>)>,
+    thread::JoinHandle<()>,
+);
+
+fn recording_gateway() -> ReportedGateway {
+    use std::sync::mpsc;
+
+    let (sent, received) = mpsc::channel();
+    let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream: TcpStream| {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        loop {
+            let mut header = [0u8; HEADER_LEN];
+            match stream.read_exact(&mut header) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) =>
+                {
+                    continue;
+                }
+                Err(_) => break,
+            }
+            let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+            let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+            if stream.read_exact(&mut body).is_err() {
+                break;
+            }
+            let id = u16::from_le_bytes([header[2], header[3]]);
+            sent.send((id, body)).unwrap();
+        }
+    });
+    (port, received, server)
+}
+
+#[test]
+fn web_nickname_report_back_sends_the_staged_2017_body() {
+    // #1150. Live caller chain: main.rs::run_play -> menu_key(Confirm)
+    // -> OnlineSession::room_chat_took_enter -> flush_room_chat_action ->
+    // ScreenGame::lobby_slash_command -> staged SelectedUserNickName ->
+    // C2S 2017. Pin: docs/web-surfaces.md EventBridge nickname row.
+    use o2jam_shell::screens::game::LobbyChat;
+
+    let (port, received, server) = recording_gateway();
+    let mut game = ScreenGame::new();
+    game.menu_key(MenuKey::Back, true);
+    game.click_planet(136, 88);
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.screen(), Screen::Room);
+    assert!(game.stage_web_whisper_target("WebPeer"));
+    game.set_lobby_input(LobbyChat::Room, "hello");
+    let mut session = payment_session(game, port);
+    session.menu_key(MenuKey::Confirm, true);
+    let (id, body) = received
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the staged draft must send one whisper");
+    drop(session);
+    server.join().unwrap();
+
+    let whisper = o2jam_net::rooms::SendWhisper::decode_body(&body).unwrap();
+    assert_eq!(id, 2017);
+    assert_eq!(whisper.recipient, "WebPeer");
+    assert_eq!(whisper.content, "hello");
+}
+
+#[test]
+fn web_cart_payload_packs_the_low_mid_and_first_mflag_byte() {
+    // seam: the 0x1bbe payload is a pure three-byte codec with no
+    // runtime caller beyond the report-back arm; the Tier 3 cart leg
+    // walks the boot chain into that arm.
+    use o2jam_shell::screens::side::WebCartAdd;
+
+    let cash = WebCartAdd::from_page_properties("65537", "Cash").unwrap();
+    let gem = WebCartAdd::from_page_properties("513", "Gem").unwrap();
+    assert_eq!((cash.mid, cash.mflag), (1, b'C'));
+    assert_eq!(cash.payload(), [1, 0, b'C']);
+    assert_eq!(gem.payload(), [1, 2, b'G']);
+    assert_eq!(WebCartAdd::from_payload(&gem.payload()), Some(gem));
+    assert_eq!(cash.gem_priced(), Some(false));
+    assert_eq!(gem.gem_priced(), Some(true));
+    assert_eq!(
+        WebCartAdd::from_page_properties("513", "X")
+            .unwrap()
+            .gem_priced(),
+        None
+    );
+}
+
+#[test]
+fn web_cart_report_back_stages_only_the_two_pinned_flag_slots() {
+    // Live caller chain: the native cart arm is driven from boot in
+    // live_web_native_legs.rs; this guard pins the pure staging rule.
+    // seam: no wire frame leaves the client on a 0x1bbe cart add.
+    let mut game = ScreenGame::new();
+    assert_eq!(game.music_shop_bag_count(), 0);
+    let cash = game.stage_web_cart_add(&[7, 0, b'C']);
+    let gem = game.stage_web_cart_add(&[8, 0, b'G']);
+    let other = game.stage_web_cart_add(&[9, 0, b'X']);
+    assert!(cash.is_some() && gem.is_some(), "C and G add bag rows");
+    assert_eq!(other, None, "an unpinned flag stages nothing");
+    assert_eq!(game.music_shop_bag_count(), 2);
+}
+
+#[test]
+fn web_document_complete_payload_carries_only_the_billing_url() {
+    // seam: the 0x12 / 0x1bbd notify body is the cached URL bytes;
+    // the Tier 3 notice leg walks the boot chain into the same arm.
+    use o2jam_shell::screens::game::{
+        WebDocumentNotify, BILLING_BUTTONS_URL_SUFFIX, WEB_NOTIFY_DOCUMENT_COMPLETE,
+        WEB_NOTIFY_TYPE,
+    };
+
+    let url = "http://game1.o2jam.com/billing/imsi/buttons.asp";
+    assert_eq!(BILLING_BUTTONS_URL_SUFFIX, "billing/imsi/buttons.asp");
+    let notice = WebDocumentNotify::from_completed_url(url).unwrap();
+    assert_eq!(WEB_NOTIFY_TYPE, 0x12);
+    assert_eq!(WEB_NOTIFY_DOCUMENT_COMPLETE, 0x1bbd);
+    assert_eq!(notice.payload(), url.as_bytes());
+    assert!(WebDocumentNotify::from_completed_url("http://x/payment_input.aspx").is_none());
+
+    game_stages_document_notice(url);
+}
+
+fn game_stages_document_notice(url: &str) {
+    let mut game = ScreenGame::new();
+    game.menu_key(MenuKey::Back, true);
+    game.click_planet(136, 88);
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.stage_web_document_complete(url).unwrap().url(), url);
+    assert_eq!(game.last_web_document_url(), Some(url));
+    assert_eq!(game.room_chat().last().unwrap().text, url);
+}

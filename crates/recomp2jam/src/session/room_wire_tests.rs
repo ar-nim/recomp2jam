@@ -552,3 +552,91 @@ fn scripted_2023_parameter_stages_the_member_word_high_nibble() {
     assert_eq!(session.game.room_member_word(3), Some(0x0008_0123));
     assert_eq!(session.game.listed_rooms()[0].music_id, 0x123);
 }
+
+#[test]
+fn scripted_3003_snapshot_seats_the_native_room_roster() {
+    use super::session_tests::{joined_snapshot, member_on_team};
+    // #1134. Live caller chain: main.rs::run_play -> poll_room_join ->
+    // drain_room_join -> OnlineSession::resolve_room_join ->
+    // ScreenGame::set_room_roster_from_joined -> ChatState::set_room_user_sheet.
+    let mut room = joined_snapshot();
+    let mut host = member_on_team("Host", true, 0);
+    host.master = true;
+    host.level = 21;
+    room.slots[0].member = Some(host);
+    let mut peer = member_on_team("Peer", false, 1);
+    peer.level = 9;
+    room.slots[1].member = Some(peer);
+    room.user_count = 2;
+    let (mut session, server) = room_session(|_stream| {});
+    session.resolve_room_join(room, EntryEcho::Confirm);
+    server.join().unwrap();
+
+    let sheet = session.game.room_user_sheet();
+    assert_eq!(sheet.len(), 2, "both 3003 seats must join the roster");
+    assert_eq!(sheet[0].nickname, "Host");
+    assert_eq!(sheet[0].level, 21);
+    assert_eq!(sheet[1].nickname, "Peer");
+    assert_eq!(sheet[1].id, 1, "the seat index is the roster id");
+}
+
+#[test]
+fn scripted_3004_join_broadcast_adds_one_roster_row() {
+    // #1134. Live caller chain: main.rs::run_play -> OnlineSession::poll_wire
+    // -> poll_waiting_chat -> apply_waiting_frame -> apply_user_joined ->
+    // ScreenGame::seat_room_roster_member -> ChatState seat-keyed row.
+    use super::session_tests::{joined_snapshot, member_on_team};
+
+    let room = joined_snapshot();
+    let (mut session, server) = room_session(|_stream| {});
+    session.game_mut().set_room_roster_from_joined(&room);
+    let join = o2jam_net::rooms::UserJoinedWaiting {
+        member_id: 2,
+        member: member_on_team("NewPeer", false, 2),
+    };
+    session.apply_waiting_frame(Frame {
+        id: o2jam_net::rooms::UserJoinedWaiting::COMMAND,
+        payload: join.encode_body(),
+    });
+    server.join().unwrap();
+
+    let sheet = session.game.room_user_sheet();
+    assert_eq!(sheet.len(), 1, "one 3004 broadcast adds one row");
+    assert_eq!(sheet[0].id, 2);
+    assert_eq!(sheet[0].nickname, "NewPeer");
+}
+
+#[test]
+fn scripted_3007_leave_broadcast_removes_the_row_and_promotes_the_master() {
+    // #1134. Live caller chain: main.rs::run_play -> OnlineSession::poll_wire
+    // -> poll_waiting_chat -> apply_waiting_frame -> apply_user_left ->
+    // ScreenGame::clear_room_roster_member -> ChatState master word.
+    use super::session_tests::{joined_snapshot, member_on_team};
+
+    let room = joined_snapshot();
+    let (mut session, server) = room_session(|_stream| {});
+    session.game_mut().set_room_roster_from_joined(&room);
+    let join = o2jam_net::rooms::UserJoinedWaiting {
+        member_id: 2,
+        member: member_on_team("NewPeer", false, 2),
+    };
+    session.apply_waiting_frame(Frame {
+        id: o2jam_net::rooms::UserJoinedWaiting::COMMAND,
+        payload: join.encode_body(),
+    });
+    let leave = o2jam_net::rooms::UserLeftWaiting {
+        member_id: 2,
+        new_master_id: 1,
+        premium: false,
+        has_super_manager: false,
+    };
+    session.apply_waiting_frame(Frame {
+        id: o2jam_net::rooms::UserLeftWaiting::COMMAND,
+        payload: leave.encode_body(),
+    });
+    server.join().unwrap();
+
+    let sheet = session.game.room_user_sheet();
+    assert!(sheet.is_empty(), "the departed seat leaves the roster");
+    assert_eq!(session.game.room_roster_master(), Some(1));
+}
