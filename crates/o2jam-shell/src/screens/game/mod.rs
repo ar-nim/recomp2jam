@@ -77,24 +77,24 @@ use super::paint::{
     paint_music_shop_lightboard_entry_notice, paint_music_shop_notice, paint_music_shop_owned_rows,
     paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
     paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
-    paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_premium_time_rows, paint_relay_down_dialog,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_detail_readout,
-    paint_room_list_with_detail_gate, paint_room_member_word, paint_room_no_response_dialog,
-    paint_room_scene_with_selection, paint_room_user_panel, paint_screen, paint_shop_avatar,
-    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
-    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible,
-    room_detail_enable_is_set, room_detail_readout_art, room_panel_hit, scene_index,
-    seat_figure_is_male, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
-    waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
-    PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingConfirmState, WaitingEffect,
-    WaitingLevel, WaitingMapStep, WaitingSkillItem, WaitingSkillSlots, WaitingSkillStep,
-    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
-    WAITING_MAP_DEFAULT_FRAMES,
+    paint_myroom_confirm, paint_myroom_figure, paint_myroom_information, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_premium_time_rows,
+    paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat,
+    paint_room_detail_readout, paint_room_list_with_detail_gate, paint_room_member_word,
+    paint_room_no_response_dialog, paint_room_scene_with_selection, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
+    paint_shop_item_icons, paint_shop_notice_text, paint_shop_preview, paint_shop_scene,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
+    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_detail_enable_is_set,
+    room_detail_readout_art, room_panel_hit, scene_index, seat_figure_is_male, staged_rect_hit,
+    waiting_confirm_control_id, waiting_local_is_master, waiting_map_cycle, BattleVerdict,
+    CashChargeArt, ChannelChatMessage, LoadingStatus, PlanetPromoPaint, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, ShopBoard, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage,
+    WaitingConfirmState, WaitingEffect, WaitingLevel, WaitingMapStep, WaitingSkillItem,
+    WaitingSkillSlots, WaitingSkillStep, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT, WAITING_MAP_DEFAULT_FRAMES,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -1256,6 +1256,12 @@ pub struct ScreenGame {
     /// CONFERENCE or WEBAVATAR). It owns clicks until OK; the message
     /// bytes are exe-string pinned in [`MyRoomNotice`].
     myroom_notice: Option<MyRoomNotice>,
+    /// Caption the battle-only UHP start wrote through the pinned
+    /// text sink. The literal is owned by the messenger seam; the
+    /// shell only stages it for the Playing caption surface.
+    uhp_start_caption: Option<&'static str>,
+    /// Completion word set after the empty 4046 report.
+    uhp_start_completed: bool,
 
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
@@ -1748,6 +1754,8 @@ impl ScreenGame {
 
             messenger_liveness_open: false,
             myroom_notice: None,
+            uhp_start_caption: None,
+            uhp_start_completed: false,
             myroom_confirm: None,
             myroom_counts: [0; 17],
 
@@ -2240,6 +2248,10 @@ impl ScreenGame {
             // their frames per scene).
             self.waiting_start_armed = false;
             self.result_settled = false;
+            if next != Screen::Playing {
+                self.uhp_start_caption = None;
+                self.uhp_start_completed = false;
+            }
             self.playing_entered_wall = (next == Screen::Playing).then(Instant::now);
             if next == Screen::Avi {
                 self.avi_entered_wall = Some(std::time::Instant::now());
@@ -2579,6 +2591,29 @@ impl ScreenGame {
     /// an old one; the sheet owns input until its OK is pressed.
     pub fn post_myroom_notice(&mut self, notice: MyRoomNotice) {
         self.myroom_notice = Some(notice);
+    }
+
+    /// Stage the caption the UHP sequence chose. The literal comes
+    /// from the messenger seam; no caption text is invented here.
+    pub fn post_uhp_start_caption(&mut self, caption: &'static str) {
+        self.uhp_start_caption = Some(caption);
+    }
+
+    /// The caption currently staged for the Playing surface.
+    #[must_use]
+    pub const fn uhp_start_caption(&self) -> Option<&'static str> {
+        self.uhp_start_caption
+    }
+
+    /// Set the completion word after the empty report is sent.
+    pub fn mark_uhp_start_completed(&mut self) {
+        self.uhp_start_completed = true;
+    }
+
+    /// The UHP completion word staged by the start sequence.
+    #[must_use]
+    pub const fn uhp_start_completed(&self) -> bool {
+        self.uhp_start_completed
     }
 
     /// Fold one special-item reply into the staged room and post its
@@ -9788,6 +9823,14 @@ impl ScreenGame {
         }
         self.paint_start_payment_answer_band(frame);
         self.paint_native_event_surface(frame);
+        // The UHP caption is the exe's battle-only text sink. Our
+        // presentation uses the staged Information cell with the
+        // exact UTF-8 literal; no exe glyph rasterization is claimed.
+        if self.flow.current() == Screen::Playing {
+            if let Some(caption) = self.uhp_start_caption {
+                paint_myroom_information(frame, self.relay_down_art.as_ref(), caption);
+            }
+        }
         self.paint_dialog_frame_states(frame);
         // The cursor stays on a toggle after the click, so the hover
         // repaint above would cover its selected face. Selection is the
@@ -39395,6 +39438,23 @@ mod game_tests {
             rest,
             "hiding removes the stand-in ink"
         );
+    }
+
+    #[test]
+    fn uhp_caption_host_arm_stages_the_exact_caption_and_completion_word() {
+        // seam: the battle-only UHP text sink has no winit caller in
+        // this client; staging the pinned literal and completion word
+        // is the whole host arm. The live leg proves the ink below.
+        let mut game = ScreenGame::new();
+        assert_eq!(game.uhp_start_caption(), None);
+        assert!(!game.uhp_start_completed());
+
+        let caption = crate::screens::messenger::UHP_SUCCESS_CAPTION;
+        game.post_uhp_start_caption(caption);
+        game.mark_uhp_start_completed();
+
+        assert_eq!(game.uhp_start_caption(), Some(caption));
+        assert!(game.uhp_start_completed());
     }
 
     /// Sample the native event band through the same `paint_at` the

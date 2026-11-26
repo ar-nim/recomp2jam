@@ -10,15 +10,21 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use o2jam_audio::NullBackend;
 use o2jam_net::frame::encode_frame;
+use o2jam_net::relay::{P2PListResponse, PeerInfo};
 use o2jam_net::testing::{fake_gateway, read_frame};
 use o2jam_net::{
-    AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
+    AuthResponse, ChannelList, ChannelLoginResponse, Frame, JoinRoomResponse, Request, RoomList,
     SetRoomMusic, WireMessage,
+};
+use o2jam_shell::screens::messenger::{
+    UhpPeerTables, UhpStartSequence, UHP_REPORT_OPCODE, UHP_SUCCESS_CAPTION,
 };
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -36,6 +42,7 @@ struct PlayingWireGateway {
     join_answer_written: Receiver<()>,
     script: Sender<Vec<u8>>,
     script_written: Receiver<()>,
+    reports: Receiver<Frame>,
     server: JoinHandle<()>,
 }
 
@@ -50,7 +57,7 @@ impl PlayingWireGateway {
 /// Drive the boot handshake, answer the 3002 join, and hold a separate
 /// writer so a quiet Waiting client can still receive a pushed frame.
 fn spawn_playing_wire_gateway(room: o2jam_net::JoinedRoom) -> PlayingWireGateway {
-    let (reported_tx, _reported) = mpsc::channel();
+    let (reported_tx, reports) = mpsc::channel();
     let (join_tx, join_answer_written) = mpsc::channel();
     let (script, script_rx) = mpsc::channel::<Vec<u8>>();
     let (script_written_tx, script_written) = mpsc::channel();
@@ -129,6 +136,7 @@ fn spawn_playing_wire_gateway(room: o2jam_net::JoinedRoom) -> PlayingWireGateway
         join_answer_written,
         script,
         script_written,
+        reports,
         server,
     }
 }
@@ -248,6 +256,87 @@ fn live_4035_answer_arms_the_local_download_badge_from_boot() {
         before,
         paint_frame(&mut session),
         "the arm badge repainted the Waiting board"
+    );
+    finish(session, gateway);
+}
+
+/// Paint the Playing board at a fixed clock so a caption, not the
+/// song animation, is the only possible frame delta.
+fn paint_fixed_caption_frame(session: &mut OnlineSession) -> Vec<u32> {
+    let mut buf = vec![0u32; 800 * 600];
+    session.game_mut().paint_at(
+        &mut o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        },
+        0,
+    );
+    buf
+}
+
+#[test]
+fn live_uhp_start_after_4045_inks_the_caption_and_sends_one_empty_4046_from_boot() {
+    // Live chain: main.rs::run_play ->
+    // connect::connect_and_login_with_transport -> assemble_online_session
+    // -> boot pointer walk -> Waiting/Loading Confirm ->
+    // OnlineSession::paint -> poll_wire_at -> poll_stats ->
+    // drain_peer_echoes -> 4045 arm -> UhpPeerTables::from_peer_list ->
+    // UhpStartSequence::run -> ScreenGame::post_uhp_start_caption ->
+    // ScreenGame::paint_at -> paint_myroom_information; the same run
+    // sends one empty 4046 through OnlineSession::send_uhp_report.
+    // seam: no real UDP packet or worker thread exists; the injected
+    // readiness script stands in for the exe's battle poller.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("SKIP live_uhp_start_after_4045_inks_the_caption_and_sends_one_empty_4046_from_boot: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_playing_wire_gateway(joined_room(0, true));
+    let mut session = enter_playing_wire_from_boot(&gateway);
+    assert_eq!(session.screen(), Screen::Playing);
+    let response = P2PListResponse {
+        peers: vec![PeerInfo {
+            member_id: 3,
+            public_endpoint: SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 4002),
+            local_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 6), 4003),
+        }],
+    };
+    gateway.push(response.encode());
+    paint_frame(&mut session);
+    let before = paint_fixed_caption_frame(&mut session);
+
+    let tables = UhpPeerTables::from_peer_list(&response);
+    let trace = {
+        let mut sequence = UhpStartSequence::new(vec![false, true], |_| {});
+        sequence.run(&tables, &mut session)
+    };
+    let after = paint_fixed_caption_frame(&mut session);
+
+    assert_eq!(trace.caption, UHP_SUCCESS_CAPTION);
+    assert_eq!(
+        session.game_mut().uhp_start_caption(),
+        Some(UHP_SUCCESS_CAPTION)
+    );
+    assert!(session.game_mut().uhp_start_completed());
+    assert_ne!(before, after, "the UHP caption must ink the Playing board");
+
+    let report = loop {
+        let frame = gateway
+            .reports
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        if frame.id == UHP_REPORT_OPCODE {
+            break frame;
+        }
+    };
+    assert!(report.payload.is_empty(), "4046 must carry an empty body");
+    assert!(
+        gateway
+            .reports
+            .try_iter()
+            .all(|frame| frame.id != UHP_REPORT_OPCODE),
+        "one UHP start sends exactly one 4046"
     );
     finish(session, gateway);
 }

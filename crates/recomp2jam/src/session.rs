@@ -765,6 +765,32 @@ pub struct OnlineSession {
     premium_time_rows: Vec<o2jam_net::relay::PremiumTimeRow>,
 }
 
+/// The session side of the battle-only UHP start. The shell stages
+/// the caption and completion word; this arm only sends the one
+/// empty 4046 the exe writes at file `0x18d8a1`.
+impl o2jam_shell::screens::messenger::UhpStartHost for OnlineSession {
+    fn post_uhp_caption(&mut self, caption: &'static str) {
+        self.game.post_uhp_start_caption(caption);
+    }
+
+    fn send_uhp_report(&mut self, opcode: u16, body: &[u8]) -> bool {
+        if opcode != o2jam_net::relay::ReportUdpPunchHole::COMMAND || !body.is_empty() {
+            return false;
+        }
+        match self.gateway.send_frame(opcode, body) {
+            Ok(()) => true,
+            Err(source) => {
+                tracing::warn!(?source, "UHP 4046 send failed");
+                false
+            }
+        }
+    }
+
+    fn mark_uhp_complete(&mut self) {
+        self.game.mark_uhp_start_completed();
+    }
+}
+
 impl OnlineSession {
     /// Pair a game with its gateway transport.
     #[must_use]
