@@ -1,9 +1,8 @@
 # Loading-screen typography routing (7.55) — spec
 
-How the loading gate's three GDI fonts map to the shell's font
-cells, and which loading caption goes through which cell. Spec only:
-`loading-bar-geometry` owns `paint.rs` — the call sites below are
-for that owner to change, not this spec.
+How the loading gate's three GDI fonts map to the shell's font cells.
+Resolved 2026-11-26: the exe never reads them, so no caption routes
+through any cell and the gate paints no runtime text.
 
 Version pin: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 `83a04541…72c823b`. Behavior described in our own words with file
@@ -26,35 +25,28 @@ false for `Loading`, so its TTF-missing fallback is the 5×7 bitmap —
 an approximation documented on the method. Pinned by test
 `loading_cell_pins_the_gate_trebuchet_face`.
 
-## Routing spec (for the `paint.rs` owner)
+## Resolution: no caption routes through any gate cell (2026-11-26)
 
-The song title/artist line (`LoadingStatus::caption`, the `TITLE -
-ARTIST` join) takes the gate's display face: `Cell::Loading`.
+The routing spec that lived here told a future owner to add a runtime
+`TITLE - ARTIST` line through `Cell::Loading`. That instruction is
+withdrawn. The exe creates the three gate fonts and never reads them:
+a whole-`.text` search finds no reader of `+0x524`/`+0x528`/`+0x52c` in
+either Loading class (`docs/pins/misc-tail.md`, senior REA pass). Every
+credit line on the 7.55 gate is baked into the OJN cover JPEG. Our
+client painted a runtime caption there as a stand-in; the owner ruled
+on 2026-11-26 to remove it, and `paint_loading_scene_with_status` now
+inks no text.
 
-Exact call sites in `crates/o2jam-shell/src/screens/paint.rs`:
+Guards: `loading_scene_paints_no_runtime_song_text`,
+`loading_cover_paints_full_bleed_with_no_overlay`,
+`loading_paints_no_staged_song_caption`,
+`loading_shot_staged_status_changes_no_pixel`.
 
-1. `paint_loading_song` (line 2186): replace the
-   `paint_room_detail_line` call (line 2191, which routes through
-   `draw_text` → `Cell::Box`) with `draw_text_cell` /
-   `text_width_cell` at `Cell::Loading`, plus a scrim sized to that
-   cell (width from its advance + 8, height 65 + 4 padding).
-2. Import block (line 43): add
-   `use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};`
-   (rustfmt order: `draw_text_cell, text_width_cell, Cell`).
-3. `paint_loading_scene_with_status` docs: the Trebuchet/Arial gap
-   note lapses for the caption once routed (Arial 7×14 still has no
-   cell; the OJN/Vorbis path stays a gap).
-4. Tests: `loading_cover_paints_full_bleed_behind_bar_and_caption`
-   bottom-right expectation changes (the 69-row scrim covers it on a
-   64×48 frame); add a routing test asserting the Loading advance
-   exceeds the Box advance for the same caption.
+`LoadingStatus::title`/`artist` stay as staged data for the wire and
+live legs; nothing paints them.
 
 ## Approximations (labelled)
 
-- Which caption takes which gate font is unpinned (`gdi-text.md`
-  OPEN 5 — Trebuchet 27×65 vs Arial 7×14 vs Gulimche 6×12); giving
-  the song line the display face is the spec's recommendation, not
-  an exe pin.
-- Bar and caption rects stay OPEN placeholders owned by
+- The bar rect stays an OPEN placeholder owned by
   `loading-bar-geometry` (no verified rect; `MusicLoading.ojs` is a
-  single 800×600 body).
+  single 800x600 body) and is hidden until its exe pin.

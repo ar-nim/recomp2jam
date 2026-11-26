@@ -11190,10 +11190,13 @@ impl ScreenGame {
         );
     }
 
-    /// Loading gate: staged art, then title–artist. The OPEN progress
-    /// bar stays hidden in every state until its exe pin (see
+    /// Loading gate: the staged cover alone. No runtime caption inks
+    /// (the exe reads none of its three gate fonts,
+    /// `docs/pins/misc-tail.md`) and the OPEN progress bar stays
+    /// hidden in every state until its exe pin (see
     /// [`paint_loading_bar`](crate::screens::paint::paint_loading_bar));
-    /// staged walk status is retained but not painted as a bar.
+    /// staged walk status is retained for the live legs but paints
+    /// nothing.
     fn paint_loading(&self, frame: &mut Frame<'_>) {
         match (
             self.scene_art(Screen::Loading),
@@ -36491,9 +36494,14 @@ mod game_tests {
         assert!(!buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 
+    // Evidence: docs/pins/misc-tail.md:533 (loading-gate font slots have no reader).
     #[test]
-    fn loading_paints_the_staged_song_caption() {
-        // Song row sits one placeholder row below the bar (y36).
+    fn loading_paints_no_staged_song_caption() {
+        // Live chain: main.rs::run_play -> OnlineSession::paint ->
+        // ScreenGame::paint_at -> paint_loading ->
+        // paint_loading_scene_with_status. The exe reads none of its
+        // three gate fonts, so the staged title/artist inks nothing at
+        // the old caption row (y36); the credits are baked cover ink.
         let (placements, figures) = corner_scene_art("MusicLoading.ojs");
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
@@ -36508,7 +36516,10 @@ mod game_tests {
             },
             0,
         );
-        assert!(white_near(&buf, 64, 48, (16, 36)));
+        assert!(
+            !white_near(&buf, 64, 48, (16, 36)),
+            "no runtime caption on the gate"
+        );
     }
 
     #[test]
