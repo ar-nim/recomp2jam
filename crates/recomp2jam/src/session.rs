@@ -193,6 +193,8 @@ use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGam
 use crate::connect::net_context;
 mod attempt;
 #[cfg(test)]
+mod dual_client_tests;
+#[cfg(test)]
 mod payment_tests;
 mod playing_wire_tests;
 mod press;

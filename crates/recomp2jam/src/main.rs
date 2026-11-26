@@ -14,6 +14,7 @@ mod ledger_check;
 mod live_art;
 #[cfg(test)]
 mod live_boot_gate;
+mod live_dual_client_legs;
 #[cfg(test)]
 mod live_formats_legs;
 #[cfg(test)]
