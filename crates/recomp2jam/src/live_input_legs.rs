@@ -2628,7 +2628,15 @@ mod live_input_leg_tests {
     /// Wall-clock bound for one scripted wallet answer. Long enough for
     /// a loaded gateway thread, short enough that a missing reply fails
     /// the leg instead of hanging it (#1155).
-    const WALLET_ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+    ///
+    /// STRICTLY longer than the session's own answer window
+    /// (`session::PENDING_WIRE_WINDOW`, 10 s), which starts within
+    /// milliseconds of this one on the BACK that sends 5028. With two
+    /// equal clocks the session can expire first under load and the
+    /// reply is never folded (#1157). The margin must stay larger than
+    /// any scheduling jitter; a slow-but-arriving answer is the
+    /// session's to fold.
+    const WALLET_ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 
     /// Boot answers shared by every live leg: authorization, channel
     /// list, channel login, room list. Kept separate from the wallet
