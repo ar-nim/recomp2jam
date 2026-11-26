@@ -79,8 +79,6 @@ use o2jam_net::{
     rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
     KeyMode, MemberRole, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
 };
-#[cfg(test)]
-use o2jam_render::font::{text_width_cell, Cell};
 use o2jam_render::{
     blit_rgb555, blit_rgb555_scaled, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
     scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
@@ -4640,13 +4638,12 @@ fn paint_lobby(frame: &mut Frame<'_>, background: u32) {
 
 /// Loading gate state staged while the song table walks (exe
 /// `0x4e47a0`, file `0xe47a0`, ev `68d920c2…`): the song-table
-/// fraction plus the song title/artist being loaded. The exe sets
-/// `Trebuchet MS`/`Arial` fonts there; the shell micro-font stands
-/// in (typography gap). Track and caption rects below stay OPEN placeholders: `MusicLoading.ojs` is one 800x600 body at (0,0)
-/// with no bar/caption sub-rect, the `0x4e47a0` dossier carries
-/// fonts plus the overlay mount plus the song-table walk with no
-/// literal bar/caption rect, and adjacent bar bodies belong to
-/// other dialogs — so only the fraction and the caption are live.
+/// fraction plus the song title/artist being loaded. The names are
+/// carried for the wire and live legs only: the exe reads none of its
+/// three gate fonts (`docs/pins/misc-tail.md`), so nothing here inks
+/// the cover. The track rect below stays an OPEN placeholder:
+/// `MusicLoading.ojs` is one 800x600 body at (0,0) with no bar
+/// sub-rect, and adjacent bar bodies belong to other dialogs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoadingStatus {
     /// Song-table walk fraction (`0.0`..=`1.0`, clamped at paint).
@@ -4769,7 +4766,7 @@ fn paint_loading(frame: &mut Frame<'_>) {
     }
 }
 
-/// Per-song illustration behind the loading bar/caption: the staged
+/// Per-song illustration for the loading gate: the staged
 /// [`LOADING_COVER_SPRITE`] figure (see
 /// [`crate::avatar::ojn_cover_figure`]) stretched opaque over the
 /// whole frame — the OJN cover is a full-bleed 800x600 body with no
@@ -4810,12 +4807,11 @@ fn paint_loading_cover(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
 /// `MusicLoading.ojs` planet fallback — the exe mounts that overlay
 /// only when the song load returns 0 (file `0xe47a0`, ev
 /// `68d920c2…`), so a present cover (the load succeeded) replaces
-/// it. The OPEN fractional bar stays hidden until [`LOADING_BAR_VISIBLE`];
-/// the song title/artist still paints. The caption now routes through
-/// `Cell::Loading` (the gate Trebuchet 27x65
-/// recommendation per `docs/loading-type.md`); Arial 7x14 still has
-/// no cell and the OJN/Vorbis path stays a gap. Unpainted while the
-/// shell carries no walk state.
+/// it. No runtime caption inks: the exe creates three gate fonts and
+/// never reads them (`docs/pins/misc-tail.md`), so the Artist/Remix/
+/// Pattern credits are baked cover ink. The OPEN fractional bar stays
+/// hidden until [`LOADING_BAR_VISIBLE`]. Unpainted while the shell
+/// carries no walk state.
 pub fn paint_loading_scene_with_status(
     frame: &mut Frame<'_>,
     art: &SceneArt,
@@ -10463,12 +10459,14 @@ mod paint_tests {
 
     #[test]
     fn loading_cover_paints_full_bleed_with_no_overlay() {
-        // Staged OJN cover (2x2 opaque stand-in, distinct corners —
-        // geometry only, never real art) stretches over the whole
-        // frame with nothing on top: the exe reads none of its three
-        // gate fonts (`docs/pins/misc-tail.md`), so no caption scrim
-        // and no title ink cover the baked credits. The OPEN bar
-        // stays hidden.
+        // Evidence: docs/pins/misc-tail.md (loading-gate font slots).
+        // The staged OJN cover (2x2 opaque stand-in, distinct corners
+        // — geometry only, never real art) paints over the whole frame
+        // and nothing paints on top of it: the exe reads none of its
+        // three gate fonts, so no bar, scrim or caption covers the
+        // baked credits. Full-frame equality against a cover-only paint
+        // catches ink anywhere, including white ink at the old caption
+        // row where this fixture's own white corner would hide it.
         let art = SceneArt {
             placements: Vec::new(),
             figures: HashMap::from([(LOADING_COVER_SPRITE.to_owned(), cover_figure())]),
@@ -10478,46 +10476,41 @@ mod paint_tests {
             title: "Title".to_owned(),
             artist: "Artist".to_owned(),
         };
-        let mut buf = vec![0u32; 64 * 48];
+        let mut cover_only = vec![0u32; 64 * 48];
+        assert!(
+            paint_loading_cover(
+                &mut Frame {
+                    buf: &mut cover_only,
+                    w: 64,
+                    h: 48,
+                },
+                &art,
+            ),
+            "the cover stages"
+        );
+        let mut staged = vec![0u32; 64 * 48];
         paint_loading_scene_with_status(
             &mut Frame {
-                buf: &mut buf,
+                buf: &mut staged,
                 w: 64,
                 h: 48,
             },
             &art,
             &status,
         );
-        assert_eq!(buf[0], pack_xrgb(255, 0, 0), "cover top-left");
-        assert_eq!(buf[63], pack_xrgb(0, 255, 0), "cover top-right");
-        assert_eq!(buf[47 * 64], pack_xrgb(0, 0, 255), "cover bottom-left");
+        assert_eq!(staged, cover_only, "nothing paints over the cover");
+        assert_eq!(cover_only[0], pack_xrgb(255, 0, 0), "cover top-left");
+        assert_eq!(cover_only[63], pack_xrgb(0, 255, 0), "cover top-right");
         assert_eq!(
-            buf[47 * 64 + 63],
+            cover_only[47 * 64],
+            pack_xrgb(0, 0, 255),
+            "cover bottom-left"
+        );
+        assert_eq!(
+            cover_only[47 * 64 + 63],
             pack_xrgb(255, 255, 255),
-            "cover bottom-right (the fixture's white corner)"
+            "cover bottom-right"
         );
-        assert!(
-            !buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
-            "OPEN bar fill stays off the cover"
-        );
-        // The fixture's own white corner equals the title ink, so ink
-        // absence is proved by `loading_scene_paints_no_runtime_song_text`
-        // on the plain backdrop; here the scrim is the tell.
-        assert!(
-            !buf.contains(&scrim_color()),
-            "no caption scrim over the cover"
-        );
-    }
-
-    #[test]
-    fn loading_caption_routes_through_the_display_cell() {
-        // `docs/loading-type.md` routing: the `TITLE - ARTIST`
-        // caption lays out through `Cell::Loading`, whose advance
-        // exceeds the shared `Cell::Box` face for the same text.
-        let caption = "Title - Artist";
-        let box_w = text_width_cell(caption, Cell::Box);
-        let loading_w = text_width_cell(caption, Cell::Loading);
-        assert!(loading_w > box_w, "{loading_w} must exceed {box_w}");
     }
 
     #[test]
