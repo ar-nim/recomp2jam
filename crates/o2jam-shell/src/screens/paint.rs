@@ -5086,6 +5086,93 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
     }
 }
 
+/// Floor compared with the row's `+0x88` word by `0x5251b0`.
+pub(crate) const ROOM_DETAIL_ENABLE_FLOOR: u32 = 0x64;
+
+/// Whether a bound Room row lights its detail readout (`0x5251b0`,
+/// file `0x1251b0`). The row's first title byte must be nonzero, and
+/// the `+0x88` word must reach the exe's `0x64` floor. A null row
+/// never lights it.
+#[must_use]
+pub(crate) fn room_detail_enable_is_set(room: Option<&RoomListEntry>, member_word: u32) -> bool {
+    room.is_some_and(|room| {
+        room.title
+            .as_bytes()
+            .first()
+            .is_some_and(|title_byte| *title_byte != 0)
+            && member_word >= ROOM_DETAIL_ENABLE_FLOOR
+    })
+}
+
+/// Text wells owned by the detail readout. They are withheld from
+/// the scene painter so the enable arm can repaint them over the row
+/// ink; the control itself stays staged, as with bundled chrome.
+pub(crate) const ROOM_DETAIL_READOUT_IDS: [&str; 3] = [
+    ROOM_DETAIL_MUSIC_ID,
+    ROOM_DETAIL_DIFFICULTY_ID,
+    ROOM_DETAIL_LEVEL_ID,
+];
+
+/// Read the staged board with the readout wells withheld from the
+/// scene painter. The readout is painted after the row ink, so a
+/// disabled control never leaves a lit template line behind.
+pub(crate) fn room_detail_readout_art(art: &SceneArt) -> SceneArt {
+    let mut gated = art.clone();
+    gated
+        .placements
+        .retain(|placed| !ROOM_DETAIL_READOUT_IDS.contains(&placed.id.as_str()));
+    gated
+}
+
+/// Paint the bound row's readout over the finished row ink. Only the
+/// staged text wells carry player-visible detail labels; icon wells
+/// stay owned by their figures.
+pub(crate) fn paint_room_detail_readout(
+    frame: &mut Frame<'_>,
+    room: &RoomListEntry,
+    highlight: usize,
+    placements: &[ScenePlacement],
+) {
+    let Some((panel_x, panel_y)) = room_panel_origins(placements).get(highlight).copied() else {
+        return;
+    };
+    for (id, text) in room_detail_entries(room) {
+        if !ROOM_DETAIL_READOUT_IDS.contains(&id) {
+            continue;
+        }
+        let Some(placed) = placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        paint_room_text_into_rect(
+            frame,
+            Rect {
+                x: placed.rect.x + panel_x,
+                y: placed.rect.y + panel_y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            },
+            &text,
+            caption_ink(art_title_ink()),
+        );
+    }
+}
+
+/// Flat fallback with the same readout gate as the staged board.
+pub(crate) fn paint_room_list_with_detail_gate(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    detail_enabled: bool,
+) {
+    if detail_enabled {
+        paint_room_list(frame, rooms, highlight);
+        return;
+    }
+    fill_background(frame, Screen::Room);
+    paint_title(frame, "ROOM");
+    paint_room_rows(frame, rooms, highlight, None);
+}
+
 #[cfg(test)]
 mod paint_tests {
     /// One solid probe figure at a known sprite anchor. Its ink lands
@@ -8347,6 +8434,49 @@ mod paint_tests {
             room_lock_ink(true),
             pack_xrgb(0xFF, 0x50, 0x50),
             "locked line reads red"
+        );
+    }
+
+    #[test]
+    fn room_detail_enable_table_pins_null_empty_title_and_the_one_hundred_word_floor() {
+        // Live caller chain: main.rs::run_play -> connect::connect_and_login_with_transport
+        // -> assemble_online_session -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::click_room_row -> ScreenGame::bind_room_detail
+        // -> paint::room_detail_enable_is_set.
+        let row = |title: &str| RoomListEntry {
+            number: 3,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id: 1,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 0,
+            max_level: 99,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        };
+        assert!(!room_detail_enable_is_set(None, 100), "null row stays dark");
+        assert!(
+            !room_detail_enable_is_set(Some(&row("")), 100),
+            "empty title stays dark"
+        );
+        assert!(
+            !room_detail_enable_is_set(Some(&row("Jam")), 99),
+            "word 99 is below the floor"
+        );
+        assert!(
+            room_detail_enable_is_set(Some(&row("Jam")), 100),
+            "word 100 is the first enabled value"
+        );
+        assert!(
+            room_detail_enable_is_set(Some(&row("Jam")), 101),
+            "word 101 stays enabled"
         );
     }
 
