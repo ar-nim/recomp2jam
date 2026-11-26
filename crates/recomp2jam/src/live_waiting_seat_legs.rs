@@ -674,9 +674,9 @@ fn live_waiting_removal_cause_captures_different_notice_pixels() {
 
 /// #995 Tier 3 pixel leg: after a real boot, a 3003 seat snapshot and
 /// a staged MUSELECT click, the dialog paints only songs the seated
-/// members own. The same catalog with one member owning the third
-/// song still paints that row, so the assertion measures the filter,
-/// not the font.
+/// members own. The same catalog with one member owning all three songs
+/// still paints every row, and an empty owned union paints none, so the
+/// assertions measure the filter, not the font.
 ///
 /// Live caller chain:
 ///   main.rs::run_play -> connect::connect_and_login_with_transport
@@ -738,6 +738,25 @@ fn live_waiting_picker_paints_only_member_owned_songs_from_boot() {
         .map(|cell| ink_in_rect(&full_frame, *cell))
         .collect();
 
+    let mut empty_room = scripted_room(0, 1);
+    for slot in &mut empty_room.slots {
+        if let Some(member) = slot.member.as_mut() {
+            member.music_ids.clear();
+        }
+    }
+    let (mut empty, empty_gateway) = boot_seat_leg(empty_room, Vec::new());
+    empty.game_mut().set_song_catalog(&entries);
+    click_staged(&mut empty, Screen::Waiting, "IDC_BUTTON_SWAIT_MUSELECT");
+    assert!(
+        empty.game_mut().select_music_dialog_open(),
+        "the same dialog mounts with an empty owned union"
+    );
+    let empty_frame = paint_at_ms(&mut empty, 0);
+    let empty_rows: Vec<Vec<u32>> = cells
+        .iter()
+        .map(|cell| ink_in_rect(&empty_frame, *cell))
+        .collect();
+
     assert_eq!(
         owned_rows[0], full_rows[0],
         "the peer's owned row paints the same title in both rooms"
@@ -750,6 +769,13 @@ fn live_waiting_picker_paints_only_member_owned_songs_from_boot() {
         owned_rows[6], full_rows[6],
         "the unowned row must not paint the title the owned room shows"
     );
+    for (band, (empty_row, full_row)) in empty_rows.iter().zip(&full_rows).enumerate() {
+        assert_ne!(
+            empty_row, full_row,
+            "band {band} must stay uninked when no member owns a song"
+        );
+    }
     finish(owned, owned_gateway.server);
     finish(full, full_gateway.server);
+    finish(empty, empty_gateway.server);
 }

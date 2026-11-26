@@ -104,23 +104,22 @@ use super::side::{
     myroom_record_slot, myroom_tab_kept, paint_side_scene, paint_side_scene_live,
     paint_side_scene_selected, paint_tutorial_scene, password_action_at, planet_action_at,
     select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
-    select_index_matches, select_music_rows, select_music_rows_owned_by,
-    select_music_songs_with_labels, select_row_column_text, select_row_hit,
-    shop_action_at_on_board, shop_cart_face_controls_kept, shop_cart_page_digit_kept,
-    shop_category_index, shop_extmenu_kept, shop_panel_kept, shop_shop_frame_for,
-    shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot, song_installed,
-    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
-    LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter, MusicShopMessengerState,
-    MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice, MyRoomPassInfo, MyRoomState,
-    OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand, PlanetOptionTab,
-    PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab, SelectFilterChoice,
-    SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong,
-    SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, ShopPanel, SideScreen,
-    TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights, TutorialPaintState, WalletRow,
-    WalletState, CREATE_ROOM_3KEY_MODE_CODE, CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL,
-    INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE, MYROOM_ALARM_POPUP_CODE,
-    MYROOM_BAG_CAPACITY_SLOTS, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE,
-    QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
+    select_index_matches, select_music_rows_owned_by, select_music_songs_with_labels,
+    select_row_column_text, select_row_hit, shop_action_at_on_board, shop_cart_face_controls_kept,
+    shop_cart_page_digit_kept, shop_category_index, shop_extmenu_kept, shop_panel_kept,
+    shop_shop_frame_for, shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot,
+    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
+    LankingSong, LankingSort, MusicShopAction, MusicShopFace, MusicShopGenreFilter,
+    MusicShopMessengerState, MusicShopNotice, MusicShopRow, MyRoomMessengerState, MyRoomNotice,
+    MyRoomPassInfo, MyRoomState, OwnedSort, PasswordAction, PasswordForm, PlanetAction, PlanetBand,
+    PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction, SelectDialogTab,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    ShopPanel, SideScreen, TutorialChartGlobals, TutorialGuideFrames, TutorialKeyLights,
+    TutorialPaintState, WalletRow, WalletState, CREATE_ROOM_3KEY_MODE_CODE,
+    CREATE_ROOM_7KEY_MODE_CODE, GEM_LABEL, INFORMATION_OK_CODE, MSHOP_PAGER_SONGS_PER_PAGE,
+    MYROOM_ALARM_POPUP_CODE, MYROOM_BAG_CAPACITY_SLOTS, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, ROOM_FIRSTSTEP_BUTTON_CODE, ROOM_ITEMSHOP_BUTTON_CODE,
     ROOM_MUSICSHOP_BUTTON_CODE, ROOM_MYROOM_BUTTON_CODE, SELECT_NOT_DOWNLOADED_NOTICE,
     SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
     SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEM_ROWS, TUTORIAL_CHART_GLOBALS, TUTORIAL_EXIT_HIT_RECT,
@@ -5613,19 +5612,17 @@ impl ScreenGame {
     /// wire reader splits a low-twelve-bit song id from a high category
     /// word; only the song half enters the Waiting picker's set. A
     /// vacant seat contributes nothing, and an empty list contributes
-    /// nothing (pin `0cb8.7310…0078`). `None` means no member reported
-    /// an owned song, so the wire names no picker restriction.
-    fn waiting_picker_owned_song_ids(&self) -> Option<HashSet<u16>> {
-        let ids: HashSet<u16> = self
-            .waiting
+    /// nothing (pin `0cb8.7310…0078`). An empty set therefore names no
+    /// song the Waiting picker may show.
+    fn waiting_picker_owned_song_ids(&self) -> HashSet<u16> {
+        self.waiting
             .as_ref()
             .into_iter()
             .flat_map(|room| room.slots.iter())
             .filter_map(|slot| slot.member.as_ref())
             .flat_map(|member| member.music_ids.iter().copied())
             .map(|word| word & MEMBER_MUSIC_ID_MASK)
-            .collect();
-        (!ids.is_empty()).then_some(ids)
+            .collect()
     }
 
     /// Search-result rows the dialog currently shows: the three
@@ -5639,14 +5636,9 @@ impl ScreenGame {
         if self.select_tab == SelectDialogTab::Playlist {
             return Vec::new();
         }
-        let mut rows = match self.waiting_picker_owned_song_ids() {
-            Some(owned_ids) => {
-                select_music_rows_owned_by(&self.catalog_songs, self.select_filter, &owned_ids)
-            }
-            // No member reported an owned song, so the wire carries no
-            // picker restriction: the catalog keeps its former rows.
-            None => select_music_rows(&self.catalog_songs, self.select_filter),
-        };
+        let owned_ids = self.waiting_picker_owned_song_ids();
+        let mut rows =
+            select_music_rows_owned_by(&self.catalog_songs, self.select_filter, &owned_ids);
         if let Some(index) = self.select_search_index {
             let field = self.select_search_field;
             rows.retain(|row| select_index_matches(index, select_row_column_text(*row, field)));
@@ -12848,27 +12840,21 @@ mod game_tests {
     }
 
     #[test]
-    fn waiting_picker_keeps_the_catalog_when_no_member_reports_an_owned_song() {
+    fn waiting_picker_shows_no_rows_when_no_member_owns_a_song() {
         // Live chain: main.rs::run_play -> Shell::run ->
         //   GameLoop::ingest_snapshot -> click_waiting_button (MUSELECT) ->
-        //   load_select_music_scene -> select_rows -> select_music_rows.
-        // No ownership words on the wire means no picker restriction;
-        // the full catalog stays for every board.
+        //   load_select_music_scene -> select_rows ->
+        //   select_music_rows_owned_by.
+        // An empty union names no song, so the picker has no rows.
         let game = owned_picker_game(Vec::new(), Vec::new());
-        let ids: Vec<u32> = game
-            .select_rows()
-            .iter()
-            .map(|row| row.song.song_id)
-            .collect();
-        assert_eq!(
-            ids,
-            vec![101, 101, 101, 102, 102, 102, 103, 103, 103],
-            "an empty member list contributes no restriction"
+        assert!(
+            game.select_rows().is_empty(),
+            "an empty union names no song to pick"
         );
         assert_eq!(
             game.select_songs().len(),
             3,
-            "the catalog stays whole for the other boards"
+            "the catalog stays whole for the non-Waiting boards"
         );
     }
 
