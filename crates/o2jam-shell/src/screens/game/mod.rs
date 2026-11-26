@@ -898,6 +898,12 @@ pub struct ScreenGame {
     /// stops at its end would otherwise freeze the splash.
     avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
+    /// Pause flag the exe stores at `+0x18` on deactivation
+    /// (`0x5a4b90`). Cleared on the matching activation.
+    focus_paused: bool,
+    /// Caption the exe's Playing focus-exit arm posts for the scene
+    /// it returns to (`0x650d68`, `0x650d38`, or `0x650d08`).
+    focus_exit_notice: Option<&'static str>,
     /// Decoded UI-effect samples keyed by exe cache slot (`0..0x34`).
     /// Staged from bank 0 `bgEffect.ojm` by the launch client; kept on
     /// the game (not the audio rig) because a key-bank attach replaces
@@ -1577,6 +1583,8 @@ impl ScreenGame {
             splash_hold_ms: SPLASH_AUTO_ADVANCE_MS,
             avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
+            focus_paused: false,
+            focus_exit_notice: None,
             ui_effect_bank: Vec::new(),
             avatar: None,
             channel_scene: ChannelScene::default(),
@@ -1908,6 +1916,40 @@ impl ScreenGame {
     #[must_use]
     pub fn scene_bgm_selection(&self) -> Option<BgmSelection> {
         self.audio.as_ref().and_then(|rig| rig.bgm.current())
+    }
+
+    /// Stop the scene BGM when the window leaves the active state.
+    /// The exe's `0x5a4b90` path stops the worker through `0x551850(0)`;
+    /// here the latched selection and the sink's voice both stop.
+    pub fn stop_bgm_for_focus_loss(&mut self) {
+        let Some(rig) = self.audio.as_mut() else {
+            return;
+        };
+        rig.bgm.silence();
+        let _ = rig.backend.set_scene_bgm(None, false);
+    }
+
+    /// Caption selected by the last focus exit, if one was staged.
+    #[must_use]
+    pub const fn focus_exit_notice(&self) -> Option<&'static str> {
+        self.focus_exit_notice
+    }
+
+    /// Apply one window activation edge: deactivation pauses a
+    /// Playing/Loading scene and silences its music; the matching
+    /// activation clears the pause and stages the pinned exit caption.
+    fn apply_focus_change(&mut self, active: bool) {
+        if !active {
+            self.focus_paused = matches!(self.screen(), Screen::Loading | Screen::Playing);
+            self.stop_bgm_for_focus_loss();
+            return;
+        }
+        if !std::mem::replace(&mut self.focus_paused, false) {
+            return;
+        }
+        let scene_word = crate::options::f8_scene_id_of(self.screen_name());
+        self.focus_exit_notice = scene_word
+            .and_then(|word| crate::window::focus_exit_caption(word, self.waiting.is_some()));
     }
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
@@ -8350,6 +8392,18 @@ impl ScreenGame {
     /// owned-list probe is needed here.
     pub fn apply_music_purchase_response(&mut self, response: &SyncMusicPurchaseResponse) {
         self.wallet.apply_music_purchase(response);
+        // The exe's `0x560d70` resets the owned list before inserting
+        // the reply rows; it never clears the song table. Stage an
+        // empty owned list, then fold only the ids the reply still
+        // names, so absent rows disappear while the catalog stays.
+        let free_music = self
+            .music_shop_visible_rows()
+            .first()
+            .is_some_and(|row| row.free);
+        self.stage_music_shop_board(MusicListAnswer {
+            entries: Vec::new(),
+            free_music,
+        });
         self.music_shop.fold_purchased_songs(
             &response
                 .music_list
@@ -10732,6 +10786,10 @@ impl GameLoop for ScreenGame {
             let now = self.live_song_position_ms(sample_position);
             self.strike_at(lane, now);
         }
+    }
+
+    fn focus_changed(&mut self, active: bool) {
+        self.apply_focus_change(active);
     }
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
@@ -27511,6 +27569,33 @@ mod game_tests {
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Loading);
         assert_eq!(*pushes.borrow(), vec![8, 9, 3, -1], "loading silences");
+    }
+
+    #[test]
+    fn focus_loss_from_the_window_hook_silences_the_scene_bgm() {
+        // Live chain: `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` (Focused) -> `GameLoop::focus_changed`
+        // -> `ScreenGame::focus_changed` -> `ScreenGame::stop_bgm_for_focus_loss`
+        // -> `AudioBackend::set_scene_bgm(None, false)`. NullBackend only.
+        use o2jam_audio::NullBackend;
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(marker_bank(&[9]));
+        game.enter(Screen::Planet);
+        assert!(game.scene_bgm_selection().is_some(), "a track sounds");
+
+        game.focus_changed(false);
+
+        assert_eq!(game.scene_bgm_selection(), None, "focus loss silences");
+        assert!(
+            !game
+                .audio
+                .as_ref()
+                .expect("audio rig attached")
+                .backend
+                .scene_bgm_playing(),
+            "the null backend stops the voice"
+        );
     }
 
     #[test]
