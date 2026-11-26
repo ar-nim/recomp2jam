@@ -790,3 +790,411 @@ fn cash_bill_host_table_keeps_the_five_publisher_literals() {
         ]
     );
 }
+
+// --- Web-native purchase flow (spec #750, stories #1128/#1129/#1130/
+// #1136/#1139/#1140) -----------------------------------------------
+//
+// The exe's BUYITEM press owns the empty 5015 and posts a body-ignored
+// 5016 notice (VA `0x562e90` / file `0x162e90`, ev_6e8a569a…). Its
+// web page is gone, so OUR client synthesizes the empty 5010 reply
+// probe only after that pinned answer arrives, then consumes the 5011
+// verdict. No page request line is invented (#1136 stays OPEN).
+
+use std::sync::mpsc::{self, Receiver};
+
+/// One recorded client frame: opcode plus its byte-exact body.
+type WireFrame = (u16, Vec<u8>);
+/// Gateway port, recorder, and server thread for one scripted verdict.
+type PurchaseGateway = (u16, Receiver<WireFrame>, thread::JoinHandle<()>);
+/// Session, recorder, server thread, and per-paint notice samples.
+type PurchaseTrace = (
+    OnlineSession,
+    Receiver<WireFrame>,
+    thread::JoinHandle<()>,
+    Vec<(bool, bool)>,
+);
+
+/// One synthetic one-song catalog in the 7.55 `OJNList.dat` shape.
+fn native_purchase_catalog_blob() -> Vec<u8> {
+    let mut record = vec![0u8; 300];
+    record[4..8].copy_from_slice(&757u32.to_le_bytes());
+    record[8..11].copy_from_slice(b"ojn");
+    record[20..24].copy_from_slice(&124f32.to_le_bytes());
+    record[112..117].copy_from_slice(b"First");
+    record[176..180].copy_from_slice(b"Band");
+    record[240..251].copy_from_slice(b"o2ma757.ojm");
+    record
+}
+
+/// Waiting with a staged Music Shop board, one priced song and cash.
+fn native_purchase_game() -> ScreenGame {
+    use o2jam_render::Rect;
+    use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+    use o2jam_shell::screens::side::{
+        SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+    };
+    use std::collections::HashMap;
+
+    let mut game = payment_game();
+    game.set_song_catalog(&o2jam_file::parse_ojn_list(&native_purchase_catalog_blob()).unwrap());
+    game.stage_music_shop_prices(&[o2jam_file::OjnMidParamEntry {
+        song_id: 757,
+        param_a: 0,
+        param_b: 40,
+        anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+    }]);
+    game.set_myroom_character(CharacterInfo {
+        gem: 500,
+        o2_cash: 500,
+        music_cash: 500,
+        item_cash: 500,
+        ..CharacterInfo::default()
+    });
+    let area = |code: u32, rect: Rect| ScenePlacement {
+        id: String::new(),
+        code,
+        sprite: None,
+        rect,
+        role: PlacementRole::Single,
+    };
+    game.load_side_scene(
+        vec![
+            area(
+                MSHOP_EX_FIRST_CODE,
+                Rect {
+                    x: 18,
+                    y: 104,
+                    w: 353,
+                    h: 86,
+                },
+            ),
+            area(
+                MSHOP_GEM_BUY_CODE,
+                Rect {
+                    x: 322,
+                    y: 51,
+                    w: 25,
+                    h: 16,
+                },
+            ),
+            area(
+                MSHOP_CART_BUY_CODE,
+                Rect {
+                    x: 423,
+                    y: 528,
+                    w: 49,
+                    h: 23,
+                },
+            ),
+        ],
+        HashMap::new(),
+    );
+    assert!(game.visit_side(SideScreen::MusicShop));
+    game
+}
+
+/// The pinned 2885-byte success family, reduced to one owned song.
+fn native_purchase_reply() -> o2jam_net::shop::SyncMusicPurchaseResponse {
+    use o2jam_net::shop::{MusicEntry, SyncMusicPurchaseResponse};
+    SyncMusicPurchaseResponse {
+        gem: 1000,
+        point: 250,
+        o2_cash: 5000,
+        music_cash: 120,
+        item_cash: 340,
+        cash_point: 56,
+        music_list: vec![MusicEntry {
+            music_id: 757,
+            day: 14,
+            month: 3,
+            year: 25,
+            hour: 18,
+            minute: 45,
+        }],
+        gift_boxes_raw: Vec::new(),
+        free_pass_extension_days: 7,
+    }
+}
+
+/// One frame from the recorded socket, or `None` at a quiet socket.
+fn read_purchase_frame(stream: &mut TcpStream) -> Option<Frame> {
+    let mut header = [0u8; HEADER_LEN];
+    stream.read_exact(&mut header).ok()?;
+    let body_len = usize::from(u16::from_le_bytes([header[0], header[1]]));
+    let mut bytes = header.to_vec();
+    let mut body = vec![0u8; body_len.saturating_sub(HEADER_LEN)];
+    stream.read_exact(&mut body).ok()?;
+    bytes.extend_from_slice(&body);
+    o2jam_net::frame::decode_frame(&bytes).ok()
+}
+
+/// Gateway that answers the pinned 5015 with 5016, then the synthesized
+/// 5010 with one scripted 5011 verdict, recording each client opcode.
+fn native_purchase_gateway(failure: bool) -> PurchaseGateway {
+    let (wire_tx, wire_rx) = mpsc::channel();
+    let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream: TcpStream| {
+        let Some(payment) = read_purchase_frame(&mut stream) else {
+            return;
+        };
+        wire_tx.send((payment.id, payment.payload)).ok();
+        if payment.id != 5015 {
+            return;
+        }
+        stream.write_all(&encode_frame(5016, &[])).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let Some(purchase) = read_purchase_frame(&mut stream) else {
+            return;
+        };
+        wire_tx.send((purchase.id, purchase.payload)).ok();
+        let answer = if failure {
+            encode_frame(5011, &[0x01, 0x00, 0x00, 0x00])
+        } else {
+            native_purchase_reply().encode()
+        };
+        stream.write_all(&answer).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        while let Some(frame) = read_purchase_frame(&mut stream) {
+            wire_tx.send((frame.id, frame.payload)).ok();
+        }
+    });
+    (port, wire_rx, server)
+}
+
+/// Paints after a staged cart buy: the 5015 answer installs the
+/// native 5010 and the next paint drains its 5011 verdict. Bounded
+/// paints cover a late loopback frame under a loaded test fleet.
+fn drive_native_purchase(failure: bool) -> PurchaseTrace {
+    let (port, wire, server) = native_purchase_gateway(failure);
+    let mut session = payment_session(native_purchase_game(), port);
+    session.ingest_snapshot(&InputSnapshot::click_at(350, 160));
+    session.ingest_snapshot(&InputSnapshot::click_at(424, 529));
+    let mut feedback = Vec::new();
+    for _ in 0..8 {
+        paint_payment_frame(&mut session);
+        feedback.push((
+            session.game.start_payment_answer_notice(),
+            session.game.billing_failure_notice_open(),
+        ));
+        let verdict_landed = if failure {
+            session.game.billing_failure_notice_open()
+        } else {
+            !session.game.music_download().requests().is_empty()
+        };
+        if verdict_landed {
+            break;
+        }
+    }
+    (session, wire, server, feedback)
+}
+
+#[test]
+fn tier_2_native_purchase_sends_one_empty_5010_after_the_5015_answer() {
+    // Live caller chain (story #1128/#1136/#1139, pin ev_6e8a569a…
+    // VA `0x562e90`; 5010 empty-send case file `0xa4df0` index 8):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    //   flush_start_payment -> C2S 5015 -> S2C 5016 ->
+    //   apply_payment_frame -> poll_attempts -> flush_music_buy ->
+    //   C2S 5010 (empty body). The BUYITEM press itself still sends
+    //   only 5015 (`docs/interaction-census.md` row 92).
+    let (session, wire, server, _) = drive_native_purchase(false);
+    drop(session);
+    server.join().unwrap();
+    let sent: Vec<(u16, Vec<u8>)> = wire.try_iter().collect();
+    let ids: Vec<u16> = sent.iter().map(|(id, _)| *id).collect();
+
+    assert_eq!(
+        ids,
+        vec![5015, 5010],
+        "the native flow sends 5010 only after the 5016 answer: {ids:?}"
+    );
+    assert!(
+        sent.iter().any(|(id, body)| *id == 5010 && body.is_empty()),
+        "the 5010 request body must be byte-exact empty: {sent:?}"
+    );
+}
+
+#[test]
+fn tier_2_native_purchase_success_queues_the_owned_song_download() {
+    // Live caller chain (story #1130, pin ev_d8644600… / 5011
+    // rebuild at VA `0x560d70`):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_attempts ->
+    //   poll_music_buy -> drain_music_buy ->
+    //   ScreenGame::apply_music_purchase_response ->
+    //   MusicShopState::fold_purchased_songs + MusicDownload::enqueue.
+    let (session, wire, server, _) = drive_native_purchase(false);
+    let queued: Vec<u16> = session
+        .game
+        .music_download()
+        .requests()
+        .iter()
+        .map(|request| request.song_id)
+        .collect();
+    drop(session);
+    server.join().unwrap();
+    let sent: Vec<u16> = wire.try_iter().map(|(id, _)| id).collect();
+
+    assert_eq!(
+        sent,
+        vec![5015, 5010],
+        "the success arm needs both pinned sends: {sent:?}"
+    );
+    assert_eq!(
+        queued,
+        vec![757],
+        "the 5011 success body must queue its owned song for download"
+    );
+}
+
+#[test]
+fn tier_2_native_purchase_failure_posts_the_painted_notice_and_keeps_the_cart() {
+    // Live caller chain (story #1129/#1139, scripted four-byte 5011
+    // fixture from #405; real server failure body stays E-W-5011 OPEN):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_music_buy ->
+    //   drain_music_buy -> MusicPurchaseReply::Failure ->
+    //   ScreenGame::post_music_purchase_failure_notice ->
+    //   paint_side -> paint_billing_failure_notice.
+    let (mut session, wire, server, _) = drive_native_purchase(true);
+    let band = o2jam_shell::screens::paint::BILLING_FAILURE_NOTICE_RECT;
+    let pixel = (band.y + 4) as usize * 800 + (band.x + 4) as usize;
+    let painted = painted_game(&mut session.game)[pixel];
+    let notice = session.game.billing_failure_notice_open();
+    let cart = session.game.music_shop_cart().to_vec();
+    drop(session);
+    server.join().unwrap();
+    let sent: Vec<u16> = wire.try_iter().map(|(id, _)| id).collect();
+
+    assert_eq!(
+        sent,
+        vec![5015, 5010],
+        "the failure arm needs both sends: {sent:?}"
+    );
+    assert!(notice, "a failed 5011 must post the native notice");
+    assert_eq!(
+        painted,
+        o2jam_render::pack_xrgb(0x67, 0xBA, 0xF0),
+        "the notice must ink the pinned flat-blue band"
+    );
+    assert_eq!(
+        cart,
+        vec![757],
+        "the refused buy keeps its cart for a retry"
+    );
+}
+
+#[test]
+fn tier_2_native_purchase_feedback_waits_for_the_5016_then_5011_notices() {
+    // Live caller chain (story #1140):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    //   apply_payment_frame(5016) -> note_start_payment_answer;
+    //   next paint -> poll_music_buy -> drain_music_buy(5011) ->
+    //   post_music_purchase_failure_notice.
+    // The 5016 body is ignored by the exe; no other timing is pinned.
+    let (session, wire, server, feedback) = drive_native_purchase(true);
+    drop(session);
+    server.join().unwrap();
+    let sent: Vec<u16> = wire.try_iter().map(|(id, _)| id).collect();
+
+    assert_eq!(
+        sent,
+        vec![5015, 5010],
+        "timing leg needs both sends: {sent:?}"
+    );
+    let start_at = feedback
+        .iter()
+        .position(|(start, _)| *start)
+        .expect("the 5016 notice must appear");
+    let verdict_at = feedback
+        .iter()
+        .position(|(_, failure)| *failure)
+        .expect("the 5011 notice must appear");
+    assert!(
+        start_at < verdict_at,
+        "the 5016 notice must ink before the 5011 verdict: {feedback:?}"
+    );
+}
+
+// --- Download-arm regression (#1130, senior review) --------------------
+//
+// The exe's 5011 handler rebuilds ownership flags; it never re-downloads
+// the whole owned catalog. Only a paired buy may queue its own cart ids,
+// and even then only ids the reply confirms as owned.
+
+/// One bought song plus two already-owned songs in the same 5011.
+fn purchase_reply_with_other_owned_songs() -> o2jam_net::shop::SyncMusicPurchaseResponse {
+    use o2jam_net::shop::MusicEntry;
+    let mut reply = native_purchase_reply();
+    let bought = reply.music_list[0].clone();
+    for music_id in [758, 759] {
+        reply.music_list.push(MusicEntry { music_id, ..bought });
+    }
+    reply
+}
+
+/// Song ids left queued by one shell, in enqueue order.
+fn queued_download_ids(session: &OnlineSession) -> Vec<u16> {
+    session
+        .game
+        .music_download()
+        .requests()
+        .iter()
+        .map(|request| request.song_id)
+        .collect()
+}
+
+#[test]
+fn tier_2_unsolicited_5011_rebuilds_ownership_without_queueing_downloads() {
+    // Live caller chain (pin VA `0x560d70`, ev_d8644600…):
+    //   main.rs::run_play -> OnlineSession::paint -> poll_wire_at ->
+    //   apply_waiting_frame -> 5011 rebuild ->
+    //   ScreenGame::apply_music_purchase_response -> owned rows only.
+    // Three owned entries arrive with no 5010 attempt; an account sync
+    // must not start three transfers.
+    let reply = purchase_reply_with_other_owned_songs();
+    let (port, server) = payment_gateway(vec![(5011, reply.encode_body())]);
+    let mut session = payment_session(native_purchase_game(), port);
+    settle_payment(&mut session);
+    let queued = queued_download_ids(&session);
+    let owned = session
+        .game
+        .music_shop_visible_rows()
+        .iter()
+        .any(|row| row.listed && row.song.song_id == 757);
+    drop(session);
+    server.join().unwrap();
+
+    assert!(owned, "the unsolicited 5011 must still rebuild ownership");
+    assert!(
+        queued.is_empty(),
+        "an account sync must not download its owned catalog: {queued:?}"
+    );
+}
+
+#[test]
+fn tier_2_paired_5011_queues_only_the_bought_id_from_the_cart() {
+    // Live caller chain:
+    //   OnlineSession::paint -> flush_music_buy -> C2S 5010 ->
+    //   drain_music_buy -> Completed -> MusicBuyAttempt::purchased_ids
+    //   (captured from the cart before the send) ->
+    //   MusicDownload::enqueue for confirmed ids only ->
+    //   ScreenGame::apply_music_purchase_response.
+    // The reply owns 757, 758 and 759; only 757 was in the cart.
+    let reply = purchase_reply_with_other_owned_songs();
+    let (port, server) = payment_gateway(vec![(5011, reply.encode_body())]);
+    let mut session = payment_session(native_purchase_game(), port);
+    session.ingest_snapshot(&InputSnapshot::click_at(350, 160));
+    session.game.stage_music_buy_reply_probe();
+    settle_payment(&mut session);
+    let queued = queued_download_ids(&session);
+    drop(session);
+    server.join().unwrap();
+
+    assert_eq!(
+        queued,
+        vec![757],
+        "only the bought id may download: {queued:?}"
+    );
+}
