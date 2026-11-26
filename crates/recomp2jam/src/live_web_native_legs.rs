@@ -18,8 +18,10 @@ mod live_web_native_leg_tests {
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::screens::messenger::{
-        result_event_page, NativeEventPage, WebSheet, WebSheetHost, EXE_SCENE_ROOM,
-        NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, PLAYING_QA_UI_EVENT,
+        coupon_host_arm, result_event_page, CouponHostArm, CouponKind, CouponReportBack,
+        CouponSubmit, NativeEventPage, WebSheet, WebSheetHost, CASH_BILL_UI_EVENT,
+        COUPON_FORM_RECT, COUPON_HOST_STATE_WORD, COUPON_PAGE_SELECTOR, COUPON_UI_EVENT,
+        EXE_SCENE_ROOM, NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, PLAYING_QA_UI_EVENT,
         WM_APP_HIDE_WEB_SHEETS,
     };
     use o2jam_shell::screens::side::{
@@ -1029,6 +1031,87 @@ mod live_web_native_leg_tests {
             staged_rect_pixels_from(&before, first),
             staged_rect_pixels_from(&after, first),
             "the decoded 2028 self line must ink the staged TOP100 rect"
+        );
+    }
+
+    /// Boot-to-form leg: a stored web handle from a pinned page-open
+    /// arms the state-13 hub gate; the native form then inks its pinned
+    /// fields and reports them back locally. No HTTP or opcode exists.
+    #[test]
+    fn tier_3_coupon_host_form_from_boot_inks_the_archived_fields_and_reports_back() {
+        // Live caller chain (Tier 3): main.rs::run_play ->
+        // connect::connect_and_login_with_transport -> boot_live_leg_with_art
+        // -> enter_room_by_clicks -> ScreenGame::stage_native_web_ui_event(0x12)
+        // -> ScreenGame::stage_coupon_host(0x232, state 13, selector 1)
+        // -> CouponForm::submit -> ScreenGame::paint_at ->
+        // paint_coupon_form_surface. The dead host has no live caller.
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !archives_present() {
+            println!("SKIP tier_3_coupon_host_form_from_boot_inks_the_archived_fields_and_reports_back: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        session
+            .game_mut()
+            .stage_native_web_ui_event(CASH_BILL_UI_EVENT, EXE_SCENE_ROOM);
+        let wire_before = observed(&gateway.reports).len();
+        let rest = staged_rect_pixels(&mut session, COUPON_FORM_RECT);
+
+        let opened = session
+            .game_mut()
+            .stage_coupon_host(COUPON_UI_EVENT, COUPON_PAGE_SELECTOR);
+        assert!(opened, "the state-13 coupon arm opens the native form");
+        let empty_form = staged_rect_pixels(&mut session, COUPON_FORM_RECT);
+        let selected = session.game_mut().select_coupon_kind(CouponKind::Viliv);
+        for character in "abcde-12345-fghij".chars() {
+            session.game_mut().push_coupon_char(character);
+        }
+        let typed = staged_rect_pixels(&mut session, COUPON_FORM_RECT);
+        let outcome = session
+            .game_mut()
+            .submit_coupon_form()
+            .expect("form is open");
+        let notice = session
+            .game_mut()
+            .coupon_report_back()
+            .expect("valid submit stages a report-back")
+            .notice()
+            .to_owned();
+        let reported = staged_rect_pixels(&mut session, COUPON_FORM_RECT);
+        let wire_after = observed(&gateway.reports).len();
+        finish(session, gateway.server);
+
+        assert_eq!(
+            coupon_host_arm(
+                COUPON_UI_EVENT,
+                COUPON_HOST_STATE_WORD,
+                COUPON_PAGE_SELECTOR,
+                true
+            ),
+            CouponHostArm::OpenNativeForm,
+            "the pinned hub gate names the coupon branch"
+        );
+        assert!(selected, "one of the five select values is chosen");
+        assert_ne!(empty_form, rest, "the opened form must ink pixels");
+        assert_ne!(typed, empty_form, "typed fields must ink pixels");
+        assert_ne!(reported, typed, "the report-back notice must ink pixels");
+        assert_eq!(
+            outcome,
+            CouponSubmit::Reported(CouponReportBack {
+                kind: CouponKind::Viliv,
+                number: "ABCDE-12345-FGHIJ".to_owned(),
+            })
+        );
+        assert!(
+            notice.contains("no acceptance claim"),
+            "the dead host must never be reported as accepting a coupon"
+        );
+        assert_eq!(
+            wire_after, wire_before,
+            "a coupon submit must send no opcode"
         );
     }
 }
