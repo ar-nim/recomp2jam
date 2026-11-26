@@ -4751,6 +4751,77 @@ mod live_play_tests {
     }
 
     #[test]
+    fn packed_run_spans_land_as_one_centered_hit_burst_body() {
+        // Tier-0 shell body guard for #1048. Live chain:
+        //   main.rs::run_play -> ScreenGame::paint_playing ->
+        //   LivePlay::paint_hit_bursts -> paint_lane_flash ->
+        //   paint_staged_burst.
+        // The Tier-3 leg in `live_result_input_legs.rs` samples the
+        // installed `Note_Click.oja` body through the same painter.
+        // Two packed row runs with distinct x offsets, then the one
+        // zero word that terminates the plane (not one per span).
+        let mut plane = Vec::new();
+        plane.extend_from_slice(&2u16.to_le_bytes());
+        plane.extend_from_slice(&1u16.to_le_bytes());
+        plane.extend_from_slice(&0u16.to_le_bytes());
+        for word in [0x7FE0u16, 0x7FE0] {
+            plane.extend_from_slice(&word.to_le_bytes());
+        }
+        plane.extend_from_slice(&1u16.to_le_bytes());
+        plane.extend_from_slice(&3u16.to_le_bytes());
+        plane.extend_from_slice(&1u16.to_le_bytes());
+        plane.extend_from_slice(&0x03E0u16.to_le_bytes());
+        plane.extend_from_slice(&0u16.to_le_bytes());
+        let alpha = vec![0xFFu8; 3];
+        let body = oja55_body(&[((-3, -2, 6, 2), &plane, &alpha)]);
+        let archive = opi_blob(&[("Note_Click.oja", &body)]);
+        let mut live = LivePlay::new(&[(3, 1_000, 7)]);
+        live.set_skin(PlaySkin::from_archive(&archive).expect("packed `.oja` stages"));
+        live.strike_lane(3, 1_000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1_000,
+        );
+        let lane = geom().lane_rect(3);
+        let lane_width = i32::try_from(lane.w).expect("lane width fits i32");
+        let left = lane.x + (lane_width - 6) / 2;
+        let pad = geom().receptor_pad(3);
+        let pad_height = i32::try_from(pad.h).expect("pad height fits i32");
+        let center_y = pad.y + pad_height / 2;
+        let top = center_y - 1;
+        assert_eq!(
+            buf[usize::try_from(top).expect("top fits usize") * 70
+                + usize::try_from(left + 1).expect("left fits usize")],
+            solid_ink(0x7FE0)
+        );
+        assert_eq!(
+            buf[usize::try_from(top).expect("top fits usize") * 70
+                + usize::try_from(left + 2).expect("left fits usize")],
+            solid_ink(0x7FE0)
+        );
+        assert_eq!(
+            buf[usize::try_from(top + 1).expect("row fits usize") * 70
+                + usize::try_from(left + 3).expect("left fits usize")],
+            solid_ink(0x03E0)
+        );
+        let scattered = buf
+            .iter()
+            .enumerate()
+            .filter(|(offset, pixel)| {
+                offset / 70 < usize::try_from(top).expect("top fits usize")
+                    && **pixel == solid_ink(0x7FE0)
+            })
+            .count();
+        assert_eq!(scattered, 0, "the runs paste inside one centred body");
+    }
+
+    #[test]
     fn jam_gauge_empty_shows_shell_without_fill() {
         let mut live = LivePlay::default();
         let mut buf = vec![0u32; 70 * 60];

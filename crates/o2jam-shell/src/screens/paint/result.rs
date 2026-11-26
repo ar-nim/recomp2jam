@@ -1219,9 +1219,10 @@ mod result_page_and_band_tests {
 
     use super::{
         grade_band_records, paint_album_cover, paint_information_message, paint_result_body_frame,
-        paint_result_scene, quit_fallback_rects, result_placement_visible, result_scroll_step,
-        result_viewport_rect, BattleVerdict, ResultGradeBandRecord, ResultPaint, ResultVerdict,
-        RESULT_RANK_SPRITE,
+        paint_result_rank_row, paint_result_scene, quit_fallback_rects, result_number_ink,
+        result_placement_visible, result_rank_text_y, result_scroll_step, result_viewport_rect,
+        BattleVerdict, ResultGradeBandRecord, ResultPaint, ResultRankRow, ResultVerdict,
+        RESULT_RANK_SPRITE, RESULT_ROW_SPEED_X,
     };
     use crate::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
     use crate::screens::paint::SceneArt;
@@ -1433,6 +1434,49 @@ mod result_page_and_band_tests {
         assert!(
             noticed.contains(&ink(0x7FFF)),
             "the fixed rect inks a nonempty caption in white"
+        );
+    }
+
+    /// #1032 Tier-0 speed paint seam. Live chain: `main.rs::run_play`
+    /// → `OnlineSession::paint` → `ScreenGame::paint_result` →
+    /// `paint_result_rank_rows` → `paint_result_rank_row`; the Tier-3
+    /// leg in `live_result_input_legs.rs` proves the booted board
+    /// reaches this arm with a 4050-staged record.
+    #[test]
+    fn result_rank_row_inks_the_member_speed_at_the_pinned_column() {
+        let mut buf = vec![0u32; 800 * 600];
+        let row = ResultRankRow {
+            rank: None,
+            name: None,
+            judgements: None,
+            combos: None,
+            score: None,
+            bonus: None,
+            speed: Some(6),
+            seat_byte: None,
+        };
+        let text_y = result_rank_text_y(2).expect("row 2 has a pinned text line");
+        paint_result_rank_row(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            2,
+            &row,
+            result_number_ink(),
+        );
+        let inked = (RESULT_ROW_SPEED_X..RESULT_ROW_SPEED_X + 40)
+            .flat_map(|x| (text_y..text_y + 14).map(move |y| (x, y)))
+            .filter(|(x, y)| {
+                buf[usize::try_from(*y).expect("y fits usize") * 800
+                    + usize::try_from(*x).expect("x fits usize")]
+                    == ink(0x7FFF)
+            })
+            .count();
+        assert!(
+            inked >= 8,
+            "speed code 6 must paint the X3.5 caption at x={RESULT_ROW_SPEED_X} ({inked} ink pixels)"
         );
     }
 

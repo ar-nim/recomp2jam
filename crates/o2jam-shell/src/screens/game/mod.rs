@@ -1077,6 +1077,10 @@ pub struct ScreenGame {
     /// `ResultMemberRecord`). `None` while no admitted row named the
     /// seat; the row painter falls back to local score only there.
     result_member_records: [Option<ResultMemberRecord>; 8],
+    /// Result settle flag (exe `+0x434a`): the first Result paint says
+    /// the panel has settled. The keyboard BACK mirror waits for it;
+    /// the mouse button arm keeps its own path.
+    result_settled: bool,
     select_music_art: Option<SceneArt>,
     /// Local seat role mirrored from the exe's word at VA `0x77ee86`
     /// (#343). A normal base-ready room reads 3 (Spectator); no relay
@@ -1621,6 +1625,7 @@ impl ScreenGame {
             skill_counts: [0, 0, 0],
             skill_slots: WaitingSkillSlots::default(),
             result_member_records: [None; 8],
+            result_settled: false,
             select_music_art: None,
             waiting_member_role: MemberRole::Spectator,
             waiting_effect: WaitingEffect::default(),
@@ -2065,6 +2070,7 @@ impl ScreenGame {
             // the scene being left (the exe rebuilds its controls and
             // their frames per scene).
             self.waiting_start_armed = false;
+            self.result_settled = false;
             self.playing_entered_wall = (next == Screen::Playing).then(Instant::now);
             if next == Screen::Avi {
                 self.avi_entered_wall = Some(std::time::Instant::now());
@@ -5691,17 +5697,23 @@ impl ScreenGame {
         }
     }
 
+    /// The exe's Result BACK arm (`0x17200005`): the staged click and
+    /// the settled keyboard mirror queue the same empty 4021. The
+    /// scripted 4022 installs Waiting (`0x4c2cf0`, `ev_70fafb64…`).
+    fn press_result_back_arm(&mut self) {
+        self.outbox.pending_result_back = true;
+    }
+
     /// Result button click: RETRY re-enters Waiting, BACK queues the
     /// pinned empty 4021 and waits for the scripted 4022 answer before
     /// it enters Waiting (`FUN_004c2cf0`, file `0xc2cf0`, and the
-    /// state-5 install, file `0x477990`; #294 T3). The keyboard Back
-    /// arm stays an ours-by-design local shortcut, not an exe pin.
+    /// state-5 install, file `0x477990`; #294 T3).
     fn click_result_button(&mut self, x: i32, y: i32) {
         if self.result_button_hit(RESULT_RETRY_ID, &RESULT_RETRY_RECT, x, y) {
             self.outbox.pending_result_retry = true;
             self.enter(Screen::Waiting);
         } else if self.result_button_hit(RESULT_BACK_ID, &RESULT_BACK_RECT, x, y) {
-            self.outbox.pending_result_back = true;
+            self.press_result_back_arm();
         }
     }
 
@@ -9247,6 +9259,9 @@ impl ScreenGame {
         // The cursor stays on a toggle after the click, so the hover
         // repaint above would cover its selected face. Selection is the
         // last layer: it must win over the pointer/press stand-in.
+        if self.flow.current() == Screen::Result {
+            self.result_settled = true;
+        }
         self.paint_create_room_toggle_selection(frame);
         self.paint_options_key_area_over_hover(frame);
     }
@@ -10666,6 +10681,19 @@ impl Default for ScreenGame {
 
 impl GameLoop for ScreenGame {
     fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
+        // Result owns the exe's class-2 codes 8/9 (Backspace/Tab):
+        // once the panel has settled they invoke the BACK arm, never
+        // a RETRY or a local Room shortcut (`0x4c2b20`, `ev_dbe3dc54…`).
+        // Enter has no exe Result arm, so the window consumes it here
+        // instead of queueing a Confirm menu edge.
+        if self.flow.current() == Screen::Result
+            && matches!(code, KeyCode::Backspace | KeyCode::Tab | KeyCode::Enter)
+        {
+            if down && self.result_settled && matches!(code, KeyCode::Backspace | KeyCode::Tab) {
+                self.press_result_back_arm();
+            }
+            return true;
+        }
         // The exe's CDOption dialog owns keys while a sheet is open:
         // the main window hands the press to the top dialog and never
         // walks the scene stack (#314 static pin P1). One owner serves
@@ -33975,26 +34003,51 @@ mod game_tests {
     }
 
     #[test]
-    fn result_keys_mirror_the_staged_buttons() {
-        // Confirm/Back are the keyboard arms of RETRY/BACK: the
-        // pinned fallback rects answer while the buttons stage
-        // nothing, and a miss lands nowhere.
-        // seam: this mirror is an ours-by-design local shortcut; the
-        // exe keyboard-Back target stays OPEN (#294 T3, no REA in lane).
-        use MenuKey;
+    fn result_backspace_and_tab_take_the_settled_back_arm_and_confirm_is_idle() {
+        // Tier 1 window-input seam (#1079). Live chain:
+        //   main.rs::run_play -> window::route_key -> route_key_event
+        //   -> ScreenGame::capture_raw_key -> press_result_back_arm
+        //   -> pending_result_back -> session 4021 -> Waiting after 4022.
+        // The exe drains class-2 codes 8/9 (Backspace/Tab) only after
+        // the settle flag and sends no RETRY for any key
+        // (`0x4c2b20`/`0x4c2cf0`, docs/pins/result-playing.md).
+        use crate::{route_key_event, Keymap};
+        use winit::keyboard::KeyCode;
+
+        let mut unsettled = ScreenGame::new();
+        for next in [
+            Screen::Planet,
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            assert!(unsettled.flow.go(next).is_ok());
+        }
+        let mut keymap = Keymap::new();
+        let route = route_key_event(&mut unsettled, &mut keymap, KeyCode::Backspace, true, None);
+        assert!(route.edges.is_empty(), "unsettled key arms nothing");
+        assert!(unsettled.take_result_back().is_none());
+
         let mut game = ScreenGame::new();
         finish_song(&mut game);
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
-        game.ingest_snapshot(&InputSnapshot::click_at(0, 0));
+        for code in [KeyCode::Backspace, KeyCode::Tab] {
+            let route = route_key_event(&mut game, &mut keymap, code, true, None);
+            assert!(route.captured, "{code:?} belongs to the Result arm");
+            assert!(route.edges.is_empty(), "{code:?} reaches no menu edge");
+            assert!(game.take_result_back().is_some(), "{code:?} queues 4021");
+            assert!(game.take_result_back().is_none(), "one key sends once");
+            assert!(game.take_result_retry().is_none(), "no keyboard RETRY");
+        }
+        let route = route_key_event(&mut game, &mut keymap, KeyCode::Enter, true, None);
+        assert!(route.edges.is_empty(), "Confirm has no exe Result arm");
+        assert!(game.take_result_back().is_none());
+        assert!(game.take_result_retry().is_none());
         assert_eq!(game.screen(), Screen::Result);
-        game.menu_key(MenuKey::Confirm, true);
-        assert_eq!(game.screen(), Screen::Waiting);
-        let mut back = ScreenGame::new();
-        finish_song(&mut back);
-        paint_result_frame(&mut back);
-        back.menu_key(MenuKey::Back, true);
-        assert_eq!(back.screen(), Screen::Room);
     }
 
     /// #1076 computed badge position. Live chain: `main.rs::run_play`
