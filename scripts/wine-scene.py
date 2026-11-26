@@ -396,6 +396,14 @@ ROOM_TAB_BRIGHT = 0.55      # room stage 0.694-0.709
 CHANNEL_PLATE_SAT = 6.0     # channel title plate 1.9; board promo area 30-61
 CHANNEL_PLATE_LUMA = (100.0, 145.0)
 
+# The signature selftest paints these plates on a neutral backdrop: a grey
+# plate measures inside the channel gate, a coloured plate misses it.
+SELFTEST_BACKDROP = (10, 10, 20)
+SELFTEST_PLATE_COLORS = {
+    "match": (120, 120, 120),
+    "mismatch": (210, 30, 90),
+}
+
 
 def green_top_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
     """Share of a box painted with the room-settings bar's green fill."""
@@ -1054,6 +1062,37 @@ def capture_scene(frames: Frames, log: SceneLog, shots: Path, name: str,
     mean = frames.capture(shots / f"{name}.png")
     log.scene(name, mean, cue, f"{name}.png")
     return True
+
+
+class StaticFrames(Frames):
+    """A single replayed frame, for the signature selftest (no display)."""
+
+    def __init__(self, frame: np.ndarray, work_dir: Path) -> None:
+        super().__init__(":selftest", work_dir)
+        self.frame = frame
+
+    def grab(self) -> np.ndarray:
+        self.last = self.frame
+        return self.frame
+
+
+def selftest_frame(case: str) -> np.ndarray:
+    """Paint a frame that either meets or misses the channel signature."""
+    frame = np.full((CANVAS[1], CANVAS[0], 3),
+                    SELFTEST_BACKDROP, dtype=np.int16)
+    left, top, right, bottom = PLATE_BOX
+    frame[top:bottom, left:right] = SELFTEST_PLATE_COLORS[case]
+    return frame
+
+
+def signature_selftest(case: str, out_dir: Path) -> bool:
+    """Feed a synthetic frame through the same gate as a live capture."""
+    shots = out_dir / "selftest-shots"
+    shots.mkdir(parents=True, exist_ok=True)
+    log = SceneLog(out_dir / "selftest-signature.log")
+    log.event(f"signature selftest case={case}")
+    frames = StaticFrames(selftest_frame(case), out_dir)
+    return capture_scene(frames, log, shots, "channel", f"selftest:{case}")
 
 
 def side_evidence_line(name: str, fraction: float, cue: str) -> str:
@@ -1787,6 +1826,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
                              "fresh 2005 data (docs/wine-boot.md Attempt 12)")
     parser.add_argument("--wineprefix", default=os.environ.get("WINEPREFIX", ""))
     parser.add_argument("--no-host", action="store_true")
+    parser.add_argument("--signature-selftest", choices=("match", "mismatch"),
+                        help="feed a synthetic frame to the signature gate "
+                             "and exit nonzero when it is refused")
     return parser
 
 
@@ -1797,6 +1839,8 @@ def main() -> int:
         arguments.host_user_index_id = 0
 
     out_dir = Path(arguments.attach).resolve()
+    if arguments.signature_selftest:
+        return 0 if signature_selftest(arguments.signature_selftest, out_dir) else 1
     shots = Path(arguments.shots) if arguments.shots else out_dir / "artifacts" / "screenshots"
     shots.mkdir(parents=True, exist_ok=True)
     log = SceneLog(out_dir / "drive.log")

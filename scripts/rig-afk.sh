@@ -774,11 +774,17 @@ selftest_leg_ambient_display_pinned() {
 selftest_leg_allocator_isolation() {
   local leg="allocator-isolation"
   local out_a="$TMP/alloc-a" out_b="$TMP/alloc-b"
-  "${SENV[@]}" bash "$0" run "$out_a" \
+  # The machine-wide live lane allows one client at a time. This leg pins
+  # display allocation, so each stub runner gets a private lane domain while
+  # both share the display registry in RIG_STATE_DIR. rig-run.sh's selftest
+  # pins the lane lock itself; do not remove that lock here.
+  "${SENV[@]}" RIG_LIVE_LOCK_DIR="$TMP/rig-state/live-lock-a" \
+    bash "$0" run "$out_a" \
     --binary "$TMP/target/debug/fake-client" --scene-script "$TMP/bin/drive-stub" \
     --target loading >"$TMP/alloc-a.out" 2>&1 &
   local pid_a=$!
-  "${SENV[@]}" bash "$0" run "$out_b" \
+  "${SENV[@]}" RIG_LIVE_LOCK_DIR="$TMP/rig-state/live-lock-b" \
+    bash "$0" run "$out_b" \
     --binary "$TMP/target/debug/fake-client" --scene-script "$TMP/bin/drive-stub" \
     --target loading >"$TMP/alloc-b.out" 2>&1 &
   local pid_b=$!
