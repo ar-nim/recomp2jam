@@ -2139,6 +2139,196 @@ pub fn shop_cart_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
     slots
 }
 
+/// Test-only record of the class identity and cleared defaults a 7.55
+/// button constructor installs. The Rust client stages rects instead of
+/// C++ button objects, so this model is the whole seam for the pin.
+#[cfg(test)]
+mod shop_button_constructor_tests {
+    /// Vftable a pinned constructor installs (resolved VA in the pin).
+    /// Each variant is the pinned C++ class with its `CCBtn` prefix
+    /// omitted.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ButtonVftable {
+        /// `CCBtnShopCart::vftable` at `0x64c6e8`.
+        ShopCart,
+        /// `CCBtnGiftList::vftable` at `0x64c3d8`.
+        GiftList,
+        /// `CCBtnMShopRList::vftable` at `0x64c52c`.
+        RankList,
+        /// `CCBtnMShopLList::vftable` at `0x64c494`.
+        LeftList,
+        /// `CCBtnSelectMusic::vftable` at `0x64c658`.
+        SelectMusic,
+    }
+
+    /// The five pinned button classes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ButtonClass {
+        ShopCart,
+        GiftList,
+        RankList,
+        LeftList,
+        SelectMusic,
+    }
+
+    /// Constructor result fields named by the static pins. Word and
+    /// byte offsets are object offsets; blocks are `(offset, bytes)`;
+    /// set words are `(offset, value)`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct ButtonConstruction {
+        vftable: ButtonVftable,
+        base_setup_called: bool,
+        cleared_word_offsets: &'static [u16],
+        cleared_byte_offsets: &'static [u16],
+        cleared_blocks: &'static [(u16, u16)],
+        set_words: &'static [(u16, u32)],
+        zero_arg_helper_calls: u8,
+    }
+
+    impl ButtonConstruction {
+        fn constructed(class: ButtonClass) -> Self {
+            match class {
+                ButtonClass::ShopCart => Self::shop_cart(),
+                ButtonClass::GiftList => Self::gift_list(),
+                ButtonClass::RankList => Self::rank_list(),
+                ButtonClass::LeftList => Self::left_list(),
+                ButtonClass::SelectMusic => Self::select_music(),
+            }
+        }
+
+        fn shop_cart() -> Self {
+            Self {
+                vftable: ButtonVftable::ShopCart,
+                base_setup_called: true,
+                cleared_blocks: &[(0x64, 280), (0x17c, 280)],
+                cleared_word_offsets: &[0x17c, 0x180],
+                ..Self::empty()
+            }
+        }
+
+        fn gift_list() -> Self {
+            Self {
+                vftable: ButtonVftable::GiftList,
+                base_setup_called: true,
+                cleared_blocks: &[(0x64, 36), (0x88, 36)],
+                cleared_word_offsets: &[0x8c, 0x90],
+                zero_arg_helper_calls: 1,
+                ..Self::empty()
+            }
+        }
+
+        fn rank_list() -> Self {
+            Self {
+                vftable: ButtonVftable::RankList,
+                base_setup_called: true,
+                cleared_word_offsets: &[0x64, 0x68, 0x70],
+                cleared_byte_offsets: &[0x6b],
+                ..Self::empty()
+            }
+        }
+
+        fn left_list() -> Self {
+            Self {
+                vftable: ButtonVftable::LeftList,
+                base_setup_called: true,
+                cleared_word_offsets: &[0x64],
+                cleared_byte_offsets: &[0x1d, 0x75, 0x76],
+                zero_arg_helper_calls: 2,
+                ..Self::empty()
+            }
+        }
+
+        fn select_music() -> Self {
+            Self {
+                vftable: ButtonVftable::SelectMusic,
+                base_setup_called: true,
+                cleared_word_offsets: &[0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0x94, 0x98],
+                set_words: &[(0x74, 0x00ff_ffff)],
+                ..Self::empty()
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                vftable: ButtonVftable::ShopCart,
+                base_setup_called: false,
+                cleared_word_offsets: &[],
+                cleared_byte_offsets: &[],
+                cleared_blocks: &[],
+                set_words: &[],
+                zero_arg_helper_calls: 0,
+            }
+        }
+    }
+
+    #[test]
+    fn shop_cart_button_uses_the_exe_class_defaults() {
+        // seam: the constructor installs a vftable and clears its own
+        // object fields; no live Rust caller constructs a C++ button.
+        // VA 0x5296e0 / file 0x1296e0, ev 2620.8ffd...cd04.012b.
+        let button = ButtonConstruction::constructed(ButtonClass::ShopCart);
+        assert_eq!(button.vftable, ButtonVftable::ShopCart);
+        assert!(button.base_setup_called, "base setup must run first");
+        assert_eq!(button.cleared_blocks, &[(0x64, 280), (0x17c, 280)]);
+        assert_eq!(button.cleared_word_offsets, &[0x17c, 0x180]);
+        assert!(button.cleared_byte_offsets.is_empty());
+        assert!(button.set_words.is_empty());
+    }
+
+    #[test]
+    fn gift_list_button_uses_the_exe_class_defaults() {
+        // seam: the constructor installs a vftable and clears its own
+        // object fields; no live Rust caller constructs a C++ button.
+        // VA 0x51ea80 / file 0x11ea80, ev 89b2.ec7d...2b.3bb1.3e11.
+        let button = ButtonConstruction::constructed(ButtonClass::GiftList);
+        assert_eq!(button.vftable, ButtonVftable::GiftList);
+        assert!(button.base_setup_called, "base setup must run first");
+        assert_eq!(button.cleared_blocks, &[(0x64, 36), (0x88, 36)]);
+        assert_eq!(button.cleared_word_offsets, &[0x8c, 0x90]);
+        assert_eq!(button.zero_arg_helper_calls, 1, "the 0x403db0 helper");
+    }
+
+    #[test]
+    fn music_shop_rank_list_button_uses_the_exe_class_defaults() {
+        // seam: the constructor installs a vftable and clears its own
+        // object fields; no live Rust caller constructs a C++ button.
+        // VA 0x5238f0 / file 0x1238f0, ev a557.263f...4970.f1a9.
+        let button = ButtonConstruction::constructed(ButtonClass::RankList);
+        assert_eq!(button.vftable, ButtonVftable::RankList);
+        assert!(button.base_setup_called, "base setup must run first");
+        assert_eq!(button.cleared_word_offsets, &[0x64, 0x68, 0x70]);
+        assert_eq!(button.cleared_byte_offsets, &[0x6b]);
+    }
+
+    #[test]
+    fn select_music_button_uses_the_exe_class_defaults() {
+        // seam: the constructor installs a vftable and writes its own
+        // object fields; no live Rust caller constructs a C++ button.
+        // VA 0x526df0 / file 0x126df0, ev 6457.8252...61f8.cb9d.
+        let button = ButtonConstruction::constructed(ButtonClass::SelectMusic);
+        assert_eq!(button.vftable, ButtonVftable::SelectMusic);
+        assert!(button.base_setup_called, "base setup must run first");
+        assert_eq!(button.set_words, &[(0x74, 0x00ff_ffff)]);
+        assert_eq!(
+            button.cleared_word_offsets,
+            &[0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0x94, 0x98]
+        );
+    }
+
+    #[test]
+    fn music_shop_left_list_button_uses_the_exe_class_defaults() {
+        // seam: the constructor installs a vftable and clears its own
+        // object fields; no live Rust caller constructs a C++ button.
+        // VA 0x520dd0 / file 0x120dd0, ev c575.d8c5...e5a5.
+        let button = ButtonConstruction::constructed(ButtonClass::LeftList);
+        assert_eq!(button.vftable, ButtonVftable::LeftList);
+        assert!(button.base_setup_called, "base setup must run first");
+        assert_eq!(button.zero_arg_helper_calls, 2, "two list helper records");
+        assert_eq!(button.cleared_word_offsets, &[0x64]);
+        assert_eq!(button.cleared_byte_offsets, &[0x1d, 0x75, 0x76]);
+    }
+}
+
 /// Cart total cell rects: `CHECKGEM` then `CHECKMONEY`. `FUN_004a0660`
 /// (file `0xa0660`, `ev_3e020a4a…`) stages these two cells into object
 /// offsets `+0x247c`/`+0x248c`; our staged `State_ItemShop.bnd` rects
