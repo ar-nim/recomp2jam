@@ -18,7 +18,7 @@ mod shop;
 mod ui_effect;
 mod waiting;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -105,7 +105,7 @@ use super::side::{
     myroom_record_slot, myroom_tab_kept, paint_side_scene, paint_side_scene_live,
     paint_side_scene_selected, paint_tutorial_scene, password_action_at, planet_action_at,
     select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
-    select_index_matches, select_music_rows, select_music_songs_with_labels,
+    select_index_matches, select_music_rows_owned_by, select_music_songs_with_labels,
     select_row_column_text, select_row_hit, shop_action_at_on_board, shop_cart_face_controls_kept,
     shop_cart_page_digit_kept, shop_category_index, shop_extmenu_kept, shop_panel_kept,
     shop_shop_frame_for, shop_submenu_caption_kept, shop_tooltip_kept, side_scene_slot,
@@ -245,6 +245,11 @@ const DEFAULT_ARENA_STAGE: u16 = 1;
 /// the 12-row history box plus scrollback, bounded so a loud room
 /// cannot grow memory without limit (PERF-07: `usize`, never `as`).
 const MAX_WAITING_CHAT_ROWS: usize = 50;
+
+/// Low twelve bits of a member's `0x540db0` word name a song; the
+/// paired high bits are a category word with no pinned picker rule
+/// (file `0x140db0`, ev `0cb8.7310…0078`).
+const MEMBER_MUSIC_ID_MASK: u16 = 0x0FFF;
 
 /// Live rows kept per lobby chat panel (oldest first): the
 /// waiting-box bound, reused so a loud channel or room cannot grow
@@ -5815,6 +5820,23 @@ impl ScreenGame {
         self.click_select_filter(x, y)
     }
 
+    /// Owned song ids from the seated members' `0x540db0` words. The
+    /// wire reader splits a low-twelve-bit song id from a high category
+    /// word; only the song half enters the Waiting picker's set. A
+    /// vacant seat contributes nothing, and an empty list contributes
+    /// nothing (pin `0cb8.7310…0078`). An empty set therefore names no
+    /// song the Waiting picker may show.
+    fn waiting_picker_owned_song_ids(&self) -> HashSet<u16> {
+        self.waiting
+            .as_ref()
+            .into_iter()
+            .flat_map(|room| room.slots.iter())
+            .filter_map(|slot| slot.member.as_ref())
+            .flat_map(|member| member.music_ids.iter().copied())
+            .map(|word| word & MEMBER_MUSIC_ID_MASK)
+            .collect()
+    }
+
     /// Search-result rows the dialog currently shows: the three
     /// filter columns first (#273), the chosung INDEX key (#762), then
     /// the submitted search query (#285). Typing alone never narrows
@@ -5826,7 +5848,9 @@ impl ScreenGame {
         if self.select_tab == SelectDialogTab::Playlist {
             return Vec::new();
         }
-        let mut rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let owned_ids = self.waiting_picker_owned_song_ids();
+        let mut rows =
+            select_music_rows_owned_by(&self.catalog_songs, self.select_filter, &owned_ids);
         if let Some(index) = self.select_search_index {
             let field = self.select_search_field;
             rows.retain(|row| select_index_matches(index, select_row_column_text(*row, field)));
@@ -12984,6 +13008,96 @@ mod game_tests {
         );
     }
 
+    /// Waiting picker with two seated members and the three-song
+    /// filter catalog. The high nibble on the peer's words is the
+    /// wire category field; pin `0cb8.7310…0078` gives it no picker
+    /// meaning, so only the low twelve bits name a song here.
+    fn owned_picker_game(host_ids: Vec<u16>, peer_ids: Vec<u16>) -> ScreenGame {
+        let mut room = waiting_room();
+        room.slots[0]
+            .member
+            .as_mut()
+            .expect("fixture seats the host")
+            .music_ids = host_ids;
+        let mut peer = ready_peer();
+        peer.music_ids = peer_ids;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let blob = crate::screens::side::filter_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let labels = crate::screens::side::filter_catalog_labels();
+        game.set_song_catalog_with_labels(&entries, &labels);
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game
+    }
+
+    #[test]
+    fn waiting_picker_shows_only_the_union_of_seated_members_owned_songs() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   GameLoop::ingest_snapshot -> click_waiting_button (MUSELECT) ->
+        //   load_select_music_scene -> select_rows ->
+        //   select_music_rows_owned_by.
+        // Reader `0x540db0` stores low 12 bits as song id; the paired
+        // high bits are a category word with no pinned picker rule.
+        let game = owned_picker_game(vec![101], vec![0x1000 | 103]);
+        let ids: Vec<u32> = game
+            .select_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![101, 101, 101, 103, 103, 103],
+            "both seats contribute owned songs; the unowned catalog row is gone"
+        );
+    }
+
+    // Evidence: docs/pins/net-a.md:133 (owned-music reader 0x540db0).
+    #[test]
+    fn waiting_picker_drops_a_song_owned_by_no_seated_member() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   GameLoop::ingest_snapshot -> click_waiting_button (MUSELECT) ->
+        //   load_select_music_scene -> select_rows ->
+        //   select_music_rows_owned_by.
+        let game = owned_picker_game(vec![101], Vec::new());
+        let ids: Vec<u32> = game
+            .select_rows()
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![101, 101, 101],
+            "an empty member contributes no ids and the other songs stay hidden"
+        );
+    }
+
+    // Evidence: docs/pins/net-a.md:133 (owned-music reader 0x540db0).
+    #[test]
+    fn waiting_picker_shows_no_rows_when_no_member_owns_a_song() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   GameLoop::ingest_snapshot -> click_waiting_button (MUSELECT) ->
+        //   load_select_music_scene -> select_rows ->
+        //   select_music_rows_owned_by.
+        // An empty union names no song, so the picker has no rows.
+        let game = owned_picker_game(Vec::new(), Vec::new());
+        assert!(
+            game.select_rows().is_empty(),
+            "an empty union names no song to pick"
+        );
+        assert_eq!(
+            game.select_songs().len(),
+            3,
+            "the catalog stays whole for the non-Waiting boards"
+        );
+    }
+
     #[test]
     fn waiting_mu_select_reopens_after_ok_close() {
         // Ticket #266 A2: after an OK close, a second MUSELECT click
@@ -16758,6 +16872,16 @@ mod game_tests {
         assert_eq!(buf[0], background_of(Screen::Room));
     }
 
+    /// Song ids the synthetic waiting room owns: every catalog the
+    /// dialog tests stage, so a guard about another filter column is
+    /// not also a guard about ownership (ticket #995).
+    fn fixture_owned_song_ids() -> Vec<u16> {
+        (101u16..=103)
+            .chain(200u16..=214)
+            .chain([757, 770])
+            .collect()
+    }
+
     fn waiting_room() -> JoinedRoom {
         let member = RoomMember {
             nickname: "host".to_owned(),
@@ -16769,7 +16893,7 @@ mod game_tests {
             ready: true,
             music_state: 0,
             equipment: [0; 17],
-            music_ids: Vec::new(),
+            music_ids: fixture_owned_song_ids(),
             cash_point: 0,
             free_pass: 0,
             playing_state: 0,
@@ -26899,6 +27023,7 @@ mod game_tests {
 
     #[test]
     fn a_search_submit_narrows_the_table_by_title_or_artist() {
+        use crate::screens::side::select_music_rows;
         // Same chain as the pager guard; SEARCH_TITLE/ARTIST set the
         // field (`+0x188`, VAs `0x43e92f`/`0x43e957`) and the SERACH
         // button submits the typed draft (VA `0x44195e`).

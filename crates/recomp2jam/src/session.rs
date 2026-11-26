@@ -14588,6 +14588,25 @@ pub(super) mod session_tests {
         assert_eq!(level_for_difficulty(9), 2);
     }
 
+    /// Test fixture: the strict picker only stages songs a seated member
+    /// owns. Seat the local master with the song this gesture taps.
+    fn seat_master_with_owned_song(session: &mut OnlineSession, song_id: u16) {
+        let member_id = session
+            .joined_room
+            .as_ref()
+            .map_or(0, |room| room.member_id);
+        let mut master = member_on_team("host", true, 0);
+        master.master = true;
+        master.music_ids = vec![song_id];
+        if let Some(room) = session.joined_room.as_mut() {
+            if let Some(slot) = room.slots.iter_mut().find(|slot| slot.index == member_id) {
+                slot.state_code = 1;
+                slot.member = Some(master.clone());
+            }
+        }
+        session.game_mut().seat_waiting_member(member_id, master);
+    }
+
     /// Open the staged select dialog with a catalog row, click it, then
     /// click OK — the shared master pick gesture for the 4000 wire guards.
     fn click_master_song_row_and_ok(session: &mut OnlineSession) {
@@ -14595,6 +14614,7 @@ pub(super) mod session_tests {
         use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
         use std::collections::HashMap;
 
+        seat_master_with_owned_song(session, 757);
         let ok_placement = ScenePlacement {
             id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
             code: 0x27200002,
@@ -14876,6 +14896,7 @@ pub(super) mod session_tests {
         rec[240..251].copy_from_slice(b"o2ma757.ojm");
         let entries = o2jam_file::parse_ojn_list(&rec).unwrap();
         session.set_song_catalog(&entries);
+        seat_master_with_owned_song(&mut session, 757);
         session
             .game_mut()
             .ingest_snapshot(&InputSnapshot::click_at(400, 184));

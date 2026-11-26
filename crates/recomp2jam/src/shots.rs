@@ -4410,6 +4410,29 @@ mod tests {
         (art, paint_native_frame(&mut game, 0))
     }
 
+    /// Variant for row-body guards: seat the scripted peer with every
+    /// staged catalog id so the strict picker produces the rows the
+    /// difficulty-letter frames are painted for.
+    fn painted_select_music_frame_with_owned_rows(archive: &[u8]) -> (StagedArt, Vec<u32>) {
+        let art = stage_dialog(archive, Dialog::SelectMusic, StageContext::default())
+            .art
+            .expect("select-music dialog stages");
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        stage_select_music_scene(&mut game);
+        let owned_ids: Vec<u16> = game
+            .select_songs()
+            .iter()
+            .filter_map(|song| u16::try_from(song.song_id).ok())
+            .collect();
+        if let Some(mut peer) = game.staged_waiting_member(1).cloned() {
+            peer.music_ids = owned_ids;
+            game.seat_waiting_member(1, peer);
+        }
+        assert_eq!(game.screen(), Screen::Waiting);
+        (art, paint_native_frame(&mut game, 0))
+    }
+
     #[test]
     fn song_dialog_buttons_paint_their_staged_bodies() {
         // Live caller chain: `main` -> `capture_all` -> `seeded_game` ->
@@ -4691,7 +4714,7 @@ mod tests {
             println!("SKIP three_chart_rows_paint_their_own_difficulty_letter_frame: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let (art, actual) = painted_select_music_frame(&archive);
+        let (art, actual) = painted_select_music_frame_with_owned_rows(&archive);
         let mut diff_rows: Vec<_> = art
             .placements
             .iter()
