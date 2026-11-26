@@ -883,6 +883,20 @@ fn rank_member_slot(member: u8) -> Option<usize> {
     (slot < PEER_SLOT_COUNT).then_some(slot)
 }
 
+/// Waiting descriptor staged by the 3001 handler (`0x55ca00`).
+/// The two strings land at the room record's `+0x54`/`+0x94`; the
+/// five bytes land at `+0xd4`, `+0xd5`, `+0xd6`, `+0xe4`, `+0xe6`.
+/// Their meanings are OPEN, so no semantic names are invented.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WaitingRoomDescriptor {
+    /// First descriptor string from the wire.
+    pub first_string: String,
+    /// Second descriptor string from the wire.
+    pub second_string: String,
+    /// Five raw bytes in wire order.
+    pub flag_bytes: [u8; 5],
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -977,6 +991,9 @@ pub struct ScreenGame {
     /// that fails the gate leaves it empty.
     room_detail_readout: Option<RoomListEntry>,
     waiting: Option<JoinedRoom>,
+    /// Descriptor words the 3001 wire handler rewrites. Empty until
+    /// that frame arrives; the painter has no pinned use of them yet.
+    waiting_descriptor: WaitingRoomDescriptor,
     /// `4039` download percentage per waiting seat (`None` until the
     /// server reports one). Wire state only after #838: the exe's
     /// member-progress frames never paint the seat badge or bar.
@@ -1031,8 +1048,8 @@ pub struct ScreenGame {
     waiting_team_highlight_armed: bool,
     /// Level ceiling the auto-pick arm applies to catalog rows (`
     /// 0x7798bc`). `u16::MAX` while no source is staged: the exe's
-    /// writer of that global stays OPEN, so an unstaged cap admits
-    /// every row rather than inventing a limit.
+    /// 2035 handler writes the byte, so an unstaged cap admits every
+    /// row rather than inventing a limit.
     auto_pick_level_cap: u16,
     /// Pinned Waiting-room notice standing over the top-bar room line:
     /// the exe's notice box over the START control (VA `0x4b22d0`,
@@ -1646,6 +1663,7 @@ impl ScreenGame {
             room_detail_target: None,
             room_detail_readout: None,
             waiting: None,
+            waiting_descriptor: WaitingRoomDescriptor::default(),
             waiting_channel_number: None,
             waiting_room_number: None,
             waiting_start_armed: false,
@@ -5418,9 +5436,23 @@ impl ScreenGame {
         self
     }
 
-    /// Stage the level ceiling the auto-pick arm applies. The exe
-    /// reads global `0x7798bc`; its writer is OPEN, so the default is
-    /// "no ceiling" instead of an invented level limit.
+    /// Stage the two descriptor strings and five raw bytes a 3001
+    /// frame rewrote (`0x55ca00`, file `0x15ca00`).
+    pub fn stage_waiting_descriptor(&mut self, descriptor: WaitingRoomDescriptor) -> &mut Self {
+        self.waiting_descriptor = descriptor;
+        self
+    }
+
+    /// Descriptor currently staged for the Waiting room.
+    #[must_use]
+    pub fn waiting_descriptor(&self) -> &WaitingRoomDescriptor {
+        &self.waiting_descriptor
+    }
+
+    /// Stage the level ceiling the auto-pick arm applies. The exe's
+    /// writer is the 2035 handler (`0x55b6d0`), which stores one byte
+    /// into global `0x7798bc` only on a zero result; until that frame
+    /// arrives the default is "no ceiling", not an invented limit.
     pub fn set_auto_pick_level_cap(&mut self, cap: u16) -> &mut Self {
         self.auto_pick_level_cap = cap;
         self
@@ -18069,6 +18101,20 @@ mod game_tests {
             "an equal key mode is a no-op"
         );
         assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_descriptor_keeps_the_two_3001_strings_and_five_raw_bytes() {
+        // seam: the shell hand-off is the whole behavior; no painter
+        // reads these fields yet, so no live chain exists beyond it.
+        let mut game = ScreenGame::new();
+        let descriptor = WaitingRoomDescriptor {
+            first_string: "Room A".to_owned(),
+            second_string: "Song B".to_owned(),
+            flag_bytes: [1, 2, 3, 4, 5],
+        };
+        game.stage_waiting_descriptor(descriptor.clone());
+        assert_eq!(game.waiting_descriptor(), &descriptor);
     }
 
     /// One catalog row for the auto-pick seam tests: all charts,

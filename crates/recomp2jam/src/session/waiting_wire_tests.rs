@@ -800,3 +800,52 @@ mod premium_time_family {
         assert_eq!(session.premium_time_rows[1].song_id, 0x0807);
     }
 }
+
+/// Tier-2 scripted-gateway guard for the 3001 descriptor body
+/// (story #1002, VA `0x55ca00` / file `0x15ca00`).
+mod key_mode_descriptor_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::message::KeyModeDescriptorChanged;
+    use o2jam_net::WireMessage;
+    use o2jam_shell::screens::game::WaitingRoomDescriptor;
+
+    use super::super::session_tests::{joined_snapshot, joined_waiting_session, paint_frame};
+
+    #[test]
+    fn key_mode_descriptor_3001_stages_the_waiting_descriptor_and_member_word() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        // connect::connect_and_login_with_transport -> assemble_online_session
+        // -> OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
+        // -> apply_waiting_frame -> apply_key_mode_changed ->
+        // ScreenGame::stage_waiting_descriptor + ScreenGame::stage_room_member_word.
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
+            let change = KeyModeDescriptorChanged {
+                first_string: "Room 3001".to_owned(),
+                second_string: "Song 3001".to_owned(),
+                flag_bytes: [1, 2, 3, 4, 5],
+                member_word_flag: 0xF123,
+            };
+            stream.write_all(&change.encode()).unwrap();
+            written_tx.send(()).unwrap();
+        });
+        session.game.set_waiting_room_number(3);
+        written.recv().unwrap();
+        paint_frame(&mut session);
+        server.join().unwrap();
+
+        let expected = WaitingRoomDescriptor {
+            first_string: "Room 3001".to_owned(),
+            second_string: "Song 3001".to_owned(),
+            flag_bytes: [1, 2, 3, 4, 5],
+        };
+        assert_eq!(session.game.waiting_descriptor(), &expected);
+        assert_eq!(
+            session.game.room_member_word(3),
+            Some(0x000F_0123),
+            "the flag word's high nibble reaches the 2023 member word"
+        );
+    }
+}
