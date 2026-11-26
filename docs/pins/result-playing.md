@@ -289,3 +289,18 @@ word; the 4050 handler's two writes leave the second write as the final
 speed. No extra transformation is applied by this setter.
 
 Evidence: `ev_98b8a43fc02d90d285c7c80eec3233d2656562f010e80490bab0417c2dbaec30`.
+
+### `0x55fa20` 4015 rank-exchange addendum (2026-11-25 senior REA pass)
+
+Body: `[u8 local_member][u16 rank][8 × u8 ranked_member_id]`.
+The member byte must be below 8. Rank 0 calls `0x5410e0`; rank 1
+calls `0x5410c0`; other rank words call neither. The handler posts
+`(0x12, rank, local_member, 0)` for rank 0/1. It then walks the eight
+ranked ids in order; for each id it finds the local/peer member slot
+and calls `0x5414a0(position)`, which stores the position byte at the
+game object's `+0x217d`. Unknown ids do not write a position. This is
+the rank-byte-to-seat mapping needed by the gauge/rank-row story.
+
+Evidence: `ev_f5391cd3192dfca5a48e2442a0d68e1ca601a606bb720a92618202df8c338de4`
+(handler), `ev_859d8bd1b6241dbf33b2f25b409a91d866cdfb32490750ec60c9925d83d37c4a`
+(position setter).
