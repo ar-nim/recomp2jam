@@ -25,7 +25,8 @@ use std::time::Instant;
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::{room_join_refusal_for, ChatState};
 pub use self::chat::{
-    ChatSendMode, LobbyChat, LobbyChatPanel, RoomJoinRefusal, SlashCommand, WhisperDelivery,
+    ChatSendMode, JoinAnswerRefusal, LobbyChat, LobbyChatPanel, RoomJoinRefusal, SlashCommand,
+    WhisperDelivery,
 };
 use self::dialog_frame::{DialogFrameState, DialogHost};
 use self::lanking::LankingState;
@@ -3737,6 +3738,24 @@ impl ScreenGame {
         self
     }
 
+    /// Caption staged by the last refused 3003 answer, if any.
+    #[must_use]
+    pub fn join_answer_refusal(&self) -> Option<JoinAnswerRefusal> {
+        self.chat.join_answer_refusal()
+    }
+
+    /// Post the one-OK sheet for a refused 3003 join (`0x55cad0`).
+    pub fn stage_join_answer_refusal(&mut self, refusal: JoinAnswerRefusal) -> &mut Self {
+        self.chat.stage_join_answer_refusal(refusal);
+        self
+    }
+
+    /// Forget the 3003 caption when its one-OK sheet is dismissed.
+    pub fn clear_join_answer_refusal(&mut self) -> &mut Self {
+        self.chat.clear_join_answer_refusal();
+        self
+    }
+
     /// Latest 2018 delivery verdict (`None` until a response lands).
     #[must_use]
     pub fn whisper_delivery(&self) -> Option<&WhisperDelivery> {
@@ -4522,6 +4541,7 @@ impl ScreenGame {
             || self.chat.room_join_refusal().is_some_and(|refusal| {
                 refusal != RoomJoinRefusal::Password && !refusal.message().is_empty()
             })
+            || self.chat.join_answer_refusal().is_some()
             || self.myroom_confirm.is_some()
             || self.room_no_response_dialog_open()
             || self.planet_modal().is_some()
@@ -4760,6 +4780,7 @@ impl ScreenGame {
         // on room teardown (`0x495a30`, REA `ev_96389df4…`).
         self.chat.close_room_user_sheet();
         self.chat.clear_room_join_refusal();
+        self.chat.clear_join_answer_refusal();
         self.outbox.pending_channel_logout = true;
         self.enter(Screen::Channel);
     }
@@ -6682,6 +6703,13 @@ impl ScreenGame {
                 }
                 return;
             }
+        }
+        if self.chat.join_answer_refusal().is_some() {
+            // The 3003 caption owns the Room board until its OK plate.
+            if self.information_ok_hit(x, y) {
+                self.chat.clear_join_answer_refusal();
+            }
+            return;
         }
         if self.messenger_liveness_open {
             // The one-OK sheet owns every click until OK; it sends
@@ -10010,6 +10038,11 @@ impl ScreenGame {
             if !message.is_empty() {
                 paint_information_message(frame, self.relay_down_art.as_ref(), &message);
             }
+        }
+        // A refused 3003 posts its own pinned caption on the same
+        // one-OK Information sheet; success never reaches this layer.
+        if let Some(refusal) = self.chat.join_answer_refusal() {
+            paint_information_message(frame, self.relay_down_art.as_ref(), refusal.message());
         }
         // The options dialog layers over the lobby exactly as over
         // the Planet board (EXIT/Escape closes back onto Room).

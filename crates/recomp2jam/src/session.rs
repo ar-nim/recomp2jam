@@ -181,8 +181,8 @@ use o2jam_net::{
     UpdateMusicState, UserJoinedWaiting, UserLeftWaiting, WaitingMusicChanged, WireMessage,
 };
 use o2jam_shell::screens::game::{
-    AutoPickOutcome, ChatSendMode, LobbyChat, ResultMemberRecord, SlashCommand, StartGateVerdict,
-    StartRequest, WaitingWireCaption,
+    AutoPickOutcome, ChatSendMode, JoinAnswerRefusal, LobbyChat, ResultMemberRecord, SlashCommand,
+    StartGateVerdict, StartRequest, WaitingWireCaption,
 };
 use o2jam_shell::screens::paint::WaitingSkillItem;
 use o2jam_shell::screens::side::MyRoomNotice;
@@ -2013,6 +2013,14 @@ impl OnlineSession {
         });
     }
 
+    /// Stage the one-OK caption pinned for a refused 3003 answer.
+    /// Unmapped result words post no invented text.
+    fn stage_3003_refusal(&mut self, result_code: u32) {
+        if let Some(refusal) = JoinAnswerRefusal::for_result_code(result_code) {
+            self.game.stage_join_answer_refusal(refusal);
+        }
+    }
+
     /// Move one room-join attempt leg: send the 3002 request unless it
     /// already went out, then drain until the socket goes quiet.
     /// Returns the attempt while it still awaits the answer (`None`
@@ -2051,6 +2059,7 @@ impl OnlineSession {
                             code = response.result_code,
                             "room join rejected; staying in Room"
                         );
+                        self.stage_3003_refusal(response.result_code);
                         return None;
                     }
                     let Some(room) = response.room else {
@@ -2082,6 +2091,7 @@ impl OnlineSession {
         self.pending_room = None;
         self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
+        self.game.clear_join_answer_refusal();
         self.game.set_joined_room(room);
         self.joined_waiting = true;
         restage_live_playing(&mut self.game);
@@ -2297,6 +2307,7 @@ impl OnlineSession {
                             if let Some(room) = response.room {
                                 self.resident_room = Some(room.title.clone());
                                 self.joined_room = Some(room.clone());
+                                self.game.clear_join_answer_refusal();
                                 self.game.set_joined_room(room);
                                 self.joined_waiting = true;
                                 restage_live_playing(&mut self.game);
@@ -2305,8 +2316,10 @@ impl OnlineSession {
                         } else {
                             tracing::warn!(
                                 code = response.result_code,
-                                "password join rejected; staying in Waiting"
+                                "join rejected; returning to Room"
                             );
+                            self.stage_3003_refusal(response.result_code);
+                            let _ = self.game.enter_screen(Screen::Room);
                         }
                     }
                     break;

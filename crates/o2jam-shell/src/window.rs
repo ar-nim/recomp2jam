@@ -164,6 +164,24 @@ pub enum PrintScreenAction {
     Notice,
 }
 
+impl PrintScreenAction {
+    /// Exact UI event words posted by the exhausted-counter arm of
+    /// `0x418dc0` (file `0x18dc0`), senior REA
+    /// `ev_c03ce8c9615cd035da6ff9a8b8046c4af72a85938a908b3ecf67ec3ba33094c8`.
+    /// This arm has no caption literal.
+    pub const NOTICE_EVENT: [u16; 4] = [0x12, 0x67, 0, 0];
+
+    /// Words this press posts to the UI queue. Only the exhausted
+    /// branch posts an event in this headless seam.
+    #[must_use]
+    pub const fn notice_event(&self) -> Option<[u16; 4]> {
+        match self {
+            Self::Notice => Some(Self::NOTICE_EVENT),
+            _ => None,
+        }
+    }
+}
+
 /// The session's used-name counter and remaining-shot word.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenShotCounter {

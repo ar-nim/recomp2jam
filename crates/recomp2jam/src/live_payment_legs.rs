@@ -154,4 +154,36 @@ mod live_payment_spec_leg_tests {
 
         finish(session, gateway.server);
     }
+
+    /// #1102 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg -> dismiss_splash -> 0x5a5190 key-down gate
+    ///   -> 0x418dc0 -> ScreenShotCounter::press ->
+    ///   PrintScreenAction::notice_event.
+    /// seam: no player Print Screen writer or UI queue exists in this
+    /// client, so the exact event words are the whole headless claim;
+    /// no caption is invented.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_exhausted_print_screen_posts_the_pinned_event_words() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+
+        let notice = ScreenShotCounter::new(0).press(0);
+        let [code, subcode, third, fourth] = notice
+            .notice_event()
+            .expect("an exhausted press posts the UI event");
+        assert_eq!(
+            (code, subcode, third, fourth),
+            (0x12, 0x67, 0, 0),
+            "UI event (0x12, 0x67, 0, 0)"
+        );
+
+        finish(session, gateway.server);
+    }
 }
