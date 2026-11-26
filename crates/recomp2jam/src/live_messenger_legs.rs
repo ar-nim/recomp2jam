@@ -12,6 +12,7 @@ mod live_messenger_leg_tests {
     use o2jam_audio::{AudioBackend, NullBackend, PcmSamples, SceneBgm};
     use o2jam_net::relay::ReportUdpPunchHole;
     use o2jam_net::WireMessage;
+    use o2jam_render::{NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::options::{apply_cursor_mode, MouseCursorMode, OptionsSettings};
     use o2jam_shell::screens::messenger::{
         error_popup_from_code, error_popup_from_supplied, web_sheet_for_ui_event,
@@ -34,6 +35,24 @@ mod live_messenger_leg_tests {
             channels: 2,
         });
         bank
+    }
+
+    /// Boot through the live gateway, then hand the session to the
+    /// window handler that owns the error arms and the paint path.
+    fn boot_error_leg() -> (WindowHandler, std::thread::JoinHandle<()>) {
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        assert_eq!(session.screen(), Screen::Planet);
+        let handler = WindowHandler::new(Shell::new(Box::new(session)));
+        (handler, gateway.server)
+    }
+
+    /// Paint one native frame through the shell's game loop.
+    fn paint_handler_frame(handler: &mut WindowHandler) -> Vec<u32> {
+        let mut buffer = vec![0u32; NATIVE_WIDTH as usize * NATIVE_HEIGHT as usize];
+        handler.paint_popup_frame(&mut buffer, NATIVE_WIDTH as usize, NATIVE_HEIGHT as usize);
+        buffer
     }
 
     /// #1112 Tier 3. seam: the boot session has no audio rig, and
@@ -263,6 +282,93 @@ mod live_messenger_leg_tests {
         assert_eq!(session.screen(), Screen::Planet);
 
         finish(session, gateway.server);
+    }
+
+    /// #1118 Tier 3. Live caller chain (headless induced failure):
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg -> dismiss_splash -> WindowHandler::new
+    ///   -> induced failure hook WindowHandler::raise_error_from_supplied
+    ///   -> error_popup_from_supplied -> fatal_path_disposition
+    ///   -> paint_error_popup -> paint_information_message.
+    /// No Win32 MessageBox exists; the hook stands in for the missing
+    /// fatal-error caller. Archives absent -> skip cleanly.
+    #[test]
+    fn live_supplied_error_paints_a_popup_over_the_boot_frame() {
+        if !archives_present() {
+            println!("SKIP live_supplied_error_paints_a_popup_over_the_boot_frame: missing install-root interface archive");
+            return;
+        }
+        let (mut handler, server) = boot_error_leg();
+        let before = paint_handler_frame(&mut handler);
+        let decision = handler.raise_error_from_supplied("display driver failed", true);
+        assert_eq!(
+            decision,
+            ErrorPopup::ShowMessage("display driver failed".to_owned())
+        );
+        let after = paint_handler_frame(&mut handler);
+        assert!(
+            after != before,
+            "the supplied error must change boot pixels"
+        );
+        drop(handler);
+        server.join().unwrap();
+    }
+
+    /// #1119 Tier 3. Live caller chain (headless induced failure):
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg -> dismiss_splash -> WindowHandler::new
+    ///   -> induced failure hook WindowHandler::raise_error_from_code
+    ///   -> error_popup_from_code -> error_text_for_code ->
+    ///   fatal_path_disposition -> paint_error_popup ->
+    ///   paint_information_message.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_mapped_error_code_paints_the_pinned_text_over_the_boot_frame() {
+        if !archives_present() {
+            println!("SKIP live_mapped_error_code_paints_the_pinned_text_over_the_boot_frame: missing install-root interface archive");
+            return;
+        }
+        let (mut handler, server) = boot_error_leg();
+        let before = paint_handler_frame(&mut handler);
+        let decision = handler
+            .raise_error_from_code(0x8876_0091, true)
+            .expect("a nonzero code stages a popup");
+        assert_eq!(
+            decision,
+            ErrorPopup::ShowMessage("The pixel format was invalid as specified.".to_owned())
+        );
+        let after = paint_handler_frame(&mut handler);
+        assert!(after != before, "the mapped code must change boot pixels");
+
+        handler.dismiss_error_popup();
+        handler
+            .raise_error_from_code(0xDEAD_BEEF, true)
+            .expect("an unmapped code stages the fallback text");
+        let fallback_frame = paint_handler_frame(&mut handler);
+        assert!(
+            after != fallback_frame,
+            "the pinned message must differ from the fallback ink"
+        );
+        drop(handler);
+        server.join().unwrap();
+    }
+
+    /// #1119 Tier 3. Live caller chain as the mapped-code leg, with
+    /// code zero taking the exe's silent arm before any paint.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_zero_error_code_leaves_the_boot_frame_unchanged() {
+        if !archives_present() {
+            println!("SKIP live_zero_error_code_leaves_the_boot_frame_unchanged: missing install-root interface archive");
+            return;
+        }
+        let (mut handler, server) = boot_error_leg();
+        let before = paint_handler_frame(&mut handler);
+        assert_eq!(handler.raise_error_from_code(0, true), None);
+        let after = paint_handler_frame(&mut handler);
+        assert!(after == before, "code zero must stay silent");
+        drop(handler);
+        server.join().unwrap();
     }
 
     /// #1120 Tier 3. Live caller chain:

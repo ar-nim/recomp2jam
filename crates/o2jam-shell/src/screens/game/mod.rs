@@ -928,6 +928,14 @@ pub struct WaitingRoomDescriptor {
     pub flag_bytes: [u8; 5],
 }
 
+/// Paint one fatal-error popup from the window's decision. The
+/// Information sheet's fallback geometry is used because no fatal
+/// error caller stages dialog art in this client; the message bytes
+/// come from the supplied string or the pinned code map.
+pub fn paint_error_popup(frame: &mut Frame<'_>, message: &str) {
+    paint_information_message(frame, None, message.as_bytes());
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,

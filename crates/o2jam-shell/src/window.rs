@@ -588,6 +588,14 @@ pub fn error_popup_from_code(code: u32, ui_flag: bool) -> Option<ErrorPopup> {
     (code != 0).then(|| error_popup_from_supplied(error_text_for_code(code), ui_flag))
 }
 
+/// Overlay the staged popup on one painted frame. Only the show arm
+/// owns pixels; the delayed-close arm leaves the scene untouched.
+fn paint_staged_error_popup(popup: &Option<ErrorPopup>, frame: &mut o2jam_render::Frame<'_>) {
+    if let Some(ErrorPopup::ShowMessage(message)) = popup {
+        crate::screens::game::paint_error_popup(frame, message);
+    }
+}
+
 /// UI notice the exe posts from a double-click when the state bit is
 /// set (`0x5a50b0` -> `0x548b10`, notice `10,3,0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,6 +680,9 @@ pub struct WindowHandler {
     screenshot_root: Option<PathBuf>,
     /// Per-session shot counter behind the Print Screen key arm.
     screenshot_counter: ScreenShotCounter,
+    /// Popup staged by the induced fatal-error hook. `None` paints no
+    /// box; the close arm stages nothing.
+    error_popup: Option<ErrorPopup>,
 }
 
 impl WindowHandler {
@@ -694,7 +705,56 @@ impl WindowHandler {
             next_heartbeat: None,
             screenshot_root: None,
             screenshot_counter: ScreenShotCounter::new(0),
+            error_popup: None,
         }
+    }
+
+    /// Induce the supplied-message fatal arm without a Win32 message
+    /// box. The returned decision is the one staged for the next paint.
+    pub fn raise_error_from_supplied(&mut self, message: &str, ui_flag: bool) -> ErrorPopup {
+        let decision = error_popup_from_supplied(message, ui_flag);
+        self.stage_error_decision(Some(decision.clone()));
+        decision
+    }
+
+    /// Induce the numeric-code fatal arm. Code zero stages no box.
+    pub fn raise_error_from_code(&mut self, code: u32, ui_flag: bool) -> Option<ErrorPopup> {
+        let decision = error_popup_from_code(code, ui_flag);
+        self.stage_error_decision(decision.clone());
+        decision
+    }
+
+    /// Clear the staged popup so the next frame returns to the scene.
+    pub fn dismiss_error_popup(&mut self) {
+        self.error_popup = None;
+    }
+
+    fn stage_error_decision(&mut self, decision: Option<ErrorPopup>) {
+        self.error_popup = decision.filter(|popup| matches!(popup, ErrorPopup::ShowMessage(_)));
+    }
+
+    /// Paint one frame through this window's shell. Headless legs use
+    /// the same paint path the `RedrawRequested` arm presents.
+    pub fn paint_popup_frame(&mut self, buffer: &mut [u32], width: usize, height: usize) {
+        self.shell.paint_into(buffer, width, height);
+        let mut frame = o2jam_render::Frame {
+            buf: buffer,
+            w: width,
+            h: height,
+        };
+        paint_staged_error_popup(&self.error_popup, &mut frame);
+    }
+
+    /// Backbuffer paint for the window's redraw arm: scene first, then
+    /// the staged fatal-error box over it.
+    fn paint_backbuffer_with_error_popup(&mut self) {
+        self.shell.paint_backbuffer();
+        let mut frame = o2jam_render::Frame {
+            buf: &mut self.shell.pixels,
+            w: DEFAULT_WIDTH as usize,
+            h: DEFAULT_HEIGHT as usize,
+        };
+        paint_staged_error_popup(&self.error_popup, &mut frame);
     }
 
     /// Install an explicit screenshot root and shot budget. Tests use a
@@ -1314,7 +1374,7 @@ impl ApplicationHandler for WindowHandler {
                 // the frame the compositor gets already answers the
                 // frame's input at paint-time positions.
                 self.deliver_snapshot();
-                self.shell.paint_backbuffer();
+                self.paint_backbuffer_with_error_popup();
                 self.present(event_loop);
                 self.capture_frame();
                 // Planet quit-confirm OK (`GameLoop::quit_requested`):
@@ -1355,6 +1415,7 @@ impl ApplicationHandler for WindowHandler {
 mod tests {
     use super::super::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
     use super::*;
+    use crate::screens::messenger::UNRECOGNIZED_ERROR_TEXT;
     use crate::screens::paint::LoadingStatus;
     use o2jam_audio::NullBackend;
     use o2jam_net::play::SetRoomMusic;
@@ -2447,6 +2508,92 @@ mod tests {
                 "The pixel format was invalid as specified.".to_owned()
             ))
         );
+    }
+
+    /// Flat canvas for the induced-failure frame pair. It paints one
+    /// constant colour so any changed pixel comes from the popup.
+    struct FlatFrameGame;
+
+    impl GameLoop for FlatFrameGame {
+        fn lane_key(&mut self, _lane: usize, _down: bool) {}
+
+        fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
+
+        fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
+            frame.buf.fill(0x0020_3040);
+        }
+    }
+
+    fn paint_handler_frame(handler: &mut WindowHandler) -> Vec<u32> {
+        let mut buffer = vec![0u32; backbuffer_words()];
+        handler.paint_popup_frame(&mut buffer, DEFAULT_WIDTH as usize, DEFAULT_HEIGHT as usize);
+        buffer
+    }
+
+    #[test]
+    fn supplied_error_paints_a_popup_over_the_window_frame() {
+        // Live chain (Tier 1): main.rs::run_play -> Shell::run ->
+        // WindowHandler::window_event -> induced-failure hook
+        // WindowHandler::raise_error_from_supplied -> error_popup_from_supplied
+        // -> fatal_path_disposition -> paint_error_popup ->
+        // paint_information_message.
+        let mut handler = WindowHandler::new(Shell::new(Box::new(FlatFrameGame)));
+        let before = paint_handler_frame(&mut handler);
+        let decision = handler.raise_error_from_supplied("surface failed", true);
+        assert_eq!(
+            decision,
+            ErrorPopup::ShowMessage("surface failed".to_owned())
+        );
+        let after = paint_handler_frame(&mut handler);
+        assert!(
+            before != after,
+            "the supplied error must paint popup pixels"
+        );
+    }
+
+    #[test]
+    fn mapped_error_code_paints_its_pinned_text_in_the_popup() {
+        // Live chain (Tier 1): main.rs::run_play -> Shell::run ->
+        // WindowHandler::window_event -> induced-failure hook
+        // WindowHandler::raise_error_from_code -> error_popup_from_code ->
+        // error_text_for_code -> fatal_path_disposition ->
+        // paint_error_popup -> paint_information_message.
+        let mut handler = WindowHandler::new(Shell::new(Box::new(FlatFrameGame)));
+        let before = paint_handler_frame(&mut handler);
+        let decision = handler
+            .raise_error_from_code(0x8876_0091, true)
+            .expect("a nonzero code stages a popup");
+        assert_eq!(
+            decision,
+            ErrorPopup::ShowMessage("The pixel format was invalid as specified.".to_owned())
+        );
+        let after = paint_handler_frame(&mut handler);
+        assert!(after != before, "the mapped code must paint popup pixels");
+
+        handler.dismiss_error_popup();
+        let fallback = handler
+            .raise_error_from_code(0xDEAD_BEEF, true)
+            .expect("an unmapped code still stages a fallback popup");
+        assert_eq!(
+            fallback,
+            ErrorPopup::ShowMessage(UNRECOGNIZED_ERROR_TEXT.to_owned())
+        );
+        let fallback_frame = paint_handler_frame(&mut handler);
+        assert!(
+            after != fallback_frame,
+            "the pinned message must differ from the fallback ink"
+        );
+    }
+
+    #[test]
+    fn zero_error_code_leaves_the_window_frame_unchanged() {
+        // seam: the popup-or-close helper's silent arm has no winit
+        // caller; the induced failure hook is the whole path here.
+        let mut handler = WindowHandler::new(Shell::new(Box::new(FlatFrameGame)));
+        let before = paint_handler_frame(&mut handler);
+        assert_eq!(handler.raise_error_from_code(0, true), None);
+        let after = paint_handler_frame(&mut handler);
+        assert!(after == before, "code zero must stay silent");
     }
 
     #[test]
