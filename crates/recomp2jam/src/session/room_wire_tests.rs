@@ -738,6 +738,8 @@ fn scripted_2028_answer_stages_the_native_top100_rows_from_the_gateway() {
     assert_eq!(nicknames, ["Champ", "Rival"]);
 }
 
+// next evidence step: #916 / #1132 — pin the exe 2028 content mapping,
+// then keep this empty-answer negative guard beside the native board.
 #[test]
 fn absent_2028_answer_leaves_the_native_top100_rows_unstaged() {
     // Empty state is explicit: no answer means no self line and no rows,
