@@ -37,6 +37,7 @@ mod live_room_seat_legs;
 mod live_room_shell_legs;
 mod live_room_wire_legs;
 mod live_session_tail_legs;
+mod live_shop_control_legs;
 mod live_stats;
 mod live_waiting_seat_legs;
 mod live_waiting_wire_legs;
