@@ -148,10 +148,15 @@ use o2jam_net::message::{
     ExitWaitingAnswer, FreeMusicStatusAnswer, MemberStateChanged, MusicLoaded, RoomClosedNotice,
     RoomDescriptorChanged, RoomDisappearedNotice, RoomParameterChanged, RoomSkillChanged,
     RoomStateChanged, RoomUserCountChanged, RoomUserList, SetRoomMusicEcho, StartGameAnswer,
-    WaitingMemberRows, WaitingSkillChanged, WaitingSkillExChanged, WaitingValueMemberEvent,
+    SyncMemberMusicList, WaitingMemberRows, WaitingSkillChanged, WaitingSkillExChanged,
+    WaitingValueMemberEvent,
 };
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
+};
+use o2jam_net::relay::{
+    decode_premium_time_rows, stored_team_from_wire, LiveStateResponse, MemberInfo,
+    PREMIUM_TIME_COMMAND,
 };
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
@@ -735,6 +740,10 @@ pub struct OnlineSession {
     /// but no Result-side consumer is pinned, so this stays a trace
     /// instead of an invented marker (#667/#679).
     last_submitter_slot: Option<u8>,
+    /// Premium-time rows from 2026 (`0x55a9a0`). The shell has no
+    /// premium row painter yet, so this mirror pins the wire staging
+    /// without inventing a caption source.
+    premium_time_rows: Vec<o2jam_net::relay::PremiumTimeRow>,
 }
 
 impl OnlineSession {
@@ -784,6 +793,7 @@ impl OnlineSession {
             result_records: [None; 8],
             last_rank_places: None,
             last_submitter_slot: None,
+            premium_time_rows: Vec::new(),
         }
     }
 
@@ -3640,6 +3650,9 @@ impl OnlineSession {
             id if id == WaitingSkillChanged::COMMAND => self.apply_waiting_skill_list(&frame),
             id if id == WaitingSkillExChanged::COMMAND => self.apply_waiting_skill_ex_list(&frame),
             id if id == MemberStateChanged::COMMAND => self.apply_member_state_changed(&frame),
+            id if id == SyncMemberMusicList::COMMAND => self.apply_member_music_list(&frame),
+            id if id == LiveStateResponse::COMMAND => self.apply_live_state(&frame),
+            id if id == PREMIUM_TIME_COMMAND => self.apply_premium_time_list(&frame),
             id if id == WaitingValueMemberEvent::COMMAND => self.apply_waiting_value_member(&frame),
             id if id == SyncMemberMusicStateEvent::COMMAND => {
                 self.apply_member_music_state(&frame);
@@ -3977,10 +3990,54 @@ impl OnlineSession {
         }
     }
 
-    /// One member's music state into the shell seats.
+    /// One member's music state into the mirrored room and the shell
+    /// seats. Keeping both mirrors in step matters when a later wire
+    /// event re-stages the whole member record (the `+0x2130` arm).
     fn stage_member_music_state(&mut self, member_id: u8, state: u8) {
+        if let Some(room) = self.joined_room.as_mut() {
+            if let Some(slot) = room.slots.iter_mut().find(|slot| slot.index == member_id) {
+                if let Some(member) = slot.member.as_mut() {
+                    member.music_state = state;
+                }
+            }
+        }
         tracing::debug!(member = member_id, state, "member music state");
         self.game.set_member_music_state(member_id, state);
+    }
+
+    /// Apply one field change to the mirrored member and re-stage the
+    /// whole record in the shell. `seat_waiting_member` is the only
+    /// shell seam for fields without a dedicated setter; re-staging in
+    /// place keeps chat history and the local seat intact (#379).
+    fn restage_joined_member(
+        &mut self,
+        member_id: u8,
+        update: impl FnOnce(&mut o2jam_net::RoomMember),
+    ) {
+        let updated = self
+            .joined_room
+            .as_mut()
+            .and_then(|room| room.slots.iter_mut().find(|slot| slot.index == member_id))
+            .and_then(|slot| slot.member.as_mut())
+            .map(|member| {
+                update(member);
+                member.clone()
+            });
+        if let Some(member) = updated {
+            self.game.seat_waiting_member(member_id, member);
+        }
+    }
+
+    /// Fold the `+0x2130` playing word into the mirrored seat.
+    fn stage_member_playing_state(&mut self, member_id: u8, state: u8) {
+        self.restage_joined_member(member_id, |member| member.playing_state = state);
+    }
+
+    /// Fold the counted 5027 words into the named peer's `0x540db0`
+    /// row. The high nibble is split out by the codec but has no pinned
+    /// shell destination; only the twelve-bit ids are staged.
+    fn stage_member_music_ids(&mut self, member_id: u8, music_ids: Vec<u16>) {
+        self.restage_joined_member(member_id, |member| member.music_ids = music_ids);
     }
 
     /// Fold one 4039 download percentage into its waiting seat
@@ -4211,13 +4268,108 @@ impl OnlineSession {
         self.announce_music_state();
     }
 
-    /// 4026 names a member whose two state setters the exe calls.
-    /// The body carries no state byte and neither setter is pinned to
-    /// a shell field, so this arm only validates the frame.
+    /// 4026 names a member and two state bytes. The exe calls both
+    /// setters for the local and every other in-range seat; the two
+    /// destinations are the pinned `+0x2130` playing word and the
+    /// `+0x217c` music word (`docs/pins/net-b.md` 4026 addendum).
     fn apply_member_state_changed(&mut self, frame: &Frame) {
         match MemberStateChanged::decode_frame(frame) {
-            Ok(change) => tracing::debug!(member = change.member_id, "member state changed"),
+            Ok(change) => {
+                self.stage_member_music_state(change.member_id, change.music_state);
+                self.stage_member_playing_state(change.member_id, change.playing_state);
+            }
             Err(_) => tracing::debug!(id = frame.id, "dropping undecodable member state"),
+        }
+    }
+
+    /// Stage one 2026 premium-time list. The row format comes from the
+    /// pinned decoder; the description lines need a global mode bitmask
+    /// and premium flag with no client-side source pinned, so no text is
+    /// invented here (the bitmask cases stay covered at the codec seam).
+    fn apply_premium_time_list(&mut self, frame: &Frame) {
+        match decode_premium_time_rows(&frame.payload) {
+            Ok(rows) => {
+                tracing::debug!(rows = rows.len(), "premium-time rows staged");
+                self.premium_time_rows = rows;
+            }
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable premium-time list"),
+        }
+    }
+
+    /// 4043 carries the live snapshot for the eight member records.
+    /// Only the active tails have an `MemberInfo`; the handler skips
+    /// every inactive slot (file `0x159d24`).
+    fn apply_live_state(&mut self, frame: &Frame) {
+        let Ok(snapshot) = LiveStateResponse::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable live state");
+            return;
+        };
+        for slot in snapshot.members {
+            if slot.active {
+                if let Some(info) = slot.info {
+                    self.stage_live_state_member(snapshot.member_id, info);
+                }
+            }
+        }
+    }
+
+    /// Stage one active live-state record into its numbered seat. The
+    /// wire team reader stores `wire + 1` (`0x540d40`); the local seat
+    /// keeps the raw byte because the shell's own-seat painter applies
+    /// the increment once (`staged_derived_team`). The exe derives the
+    /// ready and master marks from slot position (`0x1400f0`,
+    /// `0x140d20`), so this arm keeps the marks already staged by the
+    /// join and echo handlers instead of reading those wire bytes as
+    /// shell flags. The extra byte and win streak stay unstaged.
+    fn stage_live_state_member(&mut self, local_id: u8, info: MemberInfo) {
+        if info.member_id >= 8 {
+            return;
+        }
+        let seat = info.member_id;
+        let (ready, master) = self
+            .joined_room
+            .as_ref()
+            .and_then(|room| room.slots.iter().find(|slot| slot.index == seat))
+            .and_then(|slot| slot.member.as_ref())
+            .map_or((false, false), |member| (member.ready, member.master));
+        let team = if seat == local_id {
+            info.team
+        } else {
+            stored_team_from_wire(info.team)
+        };
+        let member = o2jam_net::RoomMember {
+            nickname: info.nickname,
+            level: info.level,
+            gender: info.gender,
+            gem: info.gem,
+            master,
+            team,
+            ready,
+            music_state: info.music_state,
+            equipment: info.equipments,
+            music_ids: info.music_ids,
+            cash_point: info.cash_point,
+            free_pass: u32::try_from(info.free_pass).unwrap_or(0),
+            playing_state: info.playing_state,
+            administrator: false,
+            super_manager: false,
+        };
+        self.game.seat_waiting_member(seat, member.clone());
+        if let Some(room) = self.joined_room.as_mut() {
+            room.seat_member(seat, member);
+        }
+    }
+
+    /// 5027 stages one member's owned songs into that member's row.
+    /// The handler keeps the local id separate but calls the same
+    /// reader for every in-range seat, so no peer list reaches our row.
+    fn apply_member_music_list(&mut self, frame: &Frame) {
+        match SyncMemberMusicList::decode_frame(frame) {
+            Ok(list) => {
+                let ids = list.entries.iter().map(|entry| entry.music_id).collect();
+                self.stage_member_music_ids(list.member_id, ids);
+            }
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable member music list"),
         }
     }
 
@@ -4444,6 +4596,7 @@ impl OnlineSession {
             id if id == RoomStateChanged::COMMAND => self.apply_room_state(&frame),
             id if id == RoomParameterChanged::COMMAND => self.apply_room_parameter(&frame),
             id if id == RoomSkillChanged::COMMAND => self.apply_room_skills(&frame),
+            id if id == PREMIUM_TIME_COMMAND => self.apply_premium_time_list(&frame),
             id if id == SendWhisperResponse::COMMAND => self.apply_whisper_answer(chat, &frame),
             id if Generic::from_id(id).is_some() => {}
             _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),

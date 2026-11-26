@@ -261,6 +261,7 @@ mod seat_state_family {
     use std::io::Write;
     use std::sync::mpsc;
 
+    use o2jam_net::frame::encode_frame;
     use o2jam_net::message::{MusicLoaded, WaitingMemberRows, WaitingValueMemberEvent};
     use o2jam_net::play::MemberReadyStateChanged;
     use o2jam_net::rooms::{RoomMember, RoomSlotAction, RoomSlotUpdate, UserJoinedWaiting};
@@ -446,21 +447,26 @@ mod seat_state_family {
     }
 
     #[test]
-    fn member_state_word_is_accepted_without_an_invented_stage() {
+    fn member_state_three_byte_body_stages_both_seat_words() {
         // Live chain: main.rs::run_play -> assemble_online_session ->
-        // OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
-        // -> apply_waiting_frame -> apply_member_state_changed. The
-        // two state setters' shell destinations are a hand-off.
+        // OnlineSession::paint -> poll_wire_at -> poll_waiting_chat ->
+        // drain_waiting_chat -> apply_waiting_frame ->
+        // apply_member_state_changed -> ScreenGame::set_member_music_state
+        // + ScreenGame::seat_waiting_member (playing word).
         let (written_tx, written) = mpsc::channel();
-        let (mut session, server) = joined_waiting_session(joined_snapshot(), move |mut stream| {
-            let change = o2jam_net::message::MemberStateChanged { member_id: 5 };
-            stream.write_all(&change.encode()).unwrap();
-            written_tx.send(()).unwrap();
-        });
+        let (mut session, server) =
+            joined_waiting_session(room_with_peers(&[5]), move |mut stream| {
+                stream.write_all(&encode_frame(4026, &[5, 1, 4])).unwrap();
+                written_tx.send(()).unwrap();
+            });
         written.recv().unwrap();
-        paint_frame(&mut session);
+        paint_until(&mut session, |session| {
+            session.game.member_music_state(5) == Some(4)
+        });
         server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Waiting);
+        let staged = session.game.staged_waiting_member(5).unwrap();
+        assert_eq!(staged.playing_state, 1, "the +0x2130 playing word");
+        assert_eq!(staged.music_state, 4, "the +0x217c music word");
     }
 
     #[test]
@@ -611,5 +617,186 @@ mod descriptor_and_skill_family {
         });
         server.join().unwrap();
         assert_eq!(session.game.skill_slots().selected(1).unwrap().id, 33);
+    }
+}
+
+/// Tier-2 scripted-gateway guards for the 5027 peer music-list family
+/// (story #1017). The caption read-back stays at the shell seam: the
+/// Waiting `MUSICNAME` caption follows the room song, so a peer's list
+/// must not move it.
+mod music_list_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::frame::encode_frame;
+
+    use super::super::session_tests::{
+        joined_snapshot, joined_waiting_session, member_on_team, paint_until,
+    };
+
+    // ev_c129c15e1d0b02f2c35a4032d00f81ce2b3de6336c433efbe78d5439ce250068
+    // (0x563880 / file 0x163880, docs/pins/net-c1.md).
+    #[test]
+    fn peer_music_list_lands_on_the_named_seat_and_leaves_our_caption_alone() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_waiting_chat ->
+        // drain_waiting_chat -> apply_waiting_frame ->
+        // apply_member_music_list -> ScreenGame::seat_waiting_member ->
+        // paint_waiting_music (room caption source).
+        let mut room = joined_snapshot();
+        room.music_id = 757;
+        room.slots[0].member = Some(member_on_team("HOST", true, 0));
+        room.slots[2].state_code = 2;
+        room.slots[2].member = Some(member_on_team("PEER", false, 1));
+        let mut body = vec![2u8];
+        body.extend_from_slice(&2i32.to_le_bytes());
+        body.extend_from_slice(&757u16.to_le_bytes());
+        body.extend_from_slice(&900u16.to_le_bytes());
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&encode_frame(5027, &body)).unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            session
+                .game
+                .staged_waiting_member(2)
+                .is_some_and(|member| member.music_ids.len() == 2)
+        });
+        server.join().unwrap();
+        assert_eq!(
+            session.game.staged_waiting_member(2).unwrap().music_ids,
+            vec![757, 900],
+            "the 0x540db0 row belongs to the named peer seat"
+        );
+        assert!(
+            session
+                .game
+                .staged_waiting_member(0)
+                .is_some_and(|member| member.music_ids.is_empty()),
+            "our own row keeps its list"
+        );
+        assert_eq!(
+            session.game.room_music_id(),
+            Some(757),
+            "the Waiting caption keeps the room song"
+        );
+    }
+}
+
+/// Tier-2 scripted-gateway guard for the 4043 live-state drain arm
+/// (story #956). The team byte reaches the peer seat with the exe's
+/// `+1` store increment (`0x540d40`, file `0x140d40`).
+mod live_state_team_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::relay::{LiveStateResponse, MemberInfo, MemberLiveState};
+    use o2jam_net::WireMessage;
+
+    use super::super::session_tests::{
+        joined_snapshot, joined_waiting_session, member_on_team, paint_until,
+    };
+
+    /// One active peer with raw wire team 3 and all other fields empty.
+    fn live_snapshot() -> LiveStateResponse {
+        let mut members = std::array::from_fn(|_| MemberLiveState::default());
+        members[1] = MemberLiveState {
+            active: true,
+            info: Some(MemberInfo {
+                member_id: 1,
+                nickname: "WIREPEER".to_owned(),
+                level: 12,
+                gender: 0,
+                gem: 34,
+                team: 3,
+                ready: false,
+                music_state: 0,
+                equipments: [0; 17],
+                music_ids: vec![757],
+                cash_point: 0,
+                free_pass: 0,
+                playing_state: 0,
+                live_extra: 0,
+                is_room_master: false,
+                win_streak: 0,
+            }),
+        };
+        LiveStateResponse {
+            member_id: 0,
+            user_count: 2,
+            win_streak: 0,
+            members,
+        }
+    }
+
+    #[test]
+    fn live_state_4043_lands_the_incremented_team_on_the_named_peer() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_waiting_chat ->
+        // drain_waiting_chat -> apply_waiting_frame -> apply_live_state ->
+        // ScreenGame::seat_waiting_member -> paint_waiting_seat_marks.
+        let mut room = joined_snapshot();
+        room.slots[1].state_code = 2;
+        room.slots[1].member = Some(member_on_team("PEER", false, 0));
+        let snapshot = live_snapshot();
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&snapshot.encode()).unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            session
+                .game
+                .staged_waiting_member(1)
+                .is_some_and(|member| member.team == 4)
+        });
+        server.join().unwrap();
+        let staged = session.game.staged_waiting_member(1).unwrap();
+        assert_eq!(staged.team, 4, "wire team 3 stores as 4 in the seat");
+        assert_eq!(staged.music_ids, vec![757], "the same row's music list");
+    }
+}
+
+/// Tier-2 scripted-gateway guard for the 2026 premium-time handler
+/// (story #962). The exact description text stays OPEN; the row format
+/// and bitmask line counts are pinned in `o2jam-net::relay`.
+mod premium_time_family {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use o2jam_net::frame::encode_frame;
+    use o2jam_net::relay::PREMIUM_TIME_COMMAND;
+
+    use super::super::session_tests::{channel_session, paint_until};
+
+    #[test]
+    fn premium_time_2026_stages_its_rows_on_the_scripted_gateway() {
+        // Live chain: main.rs::run_online -> assemble_online_session ->
+        // OnlineSession::paint -> poll_wire_at -> poll_lobby_chat ->
+        // drain_lobby_chat -> apply_lobby_frame -> apply_premium_time_list.
+        let mut body = 2u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&0x1234u16.to_le_bytes());
+        body.extend_from_slice(&[1, 2, 3, 4, 5]);
+        body.extend_from_slice(&0x0807u16.to_le_bytes());
+        body.extend_from_slice(&[8, 9, 10, 0, 0]);
+        let (written_tx, written) = mpsc::channel();
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream
+                .write_all(&encode_frame(PREMIUM_TIME_COMMAND, &body))
+                .unwrap();
+            written_tx.send(()).unwrap();
+        });
+        written.recv().unwrap();
+        paint_until(&mut session, |session| {
+            !session.premium_time_rows.is_empty()
+        });
+        server.join().unwrap();
+        assert_eq!(session.premium_time_rows.len(), 2);
+        assert_eq!(session.premium_time_rows[0].song_id, 0x1234);
+        assert_eq!(session.premium_time_rows[0].status, [1, 2, 3, 4, 5]);
+        assert_eq!(session.premium_time_rows[1].song_id, 0x0807);
     }
 }
