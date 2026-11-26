@@ -253,6 +253,105 @@ pub struct WhisperDelivery {
     pub content: Option<String>,
 }
 
+/// Negative 3003 JoinWaiting result words and their one-OK captions.
+/// The handler is `0x55cad0` (file `0x15cad0`), REA analysis
+/// `ev_62dc049e5d6545ca23f881a2f39729001d500bb97b815b823c30ce813bcfb8fb`
+/// and addendum `ev_5336dbe5254d48f17d33ad7ed0b4fa0789916c58000848416bc3de2d0fc881f3`;
+/// per-caption offsets and IDs are in `docs/pins/input-msg.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinAnswerRefusal {
+    /// No such room number (file `0x24d928`).
+    InvalidRoomNumber,
+    /// Free users cannot enter the all-song room (`0x24d958`).
+    AllSongFreeUser,
+    /// Game already in progress (`0x24d988`).
+    GameInProgress,
+    /// Room full (`0x24d9a0`), shared by two result codes.
+    RoomFull,
+    /// Wrong password (`0x24d9b8`).
+    WrongPassword,
+    /// Single room cannot be entered (`0x24d9d0`).
+    SingleRoom,
+    /// Failure asks the player to contact an administrator (`0x24d9f4`).
+    AdministratorContact,
+}
+
+impl JoinAnswerRefusal {
+    /// Interpret one raw 3003 result word. Codes outside the pinned
+    /// set have no caption here, so they stay unmapped.
+    #[must_use]
+    pub fn for_result_code(code: u32) -> Option<Self> {
+        match code {
+            INVALID_ROOM_NUMBER_CODE => Some(Self::InvalidRoomNumber),
+            ALL_SONG_FREE_USER_CODE => Some(Self::AllSongFreeUser),
+            GAME_IN_PROGRESS_CODE => Some(Self::GameInProgress),
+            FULL_MINUS_SIX_CODE | FULL_MINUS_FOUR_CODE => Some(Self::RoomFull),
+            WRONG_PASSWORD_CODE => Some(Self::WrongPassword),
+            SINGLE_ROOM_CODE => Some(Self::SingleRoom),
+            ADMINISTRATOR_CONTACT_CODE => Some(Self::AdministratorContact),
+            _ => None,
+        }
+    }
+
+    /// Exact CP949 caption bytes for the one-OK sheet. No caption is
+    /// invented for an unmapped result.
+    #[must_use]
+    pub fn message(self) -> &'static [u8] {
+        match self {
+            Self::InvalidRoomNumber => INVALID_ROOM_NUMBER,
+            Self::AllSongFreeUser => ALL_SONG_FREE_USER,
+            Self::GameInProgress => GAME_IN_PROGRESS,
+            Self::RoomFull => ROOM_FULL_3003,
+            Self::WrongPassword => WRONG_PASSWORD_3003,
+            Self::SingleRoom => SINGLE_ROOM,
+            Self::AdministratorContact => ADMINISTRATOR_CONTACT,
+        }
+    }
+}
+
+/// Result words are two's-complement negatives on the wire: -8 .. -1.
+const INVALID_ROOM_NUMBER_CODE: u32 = 0xFFFF_FFF8;
+const ALL_SONG_FREE_USER_CODE: u32 = 0xFFFF_FFF9;
+const FULL_MINUS_SIX_CODE: u32 = 0xFFFF_FFFA;
+const GAME_IN_PROGRESS_CODE: u32 = 0xFFFF_FFFB;
+const FULL_MINUS_FOUR_CODE: u32 = 0xFFFF_FFFC;
+const WRONG_PASSWORD_CODE: u32 = 0xFFFF_FFFD;
+const SINGLE_ROOM_CODE: u32 = 0xFFFF_FFFE;
+const ADMINISTRATOR_CONTACT_CODE: u32 = 0xFFFF_FFFF;
+
+const INVALID_ROOM_NUMBER: &[u8] = &[
+    0xC0, 0xDF, 0xB8, 0xF8, 0xB5, 0xC8, 0x20, 0xB9, 0xE6, 0xB9, 0xF8, 0xC8, 0xA3, 0x20, 0xC0, 0xD4,
+    0xB4, 0xCF, 0xB4, 0xD9, 0x2E, 0x20, 0xB4, 0xD9, 0xBD, 0xC3, 0x20, 0xC0, 0xD4, 0xC0, 0xE5, 0xC0,
+    0xBB, 0x20, 0xBD, 0xC3, 0xB5, 0xB5, 0xC7, 0xD8, 0xC1, 0xD6, 0xBC, 0xBC, 0xBF, 0xE4,
+];
+const ALL_SONG_FREE_USER: &[u8] = &[
+    0xB9, 0xAB, 0xB7, 0xE1, 0xC0, 0xCC, 0xBF, 0xEB, 0xC0, 0xDA, 0xB4, 0xC2, 0x20, 0xC0, 0xFC, 0xB0,
+    0xEE, 0xC0, 0xCC, 0xBF, 0xEB, 0xB9, 0xE6, 0xBF, 0xA1, 0x20, 0xC0, 0xD4, 0xC0, 0xE5, 0xC7, 0xCF,
+    0xBD, 0xC7, 0x20, 0xBC, 0xF6, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+const GAME_IN_PROGRESS: &[u8] = &[
+    0xB0, 0xD4, 0xC0, 0xD3, 0xC0, 0xCC, 0x20, 0xC1, 0xF8, 0xC7, 0xE0, 0x20, 0xC1, 0xDF, 0x20, 0xC0,
+    0xD4, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+const ROOM_FULL_3003: &[u8] = &[
+    0xB9, 0xE6, 0xC0, 0xCE, 0xBF, 0xF8, 0xC0, 0xCC, 0x20, 0xB8, 0xF0, 0xB5, 0xCE, 0x20, 0xC3, 0xA1,
+    0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+const WRONG_PASSWORD_3003: &[u8] = &[
+    0xC6, 0xD0, 0xBD, 0xBA, 0xBF, 0xF6, 0xB5, 0xE5, 0xB0, 0xA1, 0x20, 0xC6, 0xB2, 0xB8, 0xB3, 0xB4,
+    0xCF, 0xB4, 0xD9, 0x2E,
+];
+const SINGLE_ROOM: &[u8] = &[
+    0xBD, 0xCC, 0xB1, 0xDB, 0x20, 0xB7, 0xEB, 0xC0, 0xCC, 0xB6, 0xF3, 0xBC, 0xAD, 0x20, 0xB5, 0xE9,
+    0xBE, 0xEE, 0xB0, 0xA5, 0x20, 0xBC, 0xF6, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9,
+    0x2E,
+];
+const ADMINISTRATOR_CONTACT: &[u8] = &[
+    0x5B, 0xBD, 0xC7, 0xC6, 0xD0, 0x5D, 0xC0, 0xCC, 0x20, 0xB8, 0xDE, 0xBD, 0xC3, 0xC1, 0xF6, 0xB8,
+    0xA6, 0x20, 0xBA, 0xB8, 0xBD, 0xC3, 0xB8, 0xE9, 0x20, 0xB0, 0xFC, 0xB8, 0xAE, 0xC0, 0xDA, 0xBF,
+    0xA1, 0xB0, 0xD4, 0x20, 0xB9, 0xAE, 0xC0, 0xC7,
+];
+
 /// Gate reasons the Room row press refuses, named by the exe's pinned
 /// message bytes (`docs/pins/room-waiting.md`, `0x493a50`). The
 /// already-started arm has no pinned caption here, so it stays absent
@@ -440,6 +539,7 @@ pub(super) struct ChatState {
     channel_panel: LobbyChatPanel,
     room_panel: LobbyChatPanel,
     room_join_refusal: Option<RoomJoinRefusal>,
+    join_answer_refusal: Option<JoinAnswerRefusal>,
     whisper_delivery: Option<WhisperDelivery>,
     room_user_sheet_open: bool,
     /// Named rows of a decoded 2011 sheet. Web content stays outside
@@ -833,6 +933,21 @@ impl ChatState {
     /// Forget the verdict when the one-OK sheet is dismissed.
     pub(super) fn clear_room_join_refusal(&mut self) {
         self.room_join_refusal = None;
+    }
+
+    /// One-OK caption staged by a refused 3003 answer.
+    pub(super) fn join_answer_refusal(&self) -> Option<JoinAnswerRefusal> {
+        self.join_answer_refusal
+    }
+
+    /// Stage the caption verdict carried by a 3003 answer.
+    pub(super) fn stage_join_answer_refusal(&mut self, refusal: JoinAnswerRefusal) {
+        self.join_answer_refusal = Some(refusal);
+    }
+
+    /// Forget the 3003 caption when its one-OK sheet is dismissed.
+    pub(super) fn clear_join_answer_refusal(&mut self) {
+        self.join_answer_refusal = None;
     }
 
     /// Latest 2018 delivery verdict.

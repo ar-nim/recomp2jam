@@ -18,7 +18,7 @@ use o2jam_net::rooms::{
 };
 use o2jam_net::{Request, RoomListEntry, WireMessage};
 
-use super::session_tests::{paint_until, read_frame, room_session};
+use super::session_tests::{paint_frame, paint_until, read_frame, room_session};
 use super::*;
 
 /// One staged row that passes the shell's listed-room filter.
@@ -527,6 +527,62 @@ fn scripted_2018_refusal_stages_the_zero_ink_row() {
         .find(|row| row.zero_ink)
         .expect("one refusal row");
     assert!(refusal_row.text.contains("Ghost"));
+}
+
+/// Every negative 3003 result must stage the pinned one-OK caption
+/// without entering Waiting. The seven caption strings cover eight
+/// result words: `-6` and `-4` share the room-full text.
+#[test]
+fn scripted_3003_refusals_post_a_sheet_for_every_pinned_result_code() {
+    // Live caller chain: main.rs::run_play -> assemble_online_session ->
+    // OnlineSession::poll_attempts -> poll_room_join -> drain_room_join ->
+    // JoinRoomResponse 3003 -> ScreenGame::stage_join_answer_refusal ->
+    // paint_room -> paint_information_message.
+    use o2jam_net::{JoinRoom, JoinRoomResponse};
+    use o2jam_shell::screens::game::JoinAnswerRefusal;
+
+    let cases = [
+        (-8i32, JoinAnswerRefusal::InvalidRoomNumber),
+        (-7, JoinAnswerRefusal::AllSongFreeUser),
+        (-6, JoinAnswerRefusal::RoomFull),
+        (-5, JoinAnswerRefusal::GameInProgress),
+        (-4, JoinAnswerRefusal::RoomFull),
+        (-3, JoinAnswerRefusal::WrongPassword),
+        (-2, JoinAnswerRefusal::SingleRoom),
+        (-1, JoinAnswerRefusal::AdministratorContact),
+    ];
+    for (signed_code, expected) in cases {
+        let result_code = u32::from_le_bytes(signed_code.to_le_bytes());
+        let (mut session, server) = room_session(move |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let answer = JoinRoomResponse {
+                result_code,
+                room: None,
+            };
+            stream.write_all(&answer.encode()).unwrap();
+        });
+        session.set_pending_room_join(3, "");
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        assert!(
+            session.game.dialog_owns_input(),
+            "result {signed_code} posts a one-OK sheet"
+        );
+        assert_eq!(session.screen(), Screen::Room, "refusal stays in Room");
+        assert_eq!(
+            session.game.join_answer_refusal(),
+            Some(expected),
+            "result {signed_code} maps to the pinned caption"
+        );
+        assert!(
+            !expected.message().is_empty(),
+            "the pinned caption has exe bytes"
+        );
+        server.join().unwrap();
+    }
 }
 
 #[test]

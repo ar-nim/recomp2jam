@@ -9,6 +9,7 @@
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use o2jam_net::message::MemberStateChanged;
 use o2jam_net::testing::{fake_gateway, read_frame};
@@ -16,11 +17,13 @@ use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
     WireMessage,
 };
+use o2jam_shell::screens::game::JoinAnswerRefusal;
+use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
 use crate::live_leg_support::{
-    archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
-    join_waiting_by_click, joined_room, paint, paint_frame, read_frame_until_eof, room_row,
-    MAX_SCREEN_PAINTS,
+    archives_present, boot_live_leg, channel_row, click_staged, dismiss_splash,
+    enter_room_by_clicks, information_ok_centre, join_waiting_by_click, joined_room, paint,
+    paint_frame, read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
 };
 use crate::session::OnlineSession;
 
@@ -44,6 +47,15 @@ impl TailWireGateway {
 }
 
 fn spawn_tail_wire_gateway(room: o2jam_net::JoinedRoom) -> TailWireGateway {
+    spawn_tail_wire_gateway_with_join_refusal(room, None)
+}
+
+/// Every join answers with `refusal`; room entry itself sends no
+/// 3002, so the first join is the staged row press.
+fn spawn_tail_wire_gateway_with_join_refusal(
+    room: o2jam_net::JoinedRoom,
+    refusal: Option<i32>,
+) -> TailWireGateway {
     let (join_tx, join_answer_written) = mpsc::channel();
     let (script, script_rx) = mpsc::channel::<Vec<u8>>();
     let (script_written_tx, script_written) = mpsc::channel();
@@ -96,15 +108,17 @@ fn spawn_tail_wire_gateway(room: o2jam_net::JoinedRoom) -> TailWireGateway {
         });
         while let Some(frame) = read_frame_until_eof(&mut stream) {
             if frame.id == Request::JoinWaiting.id() {
-                stream
-                    .write_all(
-                        &JoinRoomResponse {
-                            result_code: 0,
-                            room: Some(room.clone()),
-                        }
-                        .encode(),
-                    )
-                    .unwrap();
+                let answer = match refusal {
+                    Some(code) => JoinRoomResponse {
+                        result_code: u32::from_le_bytes(code.to_le_bytes()),
+                        room: None,
+                    },
+                    None => JoinRoomResponse {
+                        result_code: 0,
+                        room: Some(room.clone()),
+                    },
+                };
+                stream.write_all(&answer.encode()).unwrap();
                 join_tx.send(()).unwrap();
             }
         }
@@ -131,6 +145,111 @@ fn finish(session: OnlineSession, gateway: TailWireGateway) {
     drop(session);
     drop(gateway.script);
     gateway.server.join().unwrap();
+}
+
+/// Boot into Room through pointer snapshots; room entry sends no
+/// 3002 here, so the first staged row press owns the refusal.
+fn boot_room_before_refused_row(port: u16) -> OnlineSession {
+    let mut session = boot_live_leg(port, false);
+    dismiss_splash(&mut session);
+    enter_room_by_clicks(&mut session);
+    session
+}
+
+fn changed_pixels(before: &[u32], after: &[u32]) -> usize {
+    assert_eq!(before.len(), after.len());
+    before
+        .iter()
+        .zip(after)
+        .filter(|(left, right)| left != right)
+        .count()
+}
+
+fn press_refused_row_and_await_answer(session: &mut OnlineSession, gateway: &TailWireGateway) {
+    click_staged(session, Screen::Room, "IDC_BUTTON_SROOM_EXBUTTON1");
+    paint(session);
+    gateway
+        .join_answer_written
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the row press was answered by a refusal");
+    paint(session);
+}
+
+/// #1018 Tier 3, first half of the popup pair. Live caller chain:
+///   main.rs::run_play -> connect::connect_and_login_with_transport ->
+///   boot_live_leg -> dismiss_splash -> enter_room_by_clicks ->
+///   staged row click -> OnlineSession::poll_attempts -> drain_room_join ->
+///   3003 result -6 -> ScreenGame::stage_join_answer_refusal ->
+///   paint_room -> paint_information_message.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
+    let mut session = boot_room_before_refused_row(gateway.port);
+    let before = paint_frame(&mut session);
+    press_refused_row_and_await_answer(&mut session, &gateway);
+
+    assert_eq!(session.screen(), Screen::Room, "a refusal stays in Room");
+    assert!(
+        session.game_mut().dialog_owns_input(),
+        "the 3003 refusal owns the next click"
+    );
+    assert_eq!(
+        session.game_mut().join_answer_refusal(),
+        Some(JoinAnswerRefusal::RoomFull),
+        "the pinned room-full caption is staged"
+    );
+    assert!(
+        changed_pixels(&before, &paint_frame(&mut session)) > 0,
+        "the refusal sheet paints over the Room board"
+    );
+    finish(session, gateway);
+}
+
+/// #1018 Tier 3, second half of the popup pair. Live caller chain:
+///   main.rs::run_play -> ... -> 3003 result -6 ->
+///   ScreenGame::stage_join_answer_refusal -> ScreenGame::click_room ->
+///   information_ok_hit -> ChatState::clear_join_answer_refusal.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_3003_refusal_ok_dismisses_the_sheet_without_a_new_wire_frame() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
+    let mut session = boot_room_before_refused_row(gateway.port);
+    press_refused_row_and_await_answer(&mut session, &gateway);
+    assert!(
+        session.game_mut().dialog_owns_input(),
+        "the sheet is up before OK"
+    );
+    let before_ok = paint_frame(&mut session);
+    let (ok_x, ok_y) = information_ok_centre();
+    session.ingest_snapshot(&InputSnapshot::click_at(ok_x, ok_y));
+
+    assert!(
+        !session.game_mut().dialog_owns_input(),
+        "OK hands input back to the Room board"
+    );
+    assert_eq!(
+        session.game_mut().join_answer_refusal(),
+        None,
+        "OK clears the staged caption"
+    );
+    assert!(
+        changed_pixels(&before_ok, &paint_frame(&mut session)) > 0,
+        "OK removes the painted sheet"
+    );
+    assert!(
+        gateway.join_answer_written.try_recv().is_err(),
+        "the dismissal posts no further join"
+    );
+    finish(session, gateway);
 }
 
 #[test]
