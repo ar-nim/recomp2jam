@@ -102,6 +102,7 @@ mod live_shop_control_tests {
             println!("SKIP live_gift_pager_wraps_clamps_and_clears_the_picked_row_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
         let (avatar, gift_ids) = installed_avatar_with_gift_ids();
@@ -205,6 +206,7 @@ mod live_shop_control_tests {
             println!("SKIP live_select_music_row_filter_narrows_the_dialog_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
         dismiss_splash(&mut session);

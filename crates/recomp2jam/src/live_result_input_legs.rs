@@ -250,6 +250,7 @@ mod live_result_input_leg_tests {
             println!("SKIP live_result_keyboard_back_sends_4021_and_installs_waiting_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_result_back_gateway(joined_room(0, true));
         let mut session = walk_to_live_result(&gateway, None);
         let before = paint_frame(&mut session);
@@ -294,6 +295,7 @@ mod live_result_input_leg_tests {
             println!("SKIP live_result_speed_from_4050_is_painted_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_result_speed_gateway(joined_room(0, true));
         let mut session = walk_to_live_result(&gateway, Some(9));
         assert_eq!(
@@ -336,6 +338,7 @@ mod live_result_input_leg_tests {
             println!("SKIP live_staged_hit_burst_lands_as_one_body_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let archive = read_install_archives(&install_root())
             .playing
             .expect("playing archive behind the guard");

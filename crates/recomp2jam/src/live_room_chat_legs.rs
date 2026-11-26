@@ -149,6 +149,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_room_typed_draft_inks_the_staged_edit_rect_and_sends_one_2012_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -202,6 +203,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_room_chat_rows_ink_two_distinct_senders_in_the_staged_list_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -258,6 +260,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_room_row_press_joins_when_eligible_and_refuses_without_a_frame_when_not: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let eligible_gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut eligible = boot_live_leg_with_art(eligible_gateway.port, false);
         dismiss_splash(&mut eligible);
@@ -328,6 +331,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_started_room_row_press_posts_3002_and_the_minus_five_sheet_stays_in_room: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_started_room_gateway();
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -394,6 +398,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_room_exit_closes_the_user_sheet_and_refreshes_gift_on_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -442,6 +447,7 @@ mod live_room_chat_leg_tests {
             println!("SKIP live_room_2018_answer_keeps_the_delivery_verdict_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);

@@ -33,6 +33,7 @@ mod live_payment_spec_leg_tests {
             println!("SKIP live_payment_web_rebuild_closes_the_old_window_before_the_new_page: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -71,6 +72,7 @@ mod live_payment_spec_leg_tests {
             println!("SKIP live_gift_web_rebuild_keeps_both_pinned_urls_on_the_session_id: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -115,6 +117,7 @@ mod live_payment_spec_leg_tests {
             println!("SKIP live_print_screen_counts_presses_and_notices_when_the_counter_is_empty: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -204,6 +207,7 @@ mod live_payment_spec_leg_tests {
             println!("SKIP live_print_screen_writer_writes_a_numbered_jpeg_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -247,6 +251,7 @@ mod live_payment_spec_leg_tests {
             println!("SKIP live_exhausted_print_screen_posts_the_pinned_event_words: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -301,6 +306,7 @@ mod live_cash_bill_host_leg_tests {
             println!("SKIP live_native_cash_charge_covers_all_five_publisher_hosts_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);

@@ -695,7 +695,9 @@ mod live_dual_client_leg_tests {
         SLOT_UPDATE_OPCODE, START_ANSWER_OPCODE, START_REQUEST_OPCODE, WHISPER_CONTENT,
         WHISPER_RECEIVE_OPCODE, WHISPER_SENDER, WHISPER_SEND_OPCODE, WHISPER_TARGET,
     };
-    use crate::live_leg_support::{archives_present, joined_room, paint, staged_rect_pixels};
+    use crate::live_leg_support::{
+        archives_present, hold_live_leg_lock, joined_room, paint, staged_rect_pixels,
+    };
 
     const LOADING_HARNESS_TAG: &str = "dual-loading-4010-4011-4012";
     // Harness label only, not a field read from the 7.55 client.
@@ -720,6 +722,7 @@ mod live_dual_client_leg_tests {
         if skip_if_no_archives(guard) {
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
         gateway.set_harness_tag(guard);
         let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
@@ -786,6 +789,7 @@ mod live_dual_client_leg_tests {
         if skip_if_no_archives(guard) {
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
         gateway.set_harness_tag(guard);
         let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
@@ -853,6 +857,7 @@ mod live_dual_client_leg_tests {
         if skip_if_no_archives(guard) {
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = DualGateway::spawn_with_rooms(vec![
             joined_room(MASTER_MEMBER_ID, true),
             joined_room(GUEST_MEMBER_ID, true),
@@ -1044,6 +1049,7 @@ mod live_dual_client_leg_tests {
         if skip_if_no_archives(guard) {
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = DualGateway::spawn_with_rooms(vec![
             joined_room(MASTER_MEMBER_ID, true),
             joined_room(GUEST_MEMBER_ID, true),

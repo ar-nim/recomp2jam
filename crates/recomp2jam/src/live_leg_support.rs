@@ -9,6 +9,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use o2jam_net::frame::encode_frame;
@@ -32,6 +33,17 @@ use crate::{
     stage_channel_list_after_relay_gate, stage_online_identity, stage_online_rooms,
 };
 use o2jam_shell::screens::side::{PlanetOptionTab, ROOM_OPTION_BUTTON_CODE};
+
+/// One lock for every booted live leg. A dual-client leg runs two gateways;
+/// without this, its threads can starve another leg's gateway and trip a
+/// wall-clock answer wait in the full suite.
+static LIVE_LEG_LOCK: Mutex<()> = Mutex::new(());
+
+/// Hold this guard for a whole leg, after its archive check. The guard
+/// releases the lock on every exit, including a panic or a SKIP return.
+pub(crate) fn hold_live_leg_lock() -> MutexGuard<'static, ()> {
+    LIVE_LEG_LOCK.lock().expect("live leg lock")
+}
 
 /// Live boot rows: one channel (the resident one) and one room.
 pub(crate) fn channel_row() -> ChannelState {

@@ -66,6 +66,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_messenger_sheet_keeps_the_boot_scene_cue_on_the_null_backend: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -108,6 +109,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_display_mode_change_plans_the_native_rebuild_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -144,6 +146,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_cash_bill_and_bingo_ui_events_open_one_sheet_after_the_prior_closes: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -175,6 +178,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_qa_ui_event_uses_the_exe_scene_two_rect_shift: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -203,6 +207,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_both_global_web_sheets_show_then_hide_on_the_app_event: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -234,6 +239,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_uhp_start_names_the_success_caption_and_4046_frame: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -264,6 +270,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_error_popup_accepts_supplied_text_and_mapped_codes: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -294,6 +301,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_supplied_error_paints_a_popup_over_the_boot_frame: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut handler, server) = boot_error_leg();
         let scene = paint_handler_frame(&mut handler);
         let decision = handler.raise_error_from_supplied("display driver failed", true);
@@ -331,6 +339,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_mapped_error_code_paints_the_pinned_text_over_the_boot_frame: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut handler, server) = boot_error_leg();
         let before = paint_handler_frame(&mut handler);
         let decision = handler
@@ -366,6 +375,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_zero_error_code_leaves_the_boot_frame_unchanged: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut handler, server) = boot_error_leg();
         let before = paint_handler_frame(&mut handler);
         assert_eq!(handler.raise_error_from_code(0, true), None);
@@ -388,6 +398,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_cursor_request_applies_the_persisted_mode_to_the_pointer_arm: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -414,6 +425,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_window_close_takes_the_boot_session_to_the_exit_decision: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -436,6 +448,7 @@ mod live_messenger_leg_tests {
             println!("SKIP live_double_click_raises_the_pinned_notice_when_the_bit_is_set: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);

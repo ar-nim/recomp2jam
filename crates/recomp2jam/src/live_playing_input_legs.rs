@@ -24,7 +24,7 @@ use o2jam_shell::{GameLoop, MenuKey, Screen};
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks, finish,
-    join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
+    hold_live_leg_lock, join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
     read_frame_until_eof, room_row, spawn_live_leg_gateway, spawn_result_back_gateway,
     LiveLegGateway, MAX_SCREEN_PAINTS,
 };
@@ -89,6 +89,7 @@ fn live_focus_off_and_on_reach_the_booted_scene_bgm_stop_hook() {
         println!("SKIP live_focus_off_and_on_reach_the_booted_scene_bgm_stop_hook: missing install-root interface archive");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_live_leg_gateway(joined_room(0, true));
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);
@@ -227,6 +228,7 @@ fn live_4035_acquire_arms_the_local_badge_from_boot() {
         println!("SKIP live_4035_acquire_arms_the_local_badge_from_boot: missing install-root interface archive");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_acquire_gateway(joined_room(0, true));
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);
@@ -277,6 +279,7 @@ fn live_focus_return_from_playing_installs_room_from_boot() {
         println!("SKIP live_focus_return_from_playing_installs_room_from_boot: missing install-root interface archive");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_focus_leg(joined_room(0, true));
     session.menu_key(MenuKey::Confirm, true);
     assert_eq!(session.screen(), Screen::Playing, "the gate handed off");
@@ -312,6 +315,7 @@ fn live_focus_return_from_loading_empty_title_clears_seats_and_installs_room_fro
         println!("SKIP live_focus_return_from_loading_empty_title_clears_seats_and_installs_room_from_boot: missing install-root interface archive");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let mut room = joined_room(0, true);
     room.title.clear();
     let (mut session, gateway) = boot_focus_leg(room);
@@ -351,6 +355,7 @@ fn live_focus_return_from_loading_named_room_installs_waiting_from_boot() {
         println!("SKIP live_focus_return_from_loading_named_room_installs_waiting_from_boot: missing install-root interface archive");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_focus_leg(joined_room(0, true));
     let before = paint_frame(&mut session);
 

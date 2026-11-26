@@ -17,7 +17,6 @@ mod live_input_leg_tests {
     use std::net::TcpStream;
     use std::rc::Rc;
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-    use std::sync::Mutex;
 
     use std::time::{Duration, Instant};
 
@@ -77,6 +76,7 @@ mod live_input_leg_tests {
             println!("SKIP live_click_result_back_sends_4021_and_installs_waiting_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_result_back_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -167,6 +167,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_messenger_press_mounts_the_one_ok_liveness_sheet_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -239,6 +240,7 @@ mod live_input_leg_tests {
             println!("SKIP live_click_waiting_back_sends_the_room_leave_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -293,6 +295,7 @@ mod live_input_leg_tests {
             println!("SKIP live_click_rejoin_after_back_sends_a_second_join_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -352,6 +355,7 @@ mod live_input_leg_tests {
             println!("SKIP live_click_dialog_ok_releases_the_held_channel_rows: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, true);
         dismiss_splash(&mut session);
@@ -446,6 +450,7 @@ mod live_input_leg_tests {
 
     #[test]
     fn live_click_guest_ready_then_back_from_boot() {
+        let _live_leg_guard = hold_live_leg_lock();
         waiting_lifecycle_by_clicks(
             stringify!(live_click_guest_ready_then_back_from_boot),
             1,
@@ -457,6 +462,7 @@ mod live_input_leg_tests {
 
     #[test]
     fn live_click_master_start_then_back_from_boot() {
+        let _live_leg_guard = hold_live_leg_lock();
         waiting_lifecycle_by_clicks(
             stringify!(live_click_master_start_then_back_from_boot),
             0,
@@ -582,6 +588,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_top_tabs_pair_by_bnd_ordinal_and_queue_enter_shop: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         for tab in room_top_tabs() {
             // One fresh boot per aim: the side-sweep rig pressed all
             // four aims in one live session without leaving the first
@@ -630,6 +637,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_itemshop_routes_with_a_pending_join_intent: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         // The wave-4 driver boots with `--join-room 0`.
@@ -758,6 +766,7 @@ mod live_input_leg_tests {
             println!("SKIP live_itemshop_entry_mounts_the_exe_shop_state_from_room_and_myroom: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let samples = staged_shop_samples();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
@@ -827,6 +836,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_quickjoin_click_posts_3002_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         // This gateway boot fetches no character; stage the same 2001
@@ -955,6 +965,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_wa_tabs_toggle_the_selection_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -1085,6 +1096,7 @@ mod live_input_leg_tests {
             println!("SKIP live_shop_browse_scroll_tabs_and_grid_change_goods_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -1191,6 +1203,7 @@ mod live_input_leg_tests {
             println!("SKIP live_shop_go_myroom_enters_myroom_without_an_exit_send: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -1244,6 +1257,7 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane() {
+        let _live_leg_guard = hold_live_leg_lock();
         assert_options_key_capture_from(
             stringify!(
                 live_options_key_capture_from_room_eats_unmapped_keys_and_rebinds_armed_lane
@@ -1267,6 +1281,7 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane() {
+        let _live_leg_guard = hold_live_leg_lock();
         assert_options_key_capture_from(
             stringify!(
                 live_options_key_capture_from_planet_eats_unmapped_keys_and_rebinds_armed_lane
@@ -1443,6 +1458,7 @@ mod live_input_leg_tests {
             println!("SKIP options_key_hover_preserves_rest_ink_with_distinct_off_on_off_frames: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         for entry in [OptionsEntry::Room, OptionsEntry::Planet] {
             let gateway = spawn_live_leg_gateway(joined_room(0, true));
             let mut session = boot_live_leg_with_art(gateway.port, false);
@@ -1530,6 +1546,7 @@ mod live_input_leg_tests {
             println!("SKIP options_key_tab_and_cell_clicks_keep_exe_dispatch_from_both_entries: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         // Staged Key-tab footer codes from exe click arm 0x4383d0.
         const KEY_SAVE: u32 = 0x2520_0016;
         const KEY_EXIT: u32 = 0x2520_0017;
@@ -1762,11 +1779,6 @@ mod live_input_leg_tests {
         calls
     }
 
-    /// The two #180 legs share one fake gateway shape. Serializing
-    /// them keeps a second MyRoom gateway from racing the clock-based
-    /// Waiting/Result legs when cargo runs the whole suite in parallel.
-    static MYROOM_LIVE_LEG_LOCK: Mutex<()> = Mutex::new(());
-
     /// #180 T5: the baked STATUS badge click flips the upper-right
     /// face and sends nothing. Statics pin the first-click direction
     /// and the local face write (`FUN_004a3ee0`, file `0xa3ee0`,
@@ -1789,11 +1801,11 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot() {
-        let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
         if !archives_present() {
             println!("SKIP live_click_on_the_baked_status_badge_opens_the_status_plate_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -1896,11 +1908,11 @@ mod live_input_leg_tests {
     /// Archives absent -> skip cleanly (CI has no game data).
     #[test]
     fn my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot() {
-        let _leg_guard = MYROOM_LIVE_LEG_LOCK.lock().expect("MyRoom leg lock");
         if !archives_present() {
             println!("SKIP my_bag_press_round_trips_the_present_box_and_bag_grid_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -2054,6 +2066,7 @@ mod live_input_leg_tests {
             println!("SKIP live_cart_face_keeps_set_item_prices_dark_and_the_alarm_popup_bodyless_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         if let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) {
@@ -2292,6 +2305,7 @@ mod live_input_leg_tests {
             println!("SKIP live_waiting_chat_tabs_keep_addressed_rows_and_send_with_the_selected_mode_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_chat_tabs_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -2526,6 +2540,7 @@ mod live_input_leg_tests {
             println!("SKIP the_message_sheet_rest_face_keeps_the_baked_gray_buttons: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_prestaged_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -2891,6 +2906,7 @@ mod live_input_leg_tests {
             println!("SKIP the_wallet_cell_ink_follows_the_pinned_word: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         // Distinct words: word 1 only the gem, word 3 the W cell,
         // word 4 the cash-point slot that 5029 later overwrites.
         let (gateway, wallet_answer_written) = spawn_wallet_leg_gateway(
@@ -3110,6 +3126,7 @@ mod live_input_leg_tests {
             println!("SKIP live_waiting_back_rest_inks_the_staged_exe_plate_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         assert_waiting_hot_back_records_intact();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
@@ -3201,6 +3218,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_itemshop_click_mounts_the_shop_side_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let samples = staged_shop_samples();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
@@ -3257,6 +3275,7 @@ mod live_input_leg_tests {
             println!("SKIP live_room_myroom_click_mounts_the_myroom_side_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
@@ -3366,6 +3385,7 @@ mod live_input_leg_tests {
             println!("SKIP live_cart_row_price_inks_the_pinned_currency_suffix_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_live_item_shop();
         let slot = live_shop_rect(&mut session, SHOP_CART_TOGGLE_FIRST_CODE);
         let template = live_shop_rect(&mut session, SHOP_CART_PRICE_CODE);
@@ -3444,6 +3464,7 @@ mod live_input_leg_tests {
             println!("SKIP live_cart_totals_and_pager_follow_the_local_cart_vector_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_live_item_shop();
         let money = live_shop_rect(&mut session, SHOP_CART_CHECKMONEY_CODE);
         let gem = live_shop_rect(&mut session, SHOP_CART_CHECKGEM_CODE);
@@ -3517,6 +3538,7 @@ mod live_input_leg_tests {
             println!("SKIP live_cart_buy_plate_follows_the_face_flag_and_an_empty_click_is_silent: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_live_item_shop();
         let buy = live_shop_rect(&mut session, SHOP_BUYITEM_CODE);
         let bagsort = live_shop_rect(&mut session, SHOP_BAGSORT_CODE);
@@ -3640,6 +3662,7 @@ mod live_input_leg_tests {
             println!("SKIP live_music_shop_buy_sends_one_5015_and_sort_pager_stay_wire_quiet: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -3780,6 +3803,7 @@ mod live_input_leg_tests {
             println!("SKIP live_wallet_digits_yield_to_the_message_sheet_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (gateway, wallet_answer_written) = spawn_wallet_leg_gateway(
             joined_room(0, true),
             vec![(15_527, 0), (626, 0)],
@@ -3890,6 +3914,7 @@ mod live_input_leg_tests {
             println!("SKIP live_cart_pager_total_uses_the_full_vector_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_live_item_shop();
         let total_ones = live_shop_rect(&mut session, SHOP_CART_PAGE_TOT_ONES_CODE);
         let current_ones = live_shop_rect(&mut session, SHOP_CART_PAGE_CUR_ONES_CODE);
@@ -3952,6 +3977,7 @@ mod live_input_leg_tests {
             println!("SKIP live_repeated_row_picks_append_cart_rows_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_live_item_shop();
         let price_template = live_shop_rect(&mut session, SHOP_CART_PRICE_CODE);
         let row_rects = (0..3)
