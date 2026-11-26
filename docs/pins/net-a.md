@@ -362,3 +362,17 @@ is recorded; see `docs/live-path-reachability.md`.
 The spec-shaped copy of the player-visible subset is in
 `/home/arnim/scratch/lanes-2026-11-25/spec-enrich-pins-net-a.md`; the query log is
 `findings-pins-net-a.md` in the same directory.
+
+### `0x541690` live-extra setter addendum (2026-11-25 senior REA pass)
+
+`0x541690` stores one wire byte at member record `+0x2131`, immediately
+after the playing-state byte at `+0x2130` and before the music-state byte
+at `+0x217c`. Its resolved callers are the 3003 join reader `0x55cad0`,
+the 3004 member reader `0x55d420`, the 3003 snapshot helper `0x559b50`,
+and the member-list helper `0x55d820`. This pins the storage order for
+#1000; no player-visible consumer of `+0x2131` was established, so its
+value semantics remain OPEN.
+
+Evidence: `ev_6d732c7df583d4e6a5f8d63d055b7e2701cb6917059946f47ea3a81f9cf1be17`
+(setter), `ev_2286141f913f9ff1c4e4b504a4f9da8f54770ac2eddb3b1930c94e8d12898875`
+(callers).

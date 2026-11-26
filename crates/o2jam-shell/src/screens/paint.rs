@@ -74,6 +74,7 @@ use crate::options::{OptionsSettings, WindowCursorStage};
 use crate::staging::ShopPriceFonts;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
+use o2jam_net::relay::PremiumTimeRow;
 use o2jam_net::{
     rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
     KeyMode, MemberRole, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
@@ -4158,6 +4159,58 @@ pub fn paint_myroom_confirm(frame: &mut Frame<'_>, art: Option<&SceneArt>, messa
     }
 }
 
+/// The one staged Information message cell, or its archive-less
+/// fallback. Geometry always comes from the `.bnd` placement.
+fn staged_information_message_rect(art: Option<&SceneArt>) -> Rect {
+    art.filter(|art| art.has_figures())
+        .and_then(|art| {
+            let origin = dialog_origin(&art.placements);
+            art.placements
+                .iter()
+                .find(|placement| placement.code == INFORMATION_MESSAGE_CODE)
+                .map(|placement| Rect {
+                    x: placement.rect.x + origin.0,
+                    y: placement.rect.y + origin.1,
+                    w: placement.rect.w,
+                    h: placement.rect.h,
+                })
+        })
+        .unwrap_or_else(|| quit_fallback_rects().0)
+}
+
+/// Paint the pinned 2026 premium-time rows in a staged description
+/// rect. Song ids are wire values; the description text and status
+/// byte meanings stay OPEN, so no prose is invented here. The exe's
+/// own description rect is unpinned; the staged Information cell is
+/// our presentation seam, not an exe geometry claim.
+pub fn paint_premium_time_rows(
+    frame: &mut Frame<'_>,
+    art: Option<&SceneArt>,
+    rows: &[PremiumTimeRow],
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let staged_rect = staged_information_message_rect(art);
+    let rect = scale_rect_to_frame(&staged_rect, frame.w, frame.h);
+    let line_height = usize::try_from(rect.h).unwrap_or(0) / rows.len();
+    if line_height == 0 {
+        return;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let top = index.saturating_mul(line_height);
+        let cell = Rect {
+            x: rect.x,
+            y: rect
+                .y
+                .saturating_add(i32::try_from(top).unwrap_or(i32::MAX)),
+            w: rect.w,
+            h: u32::try_from(line_height).unwrap_or(0),
+        };
+        paint_text_into_rect(frame, cell, &row.song_id.to_string(), CP949_INK);
+    }
+}
+
 /// One-OK sheet painter shared by the relay notice, the Room fuse, and
 /// the refused channel enter (#717). The caller owns the exact CP949
 /// bytes; geometry comes only from the staged `.bnd` rects or the
@@ -5086,6 +5139,93 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
     }
 }
 
+/// Floor compared with the row's `+0x88` word by `0x5251b0`.
+pub(crate) const ROOM_DETAIL_ENABLE_FLOOR: u32 = 0x64;
+
+/// Whether a bound Room row lights its detail readout (`0x5251b0`,
+/// file `0x1251b0`). The row's first title byte must be nonzero, and
+/// the `+0x88` word must reach the exe's `0x64` floor. A null row
+/// never lights it.
+#[must_use]
+pub(crate) fn room_detail_enable_is_set(room: Option<&RoomListEntry>, member_word: u32) -> bool {
+    room.is_some_and(|room| {
+        room.title
+            .as_bytes()
+            .first()
+            .is_some_and(|title_byte| *title_byte != 0)
+            && member_word >= ROOM_DETAIL_ENABLE_FLOOR
+    })
+}
+
+/// Text wells owned by the detail readout. They are withheld from
+/// the scene painter so the enable arm can repaint them over the row
+/// ink; the control itself stays staged, as with bundled chrome.
+pub(crate) const ROOM_DETAIL_READOUT_IDS: [&str; 3] = [
+    ROOM_DETAIL_MUSIC_ID,
+    ROOM_DETAIL_DIFFICULTY_ID,
+    ROOM_DETAIL_LEVEL_ID,
+];
+
+/// Read the staged board with the readout wells withheld from the
+/// scene painter. The readout is painted after the row ink, so a
+/// disabled control never leaves a lit template line behind.
+pub(crate) fn room_detail_readout_art(art: &SceneArt) -> SceneArt {
+    let mut gated = art.clone();
+    gated
+        .placements
+        .retain(|placed| !ROOM_DETAIL_READOUT_IDS.contains(&placed.id.as_str()));
+    gated
+}
+
+/// Paint the bound row's readout over the finished row ink. Only the
+/// staged text wells carry player-visible detail labels; icon wells
+/// stay owned by their figures.
+pub(crate) fn paint_room_detail_readout(
+    frame: &mut Frame<'_>,
+    room: &RoomListEntry,
+    highlight: usize,
+    placements: &[ScenePlacement],
+) {
+    let Some((panel_x, panel_y)) = room_panel_origins(placements).get(highlight).copied() else {
+        return;
+    };
+    for (id, text) in room_detail_entries(room) {
+        if !ROOM_DETAIL_READOUT_IDS.contains(&id) {
+            continue;
+        }
+        let Some(placed) = placements.iter().find(|placed| placed.id == id) else {
+            continue;
+        };
+        paint_room_text_into_rect(
+            frame,
+            Rect {
+                x: placed.rect.x + panel_x,
+                y: placed.rect.y + panel_y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            },
+            &text,
+            caption_ink(art_title_ink()),
+        );
+    }
+}
+
+/// Flat fallback with the same readout gate as the staged board.
+pub(crate) fn paint_room_list_with_detail_gate(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    detail_enabled: bool,
+) {
+    if detail_enabled {
+        paint_room_list(frame, rooms, highlight);
+        return;
+    }
+    fill_background(frame, Screen::Room);
+    paint_title(frame, "ROOM");
+    paint_room_rows(frame, rooms, highlight, None);
+}
+
 #[cfg(test)]
 mod paint_tests {
     /// One solid probe figure at a known sprite anchor. Its ink lands
@@ -5111,6 +5251,45 @@ mod paint_tests {
         blob.extend_from_slice(&pixels);
         let sprite = o2jam_file::parse_sprite55(&blob).expect("synthetic pose frame");
         AvatarFigure::from_sprite55_frame(&sprite, 0)
+    }
+
+    #[test]
+    fn premium_time_rows_ink_only_the_staged_song_ids() {
+        // seam: the painter consumes staged rows and staged rects; the
+        // 2026 wire staging is pinned by `premium_time_2026_stages_its_rows_on_the_scripted_gateway`.
+        let rows = [
+            PremiumTimeRow {
+                song_id: 757,
+                status: [0; 5],
+            },
+            PremiumTimeRow {
+                song_id: 900,
+                status: [1, 2, 3, 4, 5],
+            },
+        ];
+        let mut pixels = vec![0u32; 800 * 600];
+        {
+            let mut frame = Frame {
+                buf: &mut pixels,
+                w: 800,
+                h: 600,
+            };
+            paint_premium_time_rows(&mut frame, None, &[]);
+        }
+        let blank = pixels.clone();
+        {
+            let mut frame = Frame {
+                buf: &mut pixels,
+                w: 800,
+                h: 600,
+            };
+            paint_premium_time_rows(&mut frame, None, &rows);
+        }
+        assert!(blank.iter().all(|pixel| *pixel == 0));
+        assert!(
+            pixels != blank,
+            "staged song ids must ink inside the description rect"
+        );
     }
 
     #[test]
@@ -5175,7 +5354,7 @@ mod paint_tests {
         // v6 re-pair rerun after merge, not the pre-fix wave.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
         let Some(source) = crate::avatar_source::read_installed_avatar(&root) else {
-            println!("skip: missing install-root avatar archive");
+            println!("SKIP featured_card_blits_the_full_body_sprite_at_the_exe_native_box: missing install-root avatar archive");
             return;
         };
         let figures = crate::avatar::load_shop_featured_figures(source.archive(), source.table());
@@ -5392,6 +5571,9 @@ mod paint_tests {
         // place the literal sprite names and their frame shapes can
         // be checked against the pin; skip cleanly without game data.
         let Some(archive) = interface_archive() else {
+            println!(
+                "SKIP staged_shop_price_fonts_come_from_the_exe_archive_atlas: install-root absent"
+            );
             return;
         };
         let entries = o2jam_file::parse_opi(&archive).expect("Interface directory parses");
@@ -5437,6 +5619,9 @@ mod paint_tests {
         // frames: the sprite raster, not just its pinned position,
         // must reach the canvas. Skips without install-root.
         let Some(archive) = interface_archive() else {
+            println!(
+                "SKIP featured_price_row_inks_the_real_archive_glyph_raster: install-root absent"
+            );
             return;
         };
         let fonts = stage_shop_price_fonts(&archive, StageContext::default())
@@ -8351,6 +8536,49 @@ mod paint_tests {
     }
 
     #[test]
+    fn room_detail_enable_table_pins_null_empty_title_and_the_one_hundred_word_floor() {
+        // Live caller chain: main.rs::run_play -> connect::connect_and_login_with_transport
+        // -> assemble_online_session -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::click_room_row -> ScreenGame::bind_room_detail
+        // -> paint::room_detail_enable_is_set.
+        let row = |title: &str| RoomListEntry {
+            number: 3,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id: 1,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 0,
+            max_level: 99,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        };
+        assert!(!room_detail_enable_is_set(None, 100), "null row stays dark");
+        assert!(
+            !room_detail_enable_is_set(Some(&row("")), 100),
+            "empty title stays dark"
+        );
+        assert!(
+            !room_detail_enable_is_set(Some(&row("Jam")), 99),
+            "word 99 is below the floor"
+        );
+        assert!(
+            room_detail_enable_is_set(Some(&row("Jam")), 100),
+            "word 100 is the first enabled value"
+        );
+        assert!(
+            room_detail_enable_is_set(Some(&row("Jam")), 101),
+            "word 101 stays enabled"
+        );
+    }
+
+    #[test]
     fn room_detail_entries_cover_every_panel_line() {
         let entries = room_detail_entries(&detailed_room());
         assert_eq!(entries.len(), ROOM_DETAIL_LINES);
@@ -11021,6 +11249,7 @@ mod paint_tests {
         // frame's holes show the sibling frames (ghost of the previous
         // banner where the exe shows the dialog backdrop).
         let Some(archive) = interface_archive() else {
+            println!("SKIP promo_banner_paints_only_the_selected_frame: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Planet, StageContext::default())
@@ -11097,6 +11326,7 @@ mod paint_tests {
         // only for a nonzero key (docs/claims-render.md rule 4), so a
         // stored black pixel must cover the board art beneath it.
         let Some(archive) = interface_archive() else {
+            println!("SKIP planet_zero_key_black_plates_cover_the_board_art: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Planet, StageContext::default())
@@ -11143,6 +11373,7 @@ mod paint_tests {
         // transparent pixels are zero words: the band must not hide
         // the header backdrop, unlike the key-0 `.ojs` plates.
         let Some(archive) = interface_archive() else {
+            println!("SKIP waiting_notice_board_zero_words_leave_the_header_backdrop_visible: install-root absent");
             return;
         };
         let staged = stage_state(&archive, State::Waiting, StageContext::default())
@@ -11184,6 +11415,7 @@ mod paint_tests {
         // their black pixels are opaque in 7.55, so the flanks show
         // dark vinyl instead of the board art under the dialog holes.
         let Some(archive) = interface_archive() else {
+            println!("SKIP channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels: install-root absent");
             return;
         };
         let staged_board = stage_state(&archive, State::Planet, StageContext::default())
@@ -12428,7 +12660,7 @@ mod paint_tests {
         // so the room paint must land that same stack centered and
         // contained in the `IDC_IMAGE_SROOM_AVATA` slot.
         let Some(figure) = stacked_hero_figure() else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP room_user_panel_centers_the_stacked_worn_figure_in_its_slot: missing install-root avatar.opa");
             return;
         };
         let placements = room_user_panel_placements();
@@ -12471,7 +12703,7 @@ mod paint_tests {
         // too — the room panel matches this figure for the same
         // equipment, both through the shared seat-slot helper.
         let Some(figure) = stacked_hero_figure() else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_avatar_centers_the_stacked_worn_figure_in_its_slot: missing install-root avatar.opa");
             return;
         };
         let slot = Rect {
@@ -12543,11 +12775,11 @@ mod paint_tests {
         let mut face_only = [0i32; 17];
         face_only[11] = 35;
         let Some(full) = stacked_figure_for_row(&face_only, true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_paints_bare_arms_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let Some(old) = stacked_figure_for_row(&[30, 35], true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP waiting_seat_paints_bare_arms_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let slot = Rect {
@@ -12621,7 +12853,7 @@ mod paint_tests {
         let mut face_only = [0i32; 17];
         face_only[11] = 35;
         let Some(figure) = stacked_figure_for_row(&face_only, true) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP room_user_panel_paints_default_body_for_the_face_only_row: missing install-root avatar.opa");
             return;
         };
         let placements = room_user_panel_placements();
@@ -16863,6 +17095,7 @@ mod dialog_paint_tests {
         // art and hit tests land together (#131 inert controls, #132
         // stacked sprites both traced here).
         let Some(archive) = interface_archive() else {
+            println!("SKIP option_sheets_paint_on_their_hit_rects: install-root absent");
             return;
         };
         let ctx = StageContext::default();
@@ -16971,6 +17204,7 @@ mod dialog_paint_tests {
         // `.bnd` rect; the #132 regression stacked all 37 records at
         // the dialog origin.
         let Some(archive) = interface_archive() else {
+            println!("SKIP keytext_sheet_paints_one_frame_per_key_button: install-root absent");
             return;
         };
         let art = stage_dialog(&archive, Dialog::PlanetOption, StageContext::default())

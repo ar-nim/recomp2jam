@@ -641,3 +641,17 @@ entries come from that dispatch table, not from the handler bodies.
   while the song table needs flag updates only, no clearing.
 - **Evidence**: `ev_5741ec104eee5d136707bb5d9244a3a98ce51f4cfa3cd60fb92844aaff65378a`
   (full handler pseudocode).
+
+### `0x55f630` START-result addendum — fifth caption is a settings mismatch (2026-11-25 senior REA pass)
+
+Result 0 enters the success path only when the staged settings words
+match: for a non-battle room, the settings word at global `0x768570` must equal
+the mode byte at global `0x7789e7` times 12, plus 1, plus the arena byte at global `0x7789e9`; for a battle room it must equal
+the arena byte at global `0x7789e9` plus `0x25`. A mismatch sets a local flag and, after the
+switch, posts caption `0x64dac0` through popup code `0xffe`.
+The four direct refusal captions are: result 1 -> `0x64db58`
+(unready member), 2 -> `0x64db44` (team mismatch), 3 -> `0x64db18`
+(VS cannot play alone), 4 -> `0x64daec` (server info unavailable).
+There is no fifth result-code arm.
+
+Evidence: `ev_f0cfcdeffc96613dd03eee0446e510efcbd4320631900c4d77159b605ec69917`.

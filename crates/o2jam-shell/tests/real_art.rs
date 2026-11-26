@@ -248,7 +248,10 @@ fn walk_to_playing(game: &mut ScreenGame) {
 fn avi_paints_real_logo_through_the_bound_record() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip avi: missing {}", path.display());
+        println!(
+            "SKIP avi_paints_real_logo_through_the_bound_record: avi: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Avi, StageContext::default()).art else {
@@ -290,7 +293,10 @@ fn avi_paints_real_logo_through_the_bound_record() {
 fn channel_layers_list_over_real_dialog_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip channel: missing {}", path.display());
+        println!(
+            "SKIP channel_layers_list_over_real_dialog_art: channel: missing {}",
+            path.display()
+        );
         return;
     };
     // The channel dialog stages through the declaration (bound
@@ -467,7 +473,10 @@ fn planet_layers_staged_art_under_the_live_cursor() {
     // ink the frame.
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip planet: missing {}", path.display());
+        println!(
+            "SKIP planet_layers_staged_art_under_the_live_cursor: planet: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Planet, StageContext::default()).art else {
@@ -535,7 +544,10 @@ fn planet_without_art_keeps_the_flat_card() {
 fn room_layers_rows_over_bound_room_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip room: missing {}", path.display());
+        println!(
+            "SKIP room_layers_rows_over_bound_room_art: room: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art else {
@@ -558,7 +570,10 @@ fn room_layers_rows_over_bound_room_art() {
 fn room_stages_pinned_back_button() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip room back: missing {}", path.display());
+        println!(
+            "SKIP room_stages_pinned_back_button: room back: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art else {
@@ -580,7 +595,10 @@ fn room_stages_pinned_back_button() {
 fn room_stages_pinned_option_button() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip room option: missing {}", path.display());
+        println!(
+            "SKIP room_stages_pinned_option_button: room option: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art else {
@@ -602,7 +620,10 @@ fn room_stages_pinned_option_button() {
 fn waiting_layers_seats_over_bound_waiting_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip waiting: missing {}", path.display());
+        println!(
+            "SKIP waiting_layers_seats_over_bound_waiting_art: waiting: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Waiting, StageContext::default()).art else {
@@ -630,7 +651,7 @@ fn waiting_layers_seats_over_bound_waiting_art() {
 fn waiting_real_art_selects_one_backdrop_record_per_role() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip waiting backdrop: missing {}", path.display());
+        println!("SKIP waiting_real_art_selects_one_backdrop_record_per_role: waiting backdrop: missing {}", path.display());
         return;
     };
     let art = stage_state(&archive, State::Waiting, StageContext::default())
@@ -691,7 +712,7 @@ fn waiting_top_buttons_sit_on_their_own_block_rects() {
     // Skips when install-root is absent.
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip waiting top buttons: missing {}", path.display());
+        println!("SKIP waiting_top_buttons_sit_on_their_own_block_rects: waiting top buttons: missing {}", path.display());
         return;
     };
     // Independent oracle: parse the ControlList and the bind section
@@ -776,7 +797,10 @@ fn waiting_top_buttons_sit_on_their_own_block_rects() {
 fn loading_layers_real_art_without_the_open_bar() {
     let path = archive_path(PLAYING_ARCHIVE);
     let Some(archive) = install_archives().playing else {
-        println!("skip loading: missing {}", path.display());
+        println!(
+            "SKIP loading_layers_real_art_without_the_open_bar: loading: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Loading, StageContext::default()).art else {
@@ -799,7 +823,10 @@ fn loading_layers_real_art_without_the_open_bar() {
 fn playing_layers_notes_over_bound_gauges() {
     let path = archive_path(PLAYING_ARCHIVE);
     let Some(archive) = install_archives().playing else {
-        println!("skip playing: missing {}", path.display());
+        println!(
+            "SKIP playing_layers_notes_over_bound_gauges: playing: missing {}",
+            path.display()
+        );
         return;
     };
     // The Playing subset stages through the room mode of a fresh
@@ -833,7 +860,10 @@ fn playing_layers_notes_over_bound_gauges() {
 fn result_layers_digits_over_bound_result_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip result: missing {}", path.display());
+        println!(
+            "SKIP result_layers_digits_over_bound_result_art: result: missing {}",
+            path.display()
+        );
         return;
     };
     let Some(art) = stage_state(&archive, State::Result, StageContext::default()).art else {
@@ -877,7 +907,7 @@ fn playing_sheet(name: &str) -> Option<Bnd> {
 fn playing_network_sheet_parses_nineteen_exit_path_rects() {
     let Some(bind) = playing_sheet("State_Playing_network.bnd") else {
         println!(
-            "skip playing network: missing {}",
+            "SKIP playing_network_sheet_parses_nineteen_exit_path_rects: playing network: missing {}",
             archive_path(PLAYING_ARCHIVE).display()
         );
         return;
@@ -905,7 +935,7 @@ fn playing_network_sheet_parses_nineteen_exit_path_rects() {
 fn avatar_info_sheet_parses_ten_gauge_rects() {
     let Some(bind) = playing_sheet("Avatar_Info.bnd") else {
         println!(
-            "skip avatar info: missing {}",
+            "SKIP avatar_info_sheet_parses_ten_gauge_rects: avatar info: missing {}",
             archive_path(PLAYING_ARCHIVE).display()
         );
         return;
@@ -922,7 +952,7 @@ fn avatar_info_sheet_parses_ten_gauge_rects() {
 fn map_avatar_sheet_parses_eight_seat_rects() {
     let Some(bind) = playing_sheet("Map_Avatar.bnd") else {
         println!(
-            "skip map avatar: missing {}",
+            "SKIP map_avatar_sheet_parses_eight_seat_rects: map avatar: missing {}",
             archive_path(PLAYING_ARCHIVE).display()
         );
         return;
@@ -1020,7 +1050,10 @@ fn map_avatar_sheet_stages_eight_rects_by_name() {
 fn playing_control_list_mounts_only_the_solo_sheet() {
     let path = archive_path(PLAYING_ARCHIVE);
     let Some(archive) = install_archives().playing else {
-        println!("skip playing list: missing {}", path.display());
+        println!(
+            "SKIP playing_control_list_mounts_only_the_solo_sheet: playing list: missing {}",
+            path.display()
+        );
         return;
     };
     let entries = parse_opi(&archive).unwrap();
@@ -1048,7 +1081,7 @@ fn playing_control_list_mounts_only_the_solo_sheet() {
 fn master_emblem_stages_only_on_the_creator_seat_with_real_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip master emblem: missing {}", path.display());
+        println!("SKIP master_emblem_stages_only_on_the_creator_seat_with_real_art: master emblem: missing {}", path.display());
         return;
     };
     let entries = parse_opi(&archive).expect("Interface1.opi parses");
@@ -1212,7 +1245,7 @@ fn sound_slider_step_repaints_the_real_bar_fill_without_moving_the_record() {
     // chain and compare that band across one Down/Up pair.
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
-        println!("skip sound bar repaint: missing {}", path.display());
+        println!("SKIP sound_slider_step_repaints_the_real_bar_fill_without_moving_the_record: sound bar repaint: missing {}", path.display());
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionSound, StageContext::default())

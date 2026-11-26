@@ -247,7 +247,7 @@ mod live_result_input_leg_tests {
     #[test]
     fn live_result_keyboard_back_sends_4021_and_installs_waiting_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_result_keyboard_back_sends_4021_and_installs_waiting_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_result_back_gateway(joined_room(0, true));
@@ -291,7 +291,7 @@ mod live_result_input_leg_tests {
     #[test]
     fn live_result_speed_from_4050_is_painted_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_result_speed_from_4050_is_painted_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_result_speed_gateway(joined_room(0, true));
@@ -333,7 +333,7 @@ mod live_result_input_leg_tests {
     #[test]
     fn live_staged_hit_burst_lands_as_one_body_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_staged_hit_burst_lands_as_one_body_from_boot: missing install-root interface archive");
             return;
         }
         let archive = read_install_archives(&install_root())

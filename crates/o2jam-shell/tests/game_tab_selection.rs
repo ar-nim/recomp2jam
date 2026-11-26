@@ -143,6 +143,7 @@ fn changed_inside(before: &[u32], after: &[u32], rect: (i32, i32, i32, i32)) -> 
 #[test]
 fn flipping_note_type_repaints_its_two_check_cells() {
     let Some(archive) = interface_archive() else {
+        println!("SKIP flipping_note_type_repaints_its_two_check_cells: install-root absent");
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -169,6 +170,7 @@ fn flipping_note_type_repaints_its_two_check_cells() {
 #[test]
 fn flipping_guide_level_repaints_only_the_guide_cells() {
     let Some(archive) = interface_archive() else {
+        println!("SKIP flipping_guide_level_repaints_only_the_guide_cells: install-root absent");
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -191,6 +193,7 @@ fn flipping_guide_level_repaints_only_the_guide_cells() {
 #[test]
 fn flipping_blend_half_repaints_only_the_eq_cells() {
     let Some(archive) = interface_archive() else {
+        println!("SKIP flipping_blend_half_repaints_only_the_eq_cells: install-root absent");
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -208,6 +211,7 @@ fn flipping_blend_half_repaints_only_the_eq_cells() {
 #[test]
 fn flipping_mode_repaints_only_the_mode_cells() {
     let Some(archive) = interface_archive() else {
+        println!("SKIP flipping_mode_repaints_only_the_mode_cells: install-root absent");
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -225,6 +229,9 @@ fn flipping_mode_repaints_only_the_mode_cells() {
 #[test]
 fn flipping_longnote_mode_repaints_only_the_longnote_cells() {
     let Some(archive) = interface_archive() else {
+        println!(
+            "SKIP flipping_longnote_mode_repaints_only_the_longnote_cells: install-root absent"
+        );
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -242,6 +249,7 @@ fn flipping_longnote_mode_repaints_only_the_longnote_cells() {
 #[test]
 fn flipping_effect_level_repaints_only_the_effect_cells() {
     let Some(archive) = interface_archive() else {
+        println!("SKIP flipping_effect_level_repaints_only_the_effect_cells: install-root absent");
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())
@@ -263,6 +271,9 @@ fn flipping_effect_level_repaints_only_the_effect_cells() {
 #[test]
 fn game_tab_default_repaints_every_value_family_in_one_click() {
     let Some(archive) = interface_archive() else {
+        println!(
+            "SKIP game_tab_default_repaints_every_value_family_in_one_click: install-root absent"
+        );
         return;
     };
     let art = stage_dialog(&archive, Dialog::PlanetOptionGame, StageContext::default())

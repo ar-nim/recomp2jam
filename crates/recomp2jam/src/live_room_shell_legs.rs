@@ -8,8 +8,8 @@
 //! installed archives skip each leg cleanly (CI has no game data).
 
 use o2jam_net::{JoinedRoom, RoomMember, RoomSlot, RoomSlotState};
-use o2jam_render::NATIVE_WIDTH;
-use o2jam_shell::Screen;
+use o2jam_render::{Rect, NATIVE_WIDTH};
+use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
 use crate::live_leg_support::*;
 
@@ -137,7 +137,7 @@ fn staged_pixels(session: &mut crate::session::OnlineSession, id: &str) -> Vec<u
 #[test]
 fn live_room_nonzero_gender_byte_paints_the_paired_seat_figure() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_nonzero_gender_byte_paints_the_paired_seat_figure: missing install-root interface archive");
         return;
     }
     let (mut female, female_gateway) = boot_shell_leg(scripted_shell_room(0, 0, false));
@@ -178,7 +178,7 @@ fn live_room_nonzero_gender_byte_paints_the_paired_seat_figure() {
 #[test]
 fn live_room_derived_team_plate_differs_from_the_raw_wire_seat_team() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_derived_team_plate_differs_from_the_raw_wire_seat_team: missing install-root interface archive");
         return;
     }
     assert_eq!(
@@ -214,7 +214,7 @@ use o2jam_net::rooms::SendWhisperResponse;
 use o2jam_net::testing::fake_gateway;
 use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, ChannelState, JoinRoomResponse, Request,
-    WireMessage,
+    RoomListEntry, WireMessage,
 };
 use o2jam_shell::screens::game::LobbyChat;
 
@@ -320,6 +320,15 @@ fn boot_roster_leg() -> (crate::session::OnlineSession, RosterGateway) {
 }
 
 fn spawn_room_gateway(channel_id: u16) -> (RoomGateway, Sender<Vec<u8>>) {
+    spawn_room_gateway_with_rows(channel_id, vec![room_row()])
+}
+
+/// Same boot gateway with a chosen room list, so a row-select leg can
+/// vary the bound record without touching the shell seam.
+fn spawn_room_gateway_with_rows(
+    channel_id: u16,
+    rooms: Vec<RoomListEntry>,
+) -> (RoomGateway, Sender<Vec<u8>>) {
     let (send, receive): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
     let boot = move |mut stream: std::net::TcpStream| {
         assert_eq!(
@@ -371,12 +380,7 @@ fn spawn_room_gateway(channel_id: u16) -> (RoomGateway, Sender<Vec<u8>>) {
             Request::GetChannelInfo.id()
         );
         stream
-            .write_all(
-                &o2jam_net::RoomList {
-                    rooms: vec![room_row()],
-                }
-                .encode(),
-            )
+            .write_all(&o2jam_net::RoomList { rooms }.encode())
             .unwrap();
         while let Ok(frame) = receive.recv() {
             stream.write_all(&frame).unwrap();
@@ -407,6 +411,11 @@ fn staged_screen_pixels(
         .find(|placed| placed.id == id)
         .unwrap_or_else(|| panic!("no staged placement {id}"))
         .rect;
+    frame_pixels_for_rect(session, rect)
+}
+
+/// Native pixels inside one absolute frame rect.
+fn frame_pixels_for_rect(session: &mut crate::session::OnlineSession, rect: Rect) -> Vec<u32> {
     let frame = paint_frame(session);
     let width = usize::try_from(NATIVE_WIDTH).expect("native width fits usize");
     let top = usize::try_from(rect.y).expect("rect top fits usize");
@@ -448,7 +457,7 @@ fn paint_until_room(
 #[test]
 fn live_room_channel_button_pair_uses_the_default_control_ids() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_channel_button_pair_uses_the_default_control_ids: missing install-root interface archive");
         return;
     }
     let (mut normal, normal_gateway, _) = boot_room_leg(2);
@@ -491,7 +500,7 @@ fn live_room_channel_button_pair_uses_the_default_control_ids() {
 #[test]
 fn live_room_2011_rows_populate_the_staged_user_sheet() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2011_rows_populate_the_staged_user_sheet: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -537,7 +546,7 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
 #[test]
 fn live_room_2018_refusal_inks_no_pixels_in_the_room_chat() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2018_refusal_inks_no_pixels_in_the_room_chat: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -584,7 +593,7 @@ fn live_room_2018_refusal_inks_no_pixels_in_the_room_chat() {
 #[test]
 fn live_room_2023_high_nibble_reaches_the_painted_member_word() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_2023_high_nibble_reaches_the_painted_member_word: missing install-root interface archive");
         return;
     }
     let (mut session, gateway, send) = boot_room_leg(2);
@@ -615,6 +624,107 @@ fn live_room_2023_high_nibble_reaches_the_painted_member_word() {
     assert_ne!(rest, painted, "the shifted nibble changes the member word");
     drop(send);
     finish(session, gateway.server);
+}
+
+/// One full wire row: the press stays on the Room board behind its
+/// pinned refusal sheet, so the leg can compare two detail frames.
+fn detail_leg_row(number: i32, title: &str, music_id: u16) -> RoomListEntry {
+    let mut room = room_row();
+    room.number = number;
+    room.title = title.to_owned();
+    room.music_id = music_id;
+    room.user_count = room.capacity;
+    room
+}
+
+/// Boot to the Room board with the chosen rows.
+fn boot_detail_leg(rooms: Vec<RoomListEntry>) -> (crate::session::OnlineSession, RoomGateway) {
+    let (gateway, _send) = spawn_room_gateway_with_rows(2, rooms);
+    let mut session = boot_live_leg(gateway.port, false);
+    dismiss_splash(&mut session);
+    enter_room_by_clicks(&mut session);
+    (session, gateway)
+}
+
+/// Select one staged row, then dismiss the refusal sheet its full
+/// seats raise, so the next frame shows only the detail readout gate.
+fn select_full_room_row(session: &mut crate::session::OnlineSession, panel: &str) {
+    click_staged(session, Screen::Room, panel);
+    paint(session);
+    let (ok_x, ok_y) = information_ok_centre();
+    session.ingest_snapshot(&InputSnapshot::click_at(ok_x, ok_y));
+    paint(session);
+}
+
+/// Detail wells are authored panel-relative in `State_Room.bnd`, so
+/// the readout pixel window follows the selected panel's origin.
+fn staged_detail_well(session: &mut crate::session::OnlineSession, panel: &str) -> Vec<u32> {
+    let placements = session.game_mut().scene_placements(Screen::Room);
+    let origin = placements
+        .iter()
+        .find(|placed| placed.id == panel)
+        .unwrap_or_else(|| panic!("no staged panel {panel}"))
+        .rect;
+    let well = placements
+        .iter()
+        .find(|placed| placed.id == "IDC_TEXT_SROOM_MUSICTITLE")
+        .expect("no staged music-title well")
+        .rect;
+    let rect = Rect {
+        x: origin.x + well.x,
+        y: origin.y + well.y,
+        w: well.w,
+        h: well.h,
+    };
+    frame_pixels_for_rect(session, rect)
+}
+
+/// #1127 Tier 3 row-select frame pair. Live caller chain:
+///   main.rs::run_play -> connect::connect_and_login_with_transport
+///   -> assemble_online_session -> enter_room_by_clicks ->
+///   OnlineSession::ingest_snapshot -> GameLoop::ingest_snapshot ->
+///   ScreenGame::click_room_row -> ScreenGame::bind_room_detail ->
+///   paint::room_detail_enable_is_set -> ScreenGame::paint_room ->
+///   paint::room_detail_readout_art.
+/// Archives absent -> skip cleanly (CI has no game data).
+#[test]
+fn live_room_row_select_binds_only_the_gated_detail_readout() {
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_detail_leg(vec![
+        detail_leg_row(3, "Named", 100),
+        detail_leg_row(4, "Thin", 99),
+        detail_leg_row(5, "", 100),
+    ]);
+
+    select_full_room_row(&mut session, "IDC_BUTTON_SROOM_EXBUTTON1");
+    let named_target = session.game_mut().room_detail_target().cloned();
+    let named_enabled = session.game_mut().room_detail_enabled();
+    let named_well = staged_detail_well(&mut session, "IDC_BUTTON_SROOM_EXBUTTON1");
+
+    select_full_room_row(&mut session, "IDC_BUTTON_SROOM_EXBUTTON2");
+    let thin_target = session.game_mut().room_detail_target().cloned();
+    let thin_enabled = session.game_mut().room_detail_enabled();
+    let thin_well = staged_detail_well(&mut session, "IDC_BUTTON_SROOM_EXBUTTON2");
+
+    select_full_room_row(&mut session, "IDC_BUTTON_SROOM_EXBUTTON3");
+    let empty_target = session.game_mut().room_detail_target().cloned();
+    let empty_enabled = session.game_mut().room_detail_enabled();
+
+    finish(session, gateway.server);
+
+    assert_eq!(named_target.map(|room| room.number), Some(3));
+    assert_eq!(thin_target.map(|room| room.number), Some(4));
+    assert_eq!(empty_target.map(|room| room.number), Some(5));
+    assert!(named_enabled, "word 100 on a named row fills the readout");
+    assert!(!thin_enabled, "word 99 leaves the readout dark");
+    assert!(!empty_enabled, "an empty title leaves the readout dark");
+    assert_ne!(
+        named_well, thin_well,
+        "only the enabled row lights the well"
+    );
 }
 
 /// One 3004 member body for the roster legs.
@@ -673,7 +783,7 @@ fn leave_frame(seat: u8, promoted: u8) -> Vec<u8> {
 #[test]
 fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3003_snapshot_inks_the_native_player_list_from_boot: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();
@@ -699,7 +809,7 @@ fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
 #[test]
 fn live_room_3004_broadcast_repaints_the_added_roster_row() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3004_broadcast_repaints_the_added_roster_row: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();
@@ -734,7 +844,7 @@ fn live_room_3004_broadcast_repaints_the_added_roster_row() {
 #[test]
 fn live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_roster_leg();

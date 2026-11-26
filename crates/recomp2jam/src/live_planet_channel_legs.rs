@@ -80,7 +80,7 @@ mod live_planet_channel_leg_tests {
     #[test]
     fn live_planet_emblem_clicks_from_boot_open_the_channel_dialog() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_planet_emblem_clicks_from_boot_open_the_channel_dialog: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -119,7 +119,7 @@ mod live_planet_channel_leg_tests {
     #[test]
     fn live_planet_options_and_exit_clicks_open_their_dialogs_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_planet_options_and_exit_clicks_open_their_dialogs_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -173,7 +173,7 @@ mod live_planet_channel_leg_tests {
     #[test]
     fn live_channel_dialog_row_x_and_scroll_clicks_answer_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_channel_dialog_row_x_and_scroll_clicks_answer_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));

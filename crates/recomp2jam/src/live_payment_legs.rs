@@ -30,7 +30,7 @@ mod live_payment_spec_leg_tests {
     #[test]
     fn live_payment_web_rebuild_closes_the_old_window_before_the_new_page() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_payment_web_rebuild_closes_the_old_window_before_the_new_page: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -68,7 +68,7 @@ mod live_payment_spec_leg_tests {
     #[test]
     fn live_gift_web_rebuild_keeps_both_pinned_urls_on_the_session_id() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_gift_web_rebuild_keeps_both_pinned_urls_on_the_session_id: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -112,7 +112,7 @@ mod live_payment_spec_leg_tests {
     #[test]
     fn live_print_screen_counts_presses_and_notices_when_the_counter_is_empty() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_print_screen_counts_presses_and_notices_when_the_counter_is_empty: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -201,7 +201,7 @@ mod live_payment_spec_leg_tests {
     #[test]
     fn live_print_screen_writer_writes_a_numbered_jpeg_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_print_screen_writer_writes_a_numbered_jpeg_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -244,7 +244,7 @@ mod live_payment_spec_leg_tests {
     #[test]
     fn live_exhausted_print_screen_posts_the_pinned_event_words() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_exhausted_print_screen_posts_the_pinned_event_words: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -298,7 +298,7 @@ mod live_cash_bill_host_leg_tests {
     #[test]
     fn live_native_cash_charge_covers_all_five_publisher_hosts_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_native_cash_charge_covers_all_five_publisher_hosts_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));

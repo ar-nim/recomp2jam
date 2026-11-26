@@ -45,7 +45,7 @@ mod live_room_chat_leg_tests {
     #[test]
     fn live_room_typed_draft_inks_the_staged_edit_rect_and_sends_one_2012_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_typed_draft_inks_the_staged_edit_rect_and_sends_one_2012_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -98,7 +98,7 @@ mod live_room_chat_leg_tests {
     #[test]
     fn live_room_chat_rows_ink_two_distinct_senders_in_the_staged_list_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_chat_rows_ink_two_distinct_senders_in_the_staged_list_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -154,7 +154,7 @@ mod live_room_chat_leg_tests {
     #[test]
     fn live_room_row_press_joins_when_eligible_and_refuses_without_a_frame_when_not() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_row_press_joins_when_eligible_and_refuses_without_a_frame_when_not: missing install-root interface archive");
             return;
         }
         let eligible_gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -220,7 +220,7 @@ mod live_room_chat_leg_tests {
     #[test]
     fn live_room_exit_closes_the_user_sheet_and_refreshes_gift_on_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_exit_closes_the_user_sheet_and_refreshes_gift_on_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
@@ -268,7 +268,7 @@ mod live_room_chat_leg_tests {
     #[test]
     fn live_room_2018_answer_keeps_the_delivery_verdict_from_boot() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_room_2018_answer_keeps_the_delivery_verdict_from_boot: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));

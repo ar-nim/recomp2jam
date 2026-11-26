@@ -14,11 +14,14 @@ mod live_myroom_leg_tests {
     use crate::session::OnlineSession;
 
     use o2jam_net::shop::EnterShop;
+    use o2jam_net::CharacterInfo;
     use o2jam_net::{EmptyMessage, Frame};
     use o2jam_render::{Rect, NATIVE_WIDTH};
     use o2jam_shell::screens::side::{
-        MyRoomPanel, SideScreen, MYROOM_BAG_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
-        MYROOM_STATUS_BADGE_CODE,
+        myroom_identity_captions, MyRoomPanel, SideScreen, MYROOM_BAG_FIRST_CODE,
+        MYROOM_CASH_POINT_CODE, MYROOM_EXP_CODE, MYROOM_LEVEL_CODE, MYROOM_NICKNAME_CODE,
+        MYROOM_PENALTY_COUNT_CODE, MYROOM_PENALTY_LEVEL_CODE, MYROOM_SLOT_FIRST_CODE,
+        MYROOM_STATUS_BADGE_CODE, MYROOM_WINRATE_CODE,
     };
     use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
@@ -119,7 +122,7 @@ mod live_myroom_leg_tests {
     #[test]
     fn live_master_role_myroom_toggles_faces_and_keeps_selection_local() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_master_role_myroom_toggles_faces_and_keeps_selection_local: missing install-root interface archive");
             return;
         }
         let (mut session, gateway) = boot_master_myroom();
@@ -184,6 +187,64 @@ mod live_myroom_leg_tests {
         assert!(
             observed(&gateway.reports).is_empty(),
             "faces and selections are local on the master path"
+        );
+        finish(session, gateway.server);
+    }
+
+    /// #1098 Tier 3. The constructor's cleared words must reach the
+    /// STATUS plate after a real boot, not just the pure default guard.
+    /// Live chain: main.rs::run_play -> connect::connect_and_login_with_transport
+    /// -> boot_live_leg_with_prestaged_art -> join_waiting_by_click ->
+    /// staged Waiting BACK -> staged Room MYROOM tab -> visit_side(MyRoom)
+    /// -> GameLoop::ingest_snapshot -> ScreenGame::click_myroom_side ->
+    /// set_myroom_character(CharacterInfo::default()) -> paint_side_scene ->
+    /// myroom_identity_captions. The wire writer of the constructor's
+    /// 58-word block stays OPEN; this leg stages its cleared defaults.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_myroom_boot_keeps_cleared_player_info_defaults_on_the_status_plate() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (mut session, gateway) = boot_master_myroom();
+        session
+            .game_mut()
+            .set_myroom_character(CharacterInfo::default());
+        let entry = paint_frame(&mut session);
+        click_staged_side_code(&mut session, MYROOM_STATUS_BADGE_CODE);
+        assert_eq!(
+            session.game_mut().myroom().panel(),
+            MyRoomPanel::Status,
+            "the badge press opens the plate"
+        );
+        let status = paint_frame(&mut session);
+        let hero = session
+            .game_mut()
+            .myroom_character()
+            .expect("defaults staged on the boot path");
+        assert_eq!(hero.gem, 0);
+        assert_eq!(hero.battles, 0);
+        assert_eq!(hero.wins, 0);
+        assert_eq!(hero.losses, 0);
+        assert!(hero.equipment.iter().all(|word| *word == 0));
+        let captions = myroom_identity_captions(hero);
+        let caption = |code| {
+            captions
+                .iter()
+                .find(|(staged, _)| *staged == code)
+                .map(|(_, text)| text.as_str())
+        };
+        assert_eq!(caption(MYROOM_NICKNAME_CODE), Some(""));
+        assert_eq!(caption(MYROOM_LEVEL_CODE), Some(" 0"));
+        assert_eq!(caption(MYROOM_CASH_POINT_CODE), Some("0 PT"));
+        assert_eq!(caption(MYROOM_EXP_CODE), Some(" 0"));
+        assert_eq!(caption(MYROOM_WINRATE_CODE), Some("0%"));
+        assert_eq!(caption(MYROOM_PENALTY_COUNT_CODE), Some("0"));
+        assert_eq!(caption(MYROOM_PENALTY_LEVEL_CODE), Some("Lv 0"));
+        assert!(
+            changed_pixels_in_rect(&entry, &status, STATUS_PLATE_RECT) > 0,
+            "the STATUS plate inked on the boot path"
         );
         finish(session, gateway.server);
     }

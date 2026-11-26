@@ -395,7 +395,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_stages_everything_paint_and_dispatch_consume() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_stages_everything_paint_and_dispatch_consume: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -669,7 +669,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_lane_press_keeps_the_splash_then_escape_dismisses_it() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_lane_press_keeps_the_splash_then_escape_dismisses_it: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -710,7 +710,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_gear_opens_the_pinned_sound_sheet() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_gear_opens_the_pinned_sound_sheet: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -774,7 +774,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_driven_tab_clicks_repaint_sound_and_game_sheets() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_driven_tab_clicks_repaint_sound_and_game_sheets: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -844,7 +844,7 @@ mod live_boot_gate_tests {
         use o2jam_shell::screens::side::SideScreen;
 
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_side_entry_paints_staged_art: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -904,7 +904,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_itemshop_charge_plate_paints_cash_charge_chrome() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_itemshop_charge_plate_paints_cash_charge_chrome: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -979,7 +979,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_cart_row_buy_paints_the_native_message_sheet() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_cart_row_buy_paints_the_native_message_sheet: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -1131,7 +1131,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_charge_plate_snapshot_click_paints_chrome() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_charge_plate_snapshot_click_paints_chrome: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -1205,7 +1205,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_charge_plate_close_press_returns_to_host_board() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_charge_plate_close_press_returns_to_host_board: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -1280,7 +1280,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_default_stages_shop_catalog() {
         if !install_root().join("O2Jam/Image/avatar.opa").exists() {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP live_boot_default_stages_shop_catalog: missing install-root avatar.opa");
             return;
         }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1359,7 +1359,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_default_stages_exe_new_arrivals_avatar_catalog() {
         if !install_root().join("O2Jam/Image/avatar.opa").exists() {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP live_boot_default_stages_exe_new_arrivals_avatar_catalog: missing install-root avatar.opa");
             return;
         }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1430,11 +1430,11 @@ mod live_boot_gate_tests {
     #[test]
     fn live_shop_buyitem_mounts_the_confirmation_sheet() {
         let Some(archive) = read_install_archives(&install_root()).interface else {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_shop_buyitem_mounts_the_confirmation_sheet: missing install-root interface archive");
             return;
         };
         let Some(source) = o2jam_shell::read_installed_avatar(&install_root()) else {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP live_shop_buyitem_mounts_the_confirmation_sheet: missing install-root avatar.opa");
             return;
         };
         let art = stage_state(&archive, State::Shop, StageContext::default())
@@ -1502,7 +1502,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_shop_avatar_pane_stages_equipped_figure() {
         if !install_root().join("O2Jam/Image/avatar.opa").exists() {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP live_boot_shop_avatar_pane_stages_equipped_figure: missing install-root avatar.opa");
             return;
         }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1579,7 +1579,7 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_empty_body_slot_stages_the_default_naked_figure() {
         if !install_root().join("O2Jam/Image/avatar.opa").exists() {
-            println!("skip: missing install-root avatar.opa");
+            println!("SKIP live_boot_empty_body_slot_stages_the_default_naked_figure: missing install-root avatar.opa");
             return;
         }
         let mut face_only = [0; 17];
@@ -1645,19 +1645,25 @@ mod live_boot_gate_tests {
         //   MusicShopState::set_catalog + LankingState::set_catalog
         // Archives absent -> skip cleanly (CI has no game data).
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_stages_music_shop_and_lanking_boards: missing install-root interface archive");
             return;
         }
         let catalog = install_root().join(crate::SESSION_CATALOG);
         let bytes = match std::fs::read(&catalog) {
             Ok(bytes) => bytes,
             Err(_) => {
-                println!("skip: missing {}", catalog.display());
+                println!(
+                    "SKIP live_boot_stages_music_shop_and_lanking_boards: missing {}",
+                    catalog.display()
+                );
                 return;
             }
         };
         if o2jam_file::parse_ojn_list(&bytes).is_err() {
-            println!("skip: unparsable {}", catalog.display());
+            println!(
+                "SKIP live_boot_stages_music_shop_and_lanking_boards: unparsable {}",
+                catalog.display()
+            );
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -1701,20 +1707,22 @@ mod live_boot_gate_tests {
     #[test]
     fn live_boot_myroom_data_path_paints_on_channel_login() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP live_boot_myroom_data_path_paints_on_channel_login: missing install-root interface archive");
             return;
         }
         let avatar_path = install_root().join("O2Jam/Image/avatar.opa");
         let Some(path) = avatar_path.to_str() else {
-            println!("skip: non-UTF8 avatar.opa path");
+            println!(
+                "SKIP live_boot_myroom_data_path_paints_on_channel_login: non-UTF8 avatar.opa path"
+            );
             return;
         };
         let Ok((_, table)) = connect::read_avatar_source(path) else {
-            println!("skip: missing or unparsable install-root avatar.opa");
+            println!("SKIP live_boot_myroom_data_path_paints_on_channel_login: missing or unparsable install-root avatar.opa");
             return;
         };
         if table.rows.is_empty() {
-            println!("skip: installed item table holds no rows");
+            println!("SKIP live_boot_myroom_data_path_paints_on_channel_login: installed item table holds no rows");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -2305,7 +2313,7 @@ mod live_boot_gate_tests {
     #[test]
     fn promo_cadence_conforms_on_solo_guest_and_dialog_arms() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP promo_cadence_conforms_on_solo_guest_and_dialog_arms: missing install-root interface archive");
             return;
         }
         // The exe's slowest and fastest three-gap samples bound the
@@ -2417,7 +2425,7 @@ mod live_boot_gate_tests {
     #[test]
     fn promo_banner_stages_five_dated_cells_and_new_item_ribbon() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP promo_banner_stages_five_dated_cells_and_new_item_ribbon: missing install-root interface archive");
             return;
         }
         let (port, server) = spawn_boot_gateway();
@@ -2487,7 +2495,7 @@ mod live_boot_gate_tests {
     #[test]
     fn relay_down_sheet_stages_from_the_installed_information_block() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP relay_down_sheet_stages_from_the_installed_information_block: missing install-root interface archive");
             return;
         }
         let archive = o2jam_shell::staging::read_install_archives(&install_root())
@@ -2555,7 +2563,7 @@ mod live_boot_gate_tests {
     #[test]
     fn room_fuse_ok_uses_the_staged_information_block_rect() {
         if !archives_present() {
-            println!("skip: missing install-root interface archive");
+            println!("SKIP room_fuse_ok_uses_the_staged_information_block_rect: missing install-root interface archive");
             return;
         }
         let archive = o2jam_shell::staging::read_install_archives(&install_root())

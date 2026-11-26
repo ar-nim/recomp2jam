@@ -348,7 +348,7 @@ fn still_figure() -> AvatarFigure {
 #[test]
 fn live_waiting_avatars_advance_one_breathing_frame_per_pinned_tick() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_avatars_advance_one_breathing_frame_per_pinned_tick: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_seat_leg(scripted_room(0, 1), Vec::new());
@@ -395,7 +395,7 @@ fn live_waiting_avatars_advance_one_breathing_frame_per_pinned_tick() {
 #[test]
 fn live_waiting_playing_state_from_3003_inks_the_seat_mark() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_playing_state_from_3003_inks_the_seat_mark: missing install-root interface archive");
         return;
     }
     let mut playing_room = scripted_room(0, 1);
@@ -438,7 +438,7 @@ fn live_waiting_playing_state_from_3003_inks_the_seat_mark() {
 #[test]
 fn live_waiting_slot_group_marks_the_master_and_non_host_seats() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_slot_group_marks_the_master_and_non_host_seats: missing install-root interface archive");
         return;
     }
     let mut room = scripted_room(0, 3);
@@ -472,7 +472,7 @@ fn live_waiting_slot_group_marks_the_master_and_non_host_seats() {
 #[test]
 fn live_waiting_member_music_ids_reach_the_staged_seat() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_member_music_ids_reach_the_staged_seat: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_seat_leg(scripted_room(0, 1), Vec::new());
@@ -496,7 +496,7 @@ fn live_waiting_member_music_ids_reach_the_staged_seat() {
 #[test]
 fn live_waiting_chat_team_and_master_emblem_stage_on_both_sides() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_chat_team_and_master_emblem_stage_on_both_sides: missing install-root interface archive");
         return;
     }
     let chat = vec![
@@ -566,7 +566,7 @@ fn live_waiting_chat_team_and_master_emblem_stage_on_both_sides() {
 #[test]
 fn live_waiting_team_press_sends_4004_then_4008_from_boot() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_team_press_sends_4004_then_4008_from_boot: missing install-root interface archive");
         return;
     }
     let (mut session, gateway) = boot_seat_leg(scripted_room(1, 0), Vec::new());
@@ -590,7 +590,7 @@ fn live_waiting_team_press_sends_4004_then_4008_from_boot() {
 #[test]
 fn live_waiting_ready_answer_clears_the_4039_progress_and_opens_start() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_ready_answer_clears_the_4039_progress_and_opens_start: missing install-root interface archive");
         return;
     }
     let mut room = scripted_room(0, 1);
@@ -642,7 +642,7 @@ fn live_waiting_ready_answer_clears_the_4039_progress_and_opens_start() {
 #[test]
 fn live_waiting_removal_cause_captures_different_notice_pixels() {
     if !archives_present() {
-        println!("skip: missing install-root interface archive");
+        println!("SKIP live_waiting_removal_cause_captures_different_notice_pixels: missing install-root interface archive");
         return;
     }
     // The 3010 body is empty in the exe; the caption derives from the

@@ -78,15 +78,16 @@ use super::paint::{
     paint_music_shop_progress, paint_music_shop_row_selection, paint_music_shop_search,
     paint_music_shop_tooltip, paint_music_shop_top100_chrome, paint_music_shop_wallet,
     paint_myroom_confirm, paint_myroom_figure, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_relay_down_dialog, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_list, paint_room_member_word,
-    paint_room_no_response_dialog, paint_room_scene_with_selection, paint_room_user_panel,
-    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_charge_confirm, paint_shop_featured_icons, paint_shop_identity_captions,
-    paint_shop_item_icons, paint_shop_notice_text, paint_shop_preview, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene_with_confirm,
-    paint_waiting_seat_avatar_at, paint_waiting_seat_avatars, playing_backdrop_staged,
-    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    paint_planet_scene, paint_playing_backdrop, paint_premium_time_rows, paint_relay_down_dialog,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_detail_readout,
+    paint_room_list_with_detail_gate, paint_room_member_word, paint_room_no_response_dialog,
+    paint_room_scene_with_selection, paint_room_user_panel, paint_screen, paint_shop_avatar,
+    paint_shop_bag_pager, paint_shop_board, paint_shop_charge_confirm, paint_shop_featured_icons,
+    paint_shop_identity_captions, paint_shop_item_icons, paint_shop_notice_text,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene_with_confirm, paint_waiting_seat_avatar_at, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible,
+    room_detail_enable_is_set, room_detail_readout_art, room_panel_hit, scene_index,
     seat_figure_is_male, staged_rect_hit, waiting_confirm_control_id, waiting_local_is_master,
     waiting_map_cycle, BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus,
     PlanetPromoPaint, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, ShopBoard,
@@ -143,7 +144,7 @@ use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT}
 use o2jam_net::gift::{ClaimGift, GiftMessage};
 use o2jam_net::message::RoomUserListEntry;
 use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomArena, SetRoomMusic};
-use o2jam_net::relay::default_equipment_control_ids;
+use o2jam_net::relay::{default_equipment_control_ids, PremiumTimeRow};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -819,6 +820,30 @@ impl WaitingWireCaption {
     }
 }
 
+/// Literal bytes before and after the `%s` in the 3009 kick template
+/// at VA `0x64da3c` (evidence
+/// `ev_7a55.7d5e.89b9.9107.2907.c37d.f40e.d1d3.1001.dee4.e31f.45b5.bdbe.fa65.67ce.4267`).
+/// Kept as bytes because the
+/// caption is posted through the CP949 text queue.
+const KICK_CAPTION_PREFIX_CP949: &[u8] = &[0x5B, 0xC1, 0xA4, 0xBA, 0xB8, 0x5D, 0x20];
+const KICK_CAPTION_SUFFIX_CP949: &[u8] = &[
+    0xB4, 0xD4, 0xC0, 0xCC, 0x20, 0xB0, 0xAD, 0xC5, 0xF0, 0x20, 0xB4, 0xE7, 0xC7, 0xCF, 0xBC, 0xCC,
+    0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+
+/// Build the kick caption's CP949 bytes with `nickname` in the `%s`
+/// slot. Wire nicknames are UTF-8; their legacy encoding on this
+/// interpolation stays OPEN, as on the other name captions.
+fn player_kicked_caption_bytes(nickname: &str) -> Vec<u8> {
+    let mut caption = Vec::with_capacity(
+        KICK_CAPTION_PREFIX_CP949.len() + nickname.len() + KICK_CAPTION_SUFFIX_CP949.len(),
+    );
+    caption.extend_from_slice(KICK_CAPTION_PREFIX_CP949);
+    caption.extend_from_slice(nickname.as_bytes());
+    caption.extend_from_slice(KICK_CAPTION_SUFFIX_CP949);
+    caption
+}
+
 /// Notice for one gate verdict (`None` while the verdict has no box
 /// arm: the exe sends `4034` for a missing song and shows nothing).
 #[must_use]
@@ -974,6 +999,12 @@ pub struct ScreenGame {
     room_filter: RoomListFilter,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
+    /// Room record bound by the last row selection (`0x5251b0` stores
+    /// the pointer at `+100`); `None` after a null selection.
+    room_detail_target: Option<RoomListEntry>,
+    /// Detail readout refreshed by the enable arm (`0x525240`); a row
+    /// that fails the gate leaves it empty.
+    room_detail_readout: Option<RoomListEntry>,
     waiting: Option<JoinedRoom>,
     /// `4039` download percentage per waiting seat (`None` until the
     /// server reports one). Wire state only after #838: the exe's
@@ -1037,6 +1068,18 @@ pub struct ScreenGame {
     /// calls VA `0x478c90`) for the gate refusals
     /// (`docs/music-availability.md` §4a). `None` paints the room title.
     waiting_notice: Option<&'static str>,
+    /// CP949 caption bytes for a wire sheet posted over Waiting. The
+    /// kick notice interpolates a nickname into its pinned template, so
+    /// the painter needs owned bytes rather than a static caption.
+    waiting_wire_sheet: Option<Vec<u8>>,
+    /// Staged value of the exe's START settings word `0x768570`.
+    /// `None` until a source is pinned; the 4011 answer compares it
+    /// with the staged room's mode/arena formula.
+    room_settings_word: Option<i32>,
+    /// 2026 premium-time rows staged for the Channel description
+    /// paint. The exact description prose stays OPEN; only the pinned
+    /// song ids are rendered.
+    premium_time_rows: Vec<PremiumTimeRow>,
     /// Staged song download (§4): the queue a START gate kick fills,
     /// plus the running flag the START control and the waiting scene
     /// read (`state+0x4fc`). Empty until a member lacks the room song.
@@ -1641,6 +1684,8 @@ impl ScreenGame {
             room_filter: RoomListFilter::All,
             rooms: Vec::new(),
             room_highlight: 0,
+            room_detail_target: None,
+            room_detail_readout: None,
             waiting: None,
             waiting_channel_number: None,
             waiting_room_number: None,
@@ -1699,6 +1744,9 @@ impl ScreenGame {
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
+            waiting_wire_sheet: None,
+            room_settings_word: None,
+            premium_time_rows: Vec::new(),
             music_download: MusicDownload::default(),
             room_dialog: None,
             room_no_response: RoomNoResponseFuse::default(),
@@ -2816,6 +2864,50 @@ impl ScreenGame {
             .cloned()
             .collect();
         self.room_highlight = self.room_highlight.min(self.rooms.len().saturating_sub(1));
+        self.bind_room_detail();
+    }
+
+    /// Bound row and its enable word, pinned by `0x5251b0` (file
+    /// `0x1251b0`). The `+0x88` word starts at the wire music id and
+    /// gains the shifted high nibble a 2023 event stages; the shell
+    /// never reads a room's total population for this gate.
+    fn bind_room_detail(&mut self) {
+        let bound = self.rooms.get(self.room_highlight).cloned();
+        let member_word = bound
+            .as_ref()
+            .map_or(0, |room| self.staged_detail_member_word(room));
+        self.room_detail_target = bound;
+        if room_detail_enable_is_set(self.room_detail_target.as_ref(), member_word) {
+            self.refresh_room_detail_readout();
+        } else {
+            self.room_detail_readout = None;
+        }
+    }
+
+    /// The `+0x88` word starts at the wire music id; a 2023 event can
+    /// raise its high nibble. Population (`user_count`) is a different
+    /// row field and never feeds this gate.
+    fn staged_detail_member_word(&self, room: &RoomListEntry) -> u32 {
+        self.room_member_word(room.number)
+            .unwrap_or(u32::from(room.music_id))
+    }
+
+    /// The detail-fill helper call (`0x525240`): stage the bound row
+    /// into the readout the painter reads.
+    fn refresh_room_detail_readout(&mut self) {
+        self.room_detail_readout = self.room_detail_target.clone();
+    }
+
+    /// Room record selected by the last row press, if any.
+    #[must_use]
+    pub fn room_detail_target(&self) -> Option<&RoomListEntry> {
+        self.room_detail_target.as_ref()
+    }
+
+    /// Whether the selected row filled the detail readout.
+    #[must_use]
+    pub fn room_detail_enabled(&self) -> bool {
+        self.room_detail_readout.is_some()
     }
 
     /// Family named by the active mode tab.
@@ -3126,6 +3218,7 @@ impl ScreenGame {
             | shifted_high
             | (self.room_member_words.get(&number).copied().unwrap_or(0) & 0xFFFF_0000);
         self.room_member_words.insert(number, word);
+        self.bind_room_detail();
         word
     }
 
@@ -4407,6 +4500,7 @@ impl ScreenGame {
             return StartRequest::Nothing;
         }
         let verdict = self.start_gate_verdict();
+        self.clear_waiting_notice();
         self.waiting_notice = waiting_notice_for(verdict);
         match verdict {
             StartGateVerdict::Startable => StartRequest::StartGame,
@@ -4461,6 +4555,7 @@ impl ScreenGame {
     /// start attempt succeeds).
     pub fn clear_waiting_notice(&mut self) -> &mut Self {
         self.waiting_notice = None;
+        self.waiting_wire_sheet = None;
         self
     }
 
@@ -4469,7 +4564,54 @@ impl ScreenGame {
     /// emit a frame, it only owns the notice line the painter reads.
     pub fn stage_waiting_wire_caption(&mut self, caption: WaitingWireCaption) -> &mut Self {
         self.waiting_notice = Some(caption.text());
+        self.waiting_wire_sheet = None;
         self
+    }
+
+    /// Stage the 3009 kick caption with the evicted nickname. The
+    /// pinned template at VA `0x64da3c` has one `%s`; the two literal
+    /// halves are kept as CP949 bytes so the nickname lands at that slot.
+    pub fn stage_player_kicked_caption(&mut self, nickname: &str) -> &mut Self {
+        self.waiting_notice = None;
+        self.waiting_wire_sheet = Some(player_kicked_caption_bytes(nickname));
+        self
+    }
+
+    /// The wire-sheet caption as text, used by guards and the trace
+    /// path. A missing sheet has no caption.
+    #[must_use]
+    pub fn waiting_wire_caption_text(&self) -> Option<String> {
+        self.waiting_wire_sheet
+            .as_deref()
+            .map(o2jam_text::decode_cp949_lossy)
+    }
+
+    /// Stage the value the exe reads from global `0x768570`. The
+    /// writer of that global has no pinned source in this client; a
+    /// caller that supplies it owns the value.
+    pub fn set_room_settings_word(&mut self, word: Option<i32>) -> &mut Self {
+        self.room_settings_word = word;
+        self
+    }
+
+    /// The staged START settings word (`None` while no source staged).
+    #[must_use]
+    pub const fn room_settings_word(&self) -> Option<i32> {
+        self.room_settings_word
+    }
+
+    /// Stage the 2026 premium-time rows for the Channel description
+    /// paint. The caller owns the wire decode; no description prose is
+    /// invented in this seam.
+    pub fn set_premium_time_rows(&mut self, rows: Vec<PremiumTimeRow>) -> &mut Self {
+        self.premium_time_rows = rows;
+        self
+    }
+
+    /// The staged 2026 rows, in wire order.
+    #[must_use]
+    pub fn premium_time_rows(&self) -> &[PremiumTimeRow] {
+        &self.premium_time_rows
     }
 
     /// Effect layer selected in Waiting (exe global `0x7789e0`).
@@ -4702,6 +4844,7 @@ impl ScreenGame {
     /// says to wait for it (§4). Slice 4 replaces this with the download
     /// bar the exe paints.
     pub fn note_waiting_download(&mut self) -> &mut Self {
+        self.clear_waiting_notice();
         self.waiting_notice = Some(WAITING_START_DOWNLOAD_NOTICE);
         self
     }
@@ -5057,6 +5200,7 @@ impl ScreenGame {
             return;
         };
         self.room_highlight = index;
+        self.bind_room_detail();
         let Some(room) = self.rooms.get(index).cloned() else {
             return;
         };
@@ -5508,6 +5652,7 @@ impl ScreenGame {
         }
         let Some(pick) = chosen else {
             self.waiting_back_armed = true;
+            self.clear_waiting_notice();
             self.waiting_notice = Some(WAITING_AUTO_PICK_MISS_NOTICE);
             return AutoPickOutcome::Missed;
         };
@@ -10237,6 +10382,7 @@ impl ScreenGame {
             self.chat.panel(LobbyChat::Channel).history(),
             rows.len(),
         );
+        paint_premium_time_rows(frame, self.relay_down_art.as_ref(), &self.premium_time_rows);
         // The relay notice opens here, above the channel frame the
         // exe shows behind it (#244 capture, boundary fixed in #348).
         self.paint_planet_modal(frame);
@@ -10259,20 +10405,25 @@ impl ScreenGame {
         // while the chrome buttons repaint on hover), so both staged
         // arms take the hovered code.
         let hovered_code = self.hovered_room_control().map(|control| control.code);
+        let detail_enabled = self.room_detail_enabled();
         // Both staged arms share one painter: its clone-instance filter
         // uses the live row count, so an empty list hides every authored
         // `SET 0x11` template clone (the exe's empty channel shows no
         // example rows), while chrome hover still repaints.
         if let Some(art) = self.scene_art(Screen::Room) {
+            let readout_art = room_detail_readout_art(art);
             paint_room_scene_with_selection(
                 frame,
                 &self.rooms,
                 self.room_highlight,
-                art,
+                &readout_art,
                 hovered_code,
                 self.hovered_room_panel(),
                 Some(self.room_filter.tab_code()),
             );
+            if let Some(readout) = self.room_detail_readout.as_ref() {
+                paint_room_detail_readout(frame, readout, self.room_highlight, &art.placements);
+            }
             // #959: the channel-keyed default control ids and the
             // #990 member word paint through the same staged panel as
             // the live rows. Both stay dark when no wire value staged.
@@ -10289,7 +10440,12 @@ impl ScreenGame {
         } else if self.rooms.is_empty() {
             paint_screen(frame, Screen::Room);
         } else {
-            paint_room_list(frame, &self.rooms, self.room_highlight);
+            paint_room_list_with_detail_gate(
+                frame,
+                &self.rooms,
+                self.room_highlight,
+                detail_enabled,
+            );
         }
         // The lobby chat panel: live main-room rows plus the draft at
         // the staged `IDC_LIST_SROOM_CHAT`/`IDC_EDIT_SROOM_CHAT` rects
@@ -10675,6 +10831,11 @@ impl ScreenGame {
             self.paint_select_music_art(frame);
             self.paint_select_music_text(frame);
         }
+        // A wire caption with an interpolated name owns its own sheet;
+        // geometry still comes from the staged Information sheet.
+        if let Some(caption) = self.waiting_wire_sheet.as_deref() {
+            paint_information_message(frame, self.relay_down_art.as_ref(), caption);
+        }
     }
 
     /// Paint the song-select dialog's live text over the staged art:
@@ -11050,10 +11211,12 @@ impl ScreenGame {
         match key {
             MenuKey::Up => {
                 self.room_highlight = self.room_highlight.saturating_sub(1);
+                self.bind_room_detail();
             }
             MenuKey::Down => {
                 let last = self.rooms.len().saturating_sub(1);
                 self.room_highlight = (self.room_highlight + 1).min(last);
+                self.bind_room_detail();
             }
             MenuKey::Back => self.exit_room_to_channel(),
             MenuKey::Confirm => {
@@ -16507,8 +16670,14 @@ mod game_tests {
     fn room_highlight_selects_details_panel() {
         // 200x150 fits all nine fallback detail lines; the open room
         // paints OPEN dim while the locked room paints LOCK red.
+        // Both rows clear the 0x64 word floor, so the bound readout
+        // follows the highlight instead of staying dark.
+        let mut rooms = two_rooms();
+        for room in &mut rooms {
+            room.music_id = 100;
+        }
         let mut game = ScreenGame::new();
-        game.set_rooms(two_rooms());
+        game.set_rooms(rooms);
         game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(super::MenuKey::Confirm, true);
@@ -16537,6 +16706,69 @@ mod game_tests {
         // List plus cursor keep working under the panel.
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn room_row_selection_gates_the_detail_readout_by_bound_name_and_word_floor() {
+        // Live caller chain: main.rs::run_play -> connect::connect_and_login_with_transport
+        // -> assemble_online_session -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::room_key / ScreenGame::click_room_row
+        // -> ScreenGame::bind_room_detail.
+        let mut game = ScreenGame::new();
+        let row = |number: i32, title: &str, music_id: u16, user_count: u8| RoomListEntry {
+            number,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: false,
+            music_id,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count,
+            min_level: 0,
+            max_level: 0,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        };
+        game.set_rooms(vec![
+            row(3, "", 100, 1),
+            row(4, "Thin", 99, 100),
+            row(5, "Ready", 100, 1),
+            row(6, "More", 101, 1),
+        ]);
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.room_detail_target().map(|room| room.number), Some(3));
+        assert!(!game.room_detail_enabled(), "an empty title stays dark");
+
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.room_detail_target().map(|room| room.number), Some(4));
+        assert!(
+            !game.room_detail_enabled(),
+            "a full room's population does not replace the word floor"
+        );
+
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.room_detail_target().map(|room| room.number), Some(5));
+        assert!(game.room_detail_enabled(), "word 100 fills the readout");
+
+        game.menu_key(MenuKey::Down, true);
+        assert!(game.room_detail_enabled(), "word 101 keeps the readout");
+
+        game.set_rooms(Vec::new());
+        assert_eq!(
+            game.room_detail_target(),
+            None,
+            "a null row clears the target"
+        );
+        assert!(
+            !game.room_detail_enabled(),
+            "a null row disables the readout"
+        );
     }
 
     #[test]
@@ -37087,6 +37319,19 @@ mod game_tests {
         );
         game.stage_waiting_wire_caption(WaitingWireCaption::RemovedPlain);
         assert_eq!(game.waiting_notice(), Some("당신은 퇴장 당하셨습니다."));
+    }
+
+    #[test]
+    fn kick_caption_interpolates_the_staged_nickname_into_the_pinned_template() {
+        // seam: the caption builder owns interpolation; the wire
+        // caller chain is pinned by the scripted-gateway guard in
+        // `waiting_wire_tests.rs`.
+        let mut game = ScreenGame::new();
+        game.stage_player_kicked_caption("KICKME");
+        assert_eq!(
+            game.waiting_wire_caption_text().as_deref(),
+            Some("[정보] KICKME님이 강퇴 당하셨습니다.")
+        );
     }
 
     #[test]

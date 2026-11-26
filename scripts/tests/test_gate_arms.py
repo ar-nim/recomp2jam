@@ -258,5 +258,238 @@ class RealDataSkipTest(unittest.TestCase):
                               "a present pack with a missing file must fail")
 
 
+def mask_rust_source(source: str) -> str:
+    """Blank comments and string bodies; keep code offsets intact."""
+    masked = list(source)
+    index = 0
+    mode = "code"
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if mode == "code":
+            if char == "/" and following == "/":
+                mode = "line"
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                continue
+            if char == "/" and following == "*":
+                mode = "block"
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                continue
+            if char == "'":
+                closing = source.find("'", index + 1)
+                if 0 < closing - index <= 10:
+                    for pos in range(index, closing + 1):
+                        if source[pos] != "\n": masked[pos] = " "
+                    index = closing + 1
+                    continue
+            if char == '"':
+                mode = "string"
+                masked[index] = " "
+            index += 1
+        elif mode == "line":
+            if char == "\n":
+                mode = "code"
+            else:
+                masked[index] = " "
+            index += 1
+        elif mode == "block":
+            if char == "*" and following == "/":
+                mode = "code"
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                continue
+            if char != "\n":
+                masked[index] = " "
+            index += 1
+        else:
+            if char == "\\":
+                masked[index] = " "
+                index += 2 if index + 1 < len(source) else 1
+                continue
+            if char == '"':
+                mode = "code"
+            if char != "\n":
+                masked[index] = " "
+            index += 1
+    return "".join(masked)
+
+
+def rust_test_functions(source: str):
+    """Yield (test name, body) for each #[test] function in one source."""
+    code = mask_rust_source(source)
+    lines = source.splitlines(keepends=True)
+    code_lines = code.splitlines(keepends=True)
+    for index, line in enumerate(code_lines):
+        if "#[test" not in line:
+            continue
+        function_line = index + 1
+        match = None
+        while function_line < min(index + 40, len(code_lines)):
+            candidate = code_lines[function_line]
+            if "#[" in candidate or not candidate.strip():
+                function_line += 1
+                continue
+            match = re.search(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", candidate)
+            if match:
+                break
+            function_line += 1
+        if match is None:
+            continue
+        opening = source.index("{", sum(len(item) for item in lines[:function_line]) + match.end())
+        depth = 0
+        in_string = False
+        escaped = False
+        for position in range(opening, len(source)):
+            char = source[position]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    yield match.group(1), source[opening:position + 1]
+                    break
+
+
+SKIP_PRINT_RE = re.compile(r'(?:println|eprintln)!\(\s*"([^"\n]*(?:SKIP|skip)[^"\n]*)"')
+PACK_NAME_RE = re.compile(r'pack(?:_dir_for_test|_skip_report)\(\s*[^,]*?,\s*"([^"]+)"', re.S)
+
+
+def skip_print_labels(body: str) -> list[str]:
+    """Literal diagnostic labels a test can print."""
+    return SKIP_PRINT_RE.findall(body)
+
+
+def literal_pack_labels(body: str) -> list[str]:
+    """Fixed test names passed to the shared pack gate."""
+    return PACK_NAME_RE.findall(body)
+
+
+DATA_GATE_TOKENS = (
+    "install_root(",
+
+    "archives_present(",
+    "root_has_game_data(",
+    "game_data_dir(",
+    "pack_dir_for_test(",
+    "pack_skip_report(",
+    "installed_file_bytes(",
+    "installed_data_dir(",
+    "interface_archive(",
+    "key_art(",
+    "install_archive(",
+    "stage_shop_art(",
+    "stage_side_art(",
+    "installed_catalog_songs(",
+    "skip_without_archives(",
+    "playing_render_archives_present(",
+)
+ROUTE_HELPERS = (
+    "pack_dir_for_test(",
+    "pack_skip_report(",
+    "installed_file_bytes(",
+    "installed_data_dir(",
+    "install_archive(",
+    "stage_shop_art(",
+)
+NOT_REAL_DATA = {
+    ("crates/o2jam-file/src/data_root.rs",
+     "empty_override_falls_back_to_the_checkout_root"):
+        "path arithmetic only; no archive read",
+    ("crates/o2jam-file/src/data_root.rs",
+     "unset_override_falls_back_to_the_checkout_root"):
+        "path arithmetic only; no archive read",
+    ("crates/o2jam-file/src/data_root.rs",
+     "lowercase_data_folder_is_recognised"):
+        "synthetic temporary directory; no installed archive",
+    ("crates/o2jam-file/src/data_root.rs",
+     "uppercase_data_folder_is_recognised"):
+        "synthetic temporary directory; no installed archive",
+    ("crates/o2jam-file/src/data_root.rs",
+     "root_without_a_data_folder_has_no_game_data"):
+        "negative path probe; no installed archive",
+    ("crates/recomp2jam/src/shots.rs",
+     "real_data_arm_is_not_silently_absent"):
+        "gate canary; absence is the assertion, not a skip",
+    ("crates/recomp2jam/src/shots.rs",
+     "missing_archives_stage_nothing"):
+        "asserts the no-archive fallback; no data required",
+    ("crates/recomp2jam/src/shots.rs",
+     "play_skin_keeps_fallback_without_archive"):
+        "asserts the no-archive fallback; no data required",
+    ("crates/recomp2jam/src/data_dir_guard.rs",
+     "no_tracked_path_may_shadow_the_git_ignored_data_dirs"):
+        "git ls-files checks the ignored directory name, not archive bytes",
+    ("crates/o2jam-shell/tests/install_root_probe.rs",
+     "explicit_data_root_probe_fails_when_a_hidden_arm_can_reach_archives"):
+        "environment probe; no archive read",
+    ("crates/o2jam-shell/src/screens/paint.rs",
+     "featured_price_row_inks_a_green_won_glyph_and_a_gold_gem_glyph"):
+        "system-font fallback; no install-root art",
+}
+
+
+def names_data_gate(body: str, test_name: str) -> bool:
+    """True when a real-data test passes its own name into a gate helper."""
+    compact = re.sub(r"\s+", "", body)
+    quoted = f'"{test_name}"'
+    stringified = f"stringify!({test_name})"
+    return (quoted in compact or stringified in compact) and any(
+        helper in compact for helper in ROUTE_HELPERS
+    )
+
+
+class WorkspaceSkipTest(unittest.TestCase):
+    """Seam: the source audit is the whole SKIP-label behavior."""
+
+    def test_every_real_data_test_reports_a_named_skip(self) -> None:
+        # Gate chain: real-data test -> named SKIP -> cargo --show-output ->
+        # official gate log. A silent return or a generic label leaves the
+        # hidden arm indistinguishable from a passing test (issue #914).
+        violations: list[str] = []
+        for path in sorted((REPO_ROOT / "crates").rglob("*.rs")):
+            source = path.read_text(encoding="utf-8")
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            for test_name, body in rust_test_functions(source):
+                if not any(token in body for token in DATA_GATE_TOKENS):
+                    continue
+                if (relative, test_name) in NOT_REAL_DATA:
+                    continue
+                if f"SKIP {test_name}:" in body:
+                    continue
+                if names_data_gate(body, test_name):
+                    continue
+                violations.append(f"{relative}::{test_name}")
+        self.assertEqual([], violations, "real-data tests must report a named SKIP")
+
+    def test_every_data_skip_label_names_its_test_function(self) -> None:
+        # Gate chain: real-data test -> SKIP line -> cargo --show-output ->
+        # official gate log. A label that names a group, not the #[test],
+        # cannot be grepped back to the test (reviewer finding 4, #914).
+        violations: list[str] = []
+        for path in sorted((REPO_ROOT / "crates").rglob("*.rs")):
+            source = path.read_text(encoding="utf-8")
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            for test_name, body in rust_test_functions(source):
+                for label in skip_print_labels(body):
+                    if not label.startswith(f"SKIP {test_name}:"):
+                        violations.append(f"{relative}::{test_name}: {label!r}")
+                for label in literal_pack_labels(body):
+                    if label != test_name:
+                        violations.append(f"{relative}::{test_name}: pack label {label!r}")
+        self.assertEqual([], violations, "SKIP labels must name their #[test] function")
+
+
 if __name__ == "__main__":
     unittest.main()
