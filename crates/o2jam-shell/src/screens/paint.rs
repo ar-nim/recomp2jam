@@ -4848,6 +4848,10 @@ mod result;
 mod room;
 mod waiting;
 
+#[cfg(test)]
+#[path = "itemshop_entry_parity_tests.rs"]
+mod itemshop_entry_parity_tests;
+
 pub use self::chat::{
     channel_chat_row_text, channel_chat_visible_messages, paint_channel_chat, paint_room_chat,
     paint_waiting_chat, rank_notice_board_text, waiting_chat_row_text,
