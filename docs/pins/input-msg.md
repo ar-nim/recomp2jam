@@ -613,3 +613,22 @@ openers as static bodies; no live capture is claimed by this lane.
 - **Evidence**: analysis ev 523b.9b9e.d510.d1f0.2d0a.93a1.f9c9.5266.ec13.5e91.7af2.5c32.2322.15d6.56d6.87be; dossier ev 3498.3363.07fa.cd58.8ce1.fe9d.2b6e.eec1.e062.8c61.c38e.16b7.e56b.566c.335c.71fe; caller facet ev b4ec.8e1a.eb91.3fe0.e439.4d1e.d684.3a2d.214f.0bec.851e.8361.8d4f.5842.bcd5.adea; callee facet ev 4e90.33d3.1824.599c.44a2.c9bc.4946.2f17.a10d.962a.9123.746f.8444.4e1e.270c.4428; incoming xrefs ev 0583.7c91.ecb3.35f2.4d42.d24b.8ee1.52f5.f7b9.65a2.a23c.7b7b.7a78.5382.0d20.1752; body batch ev be59.e600.ca39.14d9.4968.ff0b.3016.97b4.f97d.1299.612f.c2a9.70e3.188e.731e.b52b; file-offset mapping ev b715.6548.460d.7481.23e4.6d6f.df60.00b1.404f.04ff.7eec.be07.794e.676f.a0ca.398f.
 - **Our client**: No counterpart by VA.
 
+
+### `0x55cad0` refusal-caption addendum — 3003 JoinWaiting result map (2026-11-25 senior REA pass)
+
+- **Result word 0**: success path (stages the joined room and installs
+  Waiting state 5). Negative results show a one-OK popup and post the
+  `(0x12, 3003, …)` UI event:
+  - `-8` -> `0x64d928`: invalid room number, retry.
+  - `-7` -> `0x64d958`: free users cannot enter the all-song room.
+  - `-6` and `-4` -> `0x64d9a0`: room full.
+  - `-5` -> `0x64d988`: game already in progress.
+  - `-3` -> `0x64d9b8`: wrong password; the event's third word is 3003.
+  - `-2` -> `0x64d9d0`: single room cannot be entered; the Room web
+    slot's `+0xf60` word is cleared.
+  - `-1` -> `0x64d9f4`: administrator-contact failure message.
+- **Consequence for #1018**: the refusal text is pinned; no text needs
+  to be invented. Implement the result-code -> caption map and the
+  success/refusal split.
+- **Evidence**: `ev_5336dbe5254d48f17d33ad7ed0b4fa0789916c58000848416bc3de2d0fc881f3`
+  (handler pseudocode).
