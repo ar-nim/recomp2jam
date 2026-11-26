@@ -4599,8 +4599,17 @@ impl ScreenGame {
             self.music_shop.note_download_completion(completions.len());
             let music_dir = self.music_download.music_dir().to_path_buf();
             self.set_installed_music(crate::music_install::installed_music_in(&music_dir));
+            self.clear_finished_download_notice();
         }
         completions
+    }
+
+    /// A completed transfer clears only its own wait caption. Other
+    /// waiting notices (a kick, a gate refusal) keep their own arm.
+    fn clear_finished_download_notice(&mut self) {
+        if self.waiting_notice == Some(WAITING_START_DOWNLOAD_NOTICE) {
+            self.clear_waiting_notice();
+        }
     }
 
     /// Stage the download-in-progress notice: a transfer stands (or the
