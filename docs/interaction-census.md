@@ -598,7 +598,7 @@ with panel-face and STATUS flip pins in `docs/myroom.md`. Ordinal is
 | 84 | `IDC_IMAGE_SMYROOM_GIFT_CUR_P10` (`0x15500055`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 85 | `IDC_IMAGE_SMYROOM_GIFT_TOT_P01` (`0x15500056`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
 | 86 | `IDC_IMAGE_SMYROOM_GIFT_TOT_P10` (`0x15500057`) | static art | Static figure/icon at the paired rect; frame source unpinned here | OPEN: statics pin plus Tier 3 live-art pin |
-| 87 | `IDC_BUTTON_SMYROOM_WEBABATAR` (`0x15200058`) | button | Web avatar chrome; P0, sends nothing (`docs/myroom.md`). | OPEN: REA dispatch plus Tier 3 click (P0 silence check) |
+| 87 | `IDC_BUTTON_SMYROOM_WEBABATAR` (`0x15200058`) | button | Web avatar chrome; P0, sends nothing (`docs/myroom.md`). | VERIFIED: myroom_webavatar_posts_the_exe_register_notice_without_a_browser_claim (Tier 0; WEBAVATAR click -> UI effect 0xd + pinned register notice, no wire/browser claim) |
 | 88 | `IDC_TEXT_SMYROOM_O2CASH` (`0x15400059`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 89 | `IDC_TEXT_SMYROOM_MUSICCASH` (`0x1540005A`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
 | 90 | `IDC_TEXT_SMYROOM_ITEMCASH` (`0x1540005B`) | static text | Static readout at the paired rect; value source unpinned here | OPEN: statics pin plus Tier 3 live-art text pin |
