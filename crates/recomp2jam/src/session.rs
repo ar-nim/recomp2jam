@@ -4318,10 +4318,11 @@ impl OnlineSession {
     /// formula (VA `0x55f630`, addendum evidence
     /// `ev_f0cfcdeffc96613dd03eee0446e510efcbd4320631900c4d77159b605ec69917`).
     /// A non-battle room expects mode `0x7789e7` times 12, plus 1,
-    /// plus arena `0x7789e9`. The battle arm, the arena byte mapping
-    /// onto our wide room word, and the writer of the settings word
-    /// have no staged source here, so all stay OPEN: an unstaged word
-    /// never refuses START.
+    /// plus arena `0x7789e9`; a battle room (wire game mode `Live`)
+    /// expects arena plus `0x25`. The arena byte mapping onto our wide
+    /// room word and the writer of the settings word have no staged
+    /// source here, so they stay OPEN: an unstaged word never refuses
+    /// START.
     fn start_settings_word_mismatches(&self) -> bool {
         let Some(settings) = self.game.room_settings_word() else {
             return false;
@@ -4329,13 +4330,14 @@ impl OnlineSession {
         let Some(room) = self.joined_room.as_ref() else {
             return false;
         };
-        if room.game_mode != 0 {
-            return false;
-        }
-        let expected = i32::from(room.difficulty)
-            .saturating_mul(12)
-            .saturating_add(1)
-            .saturating_add(room.arena);
+        let expected = if room.game_mode == o2jam_net::GameMode::Live as u8 {
+            room.arena.saturating_add(0x25)
+        } else {
+            i32::from(room.difficulty)
+                .saturating_mul(12)
+                .saturating_add(1)
+                .saturating_add(room.arena)
+        };
         settings != expected
     }
 
@@ -4464,10 +4466,12 @@ impl OnlineSession {
     /// pinned decoder; the description lines need a global mode bitmask
     /// and premium flag with no client-side source pinned, so no text is
     /// invented here (the bitmask cases stay covered at the codec seam).
+    /// The decoded rows also reach the Channel painter on this live drain.
     fn apply_premium_time_list(&mut self, frame: &Frame) {
         match decode_premium_time_rows(&frame.payload) {
             Ok(rows) => {
                 tracing::debug!(rows = rows.len(), "premium-time rows staged");
+                self.game.set_premium_time_rows(rows.clone());
                 self.premium_time_rows = rows;
             }
             Err(_) => tracing::debug!(id = frame.id, "dropping undecodable premium-time list"),

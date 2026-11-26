@@ -890,10 +890,16 @@ mod caption_arms_family {
 
     /// One 4011 result-zero answer with the staged settings word set to
     /// `word`. The room's mode 1 / arena 2 expects `1 * 12 + 1 + 2`.
-    fn start_answer_with_settings_word(word: i32) -> (OnlineSession, std::thread::JoinHandle<()>) {
+    fn start_answer_with_settings_word_in_room(
+        word: i32,
+        battle: bool,
+    ) -> (OnlineSession, std::thread::JoinHandle<()>) {
         let mut room = joined_snapshot();
         room.difficulty = 1;
         room.arena = 2;
+        if battle {
+            room.game_mode = o2jam_net::GameMode::Live as u8;
+        }
         let (written_tx, written) = mpsc::channel();
         let (mut session, server) = joined_waiting_session(room, move |mut stream| {
             stream
@@ -904,6 +910,10 @@ mod caption_arms_family {
         written.recv().unwrap();
         session.game.set_room_settings_word(Some(word));
         (session, server)
+    }
+
+    fn start_answer_with_settings_word(word: i32) -> (OnlineSession, std::thread::JoinHandle<()>) {
+        start_answer_with_settings_word_in_room(word, false)
     }
 
     #[test]
@@ -932,6 +942,34 @@ mod caption_arms_family {
         server.join().unwrap();
         assert_eq!(session.game.waiting_notice(), None);
     }
+
+    #[test]
+    fn battle_settings_word_mismatch_posts_the_config_error_caption() {
+        // Live chain: main.rs::run_play -> assemble_online_session ->
+        // OnlineSession::paint -> poll_waiting_chat -> drain_waiting_chat
+        // -> apply_waiting_frame -> apply_start_game_answer ->
+        // start_settings_word_mismatches (battle arm) ->
+        // ScreenGame::stage_waiting_wire_caption -> waiting_notice.
+        let (mut session, server) = start_answer_with_settings_word_in_room(999, true);
+        paint_until(&mut session, |session| {
+            session.game.waiting_notice().is_some()
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_notice(), Some(START_CONFIG_ERROR));
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn matching_battle_settings_word_keeps_result_zero_on_the_loading_walk() {
+        // Live chain: the same 4011 answer with settings equal to
+        // arena + 0x25; the battle success arm reaches Loading.
+        let (mut session, server) = start_answer_with_settings_word_in_room(2 + 0x25, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Loading
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_notice(), None);
+    }
 }
 
 /// Frame leg for the 2026 premium-row painter (#962). The wire decode
@@ -948,39 +986,43 @@ mod premium_time_paint_family {
     use super::super::session_tests::{channel_session, paint_until, painted_game_frame};
 
     #[test]
-    fn staged_2026_premium_rows_ink_the_channel_description_frame() {
+    fn premium_time_2026_drain_stages_rows_and_inks_the_channel_frame() {
         // Live chain: main.rs::run_online -> assemble_online_session ->
         // OnlineSession::paint -> poll_wire_at -> poll_lobby_chat ->
         // drain_lobby_chat -> apply_lobby_frame -> apply_premium_time_list
-        // -> (staged row hand-off) -> ScreenGame::set_premium_time_rows
-        // -> paint_channel -> paint_premium_time_rows.
-        // The hand-off is test-side while session.rs edits are limited
-        // to caption wiring; the wire staging is pinned separately.
+        // -> ScreenGame::set_premium_time_rows -> paint_channel ->
+        // paint_premium_time_rows. The description text and rect stay OPEN.
         let mut body = 2u32.to_le_bytes().to_vec();
         body.extend_from_slice(&757u16.to_le_bytes());
         body.extend_from_slice(&[1, 2, 3, 4, 5]);
         body.extend_from_slice(&0x1234u16.to_le_bytes());
         body.extend_from_slice(&[0; 5]);
+        let (trigger, start_wire) = mpsc::channel();
         let (written_tx, written) = mpsc::channel();
         let (mut session, server) = channel_session(move |mut stream| {
+            start_wire.recv().unwrap();
             stream
                 .write_all(&encode_frame(PREMIUM_TIME_COMMAND, &body))
                 .unwrap();
             written_tx.send(()).unwrap();
         });
+        let before = painted_game_frame(&mut session);
+        assert!(session.game.premium_time_rows().is_empty());
+        trigger.send(()).unwrap();
         written.recv().unwrap();
         paint_until(&mut session, |session| {
-            !session.premium_time_rows.is_empty()
+            !session.game.premium_time_rows().is_empty()
         });
-        let before = painted_game_frame(&mut session);
-        let rows = session.premium_time_rows.clone();
-        session.game.set_premium_time_rows(rows.clone());
-        assert_eq!(session.game.premium_time_rows(), rows.as_slice());
+        let staged = session.game.premium_time_rows().to_vec();
+        assert_eq!(staged.len(), 2);
+        assert_eq!(staged[0].song_id, 757);
+        assert_eq!(staged[0].status, [1, 2, 3, 4, 5]);
+        assert_eq!(staged[1].song_id, 0x1234);
         server.join().unwrap();
         let after = painted_game_frame(&mut session);
         assert!(
             before != after,
-            "the staged premium rows changed the Channel frame"
+            "the drained premium rows changed the Channel frame"
         );
     }
 }
