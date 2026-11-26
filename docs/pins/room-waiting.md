@@ -124,7 +124,7 @@ direct-caller edge, not proof of a runtime press.
   (mode byte 2 + player level < 4); room full `0x648250` (`%s` = the
   room name); game-info loading `0x648208` (row state byte 3); PT
   insufficient `0x6481e8` (skilled row + player level < 10 + the PT word
-  `DAT_00768b34` == 0 — the same global the 5026 FREEINFO story calls
+  the PT word at global `0x768b34` == 0 — the same global the 5026 FREEINFO story calls
   the pass word, so its reader set now includes this gate; the writer
   stays OPEN); level window `0x648190` (`%d`/`%d` = the row's min/max
   level bytes); password `0x648178` (posted with popup code 8).
