@@ -273,3 +273,17 @@ with a next step.
 Result's `0x13` entry matches #904 exactly (mode-3 entry 6 of
 `BGMwinter.ojm`, worker slot `0x0d+6`), and the dialog-open trigger is
 explicitly OPEN-10 with a named evidence step.
+
+## OPEN-7 resolution — effect `0xd` is MyRoom WEBAVATAR, not Result (2026-11-25 senior REA pass)
+
+`0x4a3eb0` (the instruction at `0x4a3ed4` lies inside this function)
+compares its argument with control id `0x15200058` and, only on a match,
+posts UI effect `(0xd, 0)`. `docs/myroom.md` identifies that control as
+WEBAVATAR (`Myroom_Btn_Avatar.ojs`). The Result scratch attribution was
+wrong. Result has no pinned `0xd` effect host; OPEN-7 is resolved as a
+misattribution, not a missing Result cue.
+
+Evidence: `ev_be18041d0e6fb6d801815332799aab974ff014e9939f85e8f68a9d0f99c473e3`
+(function body). The caller inventory has no resolved direct callers
+(`ev_77cffeb492cee94826e97eef7432d7a7883e332a726fd666322a41cc264102a6`),
+consistent with a control-dispatch arm.
