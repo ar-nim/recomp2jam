@@ -1402,7 +1402,7 @@ mod tests {
         );
     }
 
-    // Evidence: docs/pins/payment.md:263 (coupon/jamcard selector split).
+    // Evidence: docs/pins/payment.md:20 (coupon/jamcard opener split).
     #[test]
     fn coupon_host_arm_leaves_the_jamcard_selector_alone() {
         // seam: selector zero names jamcard, not the coupon form.
