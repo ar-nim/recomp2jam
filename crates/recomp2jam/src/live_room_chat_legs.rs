@@ -7,10 +7,111 @@
 mod live_room_chat_leg_tests {
     use crate::live_leg_support::*;
     use o2jam_net::rooms::{MainRoomAdminMessage, MainRoomUserMessage, SendWhisperResponse};
+    use o2jam_net::{
+        AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
+        WireMessage,
+    };
     use o2jam_render::{pack_xrgb, Rect};
-    use o2jam_shell::screens::game::{LobbyChat, RoomJoinRefusal};
+    use o2jam_shell::screens::game::{JoinAnswerRefusal, LobbyChat, RoomJoinRefusal};
     use o2jam_shell::{GameLoop, InputSnapshot, Keymap, Screen};
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
     use winit::keyboard::KeyCode;
+
+    /// Gateway handles for the started-row server refusal.
+    struct StartedRoomGateway {
+        port: u16,
+        posted_opcodes: Receiver<u16>,
+        answer_written: Receiver<()>,
+        server: JoinHandle<()>,
+    }
+
+    fn expect_boot_request(stream: &mut TcpStream, want: u16) {
+        let frame = o2jam_net::testing::read_frame(stream);
+        assert_eq!(frame.id, want, "boot request {want}");
+    }
+
+    fn send_response(stream: &mut TcpStream, message: &impl WireMessage) {
+        stream.write_all(&message.encode()).unwrap();
+    }
+
+    /// The five-frame login/channel/room-list exchange every live leg
+    /// boots through.
+    fn answer_boot_exchange(stream: &mut TcpStream) {
+        expect_boot_request(stream, Request::Authorize.id());
+        send_response(
+            stream,
+            &AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            },
+        );
+        expect_boot_request(stream, Request::GetChannelList.id());
+        send_response(
+            stream,
+            &ChannelList {
+                channels: vec![channel_row()],
+            },
+        );
+        expect_boot_request(stream, Request::ChannelLogin.id());
+        send_response(
+            stream,
+            &ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            },
+        );
+        expect_boot_request(stream, Request::GetChannelInfo.id());
+        send_response(
+            stream,
+            &RoomList {
+                rooms: vec![room_row()],
+            },
+        );
+    }
+
+    /// The shared boot gateway answers 3002 with success. This one
+    /// answers the started row with the pinned 3003 result -5 instead.
+    fn spawn_started_room_gateway() -> StartedRoomGateway {
+        let (posted, posted_opcodes) = mpsc::channel();
+        let (answer_written_tx, answer_written) = mpsc::channel();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
+            answer_boot_exchange(&mut stream);
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                posted.send(frame.id).unwrap();
+                if frame.id == Request::JoinWaiting.id() {
+                    send_response(
+                        &mut stream,
+                        &JoinRoomResponse {
+                            result_code: u32::from_le_bytes((-5i32).to_le_bytes()),
+                            room: None,
+                        },
+                    );
+                    answer_written_tx.send(()).unwrap();
+                }
+            }
+        });
+        StartedRoomGateway {
+            port,
+            posted_opcodes,
+            answer_written,
+            server,
+        }
+    }
+
+    /// Paint until the 3003 verdict reaches the sheet painter.
+    fn paint_until_in_progress_sheet(session: &mut crate::session::OnlineSession) {
+        for _ in 0..MAX_SCREEN_PAINTS {
+            if session.game_mut().join_answer_refusal() == Some(JoinAnswerRefusal::GameInProgress) {
+                return;
+            }
+            paint(session);
+        }
+        panic!("the 3003 result -5 never posted the in-progress sheet");
+    }
 
     /// Absolute native rect of one staged Room placement. Geometry is
     /// read from the same `.bnd` block the painter consumes.
@@ -206,6 +307,73 @@ mod live_room_chat_leg_tests {
             None,
             "the one-OK sheet dismisses"
         );
+        finish(session, gateway.server);
+    }
+
+    /// #947 started-room refusal, Room ord 26-31. Live chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> InputSnapshot staged row press ->
+    ///   ScreenGame::press_kind_at -> OnlineSession::dispatch_room_press ->
+    ///   C2S 3002 -> S2C 3003 (-5) -> OnlineSession::stage_3003_refusal ->
+    ///   ScreenGame::stage_join_answer_refusal -> paint_information_message.
+    /// The pinned in-progress caption comes from the server answer; the
+    /// exe has no started-room local refusal in `0x493a50`.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_started_room_row_press_posts_3002_and_the_minus_five_sheet_stays_in_room() {
+        if !archives_present() {
+            println!("SKIP live_started_room_row_press_posts_3002_and_the_minus_five_sheet_stays_in_room: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_started_room_gateway();
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+
+        let mut started = room_row();
+        started.state_code = o2jam_net::RoomState::Playing as u8;
+        session.game_mut().set_rooms(vec![started]);
+        let rest = paint_frame(&mut session);
+        click_staged(&mut session, Screen::Room, "IDC_BUTTON_SROOM_EXBUTTON1");
+        paint(&mut session);
+        gateway
+            .answer_written
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the started row posted 3002 and got the -5 answer");
+        assert!(
+            gateway
+                .posted_opcodes
+                .try_iter()
+                .any(|id| id == Request::JoinWaiting.id()),
+            "the started-room press posts 3002"
+        );
+        paint_until_in_progress_sheet(&mut session);
+
+        let sheet_frame = paint_frame(&mut session);
+        assert_eq!(session.screen(), Screen::Room, "the refusal stays in Room");
+        assert_eq!(
+            session.game_mut().room_join_refusal(),
+            None,
+            "no invented local started-room caption"
+        );
+        assert_eq!(
+            session.game_mut().join_answer_refusal(),
+            Some(JoinAnswerRefusal::GameInProgress),
+            "the server owns the in-progress caption"
+        );
+        assert!(
+            changed_pixels(&rest, &sheet_frame) > 0,
+            "the in-progress sheet changes the Room frame"
+        );
+
+        let (ok_x, ok_y) = information_ok_centre();
+        session.ingest_snapshot(&InputSnapshot::click_at(ok_x, ok_y));
+        assert_eq!(
+            session.game_mut().join_answer_refusal(),
+            None,
+            "OK dismisses the server sheet"
+        );
+        assert_eq!(session.screen(), Screen::Room, "still Room after OK");
         finish(session, gateway.server);
     }
 
