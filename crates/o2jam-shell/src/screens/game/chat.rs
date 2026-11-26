@@ -390,10 +390,10 @@ const ADMINISTRATOR_CONTACT: &[u8] = &[
     0xA1, 0xB0, 0xD4, 0x20, 0xB9, 0xAE, 0xC0, 0xC7,
 ];
 
-/// Gate reasons the Room row press refuses, named by the exe's pinned
-/// message bytes (`docs/pins/room-waiting.md`, `0x493a50`). The
-/// already-started arm has no pinned caption here, so it stays absent
-/// rather than inventing text.
+/// Gate reasons the Room row press refuses locally, named by the exe's
+/// pinned message bytes (`docs/pins/room-waiting.md`, `0x493a50`). A
+/// started room is not one of them: the senior REA pass found no local
+/// caption or refusal branch, so the 3003 answer owns that caption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomJoinRefusal {
     /// Locked row (caption at file `0x248178`).
@@ -410,9 +410,6 @@ pub enum RoomJoinRefusal {
     SevenKeys,
     /// Song the catalog does not name (file `0x248330`).
     UnregisteredSong,
-    /// Started room: this arm has no pinned caption in
-    /// `docs/pins/room-waiting.md`, so it stages no popup text.
-    Started,
 }
 
 /// The held room-list message bytes, read from the pinned 7.55 image
@@ -428,11 +425,10 @@ impl RoomJoinRefusal {
             Self::Premium => NEED_PT,
             Self::SevenKeys => SEVEN_KEY_LEVEL,
             Self::UnregisteredSong => UNREGISTERED_SONG,
-            Self::Started => &[],
         }
     }
 
-    /// CP949 bytes for the one-OK sheet; an unpinned arm stays empty.
+    /// CP949 bytes for the one-OK sheet of a local refusal.
     #[must_use]
     pub fn message(self) -> Vec<u8> {
         let template = self.template();
@@ -478,9 +474,6 @@ pub(super) fn room_join_refusal_for(
     player_level: Option<i32>,
     song_known: bool,
 ) -> Option<RoomJoinRefusal> {
-    if room.state_code == RoomState::Playing as u8 {
-        return Some(RoomJoinRefusal::Started);
-    }
     if room.state_code == RoomState::Unavailable as u8 {
         return Some(RoomJoinRefusal::Loading);
     }

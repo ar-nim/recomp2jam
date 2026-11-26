@@ -754,3 +754,63 @@ fn absent_2028_answer_leaves_the_native_top100_rows_unstaged() {
     assert_eq!(session.game.lanking_self_entry(), None);
     assert!(session.game.lanking_visible_ranks().is_empty());
 }
+
+/// #947 started-room refusal. The senior REA pass found no started-room
+/// caption and no local refusal branch in `0x493a50`; the row press must
+/// reach the server, whose 3003 result -5 carries the pinned in-progress
+/// sheet (`0x24d988`).
+#[test]
+fn scripted_started_room_press_posts_3002_and_the_minus_five_answer_posts_the_in_progress_sheet() {
+    // Live caller chain: main.rs::run_play -> session pointer edge ->
+    // ScreenGame::press_kind_at -> OnlineSession::dispatch_room_press ->
+    // begin_room_join -> poll_room_join -> drain_room_join -> C2S 3002 ->
+    // S2C 3003 (-5) -> OnlineSession::stage_3003_refusal ->
+    // ScreenGame::stage_join_answer_refusal -> paint_room ->
+    // paint_information_message.
+    use o2jam_net::JoinRoomResponse;
+    use o2jam_shell::screens::game::JoinAnswerRefusal;
+    use o2jam_shell::InputSnapshot;
+
+    const IN_PROGRESS_CAPTION: &[u8] = &[
+        0xB0, 0xD4, 0xC0, 0xD3, 0xC0, 0xCC, 0x20, 0xC1, 0xF8, 0xC7, 0xE0, 0x20, 0xC1, 0xDF, 0x20,
+        0xC0, 0xD4, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+    ];
+
+    let (mut session, server) = room_session(|mut stream| {
+        let join = read_frame(&mut stream);
+        assert_eq!(
+            join.id,
+            Request::JoinWaiting.id(),
+            "a started row still posts 3002"
+        );
+        let answer = JoinRoomResponse {
+            result_code: u32::from_le_bytes((-5i32).to_le_bytes()),
+            room: None,
+        };
+        stream.write_all(&answer.encode()).unwrap();
+    });
+    let mut started = listed_row(3, "Started");
+    started.state_code = o2jam_net::RoomState::Playing as u8;
+    // The scripted game stages no catalog; keep the row clear of the
+    // unregistered-song gate so only the server can refuse this press.
+    started.music_id = 0;
+    session.game_mut().set_rooms(vec![started]);
+    session.ingest_snapshot(&InputSnapshot::click_at(300, 154));
+
+    paint_until(&mut session, |session| {
+        session.game.join_answer_refusal() == Some(JoinAnswerRefusal::GameInProgress)
+    });
+    server.join().unwrap();
+
+    let sheet = session
+        .game
+        .join_answer_refusal()
+        .expect("the 3003 verdict is staged");
+    assert_eq!(sheet.message(), IN_PROGRESS_CAPTION, "pinned exe caption");
+    assert_eq!(
+        session.game.room_join_refusal(),
+        None,
+        "no invented local started-room caption"
+    );
+    assert_eq!(session.screen(), Screen::Room, "the refusal stays in Room");
+}

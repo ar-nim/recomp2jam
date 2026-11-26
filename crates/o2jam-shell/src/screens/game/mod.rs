@@ -39180,23 +39180,27 @@ mod game_tests {
         }
     }
 
-    /// #947 unpinned caption arm. The gate stops the silent join,
-    /// but no caption is pinned for a started room in
-    /// `docs/pins/room-waiting.md`, so no popup text is invented.
+    /// #947 started-room row. The senior REA pass found no started-room
+    /// caption and no local refusal branch in `0x493a50`; the server's
+    /// 3003 result -5 owns the in-progress sheet. The wire half is
+    /// pinned by the scripted-gateway and live legs in the recomp2jam
+    /// crate.
+    /// ev_92af29edd8615724d9797629142e7e4d7219fdf74459ae3b7cd4b52c6c3bf924
+    /// (0x493a50 / file 0x93a50, docs/pins/room-waiting.md).
+    /// seam: the shell half only proves that no local caption is staged;
+    /// the wire half cannot be observed from `ScreenGame`.
     #[test]
-    fn started_room_row_press_stages_the_arm_without_an_invented_caption() {
+    fn started_room_row_press_has_no_local_refusal_arm() {
         let mut game = room_lobby_with_controls(&[]);
         let mut started = game.listed_rooms()[0].clone();
         started.state_code = o2jam_net::RoomState::Playing as u8;
         game.set_rooms(vec![started]);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 154));
-        let refusal = game.room_join_refusal().expect("started arm staged");
-        assert_eq!(refusal, RoomJoinRefusal::Started);
-        assert!(
-            refusal.message().is_empty(),
-            "no caption bytes are pinned for this arm"
+        assert_eq!(
+            game.room_join_refusal(),
+            None,
+            "the exe has no local started-room caption"
         );
-        assert_eq!(game.screen(), Screen::Room, "the press never joins");
     }
 
     /// #974 Room-panel half: the incoming whisper row names both
