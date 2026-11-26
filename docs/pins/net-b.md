@@ -620,3 +620,24 @@ entries come from that dispatch table, not from the handler bodies.
 - **Evidence**: `ev_b30a14874aa7bc248ba3837df962f8984ce4d9059870eaa89df05cef999281c3`
   (handler pseudocode), `ev_bce9903beb8615518b106ecf6b12dd40b8a63f15fb9c56aac645fe89ef853697`
   (helper pseudocode).
+
+### `0x560d70` rebuild-semantics addendum — 5011 resets the owned list, never the song table (2026-11-25 senior REA pass)
+
+- **Behavior (own words)**: the 5011 handler reads six header dwords
+  (wallet/point words and the owned count), then two counted string
+  lists, then one dword. It calls the owned-list reset the owned-list reset helper
+  ONCE before reading the owned rows, so the owned list is REBUILT from
+  the answer — rows absent from the answer disappear from the owned
+  list. It then reconciles the song table against the rebuilt list:
+  for each matching song it sets `+0x15c = 7`, switches on the song's
+  `+0x194` pack type (1..5) to find the category entry, copies the five
+  owned bytes into the song record `+0x17c..+0x180`, sets `+0x134 = 1`
+  when it was 0 (and inserts the owned row in that case), and, when the
+  second-table flag is set, inserts or updates the second table's row.
+  It NEVER removes a song-table entry. UI event `(0x12, 0x1393, 0, X)`
+  posts at the end with the last header dword.
+- **Consequence for #1038**: the parity gap is the owned-list reset —
+  our fold must rebuild the owned list from the answer (clear + insert),
+  while the song table needs flag updates only, no clearing.
+- **Evidence**: `ev_5741ec104eee5d136707bb5d9244a3a98ce51f4cfa3cd60fb92844aaff65378a`
+  (full handler pseudocode).
