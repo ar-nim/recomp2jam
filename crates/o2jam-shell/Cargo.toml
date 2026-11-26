@@ -10,6 +10,9 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
+# JPEG codec for the player's Print Screen writer. `zune-jpeg` in the
+# lockfile is decode-only; `image`'s jpeg feature supplies the encoder.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 tracing.workspace = true
 o2jam-audio = { version = "0.1.0", path = "../o2jam-audio" }
 o2jam-file = { version = "0.1.0", path = "../o2jam-file" }

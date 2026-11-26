@@ -11,9 +11,12 @@ mod live_payment_spec_leg_tests {
     use o2jam_shell::screens::messenger::{
         billing_window_arm, print_screen_file_name, BillingWebEvent, BillingWebHandle,
         BillingWebPage, BillingWindowArm, PrintScreenAction, ScreenShotCounter,
-        BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD,
+        BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD, SCREENSHOT_DIMENSIONS,
+        SCREENSHOT_FOLDER_SUFFIX,
     };
     use o2jam_shell::Screen;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// #1099 Tier 3. Live caller chain:
     ///   main.rs::run_play -> connect::connect_and_login_with_transport
@@ -150,6 +153,80 @@ mod live_payment_spec_leg_tests {
         }
         assert_eq!(counter.press(0), PrintScreenAction::Notice);
         assert_eq!(counter.used(), 2);
+        assert_eq!(session.screen(), Screen::Planet);
+
+        finish(session, gateway.server);
+    }
+
+    /// Unique scratch root under `~/scratch`: the live leg writes real
+    /// bytes here and never in a user's Pictures folder.
+    struct ScratchRoot(PathBuf);
+
+    impl ScratchRoot {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock follows the epoch")
+                .as_nanos();
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/home/arnim"));
+            let dir = home.join("scratch").join(format!(
+                "screenshot-live-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).expect("scratch root is available");
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// #1101 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg -> dismiss_splash -> ScreenShotCounter::capture
+    ///   -> PrintScreenAction::write_jpeg -> image::JpegEncoder.
+    /// seam: the headless walk cannot inject a winit Snapshot event, so
+    /// writing one synthetic native frame from the booted session is the
+    /// whole headless claim. A Tier 4 Wine key/file leg stays OPEN.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_print_screen_writer_writes_a_numbered_jpeg_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+
+        let scratch = ScratchRoot::new("writer");
+        let width = usize::try_from(SCREENSHOT_DIMENSIONS.0).expect("800 fits usize");
+        let height = usize::try_from(SCREENSHOT_DIMENSIONS.1).expect("600 fits usize");
+        let frame = vec![o2jam_render::pack_xrgb(16, 200, 16); width * height];
+        let mut counter = ScreenShotCounter::new(2);
+
+        let result = counter.capture(0, scratch.path(), &frame);
+
+        assert!(result.is_written(), "booted session writes a screenshot");
+        let expected = scratch
+            .path()
+            .join(SCREENSHOT_FOLDER_SUFFIX)
+            .join(print_screen_file_name(0));
+        assert_eq!(result.path(), Some(expected.as_path()));
+        let bytes = std::fs::read(&expected).expect("screenshot file exists");
+        assert!(bytes.len() > 2, "JPEG bytes exist");
+        assert_eq!(&bytes[..2], &[0xff, 0xd8], "JPEG SOI marker");
+        assert_eq!(&bytes[bytes.len() - 2..], &[0xff, 0xd9], "JPEG EOI marker");
+        assert_eq!(counter.used(), 1, "a successful write consumes one name");
         assert_eq!(session.screen(), Screen::Planet);
 
         finish(session, gateway.server);
