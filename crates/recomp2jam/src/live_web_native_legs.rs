@@ -794,6 +794,7 @@ mod live_web_native_leg_tests {
         (root, music, source)
     }
 
+    #[test]
     fn tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
@@ -975,6 +976,7 @@ mod live_web_native_leg_tests {
         }
     }
 
+    #[test]
     fn tier_3_scripted_2028_from_boot_inks_the_native_top100_rows() {
         if !archives_present() {
             println!("skip: missing install-root interface archive");
