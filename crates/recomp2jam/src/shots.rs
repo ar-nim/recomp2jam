@@ -1044,10 +1044,10 @@ fn stage_select_music_art(game: &mut ScreenGame) {
     game.load_select_music_scene(art.placements, art.figures);
 }
 
-/// Catalog title/artist for the host pick: the loading caption
-/// source (staged `OJNList.dat` order). `None` while the staged
-/// catalog names no such song — the walk keeps its indeterminate
-/// bar rather than inventing a caption.
+/// Catalog title/artist for the host pick (staged `OJNList.dat`
+/// order). The names ride the staged walk status for the live legs
+/// only; nothing inks them on the gate. `None` while the staged
+/// catalog names no such song.
 fn loading_song_caption(game: &ScreenGame) -> Option<(String, String)> {
     let wanted = u32::from(PLAYING_SONG.music_id);
     game.select_songs()
@@ -1058,10 +1058,10 @@ fn loading_song_caption(game: &ScreenGame) -> Option<(String, String)> {
 
 /// Stage the loading shot's live walk status: thread the gate
 /// phases (entry plus the four staging/decrypt/decode/arm steps)
-/// through `loading_phase_status` with the staged catalog caption,
-/// holding the clock-armed full fraction for the paint. Staged
-/// after the Waiting→Loading edge so earlier shots stay untouched;
-/// keeps the indeterminate bar while the catalog names no song.
+/// through `loading_phase_status` with the staged catalog names,
+/// holding the clock-armed full fraction. Staged after the
+/// Waiting→Loading edge so earlier shots stay untouched; it changes
+/// no pixel on the cover (`loading_shot_staged_status_changes_no_pixel`).
 fn stage_loading_status(game: &mut ScreenGame) {
     let Some((title, artist)) = loading_song_caption(game) else {
         return;

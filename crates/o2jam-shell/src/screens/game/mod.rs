@@ -11190,10 +11190,13 @@ impl ScreenGame {
         );
     }
 
-    /// Loading gate: staged art, then title–artist. The OPEN progress
-    /// bar stays hidden in every state until its exe pin (see
+    /// Loading gate: the staged cover alone. No runtime caption inks
+    /// (the exe reads none of its three gate fonts,
+    /// `docs/pins/misc-tail.md`) and the OPEN progress bar stays
+    /// hidden in every state until its exe pin (see
     /// [`paint_loading_bar`](crate::screens::paint::paint_loading_bar));
-    /// staged walk status is retained but not painted as a bar.
+    /// staged walk status is retained for the live legs but paints
+    /// nothing.
     fn paint_loading(&self, frame: &mut Frame<'_>) {
         match (
             self.scene_art(Screen::Loading),
