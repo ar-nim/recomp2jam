@@ -19,7 +19,7 @@ use o2jam_net::{AuthResponse, ChannelList, ChannelLoginResponse, Request, WireMe
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks, finish,
-    paint, paint_frame, read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
+    hold_live_leg_lock, paint, paint_frame, read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
 };
 use crate::session::OnlineSession;
 
@@ -118,6 +118,7 @@ fn live_room_wire_2009_user_count_repaints_the_row_from_boot() {
         );
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (gateway, send) = spawn_wire_gateway();
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);
@@ -163,6 +164,7 @@ fn live_room_wire_2018_answer_stages_a_delivery_line_from_boot() {
         );
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (gateway, send) = spawn_wire_gateway();
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);
@@ -194,6 +196,7 @@ fn live_room_wire_2020_state_and_2025_skills_change_the_row_from_boot() {
         println!("SKIP live_room_wire_2020_state_and_2025_skills_change_the_row_from_boot: install-root absent");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (gateway, send) = spawn_wire_gateway();
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);
@@ -244,6 +247,7 @@ fn live_room_wire_2008_descriptor_rewrite_reaches_the_painted_board() {
         println!("SKIP live_room_wire_2008_descriptor_rewrite_reaches_the_painted_board: install-root absent");
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let (gateway, send) = spawn_wire_gateway();
     let mut session = boot_live_leg(gateway.port, false);
     dismiss_splash(&mut session);

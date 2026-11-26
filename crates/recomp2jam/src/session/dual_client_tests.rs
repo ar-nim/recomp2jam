@@ -26,7 +26,7 @@ use crate::live_dual_client_legs::harness::{
     SLOT_UPDATE_OPCODE, START_ANSWER_OPCODE, START_REQUEST_OPCODE, WHISPER_CONTENT,
     WHISPER_RECEIVE_OPCODE, WHISPER_SENDER, WHISPER_SEND_OPCODE, WHISPER_TARGET,
 };
-use crate::live_leg_support::{joined_room, paint, staged_rect_pixels};
+use crate::live_leg_support::{hold_live_leg_lock, joined_room, paint, staged_rect_pixels};
 use crate::loading::{LoadingGateArm, LOADING_CONFIRM_AFTER_START, LOADING_PLAYING_AFTER_CONFIRM};
 
 const LOADING_HARNESS_TAG: &str = "dual-loading-4010-4011-4012";
@@ -67,6 +67,7 @@ fn two_room_clients_drop_the_disbanded_row() {
     if skip_if_no_archives(guard) {
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
     gateway.set_harness_tag(guard);
     let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
@@ -133,6 +134,7 @@ fn one_whisper_reaches_both_room_chat_lists() {
     if skip_if_no_archives(guard) {
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = DualGateway::spawn(joined_room(MASTER_MEMBER_ID, true));
     gateway.set_harness_tag(guard);
     let (alpha_index, mut alpha) = boot_room_client(&gateway, MASTER_NAME);
@@ -205,6 +207,7 @@ fn master_and_guest_agree_on_badge_and_start_gate() {
     if skip_if_no_archives(guard) {
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = DualGateway::spawn_with_rooms(vec![
         joined_room(MASTER_MEMBER_ID, true),
         joined_room(GUEST_MEMBER_ID, true),
@@ -395,6 +398,7 @@ fn both_clients_log_the_start_fanout() {
     if skip_if_no_archives(guard) {
         return;
     }
+    let _live_leg_guard = hold_live_leg_lock();
     let gateway = DualGateway::spawn_with_rooms(vec![
         joined_room(MASTER_MEMBER_ID, true),
         joined_room(GUEST_MEMBER_ID, true),

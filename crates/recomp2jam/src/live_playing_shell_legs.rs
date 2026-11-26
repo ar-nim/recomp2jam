@@ -178,6 +178,7 @@ mod tests {
             println!("skip: install archives absent");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let expected = crate::expected_result_cue_pcm().expect("bgResult decodes from the install");
         let (mut session, gateway, recorder) = boot_to_result_with_recorder();
         let captures = recorder.captures();
@@ -215,6 +216,7 @@ mod tests {
             println!("skip: install archives absent");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway, recorder) = boot_to_result_with_recorder();
         let result_cue = recorder.captures().pop().expect("Result cued once");
         assert!(session.game_mut().enter_screen(Screen::Room));

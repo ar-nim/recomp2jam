@@ -80,6 +80,7 @@ mod live_result_leg_tests {
             println!("SKIP live_result_paint_leg_inks_the_staged_panels_from_boot: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_result_back_gateway(joined_room(0, true));
         let mut session = walk_to_live_result(&gateway);
         let codes = [
@@ -144,6 +145,7 @@ mod live_result_leg_tests {
             println!("SKIP live_result_fill_body_ink_is_sampled_in_a_settled_result_frame: missing install-root interface archive");
             return;
         }
+        let _live_leg_guard = hold_live_leg_lock();
         let archive = read_install_archives(&install_root())
             .interface
             .expect("interface archive behind the guard");
