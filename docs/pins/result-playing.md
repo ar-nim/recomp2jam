@@ -266,3 +266,17 @@ Result sections of `docs/interaction-census.md`.
   (arm dossier), `ev_9727bf792adf6ac2fd6ca1fa25744f1bed91796afca7fcf15222a16c7010c221`
   (settle timer), `ev_9239cf8242aec5b5180ab9cbb7367a8461ded13d975166673c33a99104b08fc4`
   (BACK enable helper).
+
+### `0x5598b0` notice-contract addendum — 4035 posts events, not caption text (2026-11-25 senior REA pass)
+
+- **Body**: one u8 count, then `count` pairs of `(u8 member, u8 state)`.
+- **Behavior (own words)**: count zero posts one UI event
+  `(0x12, 0xfc3, 0, 0)`. A nonzero count posts one event per row,
+  `(0x12, 0xfc3, member, count)`, after applying the state through the
+  shared setter. The self/other member branches call the same setter
+  (dead distinction in this build). There is NO caption string and no
+  text popup in this handler.
+- **Consequence for #1037**: the acquire notice is the event stream, not
+  a shell caption. Guard the exact empty/nonempty event sequences; do not
+  invent notice pixels.
+- **Evidence**: `ev_9856c8aed1ea517462b8c4505b6eea444ef72aba7b0f2e05db78f821c9d94dad`.
