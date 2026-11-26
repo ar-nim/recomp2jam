@@ -13,18 +13,57 @@ use std::thread::{self, JoinHandle};
 
 use o2jam_audio::{NullBackend, PcmSamples};
 use o2jam_net::frame::encode_frame;
+use o2jam_net::play::SetRoomMusic;
 use o2jam_net::testing::{fake_gateway, read_frame};
 use o2jam_net::{
     AuthResponse, ChannelList, ChannelLoginResponse, JoinRoomResponse, Request, RoomList,
     WireMessage,
 };
-use o2jam_shell::{GameLoop, Screen};
+use o2jam_shell::screens::paint::LoadingStatus;
+use o2jam_shell::{GameLoop, MenuKey, Screen};
 
 use crate::live_leg_support::{
-    archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
-    join_waiting_by_click, joined_room, paint, paint_frame, read_frame_until_eof, room_row,
-    spawn_live_leg_gateway, MAX_SCREEN_PAINTS,
+    archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks, finish,
+    join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
+    read_frame_until_eof, room_row, spawn_live_leg_gateway, spawn_result_back_gateway,
+    LiveLegGateway, MAX_SCREEN_PAINTS,
 };
+use crate::session::OnlineSession;
+
+// Caption bytes at VA `0x650d68`, `0x650d38` and `0x650d08`
+// (`docs/pins/input-msg.md` addendum, ev_0298023742…). Kept as
+// literals here so the live leg checks the pin, not the shell's
+// own constant.
+const ROOM_EXIT_NOTICE: &str = "PLAY중 화면이 전환 되어서 Room으로 나왔습니다.";
+const LOBBY_EXIT_NOTICE: &str = "PLAY중 화면이 전환 되어서 로비로 나왔습니다.";
+const WAITING_EXIT_NOTICE: &str = "PLAY중 화면이 전환 되어서 대기실로 나왔습니다.";
+
+/// Boot the real online entry, click into the staged room, and walk
+/// from Waiting to Loading on the 4010 edge. The room's title word is
+/// the one the exe's activation arm inspects.
+fn boot_focus_leg(room: o2jam_net::JoinedRoom) -> (OnlineSession, LiveLegGateway) {
+    let gateway = spawn_result_back_gateway(room);
+    let mut session = boot_live_leg(gateway.port, false);
+    dismiss_splash(&mut session);
+    enter_room_by_clicks(&mut session);
+    join_waiting_by_click(&mut session, &gateway.join_answer_written);
+    session
+        .game_mut()
+        .with_audio(Box::new(NullBackend::new()), HashMap::new());
+    session.game_mut().set_selected_music(SetRoomMusic {
+        music_id: 757,
+        difficulty: 1,
+        speed: 1,
+    });
+    session.game_mut().set_loading_status(LoadingStatus {
+        progress: 1.0,
+        title: "First".to_owned(),
+        artist: "Band".to_owned(),
+    });
+    session.menu_key(MenuKey::Confirm, true);
+    paint_until_screen(&mut session, Screen::Loading);
+    (session, gateway)
+}
 
 /// Synthetic BGM bank: record 9 is the Planet/Channel track cue.
 fn focus_cue_bank() -> Vec<Option<PcmSamples>> {
@@ -221,4 +260,117 @@ fn live_4035_acquire_arms_the_local_badge_from_boot() {
     drop(session);
     drop(gateway.script);
     gateway.server.join().unwrap();
+}
+
+/// Tier 3 focus-off/on leg for the Playing exit (#1046). The off edge
+/// must not change the scene; the on edge installs Room with the
+/// pinned caption. Audio stays on the null backend.
+#[test]
+fn live_focus_return_from_playing_installs_room_from_boot() {
+    // Live caller chain: `main.rs::run_play` ->
+    // `connect::connect_and_login_with_transport` ->
+    // `assemble_online_session` -> boot pointer walk -> Loading Confirm ->
+    // `OnlineSession::focus_changed` -> `ScreenGame::focus_changed` ->
+    // `ScreenGame::apply_focus_change` -> `ScreenGame::enter_screen(Room)`.
+    // Archives absent -> skip cleanly (CI has no game data).
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_focus_leg(joined_room(0, true));
+    session.menu_key(MenuKey::Confirm, true);
+    assert_eq!(session.screen(), Screen::Playing, "the gate handed off");
+    let before = paint_frame(&mut session);
+
+    session.focus_changed(false);
+    assert_eq!(
+        session.screen(),
+        Screen::Playing,
+        "focus loss only records the pause"
+    );
+    session.focus_changed(true);
+    assert_eq!(session.screen(), Screen::Room, "activation installs Room");
+    assert_eq!(
+        session.game_mut().focus_exit_notice(),
+        Some(ROOM_EXIT_NOTICE),
+        "the pinned Room notice is staged"
+    );
+    assert_ne!(before, paint_frame(&mut session), "the exit repainted");
+    finish(session, gateway.server);
+}
+
+/// Tier 3 focus-off/on leg for Loading with an empty room title (#1046).
+#[test]
+fn live_focus_return_from_loading_empty_title_clears_seats_and_installs_room_from_boot() {
+    // Live caller chain: `main.rs::run_play` ->
+    // `connect::connect_and_login_with_transport` ->
+    // `assemble_online_session` -> boot pointer walk -> Loading ->
+    // `OnlineSession::focus_changed` -> `ScreenGame::apply_focus_change` ->
+    // `ScreenGame::clear_waiting_seats` ->
+    // `ScreenGame::enter_screen(Screen::Room)`. Archives absent -> skip.
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let mut room = joined_room(0, true);
+    room.title.clear();
+    let (mut session, gateway) = boot_focus_leg(room);
+    assert!(
+        session.game_mut().staged_waiting_member(1).is_some(),
+        "the booted room has a peer seat"
+    );
+    let before = paint_frame(&mut session);
+
+    session.focus_changed(false);
+    assert_eq!(session.screen(), Screen::Loading, "focus loss stays put");
+    session.focus_changed(true);
+    assert_eq!(session.screen(), Screen::Room, "activation installs Room");
+    assert_eq!(
+        session.game_mut().focus_exit_notice(),
+        Some(LOBBY_EXIT_NOTICE),
+        "an empty title posts the pinned lobby notice"
+    );
+    assert_eq!(
+        session.game_mut().staged_waiting_member(1),
+        None,
+        "the Waiting seats were cleared"
+    );
+    assert_ne!(before, paint_frame(&mut session), "the exit repainted");
+    finish(session, gateway.server);
+}
+
+/// Tier 3 focus-off/on leg for Loading with a named room (#1046).
+#[test]
+fn live_focus_return_from_loading_named_room_installs_waiting_from_boot() {
+    // Live caller chain: `main.rs::run_play` ->
+    // `connect::connect_and_login_with_transport` ->
+    // `assemble_online_session` -> boot pointer walk -> Loading ->
+    // `OnlineSession::focus_changed` -> `ScreenGame::apply_focus_change`
+    // -> `ScreenGame::enter_screen(Screen::Waiting)`. Archives absent -> skip.
+    if !archives_present() {
+        println!("skip: missing install-root interface archive");
+        return;
+    }
+    let (mut session, gateway) = boot_focus_leg(joined_room(0, true));
+    let before = paint_frame(&mut session);
+
+    session.focus_changed(false);
+    assert_eq!(session.screen(), Screen::Loading, "focus loss stays put");
+    session.focus_changed(true);
+    assert_eq!(
+        session.screen(),
+        Screen::Waiting,
+        "activation installs Waiting"
+    );
+    assert_eq!(
+        session.game_mut().focus_exit_notice(),
+        Some(WAITING_EXIT_NOTICE),
+        "a named room posts the pinned Waiting notice"
+    );
+    assert!(
+        session.game_mut().staged_waiting_member(1).is_some(),
+        "the named room keeps its seats"
+    );
+    assert_ne!(before, paint_frame(&mut session), "the exit repainted");
+    finish(session, gateway.server);
 }

@@ -112,20 +112,17 @@ pub const FOCUS_ROOM_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 Ro
 pub const FOCUS_LOBBY_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 로비로 나왔습니다.";
 pub const FOCUS_WAITING_EXIT_CAPTION: &str = "PLAY중 화면이 전환 되어서 대기실로 나왔습니다.";
 
-/// Caption the exe's Playing focus-exit arm posts for the scene it
-/// returns to: the Loading scene leaves to Room; a Playing scene in a
-/// joined room leaves to Waiting, otherwise to the Lobby. Other
-/// scenes post no exit notice. `room_open` is the session's joined-room
-/// mirror, not a new wire fact.
+/// Caption the exe's activation arm posts when a paused scene exits
+/// (`docs/pins/input-msg.md`, `0x5a4b90` addendum). Playing always
+/// leaves to Room. Loading leaves to the lobby when the room title
+/// word is empty, otherwise back to Waiting. Other scenes post no
+/// exit notice.
 #[must_use]
-pub const fn focus_exit_caption(scene_word: u32, room_open: bool) -> Option<&'static str> {
-    match scene_word {
-        FOCUS_LOADING_SCENE => Some(FOCUS_ROOM_EXIT_CAPTION),
-        FOCUS_PLAYING_SCENE => Some(if room_open {
-            FOCUS_WAITING_EXIT_CAPTION
-        } else {
-            FOCUS_LOBBY_EXIT_CAPTION
-        }),
+pub const fn focus_exit_caption(scene_word: u32, room_title_empty: bool) -> Option<&'static str> {
+    match (scene_word, room_title_empty) {
+        (FOCUS_PLAYING_SCENE, _) => Some(FOCUS_ROOM_EXIT_CAPTION),
+        (FOCUS_LOADING_SCENE, true) => Some(FOCUS_LOBBY_EXIT_CAPTION),
+        (FOCUS_LOADING_SCENE, false) => Some(FOCUS_WAITING_EXIT_CAPTION),
         _ => None,
     }
 }
@@ -1036,9 +1033,14 @@ impl ApplicationHandler for WindowHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{GameLoop, InputEdge};
+    use super::super::{GameLoop, InputEdge, MenuKey, Screen, ScreenGame};
     use super::*;
+    use crate::screens::paint::LoadingStatus;
+    use o2jam_audio::NullBackend;
+    use o2jam_net::play::SetRoomMusic;
+    use o2jam_net::JoinedRoom;
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]
@@ -1447,6 +1449,10 @@ mod tests {
             self.inner.borrow_mut().ingest_snapshot(snapshot);
         }
 
+        fn focus_changed(&mut self, active: bool) {
+            self.inner.borrow_mut().focus_changed(active);
+        }
+
         fn quit_requested(&self) -> bool {
             self.inner.borrow().quit_requested()
         }
@@ -1598,18 +1604,154 @@ mod tests {
         assert_eq!(loading, Some(FOCUS_LOADING_SCENE));
         assert_eq!(playing, Some(FOCUS_PLAYING_SCENE));
         assert_eq!(
-            focus_exit_caption(FOCUS_LOADING_SCENE, true),
-            Some(FOCUS_ROOM_EXIT_CAPTION)
-        );
-        assert_eq!(
-            focus_exit_caption(FOCUS_PLAYING_SCENE, true),
-            Some(FOCUS_WAITING_EXIT_CAPTION)
-        );
-        assert_eq!(
             focus_exit_caption(FOCUS_PLAYING_SCENE, false),
-            Some(FOCUS_LOBBY_EXIT_CAPTION)
+            Some(FOCUS_ROOM_EXIT_CAPTION),
+            "Playing always exits to Room"
+        );
+        assert_eq!(
+            focus_exit_caption(FOCUS_LOADING_SCENE, true),
+            Some(FOCUS_LOBBY_EXIT_CAPTION),
+            "an empty room title exits Loading to the lobby"
+        );
+        assert_eq!(
+            focus_exit_caption(FOCUS_LOADING_SCENE, false),
+            Some(FOCUS_WAITING_EXIT_CAPTION),
+            "a named room exits Loading to Waiting"
         );
         assert_eq!(focus_exit_caption(2, true), None, "Room is not an exit");
+    }
+
+    /// A room with only the title word the activation arm inspects.
+    fn room_with_title(title: &str) -> JoinedRoom {
+        JoinedRoom {
+            member_id: 0,
+            team: 0,
+            title: title.to_owned(),
+            music_id: 757,
+            arena: 1,
+            key_mode: 2,
+            game_mode: 0,
+            difficulty: 0,
+            speed: 1,
+            has_super_manager: false,
+            user_count: 0,
+            slots: Vec::new(),
+            skills: Vec::new(),
+            premium: false,
+            champion: None,
+            champion_streak: None,
+        }
+    }
+
+    /// Walk the pinned boot keys to Loading, then stage the room title
+    /// the exe's activation arm reads there.
+    fn game_on_loading(title: &str) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading, "boot walk reaches Loading");
+        game.set_joined_room(room_with_title(title));
+        game
+    }
+
+    /// Arm the Loading gate the way the chart hand-off does, then
+    /// cross to Playing with the same Confirm the player presses.
+    fn game_on_playing() -> ScreenGame {
+        let mut game = game_on_loading("Lobby");
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 0,
+        });
+        game.set_loading_status(LoadingStatus {
+            progress: 1.0,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        });
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing, "the armed gate hands off");
+        game
+    }
+
+    #[test]
+    fn focus_return_from_playing_installs_room_with_the_pinned_caption() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` (Focused) -> `route_focus_change`
+        // -> `GameLoop::focus_changed` -> `ScreenGame::apply_focus_change`
+        // -> `ScreenGame::enter_screen(Screen::Room)`. Deactivation only
+        // records the pause; Tier 4 real-focus capture stays OPEN.
+        let (mut handler, game, _) = seamed_handler();
+        *game.borrow_mut() = game_on_playing();
+        assert_eq!(game.borrow().screen(), Screen::Playing);
+
+        handler.route_focus_change(false);
+        assert_eq!(
+            game.borrow().screen(),
+            Screen::Playing,
+            "deactivation records the pause without leaving the scene"
+        );
+        assert_eq!(
+            game.borrow().focus_exit_notice(),
+            None,
+            "focus loss posts no exit caption"
+        );
+
+        handler.route_focus_change(true);
+        assert_eq!(game.borrow().screen(), Screen::Room);
+        assert_eq!(
+            game.borrow().focus_exit_notice(),
+            Some(FOCUS_ROOM_EXIT_CAPTION),
+            "activation posts the pinned Room caption"
+        );
+    }
+
+    #[test]
+    fn focus_return_from_loading_with_empty_title_installs_room_with_lobby_caption() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` (Focused) -> `route_focus_change`
+        // -> `GameLoop::focus_changed` -> `ScreenGame::apply_focus_change`
+        // -> `ScreenGame::clear_waiting_seats` ->
+        // `ScreenGame::enter_screen(Screen::Room)`.
+        let (mut handler, game, _) = seamed_handler();
+        *game.borrow_mut() = game_on_loading("");
+        assert_eq!(game.borrow().screen(), Screen::Loading);
+
+        handler.route_focus_change(false);
+        assert_eq!(game.borrow().screen(), Screen::Loading);
+
+        handler.route_focus_change(true);
+        assert_eq!(game.borrow().screen(), Screen::Room);
+        assert_eq!(
+            game.borrow().focus_exit_notice(),
+            Some(FOCUS_LOBBY_EXIT_CAPTION),
+            "an empty room title posts the pinned lobby caption"
+        );
+    }
+
+    #[test]
+    fn focus_return_from_loading_with_room_title_installs_waiting_with_caption() {
+        // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
+        // `WindowHandler::window_event` (Focused) -> `route_focus_change`
+        // -> `GameLoop::focus_changed` -> `ScreenGame::apply_focus_change`
+        // -> `ScreenGame::enter_screen(Screen::Waiting)`.
+        let (mut handler, game, _) = seamed_handler();
+        *game.borrow_mut() = game_on_loading("Lobby");
+        assert_eq!(game.borrow().screen(), Screen::Loading);
+
+        handler.route_focus_change(false);
+        assert_eq!(game.borrow().screen(), Screen::Loading);
+
+        handler.route_focus_change(true);
+        assert_eq!(game.borrow().screen(), Screen::Waiting);
+        assert_eq!(
+            game.borrow().focus_exit_notice(),
+            Some(FOCUS_WAITING_EXIT_CAPTION),
+            "a named room title posts the pinned Waiting caption"
+        );
     }
 
     #[test]

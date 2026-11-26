@@ -79,6 +79,11 @@ pub const fn can_enter(from: Screen, to: Screen) -> bool {
             | (Waiting, Room)
             | (Loading, Playing)
             | (Loading, Waiting)
+            // Focus-return exits (`0x5a4b90`, #1046): the exe
+            // installs these lobby states on activation, not on a
+            // player-driven menu edge.
+            | (Playing, Room)
+            | (Loading, Room)
             | (Playing, Result)
             | (Result, Waiting)
             | (Result, Room)

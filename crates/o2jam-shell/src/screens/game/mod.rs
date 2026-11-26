@@ -900,9 +900,10 @@ pub struct ScreenGame {
     /// stops at its end would otherwise freeze the splash.
     avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
-    /// Pause flag the exe stores at `+0x18` on deactivation
-    /// (`0x5a4b90`). Cleared on the matching activation.
-    focus_paused: bool,
+    /// Pause reason bit 2 the exe stores at `+0x1c` on deactivation
+    /// (`0x5a4b90` addendum). Cleared on the matching activation,
+    /// which installs the pinned exit scene.
+    focus_pause_bit2_set: bool,
     /// Caption the exe's Playing focus-exit arm posts for the scene
     /// it returns to (`0x650d68`, `0x650d38`, or `0x650d08`).
     focus_exit_notice: Option<&'static str>,
@@ -1589,7 +1590,7 @@ impl ScreenGame {
             splash_hold_ms: SPLASH_AUTO_ADVANCE_MS,
             avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
-            focus_paused: false,
+            focus_pause_bit2_set: false,
             focus_exit_notice: None,
             ui_effect_bank: Vec::new(),
             avatar: None,
@@ -1942,21 +1943,60 @@ impl ScreenGame {
         self.focus_exit_notice
     }
 
-    /// Apply one window activation edge: deactivation pauses a
-    /// Playing/Loading scene and silences its music; the matching
-    /// activation clears the pause and stages the pinned exit caption.
+    /// Apply one window activation edge. Deactivation records the
+    /// exe's pause reason bit 2 and silences BGM; the matching
+    /// activation clears the bit and installs the pinned exit scene.
     fn apply_focus_change(&mut self, active: bool) {
         if !active {
-            self.focus_paused = matches!(self.screen(), Screen::Loading | Screen::Playing);
+            self.focus_pause_bit2_set = matches!(self.screen(), Screen::Loading | Screen::Playing);
             self.stop_bgm_for_focus_loss();
             return;
         }
-        if !std::mem::replace(&mut self.focus_paused, false) {
+        if !std::mem::replace(&mut self.focus_pause_bit2_set, false) {
             return;
         }
-        let scene_word = crate::options::f8_scene_id_of(self.screen_name());
-        self.focus_exit_notice = scene_word
-            .and_then(|word| crate::window::focus_exit_caption(word, self.waiting.is_some()));
+        self.install_focus_exit();
+    }
+
+    /// Install the scene and caption the exe's activation arm pins for
+    /// the paused scene (`docs/pins/input-msg.md`, `0x5a4b90` addendum).
+    fn install_focus_exit(&mut self) {
+        let room_title_empty = self.waiting_title_is_empty();
+        let scene_word = crate::options::f8_scene_id_of(self.screen_name()).unwrap_or_default();
+        let caption = crate::window::focus_exit_caption(scene_word, room_title_empty);
+        match (self.screen(), caption) {
+            (Screen::Playing, Some(caption)) => self.enter_focus_exit(Screen::Room, caption),
+            (Screen::Loading, Some(caption)) if room_title_empty => {
+                self.clear_waiting_seats();
+                self.enter_focus_exit(Screen::Room, caption);
+            }
+            (Screen::Loading, Some(caption)) => self.enter_focus_exit(Screen::Waiting, caption),
+            _ => self.focus_exit_notice = None,
+        }
+    }
+
+    /// Stage the exit notice only when the flow accepted the scene.
+    fn enter_focus_exit(&mut self, target: Screen, caption: &'static str) {
+        self.focus_exit_notice = self.enter_screen(target).then_some(caption);
+    }
+
+    /// The exe's Loading arm tests the joined room's title word.
+    fn waiting_title_is_empty(&self) -> bool {
+        self.waiting
+            .as_ref()
+            .is_none_or(|room| room.title.is_empty())
+    }
+
+    /// Empty the staged Waiting seat words before leaving Loading on
+    /// the empty-title arm.
+    fn clear_waiting_seats(&mut self) {
+        let Some(room) = self.waiting.as_ref() else {
+            return;
+        };
+        let seats: Vec<u8> = room.slots.iter().map(|slot| slot.index).collect();
+        for seat in seats {
+            self.clear_waiting_member_seat(seat);
+        }
     }
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
