@@ -129,10 +129,11 @@ use super::side::{
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::{
     coupon_host_arm, result_event_page, web_sheet_visibility_arm, CouponForm, CouponHostArm,
-    CouponKind, CouponReportBack, CouponSubmit, MessengerHost, NativeEventPage, WebSheet,
-    WebSheetHost, WebSheetTransition, WebSheetVisibilityArm, COUPON_FORM_RECT,
-    COUPON_HOST_STATE_WORD, COUPON_ID_FIELD, COUPON_NUMBER_FIELD, NATIVE_EVENT_NOTICE_LINE_PITCH,
-    NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, RESULT_EVENT_MODE_BATTLE,
+    CouponKind, CouponReportBack, CouponSubmit, MessengerHost, NativeEventPage,
+    NativeRoomFriendHost, WebSheet, WebSheetHost, WebSheetTransition, WebSheetVisibilityArm,
+    COUPON_FORM_RECT, COUPON_HOST_STATE_WORD, COUPON_ID_FIELD, COUPON_NUMBER_FIELD,
+    NATIVE_EVENT_NOTICE_LINE_PITCH, NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE,
+    RESULT_EVENT_MODE_BATTLE,
 };
 use crate::staging::{MessengerSheet, SHOP_MASTER_MASCOT_CODE};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -4253,6 +4254,13 @@ impl ScreenGame {
     #[must_use]
     pub fn room_user_sheet_url_gift_on(&self) -> bool {
         self.chat.room_user_sheet_url_gift_on()
+    }
+
+    /// Friend host mounted with the Room user sheet. `None` means the
+    /// sheet has no host; the roster and gift words stay in `ChatState`.
+    #[must_use]
+    pub const fn room_friend_host(&self) -> Option<&NativeRoomFriendHost> {
+        self.chat.room_friend_host()
     }
 
     /// Stage the unsent input line (the 3011 source on send).
