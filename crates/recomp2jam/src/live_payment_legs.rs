@@ -264,3 +264,96 @@ mod live_payment_spec_leg_tests {
         finish(session, gateway.server);
     }
 }
+
+#[cfg(test)]
+mod live_cash_bill_host_leg_tests {
+    use crate::live_leg_support::*;
+
+    use o2jam_shell::screens::messenger::{
+        cash_charge_publisher_for_ui_event, BillingWebEvent, BillingWebHandle, CashBillPublisher,
+        CASH_BILL_UI_EVENT,
+    };
+    use o2jam_shell::screens::side::SideScreen;
+    use o2jam_shell::Screen;
+
+    const PINNED_CASH_HOSTS: [&str; 5] = [
+        "o2jam.monawa.com",
+        "o2jam.gameangel.com",
+        "o2jam.gameon.nate.com",
+        "o2jam.pdbox.co.kr",
+        "o2jam.nopp.co.kr",
+    ];
+    const PINNED_CASH_PATH: &str = "client/cash_bill/index.phtml";
+
+    /// #1143 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> boot_live_leg_with_art -> dismiss_splash -> window hub
+    ///   0x5a5190 (`WM_APP+0x32`, UI event 0x12) ->
+    ///   cash_charge_publisher_for_ui_event(publisher) ->
+    ///   BillingWebHandle::rebuild_cash_bill_charge -> one mounted
+    ///   cash-bill URL per publisher, with no new wire frame.
+    /// seam: the exe host-selection condition at `0x45e010` is OPEN;
+    /// this leg supplies the publisher and never claims an exe gate.
+    /// Archives absent -> skip cleanly.
+    #[test]
+    fn live_native_cash_charge_covers_all_five_publisher_hosts_from_boot() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        assert_eq!(session.screen(), Screen::Room);
+        let wire_before = observed(&gateway.reports).len();
+
+        let mut handle = BillingWebHandle::with_handle(61);
+        for (index, publisher) in CashBillPublisher::ALL.into_iter().enumerate() {
+            let new_handle = 62 + u16::try_from(index).expect("five hosts fit u16");
+            let selected = cash_charge_publisher_for_ui_event(CASH_BILL_UI_EVENT, publisher)
+                .expect("0x12 arms the cash charge from boot");
+            let steps = handle.rebuild_cash_bill_charge(selected, "2", new_handle);
+            let mounted = steps
+                .last()
+                .and_then(|step| match step {
+                    BillingWebEvent::Mounted { url, .. } => Some(url.as_str()),
+                    BillingWebEvent::ClosedPrevious(_) => None,
+                })
+                .expect("a live charge arm mounts one page");
+            assert_eq!(
+                mounted,
+                format!(
+                    "http://{}/{PINNED_CASH_PATH}?USER_INDEX_ID=2",
+                    PINNED_CASH_HOSTS[index]
+                ),
+                "booted publisher {publisher:?} must mount its pinned URL"
+            );
+            assert_eq!(
+                steps.first(),
+                Some(&BillingWebEvent::ClosedPrevious(new_handle - 1))
+            );
+            paint(&mut session);
+        }
+        assert_eq!(
+            observed(&gateway.reports).len(),
+            wire_before,
+            "five charge arms send no new game wire"
+        );
+
+        // Render-over-time: the booted flow can mount the staged native
+        // cash sheet; no web client is created to produce those pixels.
+        let before_sheet = paint_frame(&mut session);
+        assert!(
+            session.game_mut().visit_side(SideScreen::Payment),
+            "the cash-charge sheet opens from the booted lobby"
+        );
+        let with_sheet = paint_frame(&mut session);
+        assert_ne!(
+            before_sheet, with_sheet,
+            "the native cash sheet changes the painted frame"
+        );
+
+        finish(session, gateway.server);
+    }
+}

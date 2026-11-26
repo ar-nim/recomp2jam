@@ -244,6 +244,21 @@ pub const fn web_sheet_for_ui_event(code: u16) -> Option<WebSheet> {
     }
 }
 
+/// Publisher arm of our native cash-charge flow. The `0x12` UI event
+/// is pinned; the exe's host-selection condition at `0x45e010` is
+/// OPEN. The caller supplies the publisher, so this selector is
+/// ours-by-design and claims no exe gate.
+#[must_use]
+pub const fn cash_charge_publisher_for_ui_event(
+    code: u16,
+    publisher: CashBillPublisher,
+) -> Option<CashBillPublisher> {
+    match web_sheet_for_ui_event(code) {
+        Some(WebSheet::CashBill) => Some(publisher),
+        _ => None,
+    }
+}
+
 /// What one sheet open did to the two global handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WebSheetTransition {
@@ -372,6 +387,69 @@ pub const CASH_BILL_HOSTS: [&str; 5] = [
     "o2jam.nopp.co.kr",
 ];
 
+/// Publisher argument of our native cash-charge flow. The exe's
+/// host-selection condition at `0x45e010` is OPEN, so these variants
+/// are ours-by-design: they name the five pinned hosts without
+/// claiming how the exe chose one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CashBillPublisher {
+    /// `o2jam.monawa.com`.
+    Monawa,
+    /// `o2jam.gameangel.com`.
+    GameAngel,
+    /// `o2jam.gameon.nate.com`.
+    GameOnNate,
+    /// `o2jam.pdbox.co.kr`.
+    Pdbox,
+    /// `o2jam.nopp.co.kr`.
+    Nopp,
+}
+
+impl CashBillPublisher {
+    /// All five pinned variants, in table order.
+    pub const ALL: [Self; 5] = [
+        Self::Monawa,
+        Self::GameAngel,
+        Self::GameOnNate,
+        Self::Pdbox,
+        Self::Nopp,
+    ];
+
+    const fn table_index(self) -> usize {
+        match self {
+            Self::Monawa => 0,
+            Self::GameAngel => 1,
+            Self::GameOnNate => 2,
+            Self::Pdbox => 3,
+            Self::Nopp => 4,
+        }
+    }
+
+    /// Host literal from the merged cash-bill table.
+    #[must_use]
+    pub const fn host(self) -> &'static str {
+        CASH_BILL_HOSTS[self.table_index()]
+    }
+
+    /// Short publisher name used by the 7.55 URL inventory.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Monawa => "monawa",
+            Self::GameAngel => "gameangel",
+            Self::GameOnNate => "gameon.nate",
+            Self::Pdbox => "pdbox",
+            Self::Nopp => "nopp",
+        }
+    }
+
+    /// Why this selector is ours and not a recovered exe gate.
+    #[must_use]
+    pub const fn selector_provenance() -> &'static str {
+        "OURS-BY-DESIGN: exe host-selection condition at 0x45e010 is OPEN"
+    }
+}
+
 /// One billing page literal. The exe joins `USER_INDEX_ID` from
 /// `Identifaction.ini` onto each URL (`0x4f3b30`, `0x4f4bd0`); the
 /// jamcard-versus-coupon branch is supplied by the caller because
@@ -386,6 +464,8 @@ pub enum BillingWebPage {
     JamCard,
     /// Payment2 coupon branch.
     Coupon,
+    /// Cash-bill landing page for one explicitly supplied publisher.
+    CashBill(CashBillPublisher),
 }
 
 impl BillingWebPage {
@@ -393,6 +473,7 @@ impl BillingWebPage {
     #[must_use]
     pub const fn host(self) -> &'static str {
         match self {
+            Self::CashBill(publisher) => publisher.host(),
             Self::Coupon => COUPON_HOST,
             Self::Payment | Self::GiftInput | Self::JamCard => BILLING_HOST,
         }
@@ -402,6 +483,7 @@ impl BillingWebPage {
     #[must_use]
     pub const fn path(self) -> &'static str {
         match self {
+            Self::CashBill(_) => CASH_BILL_PATH,
             Self::Payment => "np/billing/payment/payment_input.aspx",
             Self::GiftInput => "np/billing/gift/gift_input.aspx",
             Self::JamCard => "client/jamcard.asp",
@@ -472,6 +554,18 @@ impl BillingWebHandle {
             url: page.url(user_index_id),
         });
         steps
+    }
+
+    /// Rebuild a cash-bill charge for one explicit publisher. The
+    /// close-then-mount order is the merged Payment rebuild arm; the
+    /// host comes from the pinned table, never from an invented gate.
+    pub fn rebuild_cash_bill_charge(
+        &mut self,
+        publisher: CashBillPublisher,
+        user_index_id: &str,
+        handle: u16,
+    ) -> Vec<BillingWebEvent> {
+        self.rebuild(BillingWebPage::CashBill(publisher), user_index_id, handle)
     }
 
     /// The handle the host currently holds.

@@ -1446,3 +1446,121 @@ fn game_stages_document_notice(url: &str) {
     assert_eq!(game.last_web_document_url(), Some(url));
     assert_eq!(game.room_chat().last().unwrap().text, url);
 }
+
+// --- #1143: one native charge flow for five publisher cash hosts -----
+//
+// exe pin: `0x45e010` / files `0x2466d0`-`0x2467b8`, ev_c0173d8….
+// The host-selection condition is OPEN. Our window arm takes the
+// publisher explicitly; no URL is fetched and no wire frame is sent.
+
+use o2jam_shell::screens::messenger::{
+    cash_charge_publisher_for_ui_event, BillingWebEvent, BillingWebHandle, CashBillPublisher,
+    CASH_BILL_UI_EVENT,
+};
+
+/// Hosts named by the story's five URL literals, independent of the
+/// merged table so a wrong table order cannot pass this guard.
+const PINNED_CASH_HOSTS: [&str; 5] = [
+    "o2jam.monawa.com",
+    "o2jam.gameangel.com",
+    "o2jam.gameon.nate.com",
+    "o2jam.pdbox.co.kr",
+    "o2jam.nopp.co.kr",
+];
+/// Shared path of all five cash-bill literals at files `0x2466d0`-`0x2467b8`.
+const PINNED_CASH_PATH: &str = "client/cash_bill/index.phtml";
+/// Short publisher names named by story #1143.
+const PINNED_PUBLISHER_KEYS: [&str; 5] = ["monawa", "gameangel", "gameon.nate", "pdbox", "nopp"];
+
+/// One recorded client-opcode list from a charge gateway arm.
+type ChargeWire = (u16, Receiver<Vec<u16>>, thread::JoinHandle<()>);
+
+/// A gateway with no scripted answer: the charge pin (#429) is a
+/// negative wire claim, so the arm records and sends nothing.
+fn cash_charge_gateway() -> ChargeWire {
+    let (wire_tx, wire_rx) = mpsc::channel();
+    let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream: TcpStream| {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut sent = Vec::new();
+        while let Some(frame) = read_purchase_frame(&mut stream) {
+            sent.push(frame.id);
+        }
+        wire_tx.send(sent).unwrap();
+    });
+    (port, wire_rx, server)
+}
+
+/// Drive one recorded charge arm through the pinned `0x12` window
+/// event and the explicit publisher the caller supplies.
+fn cash_charge_arm(publisher: CashBillPublisher) -> (Vec<BillingWebEvent>, Vec<u16>) {
+    let (port, wire, server) = cash_charge_gateway();
+    let mut session = payment_session(payment_game(), port);
+    let mut handle = BillingWebHandle::with_handle(90);
+    let selected = cash_charge_publisher_for_ui_event(CASH_BILL_UI_EVENT, publisher)
+        .expect("0x12 arms cash charge");
+    let steps = handle.rebuild_cash_bill_charge(selected, "1143", 91);
+    paint_payment_frame(&mut session);
+    drop(session);
+    let sent = wire.recv_timeout(Duration::from_secs(5)).unwrap();
+    server.join().unwrap();
+    (steps, sent)
+}
+
+#[test]
+fn tier_2_all_five_publisher_cash_bill_charges_share_one_native_flow() {
+    // Live caller chain:
+    //   main.rs::run_play -> connect::connect_and_login_with_transport
+    //   -> window hub 0x5a5190 (`WM_APP+0x32`, UI event 0x12) ->
+    //   cash_charge_publisher_for_ui_event(publisher) ->
+    //   BillingWebHandle::rebuild_cash_bill_charge -> ClosedPrevious then
+    //   Mounted with the publisher host and shared cash-bill path.
+    // One scripted-gateway arm runs per publisher; none has a scripted
+    // reply because the charge path is wire-quiet (#429).
+    for (index, publisher) in CashBillPublisher::ALL.into_iter().enumerate() {
+        let expected_host = PINNED_CASH_HOSTS[index];
+        assert_eq!(publisher.host(), expected_host);
+        assert_eq!(publisher.key(), PINNED_PUBLISHER_KEYS[index]);
+
+        let (steps, sent) = cash_charge_arm(publisher);
+        let mounted = steps
+            .last()
+            .and_then(|step| match step {
+                BillingWebEvent::Mounted { url, .. } => Some(url.as_str()),
+                BillingWebEvent::ClosedPrevious(_) => None,
+            })
+            .expect("a charge arm mounts one page");
+        assert_eq!(
+            mounted,
+            format!("http://{expected_host}/{PINNED_CASH_PATH}?USER_INDEX_ID=1143"),
+            "publisher {publisher:?} must use its pinned host and path"
+        );
+        assert_eq!(steps.first(), Some(&BillingWebEvent::ClosedPrevious(90)));
+        assert!(sent.is_empty(), "a charge arm sends no game wire");
+    }
+}
+
+#[test]
+fn tier_2_native_cash_charge_selector_is_explicit_and_labels_the_exe_gate_open() {
+    // seam: the exe host-selection condition is OPEN (#1143), so the
+    // selector contract is the whole claim. The window arm may only
+    // pass through a publisher supplied by our flow; no exe gate is
+    // inferred from a UI-event code or a host table.
+    let nopp = CashBillPublisher::Nopp;
+    assert_eq!(
+        cash_charge_publisher_for_ui_event(CASH_BILL_UI_EVENT, nopp),
+        Some(nopp)
+    );
+    assert_eq!(cash_charge_publisher_for_ui_event(0x13, nopp), None);
+
+    let provenance = CashBillPublisher::selector_provenance();
+    assert!(
+        provenance.contains("OURS-BY-DESIGN"),
+        "the selector must name its owner: {provenance}"
+    );
+    assert!(
+        provenance.contains("OPEN"),
+        "the exe gate must stay OPEN: {provenance}"
+    );
+}

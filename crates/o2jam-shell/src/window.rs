@@ -2513,3 +2513,28 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod cash_charge_host_tests {
+    use crate::screens::messenger::{
+        cash_charge_publisher_for_ui_event, CashBillPublisher, BINGO_UI_EVENT, CASH_BILL_UI_EVENT,
+    };
+
+    #[test]
+    fn cash_bill_window_event_passes_the_callers_publisher_through() {
+        // Tier 1 seam: the pinned `WM_APP+0x32` code names the cash-bill
+        // sheet only. The exe host-selection condition at `0x45e010`
+        // is OPEN, so our flow supplies the publisher; this guard
+        // rejects an inferred gate without claiming an exe arm.
+        let pdbox = CashBillPublisher::Pdbox;
+        assert_eq!(
+            cash_charge_publisher_for_ui_event(CASH_BILL_UI_EVENT, pdbox),
+            Some(pdbox)
+        );
+        assert_eq!(
+            cash_charge_publisher_for_ui_event(BINGO_UI_EVENT, pdbox),
+            None
+        );
+        assert!(CashBillPublisher::selector_provenance().contains("OPEN"));
+    }
+}
