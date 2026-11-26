@@ -4,7 +4,10 @@
 //! [`Shell::run`](super::Shell::run) only builds it and checks the
 //! paint error afterwards.
 
+use image::codecs::jpeg::JpegEncoder;
+use image::ExtendedColorType;
 use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
@@ -16,6 +19,7 @@ use super::{
     route_key_event, GameLoop, InputEdge, InputSnapshot, KeyRoute, Shell, DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
 };
+use crate::options;
 
 mod capture;
 
@@ -99,6 +103,162 @@ pub const SCREENSHOT_DIMENSIONS: (u32, u32) = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
 pub const SCREENSHOT_QUALITY: u32 = 80;
 /// States in which `0x418dc0` skips the screenshot writer.
 pub const PRINT_SCREEN_SUPPRESSED_STATES: [u32; 2] = [10, 11];
+const SCREENSHOT_PIXEL_COUNT: usize = DEFAULT_WIDTH as usize * DEFAULT_HEIGHT as usize;
+
+/// Why one Print Screen file was not written.
+#[derive(Debug)]
+enum ScreenShotWriteError {
+    /// The supplied backbuffer is not one pinned 800x600 frame.
+    FrameSize { expected: usize, actual: usize },
+    /// The folder or file could not be opened.
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// The JPEG encoder refused the frame.
+    Encode {
+        path: PathBuf,
+        source: image::ImageError,
+    },
+}
+
+impl std::fmt::Display for ScreenShotWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FrameSize { expected, actual } => {
+                write!(
+                    formatter,
+                    "screenshot frame has {actual} pixels, expected {expected}"
+                )
+            }
+            Self::Io { path, source } => {
+                write!(
+                    formatter,
+                    "cannot write screenshot {}: {source}",
+                    path.display()
+                )
+            }
+            Self::Encode { path, source } => {
+                write!(
+                    formatter,
+                    "cannot encode screenshot {}: {source}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ScreenShotWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::FrameSize { .. } => None,
+            Self::Io { source, .. } => Some(source),
+            Self::Encode { source, .. } => Some(source),
+        }
+    }
+}
+
+/// Observable result of one Print Screen write. A missing path means
+/// the press was suppressed or exhausted; an error means the file was
+/// refused and the counter was rolled back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenShotWriteResult {
+    path: Option<PathBuf>,
+    error: Option<String>,
+}
+
+impl ScreenShotWriteResult {
+    fn written(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            error: None,
+        }
+    }
+
+    fn failed(path: PathBuf, error: impl std::fmt::Display) -> Self {
+        Self {
+            path: Some(path),
+            error: Some(error.to_string()),
+        }
+    }
+
+    fn skipped() -> Self {
+        Self {
+            path: None,
+            error: None,
+        }
+    }
+
+    /// Whether a JPEG was actually written.
+    #[must_use]
+    pub const fn is_written(&self) -> bool {
+        self.path.is_some() && self.error.is_none()
+    }
+
+    /// Whether the file or encoder refused the write.
+    #[must_use]
+    pub const fn is_failed(&self) -> bool {
+        self.error.is_some()
+    }
+
+    /// Path of the attempted or written file.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Error text when the write failed.
+    #[must_use]
+    pub fn error_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+}
+
+/// Convert the XRGB backbuffer words into RGB triplets, as the exe's
+/// writer receives one RGB row per source row (`0x57d800`).
+fn native_frame_to_rgb(native_frame: &[u32]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(native_frame.len() * 3);
+    for word in native_frame {
+        rgb.push((word >> 16) as u8);
+        rgb.push((word >> 8) as u8);
+        rgb.push(*word as u8);
+    }
+    rgb
+}
+
+/// Write one pinned 800x600 JPEG at quality 80.
+fn write_print_screen_jpeg(
+    path: &Path,
+    native_frame: &[u32],
+    width: u32,
+    height: u32,
+    quality: u32,
+) -> Result<(), ScreenShotWriteError> {
+    if native_frame.len() != SCREENSHOT_PIXEL_COUNT {
+        return Err(ScreenShotWriteError::FrameSize {
+            expected: SCREENSHOT_PIXEL_COUNT,
+            actual: native_frame.len(),
+        });
+    }
+    let quality = u8::try_from(quality).expect("pinned screenshot quality fits in u8");
+    let file = std::fs::File::create(path).map_err(|source| ScreenShotWriteError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut encoder = JpegEncoder::new_with_quality(file, quality);
+    encoder
+        .encode(
+            &native_frame_to_rgb(native_frame),
+            width,
+            height,
+            ExtendedColorType::Rgb8,
+        )
+        .map_err(|source| ScreenShotWriteError::Encode {
+            path: path.to_path_buf(),
+            source,
+        })
+}
 
 /// Scene words the activation handler `0x5a4b90` inspects on a
 /// Playing focus exit (`docs/pins/net-c2.md`, ev `3f40.f126…`).
@@ -148,7 +308,7 @@ pub fn print_screen_relative_path(counter: u32) -> String {
 }
 
 /// What one Print Screen press does. `Write` carries the pinned
-/// name and writer settings; no JPEG bytes are produced here.
+/// name and writer settings for [`PrintScreenAction::write_jpeg`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrintScreenAction {
     /// States 10 and 11 write nothing.
@@ -178,6 +338,31 @@ impl PrintScreenAction {
         match self {
             Self::Notice => Some(Self::NOTICE_EVENT),
             _ => None,
+        }
+    }
+
+    /// Write this press's frame below the host's My Pictures root.
+    /// Suppressed and exhausted presses write nothing and return a
+    /// result with no path; a failed file returns its error text.
+    #[must_use]
+    pub fn write_jpeg(&self, pictures_root: &Path, native_frame: &[u32]) -> ScreenShotWriteResult {
+        let Self::Write {
+            file_name,
+            width,
+            height,
+            quality,
+        } = self
+        else {
+            return ScreenShotWriteResult::skipped();
+        };
+        let folder = pictures_root.join(SCREENSHOT_FOLDER_SUFFIX);
+        let path = folder.join(file_name);
+        if let Err(source) = std::fs::create_dir_all(&folder) {
+            return ScreenShotWriteResult::failed(path, source);
+        }
+        match write_print_screen_jpeg(&path, native_frame, *width, *height, *quality) {
+            Ok(()) => ScreenShotWriteResult::written(path),
+            Err(error) => ScreenShotWriteResult::failed(path, error),
         }
     }
 }
@@ -215,6 +400,30 @@ impl ScreenShotCounter {
             height,
             quality: SCREENSHOT_QUALITY,
         }
+    }
+
+    /// Take one press, write its frame, and commit the name only when
+    /// the JPEG is complete. A refused write rolls the reservation back
+    /// so the next press reuses the same number.
+    #[must_use]
+    pub fn capture(
+        &mut self,
+        state_word: u32,
+        pictures_root: &Path,
+        native_frame: &[u32],
+    ) -> ScreenShotWriteResult {
+        let action = self.press(state_word);
+        let result = action.write_jpeg(pictures_root, native_frame);
+        if result.is_failed() {
+            self.undo_last_write();
+        }
+        result
+    }
+
+    /// Roll back the reservation made by a failed `Write` press.
+    fn undo_last_write(&mut self) {
+        self.used = self.used.saturating_sub(1);
+        self.remaining = self.remaining.saturating_add(1);
     }
 
     /// Number of names the session has consumed.
@@ -402,6 +611,11 @@ pub struct WindowHandler {
     /// Next heartbeat deadline while a time/wire-driven scene sets one
     /// (`GameLoop::idle_repaint_interval`); `None` on static scenes.
     next_heartbeat: Option<std::time::Instant>,
+    /// Host-supplied My Pictures root. `None` keeps this client from
+    /// writing into a real user folder without an explicit caller.
+    screenshot_root: Option<PathBuf>,
+    /// Per-session shot counter behind the Print Screen key arm.
+    screenshot_counter: ScreenShotCounter,
 }
 
 impl WindowHandler {
@@ -422,6 +636,38 @@ impl WindowHandler {
             snapshot_sequence: 0,
             input_dirty: false,
             next_heartbeat: None,
+            screenshot_root: None,
+            screenshot_counter: ScreenShotCounter::new(0),
+        }
+    }
+
+    /// Install an explicit screenshot root and shot budget. Tests use a
+    /// scratch folder; a host that resolves My Pictures can do the same.
+    #[cfg(test)]
+    pub(crate) fn install_screenshot_root(&mut self, root: PathBuf, remaining: u32) {
+        self.screenshot_root = Some(root);
+        self.screenshot_counter = ScreenShotCounter::new(remaining);
+    }
+
+    /// Write the current native backbuffer for a Print Screen press.
+    /// The scene word comes from the same F8 scene table the exe's
+    /// key gate reads; states 10 and 11 suppress the writer.
+    fn capture_current_frame(&mut self) {
+        let Some(root) = self.screenshot_root.clone() else {
+            self.log_event("screenshot skipped: no root");
+            return;
+        };
+        let state_word = options::f8_scene_id_of(self.shell.game.screen_name()).unwrap_or(0);
+        let result = self
+            .screenshot_counter
+            .capture(state_word, &root, &self.shell.pixels);
+        match result.path() {
+            Some(path) => self.log_event(&format!("screenshot {}", path.display())),
+            None => self.log_event("screenshot skipped: suppressed or exhausted"),
+        }
+        if let Some(error) = result.error_message() {
+            tracing::warn!(error, "print screen write failed");
+            self.log_event(&format!("screenshot error: {error}"));
         }
     }
 
@@ -562,6 +808,21 @@ impl WindowHandler {
         // Any key edge may move game state (dismiss, rebind, strike),
         // so the frame it changed owes one repaint (ticket #138).
         self.input_dirty = true;
+        if code == winit::keyboard::KeyCode::PrintScreen {
+            self.log_event(&format!(
+                "key-{} PrintScreen",
+                if down { "down" } else { "up" }
+            ));
+            if down {
+                self.capture_current_frame();
+            }
+            return KeyRoute {
+                captured: true,
+                text: None,
+                erase: false,
+                edges: Vec::new(),
+            };
+        }
         let route = route_key_event(
             self.shell.game.as_mut(),
             &mut self.shell.keymap,
@@ -1036,10 +1297,12 @@ impl ApplicationHandler for WindowHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{GameLoop, InputEdge};
+    use super::super::{GameLoop, InputEdge, InputSnapshot};
     use super::*;
     use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     // Live chain (Tier 1): `main.rs::run_play` -> `Shell::run` ->
@@ -1945,5 +2208,164 @@ mod tests {
         // for `WM_DESTROY`; the decision is extracted so a guard and
         // the Tier 3 boot leg name the same exit arm.
         assert_eq!(window_close_disposition(), QuitDisposition::ExitLoop);
+    }
+
+    /// Unique scratch directory: tests never touch a real Pictures
+    /// folder, and each run owns its own bytes under `~/scratch`.
+    struct ScratchRoot(PathBuf);
+
+    impl ScratchRoot {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock follows the epoch")
+                .as_nanos();
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/home/arnim"));
+            let dir = home
+                .join("scratch")
+                .join(format!("screenshot-{label}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("scratch root is available");
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Two-color synthetic frame: red left half, blue right half.
+    fn two_color_native_frame() -> Vec<u32> {
+        let width = usize::try_from(SCREENSHOT_DIMENSIONS.0).expect("800 fits usize");
+        let height = usize::try_from(SCREENSHOT_DIMENSIONS.1).expect("600 fits usize");
+        let mut frame = vec![0u32; width * height];
+        for (index, word) in frame.iter_mut().enumerate() {
+            *word = if index % width < width / 2 {
+                o2jam_render::pack_xrgb(240, 16, 16)
+            } else {
+                o2jam_render::pack_xrgb(16, 16, 240)
+            };
+        }
+        frame
+    }
+
+    /// Game probe that reports the scene word source for the key arm.
+    struct ScreenProbe(&'static str);
+
+    impl GameLoop for ScreenProbe {
+        fn lane_key(&mut self, _lane: usize, _down: bool) {}
+
+        fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
+
+        fn screen_name(&self) -> &'static str {
+            self.0
+        }
+
+        fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
+    }
+
+    fn handler_with_screenshot_root(
+        root: &Path,
+        remaining: u32,
+        screen_name: &'static str,
+    ) -> WindowHandler {
+        let mut handler = WindowHandler::new(Shell::new(Box::new(ScreenProbe(screen_name))));
+        handler.install_screenshot_root(root.to_path_buf(), remaining);
+        handler
+    }
+
+    #[test]
+    fn print_screen_key_writes_the_current_native_frame_as_a_jpeg() {
+        // Tier 1 live chain (Tier 0 writer proof): winit KeyboardInput
+        // (KeyCode::PrintScreen) -> WindowHandler::route_key_with_text ->
+        // WindowHandler::capture_current_frame -> ScreenShotCounter::capture
+        // -> PrintScreenAction::write_jpeg -> image::JpegEncoder. The
+        // backbuffer is the frame the event loop would present; a headless
+        // test supplies it and an explicit scratch root. seam: host My
+        // Pictures resolution and a real Print Screen injection stay OPEN.
+        let scratch = ScratchRoot::new("two-color");
+        let frame = two_color_native_frame();
+        let mut handler = handler_with_screenshot_root(scratch.path(), 2, "planet");
+        handler.shell.pixels.copy_from_slice(&frame);
+
+        let route = handler.route_key(winit::keyboard::KeyCode::PrintScreen, true);
+        assert!(route.captured, "Print Screen is handled at the key seam");
+
+        let path = scratch
+            .path()
+            .join(SCREENSHOT_FOLDER_SUFFIX)
+            .join(print_screen_file_name(0));
+        let bytes = std::fs::read(&path).expect("screenshot file exists");
+        assert!(!bytes.is_empty(), "the JPEG is not empty");
+        assert_eq!(&bytes[..2], &[0xff, 0xd8], "JPEG SOI marker");
+        assert_eq!(&bytes[bytes.len() - 2..], &[0xff, 0xd9], "JPEG EOI marker");
+
+        let decoded = image::load_from_memory(&bytes)
+            .expect("written bytes decode as JPEG")
+            .to_rgb8();
+        assert_eq!(decoded.dimensions(), (800, 600));
+        let left = decoded.get_pixel(10, 300).0;
+        let right = decoded.get_pixel(799 - 10, 300).0;
+        assert!(
+            left[0] > left[1] + 100 && left[0] > left[2] + 100,
+            "left half comes from the supplied red frame: {left:?}"
+        );
+        assert!(
+            right[2] > right[0] + 100 && right[2] > right[1] + 100,
+            "right half comes from the supplied blue frame: {right:?}"
+        );
+        assert_eq!(handler.screenshot_counter.used(), 1, "one name consumed");
+    }
+
+    #[test]
+    fn failed_print_screen_write_keeps_the_counter_and_surfaces_the_error() {
+        // seam: the encoder/file boundary is the whole behavior here;
+        // a blocked root stands in for the OS refusing the My Pictures
+        // write. No live path can supply that folder in this client.
+        let scratch = ScratchRoot::new("failed-write");
+        let blocked_root = scratch.path().join("root-is-a-file");
+        std::fs::write(&blocked_root, b"not a directory").expect("blocking path exists");
+        let mut counter = ScreenShotCounter::new(2);
+
+        let result = counter.capture(0, &blocked_root, &two_color_native_frame());
+
+        assert!(result.is_failed(), "a refused folder is not a written shot");
+        assert!(
+            result
+                .error_message()
+                .is_some_and(|message| !message.is_empty()),
+            "the error reaches the caller"
+        );
+        assert_eq!(counter.used(), 0, "a failed write consumes no name");
+        assert_eq!(counter.remaining(), 2, "a failed write keeps the shot");
+        assert!(!blocked_root.join(SCREENSHOT_FOLDER_SUFFIX).exists());
+    }
+
+    #[test]
+    fn print_screen_in_loading_and_playing_states_writes_no_file() {
+        // Tier 1 chain: winit KeyboardInput (Snapshot) ->
+        // WindowHandler::route_key_with_text -> capture_current_frame ->
+        // ScreenShotCounter::capture. The F8 scene-word table supplies
+        // the pinned 10/11 states; no file or name is consumed.
+        for screen_name in ["loading", "playing"] {
+            let scratch = ScratchRoot::new(screen_name);
+            let mut handler = handler_with_screenshot_root(scratch.path(), 2, screen_name);
+            handler
+                .shell
+                .pixels
+                .copy_from_slice(&two_color_native_frame());
+
+            handler.route_key(winit::keyboard::KeyCode::PrintScreen, true);
+
+            assert_eq!(handler.screenshot_counter.used(), 0);
+            assert!(!scratch.path().join(SCREENSHOT_FOLDER_SUFFIX).exists());
+        }
     }
 }
