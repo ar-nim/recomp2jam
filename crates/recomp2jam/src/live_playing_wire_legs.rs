@@ -30,7 +30,7 @@ use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
-    hold_live_leg_lock, join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
+    join_waiting_by_click, joined_room, paint, paint_frame, paint_until_screen,
     read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
 };
 use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
@@ -197,7 +197,6 @@ fn live_4015_rank_exchange_seats_both_member_places_from_boot() {
         println!("SKIP live_4015_rank_exchange_seats_both_member_places_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_playing_wire_gateway(joined_room(0, true));
     let mut session = enter_playing_wire_from_boot(&gateway);
     assert_eq!(session.screen(), Screen::Playing);
@@ -239,7 +238,6 @@ fn live_4035_answer_arms_the_local_download_badge_from_boot() {
         println!("SKIP live_4035_answer_arms_the_local_download_badge_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_playing_wire_gateway(joined_room(0, true));
     let mut session = boot_into_playing_wire(&gateway);
     let before = paint_frame(&mut session);
@@ -294,7 +292,6 @@ fn live_uhp_start_after_4045_inks_the_caption_and_sends_one_empty_4046_from_boot
         println!("SKIP live_uhp_start_after_4045_inks_the_caption_and_sends_one_empty_4046_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_playing_wire_gateway(joined_room(0, true));
     let mut session = enter_playing_wire_from_boot(&gateway);
     assert_eq!(session.screen(), Screen::Playing);

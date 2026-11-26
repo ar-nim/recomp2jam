@@ -155,7 +155,6 @@ fn live_room_3003_member_fields_stage_the_roster_and_readouts() {
         println!("SKIP live_room_3003_member_fields_stage_the_roster_and_readouts: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
     let peer = session
         .game_mut()
@@ -199,7 +198,6 @@ fn live_room_gender_byte_from_3003_reaches_the_staged_seat() {
         println!("SKIP live_room_gender_byte_from_3003_reaches_the_staged_seat: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
     let local_gender = session
         .game_mut()
@@ -232,7 +230,6 @@ fn live_room_team_ready_and_master_marks_paint_from_the_wire_seat() {
         println!("SKIP live_room_team_ready_and_master_marks_paint_from_the_wire_seat: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut ready_session, ready_gateway) = boot_scripted_seat_leg(scripted_seat_room(true, None));
     let peer = ready_session
         .game_mut()
@@ -288,7 +285,6 @@ fn live_room_champion_streak_inks_the_wins_well_from_3003() {
         println!("SKIP live_room_champion_streak_inks_the_wins_well_from_3003: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut with_streak, streak_gateway) =
         boot_scripted_seat_leg(scripted_seat_room(true, Some(7)));
     let well = staged_id_rect(&mut with_streak, "IDC_TEXT_SWAIT_WINNERSCROE");

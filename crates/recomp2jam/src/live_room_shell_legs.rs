@@ -140,7 +140,6 @@ fn live_room_nonzero_gender_byte_paints_the_paired_seat_figure() {
         println!("SKIP live_room_nonzero_gender_byte_paints_the_paired_seat_figure: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut female, female_gateway) = boot_shell_leg(scripted_shell_room(0, 0, false));
     let female_figure = female
         .game_mut()
@@ -182,7 +181,6 @@ fn live_room_derived_team_plate_differs_from_the_raw_wire_seat_team() {
         println!("SKIP live_room_derived_team_plate_differs_from_the_raw_wire_seat_team: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     assert_eq!(
         o2jam_shell::screens::paint::staged_derived_team(3),
         4,
@@ -462,7 +460,6 @@ fn live_room_channel_button_pair_uses_the_default_control_ids() {
         println!("SKIP live_room_channel_button_pair_uses_the_default_control_ids: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut normal, normal_gateway, _) = boot_room_leg(2);
     let normal_mode = staged_screen_pixels(
         &mut normal,
@@ -506,7 +503,6 @@ fn live_room_2011_rows_populate_the_staged_user_sheet() {
         println!("SKIP live_room_2011_rows_populate_the_staged_user_sheet: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway, send) = boot_room_leg(2);
     let rest = roster_pixels(&mut session);
     let sheet = RoomUserList {
@@ -553,7 +549,6 @@ fn live_room_2018_refusal_inks_no_pixels_in_the_room_chat() {
         println!("SKIP live_room_2018_refusal_inks_no_pixels_in_the_room_chat: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway, send) = boot_room_leg(2);
     let answer = SendWhisperResponse {
         invalid: true,
@@ -601,7 +596,6 @@ fn live_room_2023_high_nibble_reaches_the_painted_member_word() {
         println!("SKIP live_room_2023_high_nibble_reaches_the_painted_member_word: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway, send) = boot_room_leg(2);
     let rest = staged_screen_pixels(&mut session, Screen::Room, "IDC_TEXT_SROOM_MUSICTITLE");
     let change = RoomParameterChanged {
@@ -699,7 +693,6 @@ fn live_room_row_select_binds_only_the_gated_detail_readout() {
         println!("skip: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_detail_leg(vec![
         detail_leg_row(3, "Named", 100),
         detail_leg_row(4, "Thin", 99),
@@ -793,7 +786,6 @@ fn live_room_3003_snapshot_inks_the_native_player_list_from_boot() {
         println!("SKIP live_room_3003_snapshot_inks_the_native_player_list_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_roster_leg();
     session.game_mut().open_room_user_sheet(false);
     let rest = roster_pixels(&mut session);
@@ -820,7 +812,6 @@ fn live_room_3004_broadcast_repaints_the_added_roster_row() {
         println!("SKIP live_room_3004_broadcast_repaints_the_added_roster_row: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_roster_leg();
     session.game_mut().open_room_user_sheet(false);
     join_waiting_by_click(&mut session, &gateway.join_answer_written);
@@ -856,7 +847,6 @@ fn live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master() {
         println!("SKIP live_room_3007_broadcast_repaints_the_leave_and_promotes_the_master: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_roster_leg();
     session.game_mut().open_room_user_sheet(false);
     join_waiting_by_click(&mut session, &gateway.join_answer_written);

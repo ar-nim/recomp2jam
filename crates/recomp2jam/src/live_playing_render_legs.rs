@@ -323,7 +323,6 @@ mod tests {
             println!("SKIP live_colorkeyed_playing_figure_uploads_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_HOTTIME_ALRAM");
@@ -349,7 +348,6 @@ mod tests {
             );
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_CHATWINDOW");
@@ -373,7 +371,6 @@ mod tests {
             println!("SKIP live_packed_run_body_lands_each_run_at_its_staged_offset_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_CHATWINDOW");
@@ -396,7 +393,6 @@ mod tests {
             println!("SKIP live_frame_index_word_selects_the_painted_stage_frame_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_BUTTON_SPLAY_EXIT");
@@ -423,7 +419,6 @@ mod tests {
             println!("SKIP live_frame_count_bounds_the_staged_playing_animation_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_BUTTON_SPLAY_EXIT");
@@ -449,7 +444,6 @@ mod tests {
             println!("SKIP live_signed_anchor_lands_the_staged_playing_figure_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_BUFFER1");
@@ -477,7 +471,6 @@ mod tests {
             println!("SKIP live_staged_playing_geometry_travels_with_the_figure_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_BUFFER1");
@@ -508,7 +501,6 @@ mod tests {
             println!("SKIP live_transformed_playing_image_keeps_the_staged_position_and_size_from_boot: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_IMAGE_SPLAY_TIMEBAR");
@@ -545,7 +537,6 @@ mod tests {
             );
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_playing_render_leg();
         let art = stage_playing_art(&mut session);
         let placed = placement_named(&art, "IDC_BUTTON_SPLAY_EXIT");
@@ -574,7 +565,6 @@ mod tests {
             println!("SKIP live_staged_hold_art_width_follows_the_selected_note_tail_pair: install-root absent");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let hold = (3, 150_000, 151_000, 7);
         let (mut session, gateway) = boot_playing_hold_leg(0, Some((1.0, 80.0)), hold);
         // The same staged Playing art is present in both samples.

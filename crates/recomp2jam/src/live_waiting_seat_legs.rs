@@ -351,7 +351,6 @@ fn live_waiting_avatars_advance_one_breathing_frame_per_pinned_tick() {
         println!("SKIP live_waiting_avatars_advance_one_breathing_frame_per_pinned_tick: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_seat_leg(scripted_room(0, 1), Vec::new());
     session.game_mut().set_waiting_avatar(1, breathing_figure());
     session.game_mut().set_waiting_avatar(0, still_figure());
@@ -399,7 +398,6 @@ fn live_waiting_playing_state_from_3003_inks_the_seat_mark() {
         println!("SKIP live_waiting_playing_state_from_3003_inks_the_seat_mark: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let mut playing_room = scripted_room(0, 1);
     playing_room.slots[1].member.as_mut().unwrap().playing_state = 1;
     let (mut playing, gateway) = boot_seat_leg(playing_room, Vec::new());
@@ -443,7 +441,6 @@ fn live_waiting_slot_group_marks_the_master_and_non_host_seats() {
         println!("SKIP live_waiting_slot_group_marks_the_master_and_non_host_seats: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let mut room = scripted_room(0, 3);
     room.slots[3].member.as_mut().unwrap().ready = false;
     let (mut session, gateway) = boot_seat_leg(room, Vec::new());
@@ -478,7 +475,6 @@ fn live_waiting_member_music_ids_reach_the_staged_seat() {
         println!("SKIP live_waiting_member_music_ids_reach_the_staged_seat: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_seat_leg(scripted_room(0, 1), Vec::new());
     let peer = session.game_mut().staged_waiting_member(1).unwrap();
     assert_eq!(peer.music_ids, vec![101u16, 202]);
@@ -503,7 +499,6 @@ fn live_waiting_chat_team_and_master_emblem_stage_on_both_sides() {
         println!("SKIP live_waiting_chat_team_and_master_emblem_stage_on_both_sides: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let chat = vec![
         WaitingUserMessage {
             sender: "host".to_owned(),
@@ -574,7 +569,6 @@ fn live_waiting_team_press_sends_4004_then_4008_from_boot() {
         println!("SKIP live_waiting_team_press_sends_4004_then_4008_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let (mut session, gateway) = boot_seat_leg(scripted_room(1, 0), Vec::new());
     let (x, y) = staged_code_centre(&mut session, Screen::Waiting, 0x1620_1005);
     session.ingest_snapshot(&InputSnapshot::click_at(x, y));
@@ -599,7 +593,6 @@ fn live_waiting_ready_answer_clears_the_4039_progress_and_opens_start() {
         println!("SKIP live_waiting_ready_answer_clears_the_4039_progress_and_opens_start: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let mut room = scripted_room(0, 1);
     room.slots[1].member.as_mut().unwrap().music_state = MusicState::Downloading.code();
     let progress = DownloadProgressChanged {
@@ -652,7 +645,6 @@ fn live_waiting_removal_cause_captures_different_notice_pixels() {
         println!("SKIP live_waiting_removal_cause_captures_different_notice_pixels: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     // The 3010 body is empty in the exe; the caption derives from the
     // own-seat music word (`0x55e2f0`, `docs/pins/net-b.md` addendum).
     let mut captions = Vec::new();
@@ -699,7 +691,6 @@ fn live_waiting_picker_paints_only_member_owned_songs_from_boot() {
         println!("skip: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let blob = picker_catalog_blob();
     let entries = o2jam_file::parse_ojn_list(&blob).expect("picker catalog parses");
 

@@ -22,8 +22,8 @@ use o2jam_shell::{GameLoop, InputSnapshot, Screen};
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, click_staged, dismiss_splash,
-    enter_room_by_clicks, hold_live_leg_lock, information_ok_centre, join_waiting_by_click,
-    joined_room, paint, paint_frame, read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
+    enter_room_by_clicks, information_ok_centre, join_waiting_by_click, joined_room, paint,
+    paint_frame, read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
 };
 use crate::session::OnlineSession;
 
@@ -188,7 +188,6 @@ fn live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot() {
         println!("SKIP live_3003_refusal_posts_the_pinned_full_room_sheet_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
     let mut session = boot_room_before_refused_row(gateway.port);
     let before = paint_frame(&mut session);
@@ -222,7 +221,6 @@ fn live_3003_refusal_ok_dismisses_the_sheet_without_a_new_wire_frame() {
         println!("SKIP live_3003_refusal_ok_dismisses_the_sheet_without_a_new_wire_frame: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_tail_wire_gateway_with_join_refusal(joined_room(0, true), Some(-6));
     let mut session = boot_room_before_refused_row(gateway.port);
     press_refused_row_and_await_answer(&mut session, &gateway);
@@ -267,7 +265,6 @@ fn live_4026_three_byte_state_marks_the_peer_seat_from_boot() {
         println!("SKIP live_4026_three_byte_state_marks_the_peer_seat_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_tail_wire_gateway(joined_room(0, true));
     let mut session = boot_waiting_leg(&gateway);
     let before = paint_frame(&mut session);

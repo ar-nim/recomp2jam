@@ -379,7 +379,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_native_music_purchase_from_boot_folds_the_5011_success_body: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_purchase_gateway(joined_room(0, true), false);
         let mut session = boot_to_cart_buy(&gateway);
         let row_rect = session
@@ -431,7 +430,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_native_music_purchase_from_boot_inks_the_5011_refusal_notice: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_purchase_gateway(joined_room(0, true), true);
         let mut session = boot_to_cart_buy(&gateway);
         let feedback = settle_purchase(&mut session, true);
@@ -482,7 +480,6 @@ mod live_web_native_leg_tests {
             println!("SKIP live_web_nickname_report_back_sends_the_2017_chat_frame: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -534,7 +531,6 @@ mod live_web_native_leg_tests {
             println!("SKIP live_web_cart_report_back_adds_the_packed_mid_to_the_cart_frame: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_purchase_gateway(joined_room(0, true), false);
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -585,7 +581,6 @@ mod live_web_native_leg_tests {
             println!("SKIP live_web_document_complete_report_back_inks_the_notice_frame: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -672,7 +667,6 @@ mod live_web_native_leg_tests {
     /// zero-selector wire+frame leg.
     #[test]
     fn tier_2_armed_result_selector_names_the_ticket_page_without_a_gateway_frame() {
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_armed_selector_gateway();
         let mut session = boot_live_leg(gateway.port, false);
         gateway
@@ -714,7 +708,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_result_zero_selector_pairs_the_tally_wire_with_the_hot_time_frame: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_result_back_gateway(joined_room(0, true));
         let mut session = walk_to_live_result(&gateway);
         let frame = paint_frame(&mut session);
@@ -756,7 +749,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_qa_page_open_inks_the_labeled_help_stand_in_from_boot: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -810,7 +802,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (root, music, source) = downloaded_chart_dirs("recomp2jam-tier3-purchase-complete");
         let gateway = spawn_purchase_gateway(joined_room(0, true), false);
         let mut session = boot_to_cart_buy(&gateway);
@@ -993,7 +984,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_scripted_2028_from_boot_inks_the_native_top100_rows: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_top100_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
@@ -1060,7 +1050,6 @@ mod live_web_native_leg_tests {
             println!("SKIP tier_3_coupon_host_form_from_boot_inks_the_archived_fields_and_reports_back: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);

@@ -125,7 +125,6 @@ mod live_myroom_leg_tests {
             println!("SKIP live_master_role_myroom_toggles_faces_and_keeps_selection_local: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_master_myroom();
 
         assert_eq!(
@@ -208,7 +207,6 @@ mod live_myroom_leg_tests {
             println!("skip: missing install-root interface archive");
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let (mut session, gateway) = boot_master_myroom();
         session
             .game_mut()

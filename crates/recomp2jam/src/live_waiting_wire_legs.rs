@@ -26,8 +26,8 @@ use o2jam_shell::screens::game::WaitingRoomDescriptor;
 
 use crate::live_leg_support::{
     archives_present, boot_live_leg, channel_row, dismiss_splash, enter_room_by_clicks,
-    hold_live_leg_lock, join_waiting_by_click, joined_room, paint, paint_frame,
-    read_frame_until_eof, room_row, MAX_SCREEN_PAINTS,
+    join_waiting_by_click, joined_room, paint, paint_frame, read_frame_until_eof, room_row,
+    MAX_SCREEN_PAINTS,
 };
 use crate::session::OnlineSession;
 
@@ -205,7 +205,6 @@ fn live_3006_answer_returns_the_waiting_room_to_the_board_from_boot() {
         println!("SKIP live_3006_answer_returns_the_waiting_room_to_the_board_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     let waiting_frame = paint_frame(&mut session);
@@ -228,7 +227,6 @@ fn live_4011_answer_enters_loading_from_boot() {
         println!("SKIP live_4011_answer_enters_loading_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     let waiting_frame = paint_frame(&mut session);
@@ -251,7 +249,6 @@ fn live_4013_stages_the_peer_loaded_state_from_boot() {
         println!("SKIP live_4013_stages_the_peer_loaded_state_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     let before = paint_frame(&mut session);
@@ -290,7 +287,6 @@ fn live_4029_stages_counted_member_rows_from_boot() {
         println!("SKIP live_4029_stages_counted_member_rows_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     let before = paint_frame(&mut session);
@@ -331,7 +327,6 @@ fn live_4009_echo_lights_the_peer_ready_mark_from_boot() {
         println!("SKIP live_4009_echo_lights_the_peer_ready_mark_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, false));
     let mut session = boot_into_waiting(&gateway);
     let before = paint_frame(&mut session);
@@ -377,7 +372,6 @@ fn live_3001_descriptor_frame_stages_the_waiting_room_descriptor_from_boot() {
         println!("SKIP live_3001_descriptor_frame_stages_the_waiting_room_descriptor_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     gateway.push(
@@ -426,7 +420,6 @@ fn live_2035_cap_changes_the_auto_picked_row_from_boot() {
         println!("SKIP live_2035_cap_changes_the_auto_picked_row_from_boot: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let mut room = joined_room(0, true);
     room.music_id = 0;
     let gateway = spawn_waiting_wire_gateway(room);
@@ -482,7 +475,6 @@ fn live_3009_kick_shows_the_staged_member_nickname_from_boot() {
         println!("skip: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let mut room = joined_room(0, true);
     room.slots[1]
         .member
@@ -531,7 +523,6 @@ fn live_3014_shows_the_room_disappeared_caption_from_boot() {
         println!("skip: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     let before = paint_frame(&mut session);
@@ -575,7 +566,6 @@ fn live_4011_settings_mismatch_posts_the_config_error_sheet_from_boot() {
         println!("skip: missing install-root interface archive");
         return;
     }
-    let _live_leg_guard = hold_live_leg_lock();
     let gateway = spawn_waiting_wire_gateway(joined_room(0, true));
     let mut session = boot_into_waiting(&gateway);
     session.game_mut().set_room_settings_word(Some(999));

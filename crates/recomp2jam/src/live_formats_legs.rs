@@ -34,7 +34,6 @@ mod live_formats_spec_leg_tests {
             );
             return;
         }
-        let _live_leg_guard = hold_live_leg_lock();
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg(gateway.port, false);
         dismiss_splash(&mut session);
