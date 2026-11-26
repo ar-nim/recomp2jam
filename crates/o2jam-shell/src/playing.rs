@@ -12,6 +12,7 @@
 use crate::avatar::{
     paint_scene_figures, strided_sprite55, AvatarFigure, FigureLayer, PlacementRole, ScenePlacement,
 };
+use crate::options::selected_note_tail;
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -24,6 +25,7 @@ use o2jam_render::{
     number_width, pack_xrgb, panel_content_rect, scale_rect_to_frame, text_width, visible_spans,
     Frame, LaneCurtain, Rect, Rgb555Image, GLYPH_H, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
+use std::cell::Cell;
 
 /// Lanes across the highway.
 pub const HIGHWAY_LANES: u8 = 7;
@@ -169,6 +171,69 @@ pub const LANE_SKIN_ODD: u32 = pack_xrgb(0x0E, 0x0E, 0x16);
 pub const NOTE_CAP: u32 = pack_xrgb(0xB0, 0xE0, 0xFF);
 /// Long-note tail beam ink (heads keep the `NOTE_BLUE` core below).
 pub const TAIL_BEAM: u32 = pack_xrgb(0x20, 0x80, 0xE0);
+
+/// Exe `0x67fe8c` float pairs, one per accepted `NoteTail` value.
+/// The next eight bytes are the option global, not a fifth style
+/// (`docs/pins/result-playing.md`, senior pass 2026-11-25).
+pub const NOTE_TAIL_PAIRS: [(f32, f32); 4] = [(0.0, 0.0), (16.0, 14.0), (30.0, 25.0), (54.0, 50.0)];
+
+thread_local! {
+    /// Per-thread hand-off of the exe's chart-scale and speed floats
+    /// (`+0x64` / `+0x68` in the `CNewNote` subobject). Thread-local
+    /// so concurrent headless legs cannot overwrite each other's inputs.
+    static HOLD_ART_INPUTS: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Legacy two-pixel core used until Playing setup stages the exe's
+/// chart-scale and speed floats. No pair formula is claimed without
+/// those inputs.
+const DEFAULT_HOLD_ART_WIDTH: u32 = 2;
+
+/// Stage the two float inputs the hold-width consumer reads at
+/// construction. The exe sets them through Playing setup; this is
+/// the headless hand-off for a walked or painted leg.
+pub fn set_hold_art_inputs(chart_scale: f32, speed: f32) {
+    HOLD_ART_INPUTS.with(|inputs| inputs.set(Some((chart_scale, speed))));
+}
+
+/// Clear the staged inputs so the next play state keeps the legacy
+/// core. Callers that stage inputs restore them here after a leg.
+pub fn clear_hold_art_inputs() {
+    HOLD_ART_INPUTS.with(|inputs| inputs.set(None));
+}
+
+/// Read the staged hold-width inputs (chart scale, speed).
+#[must_use]
+pub fn hold_art_inputs() -> Option<(f32, f32)> {
+    HOLD_ART_INPUTS.with(Cell::get)
+}
+
+/// The exe's selected pair. Values outside 0..=3 fall back to the
+/// default pair, like the exe's own reader and setter.
+#[must_use]
+pub const fn note_tail_pair(note_tail: u8) -> (f32, f32) {
+    match note_tail {
+        0 => NOTE_TAIL_PAIRS[0],
+        1 => NOTE_TAIL_PAIRS[1],
+        3 => NOTE_TAIL_PAIRS[3],
+        _ => NOTE_TAIL_PAIRS[2],
+    }
+}
+
+/// Hold-art width consumer `0x56bed0`: pair the selected floats with
+/// the chart scale and speed, round, then clamp to the exe's 0..=120
+/// scalar range.
+#[must_use]
+pub fn note_tail_width(note_tail: u8, chart_scale: f32, speed: f32) -> u32 {
+    let (pair_x, pair_y) = note_tail_pair(note_tail);
+    let raw = ((chart_scale - 1.0) * pair_y + pair_x) * speed / 160.0;
+    if !raw.is_finite() {
+        return 0;
+    }
+    let rounded = raw.round().clamp(0.0, 120.0);
+    // Safe after the explicit clamp: the float is finite in 0..=120.
+    rounded as u32
+}
 /// Judgement-line receptor pad at rest (one pad per lane).
 pub const RECEPTOR_DIM: u32 = pack_xrgb(0x2A, 0x2A, 0x38);
 /// Judgement-line receptor pad flash on a struck lane.
@@ -2070,6 +2135,12 @@ pub struct LivePlay {
     /// totals pin that), while the painted count must be idempotent
     /// per instant: two paints at 5 100 show the same digits.
     shown_ticks: u64,
+    /// `NoteTail` selection copied from the exe-mirrored global at
+    /// construction, like the pair copy into `+0x6c`/`+0x70`.
+    note_tail: u8,
+    /// Floats the exe's width consumer multiplies the selected pair
+    /// by (`+0x64` chart scale and `+0x68` speed), when staged.
+    hold_art_inputs: Option<(f32, f32)>,
     /// Display-only avatar scene captions (level, song, volume).
     scene: AvatarScene,
     /// Slots the 4015 peer broadcast has reported: occupancy for the
@@ -2098,6 +2169,8 @@ impl Default for LivePlay {
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
             shown_ticks: 0,
+            note_tail: selected_note_tail(),
+            hold_art_inputs: hold_art_inputs(),
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -2137,6 +2210,8 @@ impl LivePlay {
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
             shown_ticks: 0,
+            note_tail: selected_note_tail(),
+            hold_art_inputs: hold_art_inputs(),
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -2191,9 +2266,20 @@ impl LivePlay {
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
             shown_ticks: 0,
+            note_tail: selected_note_tail(),
+            hold_art_inputs: hold_art_inputs(),
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
+    }
+
+    /// Hold-art width this run paints for its selected `NoteTail`.
+    #[must_use]
+    pub fn hold_art_width(&self) -> u32 {
+        self.hold_art_inputs
+            .map_or(DEFAULT_HOLD_ART_WIDTH, |(scale, speed)| {
+                note_tail_width(self.note_tail, scale, speed)
+            })
     }
 
     /// Skill-ring curtain worn for this run (default: none).
@@ -2717,12 +2803,36 @@ impl LivePlay {
         }
     }
 
+    /// The exe's width scalar as a per-lane clip: centered on the
+    /// lane column and trimmed to that column's own art boundary.
+    fn hold_width_clip(
+        &self,
+        geom: &HighwayGeometry,
+        lane: u8,
+        y: i32,
+        height: i32,
+    ) -> Option<Rect> {
+        let column = geom.lane_rect(lane);
+        let lane_width = i32::try_from(column.w).unwrap_or(0);
+        let width = i32::try_from(self.hold_art_width()).unwrap_or(0);
+        let center = column.x + lane_width / 2;
+        let requested = Rect {
+            x: center - width / 2,
+            y,
+            w: u32::try_from(width.max(0)).unwrap_or(0),
+            h: u32::try_from(height.max(0)).unwrap_or(0),
+        };
+        intersect_rect(&requested, &column)
+    }
+
     /// One tail span: the staged kit lane beam on held heads (the
     /// exe's held lane light, [`LANE_BEAM_STEM`]), then the staged
     /// `.oja` hold rings stepping from the hold strike
     /// ([`HOLD_RING_SPRITE`]), then the staged static long effect; the
     /// staged release beam on untouched holds, else the procedural
-    /// [`TAIL_BEAM`] core.
+    /// [`TAIL_BEAM`] core. The tail arms (release beam and procedural
+    /// core) carry the selected `NoteTail` width; the struck-lane
+    /// lights keep their own staged bodies.
     fn paint_tail_span(
         &self,
         frame: &mut Frame<'_>,
@@ -2732,6 +2842,7 @@ impl LivePlay {
         bottom: i32,
     ) {
         let lane = note.lane;
+        let height = bottom - top;
         if note.holding {
             if let Some(beam) = self.view.skin.lane_beam_frame(lane, None) {
                 beam.paint_bottom_anchored(frame, geom, lane, geom.line_y);
@@ -2748,33 +2859,16 @@ impl LivePlay {
                 art.paint_bottom_anchored(frame, geom, lane, geom.line_y);
                 return;
             }
-        } else if let Some(beam) = self.view.skin.release_beam(lane) {
-            let column = geom.lane_rect(lane);
-            beam.paint_clipped_to(
-                frame,
-                geom,
-                lane,
-                bottom,
-                &Rect {
-                    x: column.x,
-                    y: top,
-                    w: column.w,
-                    h: u32::try_from(bottom - top).unwrap_or(0),
-                },
-            );
+        } else if let (Some(beam), Some(clip)) = (
+            self.view.skin.release_beam(lane),
+            self.hold_width_clip(geom, lane, top, height),
+        ) {
+            beam.paint_clipped_to(frame, geom, lane, bottom, &clip);
             return;
         }
-        let column = geom.lane_rect(lane);
-        fill_rect(
-            frame,
-            &Rect {
-                x: column.x + column.w as i32 / 2 - 1,
-                y: top,
-                w: 2,
-                h: u32::try_from(bottom - top).unwrap_or(0),
-            },
-            TAIL_BEAM,
-        );
+        if let Some(clip) = self.hold_width_clip(geom, lane, top, height) {
+            fill_rect(frame, &clip, TAIL_BEAM);
+        }
     }
 
     /// Armed hold heads: while a hold stays open its lane keeps the
@@ -5616,6 +5710,80 @@ mod live_play_tests {
         );
         assert!(buf.contains(&TAIL_BEAM));
         assert_eq!(buf[30 * 70 + 7], TAIL_BEAM);
+    }
+
+    /// Widest run of tail ink in one row of a painted frame.
+    fn widest_hold_row(pixels: &[u32], width: usize, height: usize) -> usize {
+        (0..height)
+            .map(|row| {
+                pixels[row * width..(row + 1) * width]
+                    .iter()
+                    .filter(|pixel| **pixel == TAIL_BEAM)
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn note_tail_table_pins_four_exe_pairs() {
+        // seam: pure float table read from exe VA 0x67fe8c.
+        assert_eq!(
+            NOTE_TAIL_PAIRS,
+            [(0.0, 0.0), (16.0, 14.0), (30.0, 25.0), (54.0, 50.0)]
+        );
+        assert_eq!(note_tail_pair(0), (0.0, 0.0));
+        assert_eq!(note_tail_pair(1), (16.0, 14.0));
+        assert_eq!(note_tail_pair(2), (30.0, 25.0));
+        assert_eq!(note_tail_pair(3), (54.0, 50.0));
+        assert_eq!(note_tail_pair(4), NOTE_TAIL_PAIRS[2]);
+    }
+
+    #[test]
+    fn hold_art_width_follows_the_selected_pair_formula() {
+        // seam: pure math from exe consumer 0x56bed0.
+        assert_eq!(note_tail_width(0, 2.0, 160.0), 0);
+        assert_eq!(note_tail_width(1, 2.0, 160.0), 30);
+        assert_eq!(note_tail_width(2, 2.0, 160.0), 55);
+        assert_eq!(note_tail_width(3, 2.0, 160.0), 104);
+    }
+
+    #[test]
+    fn hold_art_width_rounds_and_clamps_to_the_exe_range() {
+        // seam: pure math; rounding and 0..=120 clamp are the consumer.
+        assert_eq!(note_tail_width(1, 2.0, 4.0), 1, "0.75 rounds to 1");
+        assert_eq!(note_tail_width(3, 10.0, 160.0), 120, "504 clamps to 120");
+        assert_eq!(note_tail_width(3, 2.0, -160.0), 0, "negative clamps to 0");
+        assert_eq!(note_tail_width(4, 2.0, 160.0), 55, "bad index uses pair 2");
+    }
+
+    #[test]
+    fn selecting_note_tail_pair_changes_the_painted_hold_width() {
+        // seam: pure paint at the LivePlay::paint_hold_tails seam;
+        // the live boot chain is pinned by the Tier 3 leg.
+        let mut settings = crate::options::OptionsSettings::default();
+        let widths: Vec<usize> = [0u8, 1, 2, 3]
+            .into_iter()
+            .map(|pair| {
+                settings.set_note_tail(i32::from(pair));
+                set_hold_art_inputs(1.0, 80.0);
+                let mut live = LivePlay::new_holds(&[(3, 150_000, 151_000, 7)]);
+                let mut buf = vec![0u32; 800 * 600];
+                live.paint(
+                    &mut Frame {
+                        buf: &mut buf,
+                        w: 800,
+                        h: 600,
+                    },
+                    &HighwayGeometry::centered(800, 600),
+                    149_500,
+                );
+                widest_hold_row(&buf, 800, 600)
+            })
+            .collect();
+        assert_eq!(widths, [0, 8, 15, 27]);
+        settings.set_note_tail(i32::from(crate::options::DEFAULT_NOTE_TAIL));
+        clear_hold_art_inputs();
     }
 
     #[test]
