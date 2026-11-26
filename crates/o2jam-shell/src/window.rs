@@ -96,6 +96,41 @@ pub const fn billing_window_arm(
     }
 }
 
+/// State word of the hub arm whose opener reaches the coupon branch
+/// (`0x4f5020` → `0x4f4bd0`, `docs/pins/payment.md`).
+pub const COUPON_HOST_STATE_WORD: u32 = BILLING_PAYMENT2_STATE_WORD;
+/// Opener selector that names the coupon page; zero names jamcard.
+pub const COUPON_PAGE_SELECTOR: u32 = 1;
+
+/// Native replacement for the dead coupon page branch. The gate is
+/// the pinned hub arm; the form itself is ours by design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponHostArm {
+    /// No coupon page branch was selected.
+    None,
+    /// Open the native coupon entry form.
+    OpenNativeForm,
+}
+
+/// Decode the state-13 hub arm with the pinned opener selector.
+#[must_use]
+pub const fn coupon_host_arm(
+    message: u32,
+    state_word: u32,
+    page_selector_word: u32,
+    web_handle_set: bool,
+) -> CouponHostArm {
+    if message == WM_APP_UI_EVENT
+        && state_word == COUPON_HOST_STATE_WORD
+        && page_selector_word == COUPON_PAGE_SELECTOR
+        && web_handle_set
+    {
+        CouponHostArm::OpenNativeForm
+    } else {
+        CouponHostArm::None
+    }
+}
+
 /// What the exe's `WM_APP+0x31` window arm does to the web sheets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebSheetVisibilityArm {
@@ -1349,6 +1384,44 @@ mod tests {
             exe_window_handler(0x10),
             ExeWindowHandler::DefaultProcedure,
             "an unlisted message still reaches the default procedure"
+        );
+    }
+
+    #[test]
+    fn coupon_host_arm_needs_the_state_13_selector_and_a_stored_handle() {
+        // seam: this Win32 hub arm has no message pump in this client;
+        // the pinned gate is the whole behavior a headless leg drives.
+        assert_eq!(
+            coupon_host_arm(
+                WM_APP_UI_EVENT,
+                COUPON_HOST_STATE_WORD,
+                COUPON_PAGE_SELECTOR,
+                true
+            ),
+            CouponHostArm::OpenNativeForm
+        );
+    }
+
+    #[test]
+    fn coupon_host_arm_leaves_the_jamcard_selector_alone() {
+        // seam: selector zero names jamcard, not the coupon form.
+        assert_eq!(
+            coupon_host_arm(WM_APP_UI_EVENT, COUPON_HOST_STATE_WORD, 0, true),
+            CouponHostArm::None
+        );
+    }
+
+    #[test]
+    fn coupon_host_arm_needs_the_ui_message() {
+        // seam: other hub messages do not reach the opener.
+        assert_eq!(
+            coupon_host_arm(
+                WM_APP_HIDE_WEB_SHEETS,
+                COUPON_HOST_STATE_WORD,
+                COUPON_PAGE_SELECTOR,
+                true
+            ),
+            CouponHostArm::None
         );
     }
 

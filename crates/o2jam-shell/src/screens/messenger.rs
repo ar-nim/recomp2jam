@@ -13,12 +13,14 @@ use o2jam_render::Rect;
 // The window module is private to `o2jam-shell`; re-export the arms
 // this family's live legs drive through the public messenger seam.
 pub use crate::window::{
-    billing_window_arm, display_mode_plan, double_click_notice, error_popup_from_code,
-    error_popup_from_supplied, print_screen_file_name, print_screen_relative_path,
-    web_sheet_visibility_arm, window_close_disposition, BillingWindowArm, ErrorPopup,
-    PrintScreenAction, QuitDisposition, ScreenShotCounter, WebSheetVisibilityArm, WindowHandler,
-    BILLING_PAYMENT2_STATE_WORD, BILLING_PAYMENT_STATE_WORD, PRINT_SCREEN_SUPPRESSED_STATES,
-    SCREENSHOT_DIMENSIONS, SCREENSHOT_FOLDER_SUFFIX, SCREENSHOT_QUALITY, WM_APP_HIDE_WEB_SHEETS,
+    billing_window_arm, coupon_host_arm, display_mode_plan, double_click_notice,
+    error_popup_from_code, error_popup_from_supplied, print_screen_file_name,
+    print_screen_relative_path, web_sheet_visibility_arm, window_close_disposition,
+    BillingWindowArm, CouponHostArm, ErrorPopup, PrintScreenAction, QuitDisposition,
+    ScreenShotCounter, WebSheetVisibilityArm, WindowHandler, BILLING_PAYMENT2_STATE_WORD,
+    BILLING_PAYMENT_STATE_WORD, COUPON_HOST_STATE_WORD, COUPON_PAGE_SELECTOR,
+    PRINT_SCREEN_SUPPRESSED_STATES, SCREENSHOT_DIMENSIONS, SCREENSHOT_FOLDER_SUFFIX,
+    SCREENSHOT_QUALITY, WM_APP_HIDE_WEB_SHEETS,
 };
 
 /// One lobby hosting the Messenger control family. The five codes
@@ -319,6 +321,15 @@ pub const NATIVE_EVENT_NOTICE_RECT: Rect = Rect {
 };
 pub const NATIVE_EVENT_NOTICE_TONE: u32 = 0x0067_BAF0;
 pub const NATIVE_EVENT_NOTICE_LINE_PITCH: i32 = 16;
+
+/// Band for the native coupon form. Presentation is ours by design
+/// (owner decision `e8d01`); it sits below the event notice band.
+pub const COUPON_FORM_RECT: Rect = Rect {
+    x: 100,
+    y: 72,
+    w: 600,
+    h: 96,
+};
 
 /// One hosted sheet. Only host identity, handle and visibility are
 /// modeled: this client has no web bridge, so no page is rendered
@@ -679,6 +690,218 @@ impl BillingWebHandle {
     }
 }
 
+/// `WM_APP+0x32` hub message that reaches the state-13 opener.
+pub const COUPON_UI_EVENT: u32 = 0x232;
+
+/// Raw SHA-256 of the surviving `coupon_in.phtml?myid=` body pinned in
+/// `docs/pins/payment.md` (`a283a1d9…aaa67`). It names the archived
+/// form contract; the dead host is not reachable from this client.
+pub const ARCHIVED_COUPON_BODY_SHA256: &str =
+    "a283a1d95fe293ab43a485ee925b9eedfbcbc7c157c63fc9fa3fc6368d8aaa67";
+
+/// Form name from the archived body. The native replacement keeps the
+/// field names so a report-back can pin the same shape.
+pub const COUPON_FORM_NAME: &str = "frmCouponCheck";
+/// `cp_id` select field from the archived body.
+pub const COUPON_ID_FIELD: &str = "cp_id";
+/// `frmCouponNum` text field from the archived body (30-char cap).
+pub const COUPON_NUMBER_FIELD: &str = "frmCouponNum";
+
+/// One `cp_id` select value from the archived body, in page order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponKind {
+    /// 교학사 총정리.
+    Khcjr,
+    /// 테일즈런너 가이드북2.
+    Trgdb,
+    /// 테일즈런너 수학 킹왕짱.
+    Trkwj,
+    /// 테일즈런너 이야기책 마법전사.
+    Triyg,
+    /// 10곡 1일 무료이용권.
+    Viliv,
+}
+
+impl CouponKind {
+    /// All five select values, in archived page order.
+    pub const ALL: [Self; 5] = [
+        Self::Khcjr,
+        Self::Trgdb,
+        Self::Trkwj,
+        Self::Triyg,
+        Self::Viliv,
+    ];
+
+    /// The exact `option value` from the archived form.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Khcjr => "KHCJR",
+            Self::Trgdb => "TRGDB",
+            Self::Trkwj => "TRKWJ",
+            Self::Triyg => "TRIYG",
+            Self::Viliv => "VILIV",
+        }
+    }
+}
+
+/// `maxlength` of the archived `frmCouponNum` text input.
+pub const COUPON_NUMBER_MAX_CHARS: usize = 30;
+
+/// Notice shown when a valid form is reported back locally. The page
+/// host is dead; this client never claims a coupon was accepted.
+pub const COUPON_REPORT_BACK_NOTICE: &str =
+    "coupon report-back staged locally; dead host, no acceptance claim";
+
+/// Why an entered coupon number cannot be submitted, in the order
+/// the archived page checks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponNumberError {
+    /// The page's first check: no `-` anywhere in the value.
+    MissingHyphen,
+    /// The page's second check: not 11 or 17 characters.
+    WrongLength,
+    /// The page's regex check: groups are not five alphanumerics.
+    WrongGroups,
+}
+
+/// Native stand-in for the archived `frmCouponCheck` fields. The
+/// number follows the page's key-up uppercasing and 30-character cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CouponForm {
+    kind: CouponKind,
+    number: String,
+}
+
+impl CouponForm {
+    /// Empty form with the select's first archived option.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            kind: CouponKind::Khcjr,
+            number: String::new(),
+        }
+    }
+
+    /// Choose one of the five pinned `cp_id` values.
+    pub fn select(&mut self, kind: CouponKind) {
+        self.kind = kind;
+    }
+
+    /// Chosen `cp_id` value.
+    #[must_use]
+    pub const fn kind(&self) -> CouponKind {
+        self.kind
+    }
+
+    /// Current `frmCouponNum` text.
+    #[must_use]
+    pub fn number(&self) -> &str {
+        &self.number
+    }
+
+    /// Type one character, as the page's key-up handler uppercases it.
+    pub fn push_char(&mut self, character: char) {
+        let remaining = COUPON_NUMBER_MAX_CHARS.saturating_sub(self.number.chars().count());
+        self.number.extend(character.to_uppercase().take(remaining));
+    }
+
+    /// Backspace one character.
+    pub fn pop_char(&mut self) {
+        self.number.pop();
+    }
+
+    /// Submit the form to the local report-back seam. No opcode and
+    /// no host reply are produced: the archived host is unreachable.
+    #[must_use]
+    pub fn submit(&self) -> CouponSubmit {
+        match validate_coupon_number(&self.number) {
+            Ok(()) => CouponSubmit::Reported(CouponReportBack {
+                kind: self.kind,
+                number: self.number.clone(),
+            }),
+            Err(error) => CouponSubmit::Rejected(error),
+        }
+    }
+}
+
+/// Outcome of one native coupon submit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CouponSubmit {
+    /// The archived page's validation stops the submit.
+    Rejected(CouponNumberError),
+    /// The pinned fields are reported back to the local notice seam.
+    Reported(CouponReportBack),
+}
+
+/// The pinned fields carried to the local notice seam. This is a
+/// report-back, never a receipt from the dead coupon host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CouponReportBack {
+    /// Submitted `cp_id` select value.
+    pub kind: CouponKind,
+    /// Submitted uppercased `frmCouponNum` value.
+    pub number: String,
+}
+
+impl CouponReportBack {
+    /// Notice text shown with the reported fields.
+    #[must_use]
+    pub const fn notice(&self) -> &'static str {
+        COUPON_REPORT_BACK_NOTICE
+    }
+
+    /// One line naming the two pinned fields.
+    #[must_use]
+    pub fn field_line(&self) -> String {
+        format!(
+            "{}={} {}={}",
+            COUPON_ID_FIELD,
+            self.kind.code(),
+            COUPON_NUMBER_FIELD,
+            self.number
+        )
+    }
+}
+
+impl Default for CouponForm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Validate one coupon number with the archived page's three checks.
+pub fn validate_coupon_number(value: &str) -> Result<(), CouponNumberError> {
+    if !value.contains('-') {
+        return Err(CouponNumberError::MissingHyphen);
+    }
+    if value.len() != 11 && value.len() != 17 {
+        return Err(CouponNumberError::WrongLength);
+    }
+    if !has_archived_groups(value) {
+        return Err(CouponNumberError::WrongGroups);
+    }
+    Ok(())
+}
+
+/// One archived regex group: exactly five ASCII alphanumerics.
+fn is_ascii_group(group: &str) -> bool {
+    let bytes = group.as_bytes();
+    bytes.len() == 5 && bytes.iter().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// Either `AAAAA-BBBBB` or `AAAAA-BBBBB-CCCCC`.
+fn has_archived_groups(value: &str) -> bool {
+    let groups: Vec<_> = value.split('-').collect();
+    match groups.as_slice() {
+        [first, second] => is_ascii_group(first) && is_ascii_group(second),
+        [first, second, third] => {
+            is_ascii_group(first) && is_ascii_group(second) && is_ascii_group(third)
+        }
+        _ => false,
+    }
+}
+
 /// C→S opcode of the relay UHP report (empty body).
 pub const UHP_REPORT_OPCODE: u16 = 4046;
 
@@ -1019,6 +1242,128 @@ mod tests {
         assert_eq!(web_sheet_for_ui_event(0x13), Some(WebSheet::BingoEvent));
         assert_eq!(web_sheet_for_ui_event(0x14), Some(WebSheet::PlayingQa));
         assert_eq!(web_sheet_for_ui_event(0x15), None);
+    }
+
+    #[test]
+    fn coupon_select_table_pins_the_five_archived_values() {
+        // seam: the five `cp_id` values are defined entirely by the
+        // archived body contract (`docs/pins/payment.md`, hash
+        // `a283a1d9…aaa67`); there is no live host to reach.
+        let codes: Vec<_> = CouponKind::ALL.iter().map(|kind| kind.code()).collect();
+        assert_eq!(codes, ["KHCJR", "TRGDB", "TRKWJ", "TRIYG", "VILIV"]);
+    }
+
+    #[test]
+    fn coupon_number_key_uppercases_each_typed_character() {
+        // seam: the key-up uppercasing is defined by the archived body
+        // (hash `a283a1d9…aaa67`); the dead host has no live caller.
+        let mut form = CouponForm::new();
+        for character in "abcde-12345".chars() {
+            form.push_char(character);
+        }
+        assert_eq!(form.number(), "ABCDE-12345");
+    }
+
+    #[test]
+    fn coupon_number_accepts_the_eleven_character_pattern() {
+        // seam: the two regexes are the whole archived form contract.
+        assert_eq!(validate_coupon_number("ABCDE-12345"), Ok(()));
+    }
+
+    #[test]
+    fn coupon_number_accepts_the_seventeen_character_pattern() {
+        // seam: the two regexes are the whole archived form contract.
+        assert_eq!(validate_coupon_number("ABCDE-12345-FGHIJ"), Ok(()));
+    }
+
+    #[test]
+    fn coupon_number_rejects_a_value_without_a_hyphen() {
+        // seam: the archived page's first check names this branch.
+        assert_eq!(
+            validate_coupon_number("ABCDE12345"),
+            Err(CouponNumberError::MissingHyphen)
+        );
+    }
+
+    #[test]
+    fn coupon_number_rejects_an_eleven_character_value_with_bad_groups() {
+        // seam: the archived page's regex names this branch.
+        assert_eq!(
+            validate_coupon_number("ABCD--12345"),
+            Err(CouponNumberError::WrongGroups)
+        );
+    }
+
+    #[test]
+    fn coupon_number_rejects_a_length_outside_eleven_or_seventeen() {
+        // seam: the archived page's second check names this branch.
+        assert_eq!(
+            validate_coupon_number("ABCDE-1234"),
+            Err(CouponNumberError::WrongLength)
+        );
+    }
+
+    #[test]
+    fn coupon_number_stops_accepting_characters_at_the_archived_cap() {
+        // seam: the archived text input's `maxlength=30` is the whole
+        // bound; no page backend exists to accept more.
+        let mut form = CouponForm::new();
+        for _ in 0..COUPON_NUMBER_MAX_CHARS + 2 {
+            form.push_char('A');
+        }
+        assert_eq!(form.number().chars().count(), COUPON_NUMBER_MAX_CHARS);
+    }
+
+    #[test]
+    fn coupon_submit_reports_the_pinned_fields_to_the_local_notice_seam() {
+        // seam: the dead host makes the local report-back the whole
+        // submit behavior (archived hash `a283a1d9…aaa67`).
+        let mut form = CouponForm::new();
+        form.select(CouponKind::Trgdb);
+        for character in "abcde-12345".chars() {
+            form.push_char(character);
+        }
+        assert_eq!(
+            form.submit(),
+            CouponSubmit::Reported(CouponReportBack {
+                kind: CouponKind::Trgdb,
+                number: "ABCDE-12345".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn coupon_submit_rejects_an_invalid_number_without_a_notice() {
+        // seam: the archived page's validation stops before submit.
+        let form = CouponForm::new();
+        assert_eq!(
+            form.submit(),
+            CouponSubmit::Rejected(CouponNumberError::MissingHyphen)
+        );
+    }
+
+    #[test]
+    fn coupon_report_back_never_claims_the_dead_host_accepted_it() {
+        // seam: the no-claim caption is the whole report-back contract.
+        let report = CouponReportBack {
+            kind: CouponKind::Viliv,
+            number: "ABCDE-12345".to_owned(),
+        };
+        assert!(
+            report.notice().contains("no acceptance claim"),
+            "{}",
+            report.notice()
+        );
+    }
+
+    #[test]
+    fn coupon_form_cites_the_archived_body_hash() {
+        // seam: the hash pins the archived body that defines these
+        // fields; no live caller can reach the dead host.
+        assert_eq!(
+            ARCHIVED_COUPON_BODY_SHA256,
+            "a283a1d95fe293ab43a485ee925b9eedfbcbc7c157c63fc9fa3fc6368d8aaa67"
+        );
     }
 
     #[test]

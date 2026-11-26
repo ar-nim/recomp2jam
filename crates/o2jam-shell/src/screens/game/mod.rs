@@ -128,8 +128,10 @@ use super::side::{
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::screens::messenger::{
-    result_event_page, web_sheet_visibility_arm, MessengerHost, NativeEventPage, WebSheet,
-    WebSheetHost, WebSheetTransition, WebSheetVisibilityArm, NATIVE_EVENT_NOTICE_LINE_PITCH,
+    coupon_host_arm, result_event_page, web_sheet_visibility_arm, CouponForm, CouponHostArm,
+    CouponKind, CouponReportBack, CouponSubmit, MessengerHost, NativeEventPage, WebSheet,
+    WebSheetHost, WebSheetTransition, WebSheetVisibilityArm, COUPON_FORM_RECT,
+    COUPON_HOST_STATE_WORD, COUPON_ID_FIELD, COUPON_NUMBER_FIELD, NATIVE_EVENT_NOTICE_LINE_PITCH,
     NATIVE_EVENT_NOTICE_RECT, NATIVE_EVENT_NOTICE_TONE, RESULT_EVENT_MODE_BATTLE,
 };
 use crate::staging::{MessengerSheet, SHOP_MASTER_MASCOT_CODE};
@@ -1202,6 +1204,10 @@ pub struct ScreenGame {
     /// Native event/help stand-in armed by Result entry or a page-open
     /// UI event (#1144/#1145). No page bytes are held here.
     native_event_page: Option<NativeEventPage>,
+    /// Native coupon form opened by the state-13 coupon host arm.
+    coupon_form: Option<CouponForm>,
+    /// Local report-back shown after a valid coupon submit.
+    coupon_report_back: Option<CouponReportBack>,
     /// Exe selector word `0x77ee50`; its writer stays OPEN. Zero takes
     /// hot-time, nonzero takes the ticket arm.
     result_event_selector: u32,
@@ -1729,6 +1735,8 @@ impl ScreenGame {
             select_mode: SelectMusicMode::SongSelect,
             select_help: SelectHelpSheet::None,
             native_event_page: None,
+            coupon_form: None,
+            coupon_report_back: None,
             result_event_selector: 0,
             web_sheets: WebSheetHost::new(),
             select_page: 0,
@@ -3171,6 +3179,65 @@ impl ScreenGame {
             WebSheet::CashBill => None,
         };
         Some(transition)
+    }
+
+    /// State-13 coupon host arm of `0x4f4bd0`. The pinned gate opens
+    /// our native form; no page body or host reply is claimed.
+    pub fn stage_coupon_host(&mut self, message: u32, page_selector_word: u32) -> bool {
+        if coupon_host_arm(
+            message,
+            COUPON_HOST_STATE_WORD,
+            page_selector_word,
+            self.web_sheets.has_stored_handle(),
+        ) != CouponHostArm::OpenNativeForm
+        {
+            return false;
+        }
+        self.coupon_form = Some(CouponForm::new());
+        self.coupon_report_back = None;
+        true
+    }
+
+    /// The coupon form currently staged, if the host arm opened it.
+    #[must_use]
+    pub fn coupon_form(&self) -> Option<&CouponForm> {
+        self.coupon_form.as_ref()
+    }
+
+    /// The local report-back currently shown, if one was submitted.
+    #[must_use]
+    pub fn coupon_report_back(&self) -> Option<&CouponReportBack> {
+        self.coupon_report_back.as_ref()
+    }
+
+    /// Select one of the five archived `cp_id` values on the form.
+    pub fn select_coupon_kind(&mut self, kind: CouponKind) -> bool {
+        let Some(form) = self.coupon_form.as_mut() else {
+            return false;
+        };
+        form.select(kind);
+        true
+    }
+
+    /// Type one key into the form's `frmCouponNum` field.
+    pub fn push_coupon_char(&mut self, character: char) -> bool {
+        let Some(form) = self.coupon_form.as_mut() else {
+            return false;
+        };
+        form.push_char(character);
+        true
+    }
+
+    /// Submit the form to the local report-back seam. A valid number
+    /// stages a notice; no opcode or host reply is produced.
+    pub fn submit_coupon_form(&mut self) -> Option<CouponSubmit> {
+        let form = self.coupon_form.as_ref()?;
+        let outcome = form.submit();
+        self.coupon_report_back = match &outcome {
+            CouponSubmit::Reported(report) => Some(report.clone()),
+            CouponSubmit::Rejected(_) => None,
+        };
+        Some(outcome)
     }
 
     /// Apply the `WM_APP+0x31` host visibility arm. Hide clears the
@@ -9788,6 +9855,7 @@ impl ScreenGame {
         }
         self.paint_start_payment_answer_band(frame);
         self.paint_native_event_surface(frame);
+        self.paint_coupon_form_surface(frame);
         self.paint_dialog_frame_states(frame);
         // The cursor stays on a toggle after the click, so the hover
         // repaint above would cover its selected face. Selection is the
@@ -9846,6 +9914,49 @@ impl ScreenGame {
         let band =
             scale_rect_to_frame(&super::paint::BILLING_FAILURE_NOTICE_RECT, frame.w, frame.h);
         fill_rect(frame, &band, 0x0067_BAF0);
+    }
+
+    /// Ink the native coupon form and its local report-back notice.
+    /// Field names, values and formats come from the archived body
+    /// (hash `a283a1d9…aaa67`); no page body is drawn.
+    fn paint_coupon_form_surface(&self, frame: &mut Frame<'_>) {
+        let Some(form) = &self.coupon_form else {
+            return;
+        };
+        let band = scale_rect_to_frame(&COUPON_FORM_RECT, frame.w, frame.h);
+        fill_rect(frame, &band, NATIVE_EVENT_NOTICE_TONE);
+        let id_line = format!("{}={}", COUPON_ID_FIELD, form.kind().code());
+        let number_line = format!("{}={}", COUPON_NUMBER_FIELD, form.number());
+        for (row, line) in [
+            "native coupon entry (dead host stand-in)",
+            id_line.as_str(),
+            number_line.as_str(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = 8 + i32::try_from(row).unwrap_or(0) * NATIVE_EVENT_NOTICE_LINE_PITCH;
+            draw_text(frame, band.x + 8, band.y + offset, line, 0x0000_0000);
+        }
+        let Some(report) = &self.coupon_report_back else {
+            return;
+        };
+        let notice_offset = 8 + 3 * NATIVE_EVENT_NOTICE_LINE_PITCH;
+        draw_text(
+            frame,
+            band.x + 8,
+            band.y + notice_offset,
+            report.notice(),
+            0x0000_0000,
+        );
+        let field_line = report.field_line();
+        draw_text(
+            frame,
+            band.x + 8,
+            band.y + notice_offset + NATIVE_EVENT_NOTICE_LINE_PITCH,
+            &field_line,
+            0x0000_0000,
+        );
     }
 
     /// Ink the labeled native stand-in over the pinned notice band.
