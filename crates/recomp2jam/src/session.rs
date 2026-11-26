@@ -3880,11 +3880,19 @@ impl OnlineSession {
         Some(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    /// Report each promoted chart the shell finished this frame: `4038`
-    /// progress (100 %), then `5012` completion (§4's promote leg).
+    /// Report each promoted chart the shell finished this frame: `5012`
+    /// completion, with `4038` progress (100 %) first in Waiting where a
+    /// member seat owns the progress bar (§4's promote leg).
+    ///
+    /// The exe's `5012` send site stays OPEN (§5: no `SetID` store of
+    /// `0x1394` was found), so this is OUR completion contract, not a
+    /// static pin. A shop purchase queues the song from the Room side,
+    /// so the pump follows the request, not one screen: a queued fetch
+    /// must still land and announce after the player leaves the shop.
     /// A fetch still in flight sends nothing and retries next paint.
     fn poll_music_downloads(&mut self) {
-        if self.game.screen() != Screen::Waiting {
+        let waiting = self.game.screen() == Screen::Waiting;
+        if !waiting && !self.game.music_download().is_running() {
             return;
         }
         let member_id = self
@@ -3893,15 +3901,17 @@ impl OnlineSession {
             .map(|room| room.member_id)
             .unwrap_or(0);
         for completion in self.game.pump_music_downloads() {
-            let progress = SetDownloadProgress {
-                progress: 100,
-                member_id,
-            };
-            if let Err(source) = self
-                .gateway
-                .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
-            {
-                tracing::warn!(%source, "download progress send failed");
+            if waiting {
+                let progress = SetDownloadProgress {
+                    progress: 100,
+                    member_id,
+                };
+                if let Err(source) = self
+                    .gateway
+                    .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
+                {
+                    tracing::warn!(%source, "download progress send failed");
+                }
             }
             let announce = SyncMusicDownload {
                 music_id: completion.song_id,

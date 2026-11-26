@@ -1564,3 +1564,132 @@ fn tier_2_native_cash_charge_selector_is_explicit_and_labels_the_exe_gate_open()
         "the exe gate must stay OPEN: {provenance}"
     );
 }
+
+// --- Purchased song completion (#520) ----------------------------------
+//
+// The exe send site for 5012 stays OPEN (`docs/music-availability.md` §5:
+// no `SetID` ctor store of `0x1394` was found). These guards pin OUR
+// local completion contract only: a confirmed cart download is promoted,
+// announces its song id once, and comes back selectable/startable.
+
+/// A throwaway local mirror: the source chart is present, the install's
+/// `Music` folder starts without it. No archive or network is touched.
+fn purchased_chart_dirs(
+    name: &str,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let scratch = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("scratch");
+    let root = scratch.join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let source = root.join("source");
+    let music = root.join("Music");
+    std::fs::create_dir_all(&source).expect("synthetic source folder");
+    std::fs::create_dir_all(&music).expect("synthetic Music folder");
+    std::fs::write(source.join("o2ma757.ojn"), b"synthetic chart").expect("synthetic chart file");
+    (root, music, source)
+}
+
+/// A Room-side Music Shop board: the live cart buy is reached from the
+/// Room tab, not from Waiting, so the completion pump must run there.
+fn room_purchase_game() -> ScreenGame {
+    let donor = native_purchase_game();
+    let placements = donor.staged_side_placements().to_vec();
+    let mut game = ScreenGame::new();
+    game.menu_key(MenuKey::Back, true);
+    game.click_planet(136, 88);
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.screen(), Screen::Room);
+    game.set_song_catalog(&o2jam_file::parse_ojn_list(&native_purchase_catalog_blob()).unwrap());
+    game.stage_music_shop_prices(&[o2jam_file::OjnMidParamEntry {
+        song_id: 757,
+        param_a: 0,
+        param_b: 40,
+        anchor: o2jam_file::OJN_MID_TABLE3_ANCHOR,
+    }]);
+    game.set_myroom_character(CharacterInfo {
+        gem: 500,
+        o2_cash: 500,
+        music_cash: 500,
+        item_cash: 500,
+        ..CharacterInfo::default()
+    });
+    game.load_side_scene(placements, std::collections::HashMap::new());
+    assert!(game.visit_side(SideScreen::MusicShop));
+    game.set_installed_music(Some(o2jam_file::installed_music(["o2ma001.ojn"])));
+    game
+}
+
+#[test]
+fn tier_2_a_purchased_song_promotes_once_and_sends_one_5012_with_its_id() {
+    // Live caller chain (scripted-gateway arm of `main.rs::run_play`):
+    //   OnlineSession::paint -> poll_wire_at -> flush_music_buy ->
+    //   C2S 5010 -> S2C 5011 -> stage_music_purchase_completion ->
+    //   ScreenGame::begin_music_download -> MusicDownload::enqueue ->
+    //   OnlineSession::poll_music_downloads ->
+    //   ScreenGame::pump_music_downloads -> MusicDownload::pump ->
+    //   ScreenGame::set_installed_music -> C2S 5012.
+    // The exe send site is OPEN; this pins OUR explicit completion only.
+    let (root, music, source) = purchased_chart_dirs("recomp2jam-purchase-complete");
+    let (port, wire, server) = native_purchase_gateway(false);
+    let mut game = room_purchase_game();
+    game.set_music_download_dirs(music.clone(), Some(source));
+    let mut session = payment_session(game, port);
+    session.ingest_snapshot(&InputSnapshot::click_at(350, 160));
+    session.ingest_snapshot(&InputSnapshot::click_at(424, 529));
+    for _ in 0..12 {
+        paint_payment_frame(&mut session);
+        thread::sleep(Duration::from_millis(2));
+        if session
+            .game
+            .select_songs()
+            .iter()
+            .any(|song| song.song_id == 757 && song.installed)
+        {
+            break;
+        }
+    }
+    let installed = session
+        .game
+        .select_songs()
+        .iter()
+        .find(|song| song.song_id == 757)
+        .map(|song| song.installed);
+    let startable = session.game.start_gate_verdict() == StartGateVerdict::Startable;
+    let waiting_notice = session.game.waiting_notice();
+    let queued = session.game.music_download().requests().len();
+    drop(session);
+    server.join().unwrap();
+    let sent: Vec<(u16, Vec<u8>)> = wire.try_iter().collect();
+    let ids: Vec<u16> = sent.iter().map(|(id, _)| *id).collect();
+    let completions: Vec<&Vec<u8>> = sent
+        .iter()
+        .filter_map(|(id, body)| (*id == 5012).then_some(body))
+        .collect();
+    let promoted = music.join("o2ma757.ojn").exists();
+    let staged = music.join("Temp").join("o2ma757.ojn").exists();
+
+    assert_eq!(
+        ids,
+        vec![5015, 5010, 5012],
+        "one completion announce: {ids:?}"
+    );
+    assert_eq!(
+        completions,
+        vec![&vec![0xF5, 0x02]],
+        "the 5012 body is the bought u16 song id"
+    );
+    assert!(
+        promoted && !staged,
+        "the chart must land in Music, not Temp"
+    );
+    assert_eq!(installed, Some(true), "the bought song must read installed");
+    assert!(startable, "a completed download must not block START");
+    assert_eq!(
+        waiting_notice, None,
+        "the wait-for-download caption must clear on completion"
+    );
+    assert_eq!(queued, 0, "the completed request must leave the queue");
+    let _ = std::fs::remove_dir_all(&root);
+}

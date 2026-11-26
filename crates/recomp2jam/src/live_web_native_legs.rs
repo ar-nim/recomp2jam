@@ -536,4 +536,128 @@ mod live_web_native_leg_tests {
         assert_eq!(cached.as_deref(), Some(url));
         assert_ne!(rest, inked, "the notify URL must ink the staged notice row");
     }
+
+    /// A throwaway local mirror under `~/scratch`: no FTP, no game-data
+    /// write. The install folder starts without the bought chart.
+    fn downloaded_chart_dirs(
+        name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let scratch = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("scratch");
+        let root = scratch.join(name);
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let music = root.join("Music");
+        std::fs::create_dir_all(&source).expect("synthetic source folder");
+        std::fs::create_dir_all(&music).expect("synthetic Music folder");
+        std::fs::write(source.join("o2ma757.ojn"), b"synthetic chart")
+            .expect("synthetic chart file");
+        (root, music, source)
+    }
+
+    /// #520 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport
+    ///   -> assemble_online_session -> boot_live_leg_with_art ->
+    ///   GameLoop::ingest_snapshot (splash, room tab, Music Shop tab,
+    ///   row, BUYITEM) -> OnlineSession::flush_music_buy -> C2S 5010 ->
+    ///   S2C 5011 -> stage_music_purchase_completion ->
+    ///   ScreenGame::begin_music_download -> MusicDownload::enqueue ->
+    ///   OnlineSession::poll_music_downloads ->
+    ///   ScreenGame::pump_music_downloads -> MusicDownload::pump ->
+    ///   ScreenGame::set_installed_music -> C2S 5012.
+    /// The exe send site stays OPEN (§5); this pins OUR local path.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn tier_3_purchased_song_completion_sends_one_5012_and_reinks_the_row() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (root, music, source) = downloaded_chart_dirs("recomp2jam-tier3-purchase-complete");
+        let gateway = spawn_purchase_gateway(joined_room(0, true), false);
+        let mut session = boot_to_cart_buy(&gateway);
+        session
+            .game_mut()
+            .set_installed_music(Some(o2jam_file::installed_music(["o2ma001.ojn"])));
+
+        // The 5011 alone only queues: no source means no transfer.
+        let mut queued_before = Vec::new();
+        for _ in 0..12 {
+            paint(&mut session);
+            queued_before = session
+                .game_mut()
+                .music_download()
+                .requests()
+                .iter()
+                .map(|request| request.song_id)
+                .collect();
+            if !queued_before.is_empty() {
+                break;
+            }
+        }
+        let row_rect = session
+            .game_mut()
+            .staged_side_control_rect(MSHOP_EX_FIRST_CODE)
+            .expect("the staged row rect owns the installed marker");
+        let before = staged_rect_pixels(&mut session, row_rect);
+        session
+            .game_mut()
+            .set_music_download_dirs(music.clone(), Some(source));
+        for _ in 0..12 {
+            paint(&mut session);
+            if session
+                .game_mut()
+                .select_songs()
+                .iter()
+                .any(|song| song.song_id == 757 && song.installed)
+            {
+                break;
+            }
+        }
+        let after = staged_rect_pixels(&mut session, row_rect);
+        let body_5012 = wait_for_opcode(&gateway.reports, 5012);
+        let mut sent = observed(&gateway.reports);
+        sent.push((5012, body_5012));
+        let ids: Vec<u16> = sent.iter().map(|(id, _)| *id).collect();
+        let bodies: Vec<&Vec<u8>> = sent
+            .iter()
+            .filter_map(|(id, body)| (*id == 5012).then_some(body))
+            .collect();
+        let installed = session
+            .game_mut()
+            .select_songs()
+            .iter()
+            .find(|song| song.song_id == 757)
+            .is_some_and(|song| song.installed);
+        let startable = session.game_mut().start_gate_verdict()
+            == o2jam_shell::screens::game::StartGateVerdict::Startable;
+        let queued_after: Vec<u16> = session
+            .game_mut()
+            .music_download()
+            .requests()
+            .iter()
+            .map(|request| request.song_id)
+            .collect();
+        finish(session, gateway.server);
+        let promoted = music.join("o2ma757.ojn").exists();
+        let staged = music.join("Temp").join("o2ma757.ojn").exists();
+
+        assert_eq!(queued_before, vec![757], "the 5011 must queue one song");
+        assert_eq!(queued_after, Vec::<u16>::new(), "the transfer must finish");
+        assert_eq!(
+            ids.iter().filter(|id| **id == 5012).count(),
+            1,
+            "one announce: {ids:?}"
+        );
+        assert_eq!(bodies, vec![&vec![0xF5, 0x02]], "5012 carries the song id");
+        assert!(
+            promoted && !staged,
+            "the chart must land in Music, not Temp"
+        );
+        assert!(installed && startable, "the bought song must be selectable");
+        assert_ne!(before, after, "the installed marker must re-ink the row");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
