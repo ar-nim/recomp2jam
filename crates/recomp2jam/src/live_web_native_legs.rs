@@ -9,14 +9,15 @@ mod live_web_native_leg_tests {
     use crate::session::OnlineSession;
 
     use o2jam_net::frame::encode_frame;
+    use o2jam_net::rooms::{MusicPlayRankingAnswer, RankDelta, RankEntry, SendMainRoomMessage};
     use o2jam_net::testing::{fake_gateway, read_frame};
     use o2jam_net::{JoinRoomResponse, JoinedRoom, Request, WireMessage};
     use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::screens::messenger::{WebSheet, WebSheetHost, EXE_SCENE_ROOM};
     use o2jam_shell::screens::side::{
-        music_shop_action_at, MusicShopAction, MusicShopFace, SideScreen, MSHOP_CART_BUY_CODE,
-        MSHOP_EX_FIRST_CODE, MSHOP_GENRE_FILTER_FIRST_CODE, MSHOP_TAB_DELETE_CODE,
-        ROOM_MUSICSHOP_BUTTON_CODE,
+        music_shop_action_at, music_shop_top100_rects, MusicShopAction, MusicShopFace, SideScreen,
+        MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GENRE_FILTER_FIRST_CODE,
+        MSHOP_TAB_DELETE_CODE, ROOM_MUSICSHOP_BUTTON_CODE,
     };
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen};
     use std::io::Write;
@@ -659,5 +660,165 @@ mod live_web_native_leg_tests {
         assert!(installed && startable, "the bought song must be selectable");
         assert_ne!(before, after, "the installed marker must re-ink the row");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// One 2028 row for the scripted board leg.
+    fn ranked_row(rank: i32, nickname: &str) -> RankEntry {
+        RankEntry {
+            rank,
+            nickname: nickname.to_owned(),
+            battles: 15,
+            wins: 9,
+            win_rate: 60,
+            delta: RankDelta::Down,
+            rank_delta: 2,
+        }
+    }
+
+    /// Boot gateway that sends the unsolicited 2028 board after the
+    /// leg's deliberate Room chat frame. The chat press gives the leg
+    /// a deterministic point to read pre-answer pixels first.
+    fn spawn_top100_gateway(joined: o2jam_net::JoinedRoom) -> LiveLegGateway {
+        let (reported, reports) = mpsc::channel();
+        let (join_written_tx, join_answer_written) = mpsc::channel();
+        let (port, server) = fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &o2jam_net::AuthResponse {
+                        result_code: 0,
+                        tail: Vec::new(),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(
+                    &o2jam_net::ChannelList {
+                        channels: vec![channel_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &o2jam_net::ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(
+                    &o2jam_net::RoomList {
+                        rooms: vec![room_row()],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+
+            let mut board_sent = false;
+            while let Some(frame) = read_frame_until_eof(&mut stream) {
+                reported.send(frame.clone()).unwrap();
+                if frame.id == Request::JoinWaiting.id() {
+                    stream
+                        .write_all(
+                            &JoinRoomResponse {
+                                result_code: 0,
+                                room: Some(joined.clone()),
+                            }
+                            .encode(),
+                        )
+                        .unwrap();
+                    join_written_tx.send(()).unwrap();
+                }
+                if frame.id == SendMainRoomMessage::COMMAND && !board_sent {
+                    // No 2027 request exists: the board is an
+                    // unsolicited answer, as in the scripted tier-2 leg.
+                    let answer = MusicPlayRankingAnswer {
+                        self_entry: ranked_row(30, "Viewer"),
+                        entries: vec![ranked_row(1, "Champ"), ranked_row(2, "Rival")],
+                    };
+                    stream.write_all(&answer.encode()).unwrap();
+                    board_sent = true;
+                }
+            }
+        });
+        LiveLegGateway {
+            port,
+            reports,
+            join_answer_written,
+            server,
+        }
+    }
+
+    /// #1132 Tier 3. Live caller chain:
+    ///   main.rs::run_play -> connect::connect_and_login_with_transport ->
+    ///   assemble_online_session -> boot_live_leg_with_art ->
+    ///   enter_room_by_clicks -> staged Room Music Shop tab ->
+    ///   ScreenGame::visit_side -> Room chat Confirm -> 2012 ->
+    ///   OnlineSession::poll_wire_at -> poll_lobby_chat ->
+    ///   drain_lobby_chat -> apply_lobby_frame -> apply_rank_answer ->
+    ///   ScreenGame::stage_lanking_board ->
+    ///   paint_music_shop_top100_board at the staged TOP100 rects.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn tier_3_scripted_2028_from_boot_inks_the_native_top100_rows() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_top100_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        let (x, y) = staged_code_centre(&mut session, Screen::Room, ROOM_MUSICSHOP_BUTTON_CODE);
+        session.ingest_snapshot(&InputSnapshot::click_at(x, y));
+        paint(&mut session);
+        assert_eq!(session.game_mut().side(), Some(SideScreen::MusicShop));
+
+        let placements = session.game_mut().staged_side_placements().to_vec();
+        let rects = music_shop_top100_rects(&placements);
+        assert_eq!(rects.len(), 8, "the eight TOP100 rects must be staged");
+        let before = paint_frame(&mut session);
+        assert_eq!(session.game_mut().lanking_self_entry(), None);
+
+        session
+            .game_mut()
+            .set_lobby_input(LobbyChat::Room, "rank please");
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..40 {
+            paint(&mut session);
+            if session.game_mut().lanking_self_entry().is_some() {
+                break;
+            }
+        }
+        let after = paint_frame(&mut session);
+        let self_entry = session.game_mut().lanking_self_entry();
+        let ranks = session.game_mut().lanking_visible_ranks();
+        let nicknames: Vec<String> = ranks.iter().map(|row| row.nickname.clone()).collect();
+        let sent: Vec<u16> = observed(&gateway.reports)
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| *id == SendMainRoomMessage::COMMAND)
+            .collect();
+        finish(session, gateway.server);
+
+        assert_eq!(sent, vec![SendMainRoomMessage::COMMAND]);
+        assert_eq!(
+            self_entry.as_ref().map(|row| row.nickname.as_str()),
+            Some("Viewer")
+        );
+        assert_eq!(nicknames, ["Champ", "Rival"]);
+        let first = rects[0];
+        assert_ne!(
+            staged_rect_pixels_from(&before, first),
+            staged_rect_pixels_from(&after, first),
+            "the decoded 2028 self line must ink the staged TOP100 rect"
+        );
     }
 }
