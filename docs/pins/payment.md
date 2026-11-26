@@ -172,3 +172,20 @@ surviving form contract for a native replacement.
 Consequence for #1146: a native coupon form can implement these fields,
 uppercasing, validation and a body-ignoring submit/report-back seam. It
 must not claim that the dead host accepted a coupon.
+
+## `gameUser_list.asp` suffix consumers (2026-11-25 senior REA pass)
+
+The only direct string is the bare suffix `gameUser_list.asp` at
+`0x64df20`. Its two resolved consumers, `0x57f690` and `0x580d70`,
+each call the substring helper `0x5f7310` on the supplied URL and set
+object word `+0x1020 = 1` on a match. Neither function constructs a full
+URL or chooses an HTTP method. The music-shop query builder `0x4d3170`
+serializes `mids`, `nid`, `hid`, and `wid` as comma-separated decimal
+lists in that order, but it does not select the target page or method.
+
+Evidence: `ev_712d4befbed7ad73160001485be18c117f2516198c2b2a559e786f01c057849f`
+(string), `ev_fd660489aaaab606a846989f8e7cb207792e25b7f2c12dd1481e215e719553c9`
+(xrefs), `ev_6f5bf79de1a740ea06ca764fa264173d5e5d8766673a1ca00f28974c4c081eed`
+and `ev_a2108327e18957d11177b948b7b0bfc49e6b2e061078e1db74294ac3a7ac22e6`
+(consumers), `ev_e9b08097360cb2aad493a6e5426189e29c9a1f4c0aa30643a947acb572dfefe9`
+(query builder).
