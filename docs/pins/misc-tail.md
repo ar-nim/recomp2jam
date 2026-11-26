@@ -529,3 +529,27 @@ The spec-shaped copy of the player-visible subset is in
 `/home/arnim/scratch/lanes-2026-11-25/spec-enrich-pins-misc-tail.md`;
 the query log and OPENs are in
 `/home/arnim/scratch/lanes-2026-11-25/findings-pins-misc-tail.md`.
+
+## Loading-gate font slots have no reader (2026-11-26 senior REA pass)
+
+Constructor `0x4e47a0` (VA; file `0xe47a0`) creates three fonts and
+stores them on the Loading object: Trebuchet MS 27×65 w400 at byte
+offset `0x524`, Arial 7×14 w400 at `0x528`, and the face at `0x64ae78`'s
+neighbour `0x64407c` (Gulimche 6×12) at `0x52c`. The destructor
+`0x4e50b0` releases them.
+
+A whole-`.text` masked byte search for every `mov reg,[base+0x524]`,
+`+0x528`, and `+0x52c` load form (opcode `8b`/`8a`, all base and index
+registers) found no reader in the Loading class range. Every hit is an
+unrelated class: `0x45fb60`, `0x466b40`, `0x461500`, `0x4c65c0`,
+`0x468650`, `0x4aab60`. The range `0x4dc000`–`0x4f0000` has zero hits.
+
+Consequence: no runtime text is drawn through the three gate fonts. The
+Loading credits and caption are baked JPEG ink only. `docs/gdi-text.md`
+OPEN 5 is closed statically; no font-consumer leg is owed.
+
+Evidence: `ev_8bfe450075a5a6fa5aa48610383c1829e98bbb495d4a7e89a51a3c6cd97a37e8`
+(constructor pseudocode), `ev_2b565920968953407045d808c6bb8c9c3ddc93ef527015c5bce200bf48be8a6d`
+(constructor assembly), `ev_55249cee006ad35f6677f3e538145019cc8de945112603db9dfbd9ae56438ff7`
+(destructor `0x4e50b0` and neighbours), `ev_491d9aa65e12fce028c33105abfa0fd2e57aec077fa792948f738d35c6a61509`
+(vtable slot `0x64adec`).
