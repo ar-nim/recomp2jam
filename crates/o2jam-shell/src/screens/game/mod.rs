@@ -1854,19 +1854,14 @@ impl ScreenGame {
         game
     }
 
-    /// Publish whether the real one-OK/Information host owns input.
-    /// The exe's show helpers write `0x304` into the control mode word
-    /// (`0x433c90`) and its hide helpers write zero (`0x433d60`); bit 2
-    /// gates the double-click notice arm (`0x548b10`). `Shell` stores
-    /// the game as `dyn GameLoop`, so the window reads the published
-    /// word through the in-crate bridge.
+    /// Publish whether the real dialog host owns input right now.
+    /// This is the same query the painter uses; every show, hide and
+    /// wire-dismiss path calls it, so the shared cell cannot lag the
+    /// visible sheet or stay open after dismissal. The exe's show
+    /// helpers write `0x304` (`0x433c90`) and hide helpers zero
+    /// (`0x433d60`); bit 2 gates `0x548b10`.
     fn publish_dialog_host_mode(&self) {
-        let word = if self.dialog_owns_input() {
-            crate::window::DIALOG_HOST_MODE_WORD
-        } else {
-            0
-        };
-        crate::window::publish_ui_dialog_host_mode_word(word);
+        crate::window::set_dialog_host_input_owned(self.dialog_owns_input());
     }
 
     /// Load the result-screen avatar figure.
@@ -2352,6 +2347,7 @@ impl ScreenGame {
             }
             self.apply_scene_bgm();
         }
+        self.publish_dialog_host_mode();
         entered
     }
 
@@ -2596,7 +2592,9 @@ impl ScreenGame {
     pub fn pump_room_user_list_fuse(&mut self) -> bool {
         let in_room = self.flow.current() == Screen::Room;
         let covered = self.open_dialog_layers();
-        self.room_no_response.pump(in_room, &covered)
+        let pumped = self.room_no_response.pump(in_room, &covered);
+        self.publish_dialog_host_mode();
+        pumped
     }
 
     #[must_use]
@@ -4208,12 +4206,14 @@ impl ScreenGame {
     /// Stage one row-press refusal (the shell half of `0x493a50`).
     pub fn stage_room_join_refusal(&mut self, refusal: RoomJoinRefusal) -> &mut Self {
         self.chat.stage_room_join_refusal(refusal);
+        self.publish_dialog_host_mode();
         self
     }
 
     /// Forget a staged refusal when its one-OK sheet is dismissed.
     pub fn clear_room_join_refusal(&mut self) -> &mut Self {
         self.chat.clear_room_join_refusal();
+        self.publish_dialog_host_mode();
         self
     }
 
@@ -4226,12 +4226,14 @@ impl ScreenGame {
     /// Post the one-OK sheet for a refused 3003 join (`0x55cad0`).
     pub fn stage_join_answer_refusal(&mut self, refusal: JoinAnswerRefusal) -> &mut Self {
         self.chat.stage_join_answer_refusal(refusal);
+        self.publish_dialog_host_mode();
         self
     }
 
     /// Forget the 3003 caption when its one-OK sheet is dismissed.
     pub fn clear_join_answer_refusal(&mut self) -> &mut Self {
         self.chat.clear_join_answer_refusal();
+        self.publish_dialog_host_mode();
         self
     }
 
@@ -7312,6 +7314,13 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        self.click_dispatch_inner(x, y);
+        self.publish_dialog_host_mode();
+    }
+
+    /// One click through every dialog/scene owner. The wrapper above
+    /// publishes the host state after any early dismissal.
+    fn click_dispatch_inner(&mut self, x: i32, y: i32) {
         if self.myroom_confirm.is_some() {
             let (ok_hit, cancel_hit) = self.myroom_confirm_button_hits(x, y);
             if ok_hit {
@@ -8411,6 +8420,7 @@ impl ScreenGame {
         self.side = None;
         self.side_origin = None;
         self.apply_bgm_cue(origin.bgm_cue());
+        self.publish_dialog_host_mode();
         true
     }
 
@@ -9132,6 +9142,7 @@ impl ScreenGame {
     pub fn commit_shop_charge_confirm(&mut self) {
         self.shop_charge_confirm_open = false;
         self.shop_charge_confirm_outcome = Some(ShopChargeConfirmOutcome::Committed);
+        self.publish_dialog_host_mode();
     }
 
     /// CANCEL: close the sheet without committing. The cart and the
@@ -9139,6 +9150,7 @@ impl ScreenGame {
     pub fn cancel_shop_charge_confirm(&mut self) {
         self.shop_charge_confirm_open = false;
         self.shop_charge_confirm_outcome = Some(ShopChargeConfirmOutcome::Cancelled);
+        self.publish_dialog_host_mode();
     }
 
     /// The staged checkout has no exe buy opcode on the game socket.
@@ -11595,6 +11607,7 @@ impl GameLoop for ScreenGame {
 
     fn focus_changed(&mut self, active: bool) {
         self.apply_focus_change(active);
+        self.publish_dialog_host_mode();
     }
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
@@ -11684,13 +11697,16 @@ impl GameLoop for ScreenGame {
             match *edge {
                 InputEdge::PointerDown { x, y } => self.apply_pointer_down(x, y),
                 InputEdge::PointerUp { x, y } => self.apply_pointer_up(x, y),
-                InputEdge::Lane { lane, down } => self.lane_key(lane, down),
-                InputEdge::Menu { key, down } => self.menu_key(key, down),
+                InputEdge::Lane { lane, down } => {
+                    self.lane_key(lane, down);
+                    self.publish_dialog_host_mode();
+                }
+                InputEdge::Menu { key, down } => {
+                    self.menu_key(key, down);
+                    self.publish_dialog_host_mode();
+                }
             }
         }
-        // One live refresh per freeze covers every host mutation the
-        // window could not publish directly (planet/room modals).
-        self.publish_dialog_host_mode();
     }
 
     fn quit_requested(&self) -> bool {
@@ -12037,6 +12053,7 @@ mod game_tests {
         SelectMusicSong, SHOP_MYCART_BACK_CODE, SHOP_TOOLTIP_CODES, TUTORIAL_INSTRUCTION_SPRITE,
     };
     use crate::staging::{stage_state, StageContext, State};
+    use crate::window::dialog_host_input_owned;
     use crate::{GameLoop, MenuKey};
     use o2jam_file::ChartMask;
     use o2jam_net::play::MusicListEntry;
@@ -12059,6 +12076,29 @@ mod game_tests {
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {}: {error}", path.display()));
         Some(bytes)
+    }
+
+    #[test]
+    fn dialog_host_bridge_tracks_the_3003_refusal_and_its_ok_dismissal() {
+        // Live chain: 3003 answer -> `stage_join_answer_refusal` ->
+        // `publish_dialog_host_mode`; wire OK -> `clear_join_answer_refusal`
+        // -> `publish_dialog_host_mode`. No snapshot freeze is involved.
+        let mut game = ScreenGame::new();
+        assert!(!dialog_host_input_owned(), "boot has no dialog up");
+
+        game.stage_join_answer_refusal(JoinAnswerRefusal::RoomFull);
+        assert!(game.dialog_owns_input());
+        assert!(
+            dialog_host_input_owned(),
+            "the wire sheet publishes ownership immediately"
+        );
+
+        game.clear_join_answer_refusal();
+        assert!(!game.dialog_owns_input());
+        assert!(
+            !dialog_host_input_owned(),
+            "the wire OK clears ownership immediately"
+        );
     }
 
     #[test]

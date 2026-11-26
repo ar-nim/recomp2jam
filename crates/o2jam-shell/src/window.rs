@@ -633,12 +633,18 @@ pub const DOUBLE_CLICK_STATE_BIT: u16 = 1 << 2;
 
 /// Windows system default for `GetDoubleClickTime`. The exe hub
 /// `0x5a5190` applies the OS rule and has no timer of its own; there
-/// is no exe byte pin for either number. winit has no double-click
-/// event, so this client restates the OS default explicitly.
+/// is no exe byte pin for this number. OPEN, tracked by #1122. Next
+/// evidence step: read `GetDoubleClickTime` and the system rectangle
+/// at the hub under a live capture, or pin the default in the exe's
+/// import table. winit has no double-click event, so this client
+/// restates the OS default explicitly until that pin exists.
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(500);
 /// Windows system default double-click rectangle (`SM_CXDOUBLECLK` /
 /// `SM_CYDOUBLECLK`), in native pixels. No exe pin; the hub applies
-/// the OS rule rather than carrying its own numbers.
+/// the OS rule rather than carrying its own numbers. OPEN, tracked
+/// by #1122. Next evidence step: read the system rectangle at the
+/// hub under a live capture, or pin the default in the exe's import
+/// table.
 pub const DOUBLE_CLICK_RECT: i32 = 4;
 
 /// Mode word the exe's dialog-show helpers write (`0x433c90` writes
@@ -647,16 +653,24 @@ pub const DOUBLE_CLICK_RECT: i32 = 4;
 pub(crate) const DIALOG_HOST_MODE_WORD: u16 = 0x304;
 
 thread_local! {
-    /// Control-mode word published by the real dialog host on this
-    /// thread. `Shell` owns the game as `dyn GameLoop`, so the window
-    /// arm reads this in-process bridge instead of a guessed field.
-    static UI_DIALOG_HOST_MODE_WORD: Cell<u16> = const { Cell::new(0) };
+    /// Live dialog-host ownership published by `ScreenGame` on every
+    /// show, hide and wire-dismiss path. `Shell` owns the game as
+    /// `dyn GameLoop`, so the window arm reads this shared cell rather
+    /// than a cached word refreshed on a frame schedule.
+    static DIALOG_HOST_INPUT_OWNED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Publish the real dialog host's control-mode word for the window
-/// arm. Called only by `ScreenGame` host mutations.
-pub(crate) fn publish_ui_dialog_host_mode_word(word: u16) {
-    UI_DIALOG_HOST_MODE_WORD.set(word);
+/// Publish the real dialog host's ownership for the window arm.
+/// `ScreenGame` calls this on every dialog show, hide and dismissal;
+/// painters and the double-click arm read the same owned state.
+pub(crate) fn set_dialog_host_input_owned(owned: bool) {
+    DIALOG_HOST_INPUT_OWNED.set(owned);
+}
+
+/// Read the live dialog-host ownership at the moment of the press.
+#[cfg(test)]
+pub(crate) fn dialog_host_input_owned() -> bool {
+    DIALOG_HOST_INPUT_OWNED.get()
 }
 
 /// One left press the double-click arm can pair with a later press.
@@ -921,6 +935,10 @@ impl WindowHandler {
             event_loop.exit();
         } else {
             self.surface_size = Some((width.get(), height.get()));
+            // Our choice: a resized window is a new hit-test surface,
+            // so a press from the old geometry cannot pair. No exe
+            // pin; see `resize_clears_the_pending_double_click_press`.
+            self.last_left_press = None;
         }
     }
 
@@ -1080,6 +1098,7 @@ impl WindowHandler {
     /// winit window but must still map window pixels to native pixels.
     pub fn set_window_surface_size(&mut self, width: u32, height: u32) {
         self.surface_size = Some((width, height));
+        self.last_left_press = None;
     }
 
     /// Drive one full left click through the same motion and
@@ -1136,11 +1155,15 @@ impl WindowHandler {
         self.last_left_press = Some(press);
     }
 
-    /// Mode word published by the real dialog host. The exe's show
-    /// helpers set bit 2 and its hide helpers clear the word; the
-    /// in-process bridge carries that state from `ScreenGame`.
+    /// Mode word from the real dialog host's live ownership. The exe's
+    /// show helpers set bit 2 and its hide helpers clear the word; the
+    /// shared cell carries that same state from `ScreenGame`.
     fn control_mode_word(&self) -> u16 {
-        UI_DIALOG_HOST_MODE_WORD.get()
+        if DIALOG_HOST_INPUT_OWNED.get() {
+            DIALOG_HOST_MODE_WORD
+        } else {
+            0
+        }
     }
 
     /// Freeze the frame's input snapshot and deliver it to the game:
@@ -2804,6 +2827,24 @@ mod tests {
         handler.route_window_left_press(-20.0, -20.0);
 
         assert!(handler.queued_ui_notices().is_empty());
+    }
+
+    #[test]
+    fn resize_clears_the_pending_double_click_press() {
+        // Our choice, not an exe pin: a resized hit-test surface
+        // starts a fresh pair, so a press from the old geometry cannot
+        // pair with the next one. Next evidence step: capture two
+        // presses spanning a Resized event in the 7.55 window hub.
+        let mut handler = dialog_host_handler();
+
+        handler.route_window_left_press(21.0, 42.0);
+        handler.set_window_surface_size(800, 600);
+        handler.route_window_left_press(21.0, 42.0);
+
+        assert!(
+            handler.queued_ui_notices().is_empty(),
+            "the resize dropped the first press"
+        );
     }
 
     #[test]
