@@ -70,7 +70,7 @@ use super::side::{
     SHOP_NOTICE_TEXT_CODE, SHOP_O2CASH_SHORTFALL_CP949, SHOP_PLAYER_LEVEL_CAPTION_CODE,
     SHOP_SKILLCOUNT_CELLS, SHOP_SKILLCOUNT_FIRST_CODE,
 };
-use crate::options::OptionsSettings;
+use crate::options::{OptionsSettings, WindowCursorStage};
 use crate::staging::ShopPriceFonts;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -104,6 +104,34 @@ pub struct SceneArt {
     pub placements: Vec<ScenePlacement>,
     /// Decoded sprite bodies by archive entry name.
     pub figures: HashMap<String, AvatarFigure>,
+}
+
+/// Archive name of the exe's window pointer sprite (`0x432090`).
+pub const WINDOW_CURSOR_SPRITE: &str = "Window_Cursor.ojs";
+
+/// What the pointer arm has to show: the staged exe sprite or the
+/// labeled amber stand-in. The stand-in is not exe art and stays the
+/// fallback until first use stages the sprite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowCursorArm<'a> {
+    /// First use staged the decoded sprite.
+    Sprite(&'a AvatarFigure),
+    /// No staged sprite yet: the labeled amber stand-in.
+    AmberStandIn,
+}
+
+/// Resolve the pointer sprite from the first-use stage and the staged
+/// art. A missing or empty body keeps the stand-in instead of drawing
+/// an invented pointer.
+#[must_use]
+pub fn window_cursor_arm<'a>(stage: &WindowCursorStage, art: &'a SceneArt) -> WindowCursorArm<'a> {
+    if stage.surface().is_none() {
+        return WindowCursorArm::AmberStandIn;
+    }
+    art.figures
+        .get(WINDOW_CURSOR_SPRITE)
+        .filter(|figure| !figure.is_empty())
+        .map_or(WindowCursorArm::AmberStandIn, WindowCursorArm::Sprite)
 }
 
 /// Cash Charge view: the Item Shop board behind the modal plus the
@@ -10319,6 +10347,51 @@ mod paint_tests {
                 caption.code
             );
         }
+    }
+
+    #[test]
+    fn window_cursor_uses_the_staged_sprite_after_first_use() {
+        // Live chain (Tier 0 arm; Tier 3 twin in recomp2jam's
+        // `live_formats_legs.rs`): first pointer use ->
+        // `options::WindowCursorStage::stage_on_first_use` ->
+        // `paint::window_cursor_arm`. The amber stand-in stays until
+        // the sprite is staged; it is not exe pointer art.
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).expect("red pixel"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0,
+        });
+        let mut art = SceneArt::default();
+        art.figures
+            .insert(WINDOW_CURSOR_SPRITE.to_owned(), figure.clone());
+        let mut stage = WindowCursorStage::default();
+
+        assert_eq!(
+            window_cursor_arm(&stage, &art),
+            WindowCursorArm::AmberStandIn
+        );
+        let surface = crate::options::WindowCursorSurface::from_dimensions(1, 1).expect("1x1 fits");
+        assert_eq!(stage.stage_on_first_use(Some(surface)), Some(surface));
+        assert_eq!(
+            window_cursor_arm(&stage, &art),
+            WindowCursorArm::Sprite(&figure)
+        );
+    }
+
+    #[test]
+    fn window_cursor_without_a_decoded_sprite_keeps_the_stand_in() {
+        // seam: the headless client has no OS cursor; the arm's only
+        // observable choice is sprite versus labelled stand-in.
+        let mut stage = WindowCursorStage::default();
+        let surface = crate::options::WindowCursorSurface::from_dimensions(1, 1).expect("1x1 fits");
+        assert_eq!(stage.stage_on_first_use(Some(surface)), Some(surface));
+
+        assert_eq!(
+            window_cursor_arm(&stage, &SceneArt::default()),
+            WindowCursorArm::AmberStandIn
+        );
     }
 
     #[test]
