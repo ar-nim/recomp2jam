@@ -8779,6 +8779,105 @@ mod side_tests {
     }
 
     #[test]
+    fn bag_pager_over_twelve_rows_clamps_both_ends_and_keeps_page_digits() {
+        // Live caller chain: main.rs::run_play -> OnlineSession::ingest_snapshot
+        // -> ScreenGame::click_myroom_side -> apply_myroom_action(BagPage)
+        // -> MyRoomState::turn_bag_page; paint_side -> myroom_bag_page_digit.
+        // Static pin: the bag pager clamps both ends (docs/myroom.md gift
+        // section); the >10-item exe page-turn frame stays RIG OPEN (#425/E-P).
+        let table = myroom_twelve_item_table();
+        let inventory: Vec<i32> = (1..=12).collect();
+        let pages = myroom_bag_pages(&inventory, &table);
+        assert_eq!(pages, 2, "twelve owned rows fill two ten-cell pages");
+
+        let mut selection = MyRoomState::new();
+        selection.turn_bag_page(MyRoomStep::Next, pages);
+        assert_eq!(selection.bag_page(), 1);
+        selection.turn_bag_page(MyRoomStep::Next, pages);
+        assert_eq!(selection.bag_page(), 1, "RIGHT clamps at the last page");
+        let second_page = myroom_bag_rows(&table, &inventory, selection.bag_page());
+        assert_eq!(
+            second_page
+                .iter()
+                .map(|row| row.item_id)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 1, 1, pages),
+            Some(2),
+            "the ones digit of page 2 must ink on the pager"
+        );
+
+        selection.turn_bag_page(MyRoomStep::Previous, pages);
+        assert_eq!(selection.bag_page(), 0);
+        selection.turn_bag_page(MyRoomStep::Previous, pages);
+        assert_eq!(selection.bag_page(), 0, "LEFT clamps at the first page");
+        assert_eq!(
+            myroom_bag_page_digit(MYROOM_BAG_PAGE_FIRST_CODE + 1, 0, pages),
+            Some(1),
+            "the first page keeps the exe's leading one"
+        );
+    }
+
+    #[test]
+    fn slot_filter_narrows_the_bag_by_the_record_slot_byte() {
+        // seam: docs/myroom.md OPEN 1 pins no exe filter (the hair-slot
+        // frame 25c5997e… leaves the bag alone). This guard pins only
+        // our explicit ours-by-design arm; default slot presses keep
+        // recording a cursor without narrowing rows.
+        let slot_row = |item_id: u32, name: &str, slot: u8| AvatarItemRow {
+            item_id,
+            item_type: 0,
+            price: 100,
+            params: [0, 0, u32::from(slot) << 24, 0],
+            flags: (0, 0),
+            name: name.to_owned(),
+            description: String::new(),
+            sprites: Vec::new(),
+        };
+        let table = AvatarItemTable {
+            rows: vec![
+                slot_row(1, "Instrument", 0),
+                slot_row(2, "Hair", 1),
+                slot_row(3, "Boots", 0),
+            ],
+        };
+        let inventory = [1, 2, 3];
+        let all = myroom_bag_rows(&table, &inventory, 0);
+        assert_eq!(
+            all.iter().map(|row| row.item_id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+
+        let instrument = MyRoomBagFilter::from_slot(0).expect("first selector");
+        let narrowed = myroom_bag_rows_with_filter(&table, &inventory, 0, instrument);
+        assert_eq!(
+            narrowed.iter().map(|row| row.item_id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "only rows whose record byte names slot 0 survive"
+        );
+        let hair = MyRoomBagFilter::from_slot(1).expect("second selector");
+        let narrowed = myroom_bag_rows_with_filter(&table, &inventory, 0, hair);
+        assert_eq!(
+            narrowed.iter().map(|row| row.item_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(
+            myroom_bag_rows_with_filter(&table, &inventory, 0, MyRoomBagFilter::Unfiltered),
+            all,
+            "the unfiltered arm stays the server-order bag"
+        );
+        assert_eq!(
+            MyRoomBagFilter::from_slot(
+                u8::try_from(MYROOM_SLOT_BUTTONS).expect("eleven buttons fit")
+            ),
+            None,
+            "no selector past the eleven buttons"
+        );
+    }
+
+    #[test]
     fn myroom_gift_views_resolve_names_and_senders() {
         let table = side_item_table();
         let songs = vec![staged_song(757)];

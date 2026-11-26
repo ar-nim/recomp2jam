@@ -840,7 +840,50 @@ pub fn myroom_bag_rows<'a>(
     inventory: &[i32],
     page: usize,
 ) -> Vec<ShopItemView<'a>> {
-    let owned = myroom_owned_rows(table, inventory);
+    myroom_bag_rows_with_filter(table, inventory, page, MyRoomBagFilter::Unfiltered)
+}
+
+/// Optional bag narrowing requested by one slot selector. The exe's
+/// hair-slot frame (`25c5997e…`) leaves the bag alone, and `docs/myroom.md`
+/// OPEN 1 pins no filter for the other ten selectors. This arm is ours
+/// by design: callers must ask for it explicitly, so the default press
+/// keeps the pinned cursor-only behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MyRoomBagFilter {
+    /// Every owned row in server order.
+    Unfiltered,
+    /// Rows whose item record byte names this selector ordinal.
+    BySlot(u8),
+}
+
+impl MyRoomBagFilter {
+    /// Build one selector filter, rejecting ordinals past the button run.
+    #[must_use]
+    pub fn from_slot(slot: u8) -> Option<Self> {
+        (usize::from(slot) < MYROOM_SLOT_BUTTONS).then_some(Self::BySlot(slot))
+    }
+}
+
+/// Visible bag rows when a caller asks for one slot filter. The
+/// unfiltered arm is exactly [`myroom_bag_rows`]; the slot arm pairs
+/// the selector ordinal with the exe-pinned record byte `+0x18`
+/// (`FUN_004a3730`, file `0xa3730`, `docs/myroom.md` #794). No exe
+/// filter is claimed: the join and the arm are ours by design.
+#[must_use]
+pub fn myroom_bag_rows_with_filter<'a>(
+    table: &'a AvatarItemTable,
+    inventory: &[i32],
+    page: usize,
+    filter: MyRoomBagFilter,
+) -> Vec<ShopItemView<'a>> {
+    let mut owned = myroom_owned_rows(table, inventory);
+    if let MyRoomBagFilter::BySlot(slot) = filter {
+        let wanted = usize::from(slot);
+        owned.retain(|view| {
+            avatar_item_by_id(table, view.item_id)
+                .is_some_and(|row| usize::from(myroom_record_slot(row)) == wanted)
+        });
+    }
     let start = page.saturating_mul(MYROOM_BAG_CELLS);
     owned
         .into_iter()
