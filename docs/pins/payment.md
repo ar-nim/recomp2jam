@@ -123,3 +123,15 @@ records before serialization; the HTTP method and target page are not
 chosen in this function, so they remain OPEN rather than invented.
 
 Evidence: `ev_e9b08097360cb2aad493a6e5426189e29c9a1f4c0aa30643a947acb572dfefe9`.
+
+## Jamcard AJAX endpoint static search (2026-11-25 senior REA pass)
+
+A complete initialized-memory byte sweep for ASCII `ajax_buy.php`
+returned no match (evidence
+`ev_7432c7efd30e9ac0161742ed9952c1ae7af5b7da73a26bc5131be5f876fa3faf`).
+The provider string inventory also returned no `ajax_buy.php` row
+(`ev_91aca4466704c49306fe0c410a21d056cf4d43c417f9b1a67e4aad30960181a9`).
+This does not prove the URL cannot be built from fragments, but it
+means there is no direct literal to pin. #1147's parameter shape and
+native purchase/check semantics remain OPEN; no encrypted parameter
+contract may be invented from the archived PHP failure alone.
