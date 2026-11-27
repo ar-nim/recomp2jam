@@ -32,7 +32,7 @@ mod live_input_leg_tests {
     use o2jam_render::{expand_rgb555, pack_xrgb, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::{ChatSendMode, PlanetModal, RoomListFilter, ScreenGame};
     use o2jam_shell::screens::messenger::{
-        MessengerHost, NativeEventPage, EXE_SCENE_ROOM, PLAYING_QA_UI_EVENT, QA_PLAYING_RECT_SHIFT,
+        MessengerHost, NativeEventPage, EXE_SCENE_ROOM, PLAYING_QA_UI_EVENT,
     };
     use o2jam_shell::screens::paint::dialog_origin;
 
@@ -266,13 +266,18 @@ mod live_input_leg_tests {
         session.menu_key(o2jam_shell::MenuKey::Confirm, true);
         assert_eq!(session.screen(), Screen::Playing, "the gate opened Playing");
 
+        // The expected value is read from the exe pin, not from the
+        // production constant. See `docs/pins/input-msg.md` for
+        // `0x45f480` / file `0x5f480` and the `0x45f190` opener.
+        const EXE_QA_RECT_SHIFT_PX: i32 = 50;
+
         let rect = session
             .game_mut()
             .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
             .expect("0x14 opens the in-game Q&A sheet");
         assert_eq!(
-            rect.qa_rect_shift, QA_PLAYING_RECT_SHIFT,
-            "the Q&A sheet opens with the pinned rectangle shift"
+            rect.qa_rect_shift, EXE_QA_RECT_SHIFT_PX,
+            "exe shifts the Q&A rect by 50 in scene 2 (file 0x5f190, ev_286dc423cbdb57485c95d5c32cbc843bcf47a138f12fb237887289b873c54b98)"
         );
         assert_eq!(
             session.game_mut().native_event_page(),

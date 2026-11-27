@@ -1566,12 +1566,17 @@ mod tests {
         assert!(game.enter_screen(Screen::Playing), "the gate arms Playing");
         assert_eq!(game.screen(), Screen::Playing);
 
+        // The expected value is read from the exe pin, not from the
+        // production constant. See `docs/pins/input-msg.md` for
+        // `0x45f480` / file `0x5f480` and the `0x45f190` opener.
+        const EXE_QA_RECT_SHIFT_PX: i32 = 50;
+
         let rect = game
             .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
             .expect("0x14 opens the in-game Q&A sheet");
         assert_eq!(
-            rect.qa_rect_shift, QA_PLAYING_RECT_SHIFT,
-            "the Q&A sheet must carry the pinned rectangle shift"
+            rect.qa_rect_shift, EXE_QA_RECT_SHIFT_PX,
+            "exe shifts the Q&A rect by 50 in scene 2 (file 0x5f190, ev_286dc423cbdb57485c95d5c32cbc843bcf47a138f12fb237887289b873c54b98)"
         );
     }
 
