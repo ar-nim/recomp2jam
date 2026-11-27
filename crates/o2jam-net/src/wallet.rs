@@ -747,7 +747,7 @@ mod tests {
             )
         }
 
-        /// Send one built request line to a scripted loopback gateway and
+        /// Send one built request line to a scripted loopback peer and
         /// return its one-line answer.
         fn replay_request_line(request_line: &str) -> String {
             let expected_line = request_line.to_owned();
@@ -781,11 +781,11 @@ mod tests {
         }
 
         #[test]
-        fn billing_request_lines_name_the_pinned_host_page_and_session_join_on_the_scripted_gateway(
-        ) {
+        fn billing_request_lines_name_the_pinned_host_page_and_session_join_on_a_scripted_peer() {
             // Seam: this client emits no HTTP request line by owner pin
-            // (`docs/pins/payment.md`, #427 live half). The built line is
-            // the reproduction seam; no live caller exists to trace.
+            // (`docs/pins/payment.md`, #427 live half). A scripted peer
+            // receives the bytes. The built line is the reproduction
+            // seam; no live caller exists to trace.
             // Cash-bill's publisher gate at 0x45e010 stays OPEN. Next
             // evidence step: one local web-stub capture of the host choice;
             // this guard asserts only the five hosts the docs pin.
