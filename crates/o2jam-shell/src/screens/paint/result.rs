@@ -1420,8 +1420,7 @@ mod result_page_and_band_tests {
         let empty = frame_rect(b"");
         let noticed = frame_rect(b"NOTICE");
         // Window corner is outside the rect, so the background sample
-        // is clean. Base print: bbox 201,200..263,213. Fixed-cell
-        // print: bbox 200,200..229,206.
+        // is clean. This synthetic notice is not an exe claim.
         let window = [
             message.x - 10,
             message.y - 10,
@@ -1441,13 +1440,13 @@ mod result_page_and_band_tests {
         assert_eq!(noticed_ink.h, 7);
         assert_eq!(noticed_ink.w, 30);
         assert_eq!(noticed_ink.first_row(), 200);
-        // OPEN: the nine-row channel notice is a different block; no
-        // exe crop measures this quit fallback. Next step: capture the
-        // fallback notice and pin its own ink signature.
-        const EXE_QUIT_FALLBACK_INK: Option<(i32, i32, i32)> = None;
+        // OPEN: the nine-row channel notice is a different block; the
+        // exe first row for this fallback is NOT measured. Next step:
+        // capture this fallback notice and pin its own ink signature.
         assert_eq!(
-            EXE_QUIT_FALLBACK_INK, None,
-            "OPEN: do not reuse another notice's exe pin here"
+            noticed_ink.first_row(),
+            200,
+            "OPEN: exe first row is NOT measured; next step is a fallback-only exe crop"
         );
     }
 

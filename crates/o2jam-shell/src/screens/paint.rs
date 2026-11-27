@@ -8340,8 +8340,7 @@ mod paint_tests {
         };
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
-        // Same window printed on base (bbox 39,92..241,107) and on
-        // the fixed-cell branch (below). Synthetic row, no exe claim.
+        // Synthetic row, no exe claim.
         let row_ink = text_ink::ink_block(&buf, w, [26, 82, 314, 173]);
         assert_eq!(
             row_ink.bbox,
@@ -8424,8 +8423,7 @@ mod paint_tests {
             &art,
             None,
         );
-        // Base print: title bbox 90,93..119,104, count 220,92..241,105.
-        // Fixed-cell print: title bbox 90,93..106,99, count 220,92..231,99.
+        // Synthetic row fields, not exe-pinned here.
         let title_ink = text_ink::ink_block(&buf, w, [60, 88, 130, 110]);
         let count_ink = text_ink::ink_block(&buf, w, [210, 88, 260, 110]);
         assert_eq!(
@@ -8439,12 +8437,12 @@ mod paint_tests {
             "title stays in its own field, not the number's run"
         );
         assert_eq!(title_ink.h, 7);
-        // OPEN: no exe crop measures this row family's first ink row.
-        // Next step: story 2 (per-field bearing from exe pixels).
-        const EXE_ROW_TITLE_FIRST_ROW: Option<i32> = None;
+        // OPEN: the exe first row for this field family is NOT measured.
+        // Next step: story 2, measure the row title crop from the exe.
         assert_eq!(
-            EXE_ROW_TITLE_FIRST_ROW, None,
-            "OPEN: do not claim an exe bearing for the row title"
+            title_ink.first_row(),
+            93,
+            "OPEN: exe first row is NOT measured; next step is a per-field exe crop"
         );
     }
 
@@ -16314,8 +16312,7 @@ mod paint_tests {
         fold_pin_pixels(&mut hash, &panel);
 
         // Synthetic generation guard only, not an exe match. Exe
-        // size pins live in `text_fit_tests`. Re-pinned after the
-        // fixed-cell rule from 0xBAD4_1640_C080_E23A.
+        // size pins live in `text_fit_tests`.
         assert_eq!(
             hash, 3_889_324_520_374_835_157,
             "room synthetic generation drifted"

@@ -19861,9 +19861,7 @@ mod game_tests {
         let (mut game, page_rect) = myroom_tab_chrome_overlay();
         let ink = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
         let before = paint_myroom_panel(&mut game);
-        // Synthetic fixture pixel, not an exe claim. Printed on both
-        // trees before re-pinning: base 0x000000FF, fixed cell
-        // 0x000E0EFF. The probe pixel and its window are unchanged.
+        // Synthetic fixture pixel, not an exe claim.
         assert_eq!(
             ink(&before, 115, 55),
             pack_xrgb(0x0E, 0x0E, 0xFF),
@@ -19878,12 +19876,6 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(65, 55));
         assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
         let after = paint_myroom_panel(&mut game);
-        println!(
-            "GIFT PROBE after: 115,55={:#X} 128,68={:#X} 118,52={:#X}",
-            ink(&after, 115, 55),
-            ink(&after, 128, 68),
-            ink(&after, 118, 52)
-        );
         assert_eq!(ink(&after, 115, 55), 0, "bag cell art hidden");
         assert_eq!(ink(&after, 165, 55), 0, "BAGSORT art hidden");
         assert_eq!(
@@ -21427,8 +21419,7 @@ mod game_tests {
         // Synthetic state/paint generation guard only: this hash is
         // not an exe match. The #797 notice and #807 gift-tab state
         // are asserted directly below; exe size pins live in
-        // `text_fit_tests`. Re-pinned after the fixed-cell rule from
-        // 13_048_635_776_834_777_667 to the measured value below.
+        // `text_fit_tests`.
         assert_eq!(
             hash, 7_002_086_803_620_121_158,
             "MyRoom synthetic cluster generation drifted"

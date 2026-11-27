@@ -176,9 +176,12 @@ fn one_single_line_cell_follows_the_frame_and_not_the_rect() {
 
 #[test]
 fn room_value_height_matches_the_exe_six_pixel_cell_and_position_and_width_are_open() {
-    // Live caller chain: main.rs::run_play -> ScreenGame::paint_at ->
-    // ScreenGame::paint_room -> paint_room_detail_readout ->
-    // paint_room_text_into_rect -> room_text_scale -> cp949_cell_scale.
+    // Live caller chain, read from the boot path:
+    // main.rs::run_play -> Shell::run -> WindowHandler::paint ->
+    // ScreenGame::paint -> ScreenGame::paint_at ->
+    // ScreenGame::paint_room -> paint_room_user_panel ->
+    // paint_room_panel_number -> paint_room_panel_value ->
+    // paint_text_into_rect -> cp949_cell_scale.
     // Archives absent -> skip cleanly (CI has no game data).
     let Some(mut game) = staged_room_game() else {
         println!("SKIP room_value_height_matches_the_exe_six_pixel_cell_and_position_and_width_are_open: install-root absent");
