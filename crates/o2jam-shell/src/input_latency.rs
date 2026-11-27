@@ -184,6 +184,10 @@ impl<G: GameLoop> JudgementStamp<G> {
 }
 
 impl<G: GameLoop> GameLoop for JudgementStamp<G> {
+    fn dialog_owns_input(&self) -> bool {
+        self.inner.dialog_owns_input()
+    }
+
     fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
         self.inner.capture_raw_key(code, down)
     }
@@ -290,6 +294,7 @@ pub(crate) fn measure_input_latency(
 
 #[cfg(test)]
 mod tests {
+    use super::super::screens::game::{JoinAnswerRefusal, ScreenGame};
     use super::super::{MenuKey, Shell};
     use super::*;
     use std::cell::RefCell;
@@ -301,6 +306,11 @@ mod tests {
     }
 
     impl GameLoop for Rc<RefCell<LaneProbe>> {
+        // Lane probe records presses only; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, lane: usize, down: bool) {
             if down {
                 self.borrow_mut().presses.push(lane);
@@ -335,6 +345,37 @@ mod tests {
         let stamped = JudgementStamp::new(game.clone(), state.clone());
         let shell = Shell::new(Box::new(stamped));
         (WindowHandler::new(shell), state, game)
+    }
+
+    #[test]
+    fn judgement_stamp_forwards_the_live_dialog_host_query_for_a_double_click() {
+        // Live chain (Tier 1): 3003 answer -> `stage_join_answer_refusal`
+        // -> `WindowHandler::route_window_left_press` ->
+        // `stage_double_click_at_native` -> `JudgementStamp<ScreenGame>::dialog_owns_input`
+        // -> `ScreenGame::dialog_owns_input` -> `control_mode_word` ->
+        // `double_click_notice` -> `queued_ui_notices`. A decorator must
+        // not silently drop the answer and kill the window arm.
+        let mut game = ScreenGame::new();
+        game.stage_join_answer_refusal(JoinAnswerRefusal::RoomFull);
+        assert!(game.dialog_owns_input(), "the staged 3003 sheet owns input");
+        let state = Rc::new(RefCell::new(StampState::new()));
+        let stamped = JudgementStamp::new(game, state);
+        let mut handler = WindowHandler::new(Shell::new(Box::new(stamped)));
+        handler.set_window_surface_size(800, 600);
+
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(21.0, 42.0);
+
+        let notices = handler.queued_ui_notices();
+        assert_eq!(
+            notices.len(),
+            1,
+            "the decorated host still raises the notice"
+        );
+        assert_eq!(
+            (notices[0].kind, notices[0].code, notices[0].param),
+            (10, 3, 0)
+        );
     }
 
     #[test]

@@ -1079,6 +1079,17 @@ impl WindowHandler {
         self.last_left_press = None;
     }
 
+    /// Queue one whole left click through the same motion and
+    /// `MouseInput` helpers the winit event arms call, without a
+    /// frame boundary. Headless live legs replay a player's gesture
+    /// as queue-then-freeze (ADR-0013); the notice arm needs the
+    /// event-time path in [`Self::route_window_left_press`].
+    pub fn queue_window_left_press(&mut self, window_x: f64, window_y: f64) {
+        self.track_motion(window_x, window_y);
+        self.route_mouse_edge(true, window_x, window_y);
+        self.route_mouse_edge(false, window_x, window_y);
+    }
+
     /// Drive one full left click through the same motion and
     /// `MouseInput` helpers the winit event arms call. Headless live
     /// legs use it because winit emits no double-click event.
@@ -1150,8 +1161,9 @@ impl WindowHandler {
     /// over. Exactly one consumption point per frame (ADR-0013) —
     /// the live loop calls this at each `RedrawRequested` before
     /// painting; headless tests call it after queueing events.
-    /// Returns the frozen snapshot for trace/test assertions.
-    pub(crate) fn deliver_snapshot(&mut self) -> InputSnapshot {
+    /// Returns the frozen snapshot for trace/test assertions. Headless
+    /// live legs call it after queueing events through this handler.
+    pub fn deliver_snapshot(&mut self) -> InputSnapshot {
         let pointer = self.cursor.and_then(|(cursor_x, cursor_y)| {
             let (window_w, window_h) = self.surface_size?;
             pointer_sample_for_tracking(window_w, window_h, cursor_x, cursor_y)
@@ -1668,6 +1680,11 @@ mod tests {
     }
 
     impl GameLoop for Rc<RefCell<InputProbe>> {
+        // Input probe records routed frames; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, lane: usize, down: bool) {
             self.borrow_mut().lanes.push((lane, down));
         }
@@ -2003,6 +2020,11 @@ mod tests {
     }
 
     impl GameLoop for SeamGame {
+        // Routed-callback seam stages no sheet of its own.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, lane: usize, down: bool) {
             self.routed
                 .borrow_mut()
@@ -2159,6 +2181,11 @@ mod tests {
     struct FocusProbe(Rc<RefCell<Vec<bool>>>);
 
     impl GameLoop for FocusProbe {
+        // Focus probe records activation edges; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
         fn ingest_snapshot(&mut self, _snapshot: &super::super::InputSnapshot) {}
         fn focus_changed(&mut self, active: bool) {
@@ -2659,6 +2686,11 @@ mod tests {
     struct FlatFrameGame;
 
     impl GameLoop for FlatFrameGame {
+        // Constant-colour frame game stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
 
         fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
@@ -2928,6 +2960,11 @@ mod tests {
     struct ScreenProbe(&'static str);
 
     impl GameLoop for ScreenProbe {
+        // Screen-word probe reports a scene name; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
 
         fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}

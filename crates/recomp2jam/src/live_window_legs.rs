@@ -177,38 +177,53 @@ mod live_window_leg_tests {
     }
 
     #[test]
-    fn live_double_click_over_the_planet_options_opened_on_release_queues_the_notice() {
+    fn live_window_queued_planet_options_release_then_double_click_queues_the_notice() {
         // Live chain: `main.rs::run_online` ->
         // `connect::connect_and_login_with_transport` -> `boot_live_leg_with_art`
-        // -> `dismiss_splash` -> `OnlineSession::ingest_snapshot` (gear press,
-        // then release on the staged rect) -> `apply_pointer_up` ->
-        // `planet_pointer_up` -> `dispatch_planet_action` ->
-        // `planet_board.open_modal(Options)` ->
+        // -> `WindowHandler::queue_window_left_press` (gear press/release)
+        // -> `WindowHandler::deliver_snapshot` -> `OnlineSession::ingest_snapshot`
+        // -> `apply_pointer_up` -> `planet_pointer_up` ->
+        // `dispatch_planet_action` -> `planet_board.open_modal(Options)` ->
         // `WindowHandler::route_window_left_press` -> `route_mouse_input` ->
         // `stage_double_click_at_native` -> `control_mode_word` ->
-        // `double_click_notice` -> `queued_ui_notices`. The modal opens on
-        // the pointer release, after the last snapshot freeze.
+        // `double_click_notice` -> `queued_ui_notices`. The release reaches
+        // the game only at the frame boundary, before the event-time
+        // press pair, so the live query sees the sheet from this frame.
         if !archives_present() {
-            println!("SKIP live_double_click_over_the_planet_options_opened_on_release_queues_the_notice: missing install-root interface archive");
+            println!("SKIP live_window_queued_planet_options_release_then_double_click_queues_the_notice: missing install-root interface archive");
             return;
         }
         let gateway = spawn_live_leg_gateway(joined_room(0, true));
         let mut session = boot_live_leg_with_art(gateway.port, false);
         dismiss_splash(&mut session);
         let (x, y) = staged_code_centre(&mut session, Screen::Planet, PLANET_OPTION_CODE);
-        session.ingest_snapshot(&InputSnapshot::press_at(x, y));
-        session.ingest_snapshot(&InputSnapshot::release_at(x, y));
-        assert!(
-            session.game_mut().dialog_owns_input(),
-            "the release-opened Options sheet owns input"
-        );
         let mut handler = WindowHandler::new(Shell::new(Box::new(session)));
         handler.set_window_surface_size(800, 600);
+
+        handler.queue_window_left_press(f64::from(x), f64::from(y));
+        let release_frame = handler.deliver_snapshot();
+        assert_eq!(
+            release_frame.edges().len(),
+            2,
+            "the queued gear press and release reach one frame"
+        );
+
+        // ADR-0013 freezes input once per frame. A press pair that is
+        // only queued reaches the game through `ingest_snapshot`, not
+        // the event-time mouse arm, so it cannot form the exe's
+        // double-click edge. The event-time pair below is the arm.
+        handler.queue_window_left_press(21.0, 42.0);
+        handler.queue_window_left_press(21.0, 42.0);
+        handler.deliver_snapshot();
+        assert!(
+            handler.queued_ui_notices().is_empty(),
+            "queued edges alone cannot stage the double-click (ADR-0013)"
+        );
 
         double_click(&mut handler);
 
         let notices = handler.queued_ui_notices();
-        assert_eq!(notices.len(), 1, "the live root queues one notice");
+        assert_eq!(notices.len(), 1, "the event-time pair queues one notice");
         assert_eq!((notices[0].kind, notices[0].code), (10, 3));
 
         drop(handler);

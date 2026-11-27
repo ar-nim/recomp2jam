@@ -60,6 +60,11 @@ mod drive_tests {
     }
 
     impl GameLoop for EdgeRecorder {
+        // Drive script only records frames; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
         fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
             self.seen.extend(snapshot.edges().iter().copied());
