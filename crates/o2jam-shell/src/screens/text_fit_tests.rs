@@ -155,11 +155,9 @@ fn staged_notice_game() -> Option<ScreenGame> {
 
 #[test]
 fn one_single_line_cell_follows_the_frame_and_not_the_rect() {
-    // Live caller chain: main.rs::run_play -> ScreenGame::paint_at ->
-    // ScreenGame::paint_shop -> paint_shop_featured_captions ->
-    // paint_text_left_in_cell -> cp949_cell_scale.
-    // Seam: pure scale conversion; the pixel guards below observe the
-    // same conversion through archive-backed live callers.
+    // Seam: pure scale conversion, reached by no live path of its
+    // own. The pixel guards below observe the same conversion through
+    // archive-backed live callers, and they carry those chains.
     assert_eq!(cp949_cell_scale(1.0), CP949_TEXT_CELL_HEIGHT_PX);
     assert_eq!(cp949_cell_scale(0.5), CP949_TEXT_CELL_HEIGHT_PX * 0.5);
     assert_eq!(room_text_scale(1.0), CP949_TEXT_CELL_HEIGHT_PX);
