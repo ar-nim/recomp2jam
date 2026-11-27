@@ -1,0 +1,22 @@
+{
+  "citation": "wine-citation.txt",
+  "created_at": "2026-11-27T12:22:50Z",
+  "inputs": {
+    "gateway_address": "127.0.0.1",
+    "gateway_port": "15010",
+    "memoryer_db": "/home/arnim/memoryer-local/O2JAM.db",
+    "mint_script": "scripts/rig-mint-launch-argv.sh",
+    "mint_script_sha256": "5d99d1b8d8a98f0129e2b9931558b8059a82171287ef476930140c97864591d8",
+    "pin_file": "docs/captures/t240/wine-argv-fields.txt",
+    "user_index_id": "1"
+  },
+  "issue": "#889",
+  "kind": "remint-verify",
+  "manifest_sha256": "9baa6894177a32b729d314aa84711f30ef6a0673fba8cd2df4ea8b6577431b9a",
+  "result": {
+    "argv_sha256": "1c95d47820e67954823e35787853d71f5401acdac47576a64d636045e2aab7d5",
+    "match": true,
+    "pinned_argv_sha256": "1c95d47820e67954823e35787853d71f5401acdac47576a64d636045e2aab7d5"
+  },
+  "schema": "rig-provenance-v1"
+}
