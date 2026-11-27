@@ -5786,17 +5786,25 @@ pub(super) mod session_tests {
     fn shop_back_session(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
     ) -> (OnlineSession, thread::JoinHandle<()>) {
-        use o2jam_render::Rect;
-        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
-        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
-        use std::collections::HashMap;
-
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.menu_key(MenuKey::Back, true);
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
+        stage_shop_back_control(&mut game);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), server)
+    }
+
+    /// Mount the Shop side and tap its staged BACK plate. Shared by
+    /// the Waiting and Room BACK fixtures below.
+    fn stage_shop_back_control(game: &mut ScreenGame) {
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::{SideScreen, SHOP_BACK_CODE};
+        use std::collections::HashMap;
+
         game.load_side_scene(
             vec![ScenePlacement {
                 id: String::new(),
@@ -5814,8 +5822,6 @@ pub(super) mod session_tests {
         );
         assert!(game.visit_side(SideScreen::Shop));
         game.click_shop(757, 580);
-        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        (OnlineSession::new(game, gateway), server)
     }
 
     /// Gateway that pushes one frame and reports the write on a channel.
@@ -6634,6 +6640,92 @@ pub(super) mod session_tests {
 
         assert_eq!(session.game.shop_gem_caption(), "GEM 626");
         assert_eq!(session.game.wallet().cash_point, Some(0));
+    }
+
+    /// Room session on the Shop side with a BACK tap queued. The
+    /// companion `shop_back_session` lands on Waiting; #1157 needs the
+    /// Room lobby drain, so this one stops after the Room Confirm.
+    fn room_shop_back_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (port, server) = fake_gateway(with_server);
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        stage_shop_back_control(&mut game);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), server)
+    }
+
+    #[test]
+    fn lobby_drain_hands_a_late_5029_to_the_waiting_wallet() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot ->
+        //   ScreenGame::click_shop(BackToLobby) -> flush_exit_shop (5028)
+        //   -> poll_wire_at -> poll_wallet_answer (quiet 1 ms drain gives up)
+        //   -> poll_lobby_chat -> apply_lobby_frame -> deferred_frames
+        //   -> poll_wire_at -> replay_deferred_frames ->
+        //   fold_expected_wallet_answer -> ScreenGame::apply_shop_cash_point.
+        // Tier 2 scripted gateway: the hand-built interleaving puts the
+        // 5029 in the lobby drain after the wallet drain has given up,
+        // then lets one real poll replay it (#1157).
+        use o2jam_net::frame::encode_frame;
+
+        let (release_reply, reply_released) = mpsc::channel();
+        let (mut session, server) = room_shop_back_session(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 5007);
+            assert_eq!(read_frame(&mut stream).id, 5028);
+            reply_released
+                .recv()
+                .expect("the BACK paint must finish before 5029");
+            stream
+                .write_all(&encode_frame(
+                    5029,
+                    &[0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                ))
+                .unwrap();
+        });
+        paint_frame(&mut session);
+        assert!(
+            session.wallet_refresh_expected.is_some(),
+            "BACK armed a wallet refresh"
+        );
+        release_reply.send(()).unwrap();
+        // A resting gateway read blocks until the scripted write lands:
+        // no sleep and no timing luck. Hand the frame to the lobby
+        // handler, which is what `poll_lobby_chat` does with a frame it
+        // reads in this interleaving.
+        let frame = session
+            .gateway
+            .next_frame()
+            .expect("the gateway delivered the 5029");
+        assert_eq!(frame.id, 5029);
+        let chat = LobbyChat::of_screen(session.game.screen()).expect("Room has a lobby drain");
+        session.apply_lobby_frame(chat, frame);
+        assert_eq!(
+            session.deferred_frames.len(),
+            1,
+            "the lobby drain parks the frame it does not own"
+        );
+        assert_eq!(session.game.wallet().gem, None);
+        paint_frame(&mut session);
+        assert_eq!(session.game.wallet().gem, Some(626));
+        assert_eq!(session.game.wallet().cash_point, Some(0));
+        assert!(
+            session.deferred_frames.is_empty(),
+            "the folded answer left the replay queue"
+        );
+        session
+            .gateway
+            .set_timeouts(Some(Duration::from_millis(1)))
+            .expect("a short idle read proves the socket is empty");
+        assert!(
+            session.gateway.next_frame().is_err(),
+            "no frame is left queued on the gateway"
+        );
+        server.join().unwrap();
     }
 
     #[test]
