@@ -20,10 +20,8 @@ mod live_messenger_leg_tests {
         WindowHandler, BINGO_UI_EVENT, CASH_BILL_UI_EVENT, EXE_SCENE_PLAYING, EXE_SCENE_ROOM,
         PLAYING_QA_UI_EVENT, UHP_SUCCESS_CAPTION,
     };
-    use o2jam_shell::{options::CustomCursorArm, GameLoop, Shell};
-    use o2jam_shell::{
-        screens::messenger::QA_PLAYING_RECT_SHIFT, InputEdge, InputSnapshot, Screen,
-    };
+    use o2jam_shell::{options::CustomCursorArm, Shell};
+    use o2jam_shell::{screens::messenger::QA_PLAYING_RECT_SHIFT, Screen};
 
     /// One synthetic scene bank entry, used only by the NullBackend
     /// leg. No installed audio is read.
@@ -419,39 +417,6 @@ mod live_messenger_leg_tests {
         dismiss_splash(&mut session);
         assert_eq!(session.screen(), Screen::Planet);
         assert_eq!(window_close_disposition(), QuitDisposition::ExitLoop);
-        finish(session, gateway.server);
-    }
-
-    /// #1122 Tier 3. Live caller chain:
-    ///   main.rs::run_play -> connect::connect_and_login_with_transport
-    ///   -> boot_live_leg -> dismiss_splash
-    ///   -> GameLoop::ingest_snapshot (two PointerDown/Up pairs)
-    ///   -> double_click_notice.
-    /// seam: Win32 `WM_LBUTTONDBLCLK` has no winit event; the notice
-    /// contract is the pinned surface until a lane owns the game
-    /// notice queue. Archives absent -> skip cleanly.
-    #[test]
-    fn live_double_click_raises_the_pinned_notice_when_the_bit_is_set() {
-        if !archives_present() {
-            println!("SKIP live_double_click_raises_the_pinned_notice_when_the_bit_is_set: missing install-root interface archive");
-            return;
-        }
-        let gateway = spawn_live_leg_gateway(joined_room(0, true));
-        let mut session = boot_live_leg(gateway.port, false);
-        dismiss_splash(&mut session);
-
-        for _ in 0..2 {
-            let mut snapshot = InputSnapshot::new();
-            snapshot.push_edge(InputEdge::PointerDown { x: 21, y: 42 });
-            snapshot.push_edge(InputEdge::PointerUp { x: 21, y: 42 });
-            session.ingest_snapshot(&snapshot);
-        }
-        let notice = o2jam_shell::screens::messenger::double_click_notice(0x0004, 21, 42)
-            .expect("bit 2 raises the notice");
-        assert_eq!((notice.kind, notice.code, notice.param), (10, 3, 0));
-        assert_eq!((notice.x, notice.y), (21, 42));
-        assert_eq!(session.screen(), Screen::Planet);
-
         finish(session, gateway.server);
     }
 }

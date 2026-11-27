@@ -499,6 +499,11 @@ pub trait GameLoop {
     fn quit_requested(&self) -> bool {
         false
     }
+    /// Whether an open dialog owns input right now. The window's
+    /// double-click arm reads this live at press time. Required: a
+    /// silent default or a decorator that drops the answer would
+    /// close the gate without any compile-time warning.
+    fn dialog_owns_input(&self) -> bool;
     /// Name of the screen currently shown (`"unknown"` by default):
     /// the capture log's transition marker, so input traces replayed
     /// through the real window can sync on scene changes. Test
@@ -782,6 +787,11 @@ mod tests {
 
     struct SolidGame(u32);
     impl GameLoop for SolidGame {
+        // Flat-fill game stages no dialog for the paint tests.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
         fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
         fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {

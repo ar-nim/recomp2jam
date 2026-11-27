@@ -226,6 +226,11 @@ mod tests {
     }
 
     impl GameLoop for RecordingGame {
+        // Capture probe records snapshots; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
 
         fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {

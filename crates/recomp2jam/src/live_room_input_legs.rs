@@ -73,6 +73,11 @@ mod tests {
     struct SceneProbe(&'static str);
 
     impl GameLoop for SceneProbe {
+        // Scene-label probe reports a name only; it stages no dialog.
+        fn dialog_owns_input(&self) -> bool {
+            false
+        }
+
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
         fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
         fn screen_name(&self) -> &'static str {

@@ -7288,6 +7288,7 @@ impl ScreenGame {
         self.planet_pointer_up(x, y);
     }
 
+    /// One click through every dialog/scene owner.
     fn click_dispatch(&mut self, x: i32, y: i32) {
         if self.myroom_confirm.is_some() {
             let (ok_hit, cancel_hit) = self.myroom_confirm_button_hits(x, y);
@@ -11488,6 +11489,10 @@ impl Default for ScreenGame {
 }
 
 impl GameLoop for ScreenGame {
+    fn dialog_owns_input(&self) -> bool {
+        ScreenGame::dialog_owns_input(self)
+    }
+
     fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
         // Result owns the exe's class-2 codes 8/9 (Backspace/Tab):
         // once the panel has settled they invoke the BACK arm, never
@@ -12033,6 +12038,24 @@ mod game_tests {
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|error| panic!("PACK GAP {test_name}: {}: {error}", path.display()));
         Some(bytes)
+    }
+
+    #[test]
+    fn dialog_host_query_tracks_the_3003_refusal_and_its_ok_dismissal() {
+        // Live chain: 3003 answer -> `stage_join_answer_refusal` ->
+        // `ScreenGame::dialog_owns_input` -> `WindowHandler::control_mode_word`;
+        // wire OK -> `clear_join_answer_refusal` -> the same live query.
+        let mut game = ScreenGame::new();
+        assert!(!game.dialog_owns_input(), "boot has no dialog up");
+
+        game.stage_join_answer_refusal(JoinAnswerRefusal::RoomFull);
+        assert!(
+            game.dialog_owns_input(),
+            "the wire sheet owns input immediately"
+        );
+
+        game.clear_join_answer_refusal();
+        assert!(!game.dialog_owns_input(), "the wire OK clears ownership");
     }
 
     #[test]
