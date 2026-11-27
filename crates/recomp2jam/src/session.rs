@@ -3014,16 +3014,7 @@ impl OnlineSession {
         }
         self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "wallet refresh", |session| loop {
             match session.gateway.next_frame() {
-                Ok(frame) if frame.id == SyncCashPointResponse::COMMAND => {
-                    match SyncCashPointResponse::decode_body(&frame.payload) {
-                        Ok(response) => session.game.apply_shop_cash_point(&response),
-                        Err(_) => {
-                            tracing::debug!(id = frame.id, "dropping undecodable wallet answer")
-                        }
-                    }
-                    session.wallet_refresh_expected = None;
-                    break;
-                }
+                Ok(frame) if session.fold_expected_wallet_answer(&frame) => break,
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-wallet frame in wallet drain");
@@ -3034,6 +3025,21 @@ impl OnlineSession {
                 Err(_) => break,
             }
         });
+    }
+
+    /// Fold one 5029 while a refresh owns the socket. Returns `true`
+    /// for the awaited answer so a drain stops and replay skips its
+    /// normal routing. One body decoder serves both callers (#1157).
+    fn fold_expected_wallet_answer(&mut self, frame: &Frame) -> bool {
+        if self.wallet_refresh_expected.is_none() || frame.id != SyncCashPointResponse::COMMAND {
+            return false;
+        }
+        match SyncCashPointResponse::decode_body(&frame.payload) {
+            Ok(response) => self.game.apply_shop_cash_point(&response),
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable wallet answer"),
+        }
+        self.wallet_refresh_expected = None;
+        true
     }
 
     fn flush_shop_buy(&mut self) {
@@ -4867,16 +4873,26 @@ impl OnlineSession {
             5016 => {
                 self.apply_payment_frame(&frame);
             }
-            _ => tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain"),
+            _ => {
+                tracing::debug!(id = frame.id, "deferring non-chat frame from lobby drain");
+                self.deferred_frames.push_back(frame);
+            }
         }
     }
 
-    /// Replay frames the #367 fuse drain read while an unrelated drain
-    /// owned the screen. Room/Channel frames go to the lobby handler,
-    /// Waiting frames to the waiting handler; nothing is lost just
-    /// because a 07DA poll was in flight (#380).
+    /// Replay frames an unrelated drain read while another leg owned
+    /// the screen. The awaited wallet answer folds first (#1157);
+    /// Room/Channel frames go to the lobby handler and Waiting frames
+    /// to the waiting handler, so a 07DA poll loses nothing (#380).
     fn replay_deferred_frames(&mut self) {
-        while let Some(frame) = self.deferred_frames.pop_front() {
+        // Take one generation at a time. A frame this screen still
+        // cannot own goes back on the queue; replaying it again in the
+        // same paint would spin forever (#1157).
+        let deferred = std::mem::take(&mut self.deferred_frames);
+        for frame in deferred {
+            if self.fold_expected_wallet_answer(&frame) {
+                continue;
+            }
             match LobbyChat::of_screen(self.game.screen()) {
                 Some(chat) => self.apply_lobby_frame(chat, frame),
                 None if self.game.screen() == Screen::Waiting => self.apply_waiting_frame(frame),
