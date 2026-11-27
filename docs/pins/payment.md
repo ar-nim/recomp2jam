@@ -22,15 +22,18 @@ sizing), `docs/pins/input-msg.md` (cash-bill close-then-open),
 | #1101 (path half) | `0x57d800` / `0x17d800`; writer `0x42d0a0`; folder suffix at `0x64427c`; name at `0x6447d0` | On Print Screen (`0x2c`) outside states 10 and 11, the writer requests 800x600 at quality 80 and writes `ScreenShot%03d.jpg` below `My Pictures\오투잼_스크린샷` with a per-session counter. | dossier `ev efb6.f8db.ebe7.5702.f288.dd84.8af9.3d97.c971.7b21.4f57.0507.d38f.a1bd.529b.6bf2`; writer dossier `ev 5447.ceb6.c70e.2299.892a.85c5.4fda.8243.deae.5ce2.ab33.ef2b.b236.7b40.3eb3.5134`; suffix bytes `ev f22e.89b3.08c5.34f5.033b.0794.1554.de5d.40e4.3e38.2724.6365.a314.c231.c330.273e`; name literal `ev 4e83.46c0.b7ce.8c08.29fd.5a45.3eb1.480b.394e.5417.c998.6c1f.dca2.f850.c8de.6c1c` | `print_screen_file_name`, `print_screen_relative_path`, `ScreenShotCounter::press`; no JPEG encoder is wired. |
 | #1102 (branch half) | `0x418dc0` / `0x18dc0`; queue `0x478d50` | When the remaining-shot word reaches zero the Print Screen arm posts the UI queue instead of calling the writer. | `ev 52e5.59f7.df3d.44f6.e10c.9c57.ce6d.aa2f.dd77.a376.1c27.b615.eb00.0092.62fb.6928`; writer caller chain in `docs/pins/misc-tail.md` | `PrintScreenAction::Notice`; no caption is invented. |
 
-## Contradiction kept visible
+## Gift path disagreement
 
-`crates/o2jam-shell/src/screens/side.rs:6474` stores the gift path as
-`billing/gift/gift_input.aspx`; the URL literal inventory
-(`docs/web-url-archive-audit.md` line 59) names
-`http://game1.o2jam.com/np/billing/gift/gift_input.aspx?USER_INDEX_ID=<id>`.
-The exe literal wins for the rebuilt URL; the shorter `side.rs` label
-is left untouched (senior-owned file). The disagreement is not
-resolved silently.
+The shell no longer holds a second gift-path literal. `GIFT_URL_PATH`
+is re-exported from `o2jam_net::wallet` and reads the table row pinned
+at file `0x24b638`: `np/billing/gift/gift_input.aspx`. Both the URL builder
+and the staged label take that value. The row follows the URL
+literal inventory at `docs/web-url-archive-audit.md` lines 59 and 80.
+
+The shorter form `billing/gift/gift_input.aspx` now survives only in
+`docs/lifecycle.md` §12. The two documents disagree. This stays OPEN;
+the next evidence step is to read the executable string at file
+`0x24b638` and the bytes around it before choosing one form.
 
 ## Hand-offs (no REA read in this lane)
 
