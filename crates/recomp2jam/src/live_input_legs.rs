@@ -3774,6 +3774,12 @@ mod live_input_leg_tests {
     ///   ScreenGame::paint_side -> paint_shop_board ->
     ///   paint_shop_wallet gate (shop +0x25a0).
     /// Archives absent -> skip cleanly (CI has no game data).
+    //
+    // OPEN(#1157): when a 5029 lands after `poll_wallet_answer`'s 1 ms drain,
+    // the lobby drain skips it as a foreign chat frame and the wallet never
+    // folds. The interleaving and probe rates are in
+    // ~/scratch/impl-2026-11-25/lane-wallet-diagnose/findings-wallet-diagnose.md.
+    // The fix belongs in `session.rs::apply_lobby_frame`, outside this lane.
     #[test]
     fn live_wallet_digits_yield_to_the_message_sheet_from_boot() {
         if !archives_present() {
