@@ -31,7 +31,9 @@ mod live_input_leg_tests {
     };
     use o2jam_render::{expand_rgb555, pack_xrgb, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::screens::game::{ChatSendMode, PlanetModal, RoomListFilter, ScreenGame};
-    use o2jam_shell::screens::messenger::MessengerHost;
+    use o2jam_shell::screens::messenger::{
+        MessengerHost, NativeEventPage, EXE_SCENE_ROOM, PLAYING_QA_UI_EVENT, QA_PLAYING_RECT_SHIFT,
+    };
     use o2jam_shell::screens::paint::dialog_origin;
 
     use o2jam_shell::screens::side::{
@@ -217,6 +219,71 @@ mod live_input_leg_tests {
             "OK clears the mounted sheet"
         );
         assert_eq!(session.screen(), Screen::Room, "OK keeps the Room board");
+        finish(session, gateway.server);
+    }
+
+    /// #1116 Tier 3. seam: no winit event sends the exe's `WM_APP+0x32`
+    /// / `0x14` message, so the extracted `ScreenGame` arm is the whole
+    /// Q&A open path. The leg still boots, walks to Playing and opens
+    /// the sheet there, so a boot regression cannot hide behind the
+    /// seam. Web content stays blank by owner decision (#948).
+    /// CONFLICT: the pin names scene 2, the story calls that shift
+    /// Playing; the exe pin wins and the contradiction stays OPEN.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_playing_qa_sheet_opens_with_the_pinned_rect_shift_from_boot() {
+        if !archives_present() {
+            println!("SKIP live_playing_qa_sheet_opens_with_the_pinned_rect_shift_from_boot: missing install-root interface archive");
+            return;
+        }
+        // The result-back gateway is reused for its 4011 START answer;
+        // without it the Waiting confirm never reaches Loading.
+        let gateway = spawn_result_back_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        join_waiting_by_click(&mut session, &gateway.join_answer_written);
+        session
+            .game_mut()
+            .with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        session
+            .game_mut()
+            .set_selected_music(o2jam_net::play::SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 1,
+            });
+        session
+            .game_mut()
+            .set_loading_status(o2jam_shell::screens::paint::LoadingStatus {
+                progress: 1.0,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+            });
+
+        session.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        paint_until_screen(&mut session, Screen::Loading);
+        session.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        assert_eq!(session.screen(), Screen::Playing, "the gate opened Playing");
+
+        let rect = session
+            .game_mut()
+            .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
+            .expect("0x14 opens the in-game Q&A sheet");
+        assert_eq!(
+            rect.qa_rect_shift, QA_PLAYING_RECT_SHIFT,
+            "the Q&A sheet opens with the pinned rectangle shift"
+        );
+        assert_eq!(
+            session.game_mut().native_event_page(),
+            Some(NativeEventPage::InGameQa),
+            "the blank 1:1 Q&A stand-in is staged"
+        );
+        assert_eq!(
+            session.screen(),
+            Screen::Playing,
+            "the sheet overlays Playing"
+        );
         finish(session, gateway.server);
     }
 

@@ -1529,6 +1529,53 @@ mod tests {
     }
 
     #[test]
+    fn playing_qa_arm_stages_the_pinned_rect_shift_on_screen_game() {
+        // seam: the exe's `WM_APP+0x32` / `0x14` arm has no winit
+        // sender. `ScreenGame::stage_native_web_ui_event` is the
+        // extracted arm helper against the live game state.
+        // CONFLICT: the pin names scene 2 while the story calls the
+        // shift Playing; options.rs pins Playing as 11. The exe pin
+        // wins here, and the scene-word contradiction stays OPEN.
+        use crate::screens::{paint::LoadingStatus, ScreenGame};
+        use crate::Screen;
+        use o2jam_audio::NullBackend;
+        use o2jam_net::play::SetRoomMusic;
+        use std::collections::HashMap;
+
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 0,
+        });
+        game.set_loading_status(LoadingStatus {
+            progress: 1.0,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        });
+        for scene in [
+            Screen::Planet,
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+        ] {
+            assert!(game.enter_screen(scene), "the walk reaches {scene:?}");
+        }
+        assert!(game.enter_screen(Screen::Playing), "the gate arms Playing");
+        assert_eq!(game.screen(), Screen::Playing);
+
+        let rect = game
+            .stage_native_web_ui_event(PLAYING_QA_UI_EVENT, EXE_SCENE_ROOM)
+            .expect("0x14 opens the in-game Q&A sheet");
+        assert_eq!(
+            rect.qa_rect_shift, QA_PLAYING_RECT_SHIFT,
+            "the Q&A sheet must carry the pinned rectangle shift"
+        );
+    }
+
+    #[test]
     fn ui_event_codes_name_the_three_web_sheet_hosts() {
         // seam: the UI-event code table is the whole claim. The exe
         // reaches it from one window hub (`0x5a5190`), which this
