@@ -1415,25 +1415,39 @@ mod result_page_and_band_tests {
                 None,
                 text,
             );
-            let width = 800usize;
-            let top = usize::try_from(message.y).expect("rect top fits usize");
-            let left = usize::try_from(message.x).expect("rect left fits usize");
-            let rows = usize::try_from(message.h).expect("rect height fits usize");
-            let columns = usize::try_from(message.w).expect("rect width fits usize");
-            (top..top + rows)
-                .flat_map(|y| (left..left + columns).map(move |x| (y, x)))
-                .map(|(y, x)| buf[y * width + x])
-                .collect::<Vec<_>>()
+            buf
         };
         let empty = frame_rect(b"");
         let noticed = frame_rect(b"NOTICE");
+        // Window corner is outside the rect, so the background sample
+        // is clean. Base print: bbox 201,200..263,213. Fixed-cell
+        // print: bbox 200,200..229,206.
+        let window = [
+            message.x - 10,
+            message.y - 10,
+            message.x + i32::try_from(message.w).expect("width fits i32") + 10,
+            message.y + i32::try_from(message.h).expect("height fits i32") + 10,
+        ];
+        let noticed_ink = crate::screens::paint::text_ink::ink_block(&noticed, 800, window);
         assert!(
-            !empty.contains(&ink(0x7FFF)),
-            "an empty caption paints no white ink"
+            !crate::screens::paint::text_ink::has_ink(&empty, 800, window),
+            "an empty caption paints no ink"
         );
-        assert!(
-            noticed.contains(&ink(0x7FFF)),
-            "the fixed rect inks a nonempty caption in white"
+        assert_eq!(
+            noticed_ink.bbox,
+            [200, 200, 229, 206],
+            "the fixed rect inks a nonempty caption in one GDI cell"
+        );
+        assert_eq!(noticed_ink.h, 7);
+        assert_eq!(noticed_ink.w, 30);
+        assert_eq!(noticed_ink.first_row(), 200);
+        // OPEN: the nine-row channel notice is a different block; no
+        // exe crop measures this quit fallback. Next step: capture the
+        // fallback notice and pin its own ink signature.
+        const EXE_QUIT_FALLBACK_INK: Option<(i32, i32, i32)> = None;
+        assert_eq!(
+            EXE_QUIT_FALLBACK_INK, None,
+            "OPEN: do not reuse another notice's exe pin here"
         );
     }
 

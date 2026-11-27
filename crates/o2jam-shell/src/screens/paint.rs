@@ -31,6 +31,11 @@ use std::collections::HashMap;
 mod channel_parity_tests;
 mod myroom;
 mod options_game;
+#[cfg(test)]
+#[path = "text_fit_tests.rs"]
+pub(crate) mod text_fit_tests;
+#[cfg(test)]
+pub(crate) mod text_ink;
 pub use self::myroom::*;
 
 use super::super::avatar::{
@@ -1434,7 +1439,7 @@ fn paint_text_left_in_cell(
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    let scale = cp949_cell_scale(text_frame_scale(frame));
     if scale <= 0.0 {
         return;
     }
@@ -2677,7 +2682,7 @@ fn cp949_text_width_at_scale(text: &str, scale: f32) -> f32 {
 /// the leftover half-width, never a hand-tuned literal.
 fn paint_centered_billing_notice_line(frame: &mut Frame<'_>, line_rect: Rect, cp949_bytes: &[u8]) {
     let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
-    let scale = cp949_fit_scale(&text, line_rect.w as f32, line_rect.h as f32);
+    let scale = cp949_cell_scale(text_frame_scale(frame));
     if scale <= 0.0 {
         return;
     }
@@ -2899,7 +2904,22 @@ const CP949_INK: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 /// One GDI cell height of the TEXT control face (`Gulimche 6x12`,
 /// `docs/gdi-text.md` font table). Explicit `\n` line breaks in a
 /// CP949 message advance by one cell, not by the fitted glyph em.
-const CP949_TEXT_CELL_HEIGHT_PX: f32 = 12.0;
+pub(super) const CP949_TEXT_CELL_HEIGHT_PX: f32 = 12.0;
+
+/// Frame scale of the native canvas: staged rects and the fixed GDI
+/// cell use the same factor, so both axes of a 400x300 frame halve.
+#[must_use]
+pub(super) fn text_frame_scale(frame: &Frame<'_>) -> f32 {
+    frame.w as f32 / NATIVE_WIDTH as f32
+}
+
+/// Scale of one single-line TEXT cell. The exe rasterizes a fixed
+/// 6x12 GDI cell; the staged rect places and clips it, never sizes
+/// it. A long caption overflows or clips instead of shrinking.
+#[must_use]
+fn cp949_cell_scale(frame_scale: f32) -> f32 {
+    CP949_TEXT_CELL_HEIGHT_PX * frame_scale
+}
 
 /// Em extent fitting `text` into a `w`×`h` rect: the smaller of the
 /// height cap and the widest-row fit (advances scale linearly, so
@@ -3066,11 +3086,11 @@ fn composite_text_image(frame: &mut Frame<'_>, rect: &Rect, image: &o2jam_text::
 }
 
 /// Paint one string into its native rect (scaled to the frame),
-/// left-anchored at the rect origin and size-fit to the rect (the
-/// same `TEXT` rule as the planet captions). Geometry always comes
-/// from the caller (staged `.bnd` rects) — never from literals
-/// here. Bare ink, no scrim: the string fits the rect by
-/// construction.
+/// left-anchored at the rect origin. A single line uses one fixed
+/// GDI cell; a message with stored line breaks keeps the `#882`
+/// widest-row fit. The rect places and clips the ink; it never
+/// sizes a single line. Geometry comes from the caller's staged
+/// rect, never from a literal here.
 fn paint_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, ink: [u8; 4]) {
     if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
         return;
@@ -3083,7 +3103,7 @@ fn paint_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, in
     let scale = if row_count > 1 {
         cp949_multiline_scale(text, rect.w as f32, rect.h as f32)
     } else {
-        cp949_fit_scale(text, rect.w as f32, rect.h as f32)
+        cp949_cell_scale(text_frame_scale(frame))
     };
     if scale <= 0.0 {
         return;
@@ -3143,7 +3163,7 @@ pub(super) fn paint_caption_in_cell(
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    let scale = cp949_cell_scale(text_frame_scale(frame));
     if scale <= 0.0 {
         return;
     }
@@ -3174,10 +3194,10 @@ fn caption_ink(ink: u32) -> [u8; 4] {
 }
 
 /// Paint one CP949 string into its native rect (scaled to the
-/// frame), left-anchored at the rect origin (the same `TEXT` rule
-/// as the waiting captions) and size-fit to the rect. Geometry
-/// always comes from the caller (staged `.bnd` rects or the
-/// dialog-relative message rect) — never from literals here.
+/// frame), left-anchored at the rect origin. Single lines use one
+/// fixed GDI cell; multiline messages keep their own fit. Geometry
+/// comes from the caller's staged or dialog-relative rect, never
+/// from a literal here.
 fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: &[u8]) {
     let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
     paint_text_into_rect(frame, native_rect, &text, CP949_INK);
@@ -3202,7 +3222,7 @@ fn paint_planet_caption_in_cell(frame: &mut Frame<'_>, native_rect: Rect, text: 
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
+    let scale = cp949_cell_scale(text_frame_scale(frame));
     if scale <= 0.0 {
         return;
     }
@@ -5186,6 +5206,44 @@ pub(crate) fn paint_room_list_with_detail_gate(
 
 #[cfg(test)]
 mod paint_tests {
+    #[test]
+    fn one_cell_ink_height_does_not_follow_rect_height() {
+        // seam: this synthetic frame calls the same single-line
+        // painter as the archive-backed room value guard. It pins
+        // size only; the live caller chain is in `text_fit_tests`.
+        let measure = |rect_height: u32| {
+            let mut pixels = vec![0_u32; 800 * 600];
+            paint_text_into_rect(
+                &mut Frame {
+                    buf: &mut pixels,
+                    w: 800,
+                    h: 600,
+                },
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 80,
+                    h: rect_height,
+                },
+                "7",
+                [0xFF, 0xFF, 0xFF, 0xFF],
+            );
+            let bottom = 10 + i32::try_from(rect_height).expect("rect height fits i32");
+            super::text_ink::ink_block(&pixels, 800, [0, 0, 100, bottom])
+        };
+        let tight = measure(12);
+        let tall = measure(20);
+        assert_eq!(tight.h, 6, "12 px cell inks six rows in a 12 px rect");
+        assert_eq!(
+            tall.h, 6,
+            "a 20 px rect keeps the same six rows, not a 20 px glyph"
+        );
+        assert_eq!(tight.w, 5, "advance stays one cell wide");
+        assert_eq!(tall.w, tight.w);
+        assert_eq!(tight.first_row(), 10, "rect top stays the ink top");
+        assert_eq!(tall.first_row(), tight.first_row());
+    }
+
     /// One solid probe figure at a known sprite anchor. Its ink lands
     /// where the blit puts the image origin, so the test needs no game
     /// data and can name the pinned pixel coordinates directly.
@@ -8282,13 +8340,15 @@ mod paint_tests {
         };
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
-        // Exe-measured 2026-11-09: the split row fields anchor at
-        // panel origin +12/+12 (number), +64/+11 (title), +194/+10
-        // (count) — panel 0 (26,82) puts the number glyphs at (38,94).
-        assert!(
-            window_has_ink(38, 94, 90, 10, white),
+        // Same window printed on base (bbox 39,92..241,107) and on
+        // the fixed-cell branch (below). Synthetic row, no exe claim.
+        let row_ink = text_ink::ink_block(&buf, w, [26, 82, 314, 173]);
+        assert_eq!(
+            row_ink.bbox,
+            [38, 92, 231, 100],
             "first room inks its staged left-top panel"
         );
+        assert_eq!(row_ink.h, 9);
         assert!(
             window_has_ink(26, 189, 90, 10, amber),
             "highlight cursor rides the staged second panel (number origin)"
@@ -8364,28 +8424,27 @@ mod paint_tests {
             &art,
             None,
         );
-        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
-        let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32| -> bool {
-            (y..y + hh).any(|py| {
-                (x..x + ww).any(|px| {
-                    usize::try_from(px).is_ok_and(|px| {
-                        usize::try_from(py)
-                            .is_ok_and(|py| px < w && py < h && near_xrgb(buf[py * w + px], white))
-                    })
-                })
-            })
-        };
-        assert!(
-            window_has_ink(220, 92, 40, 16),
+        // Base print: title bbox 90,93..119,104, count 220,92..241,105.
+        // Fixed-cell print: title bbox 90,93..106,99, count 220,92..231,99.
+        let title_ink = text_ink::ink_block(&buf, w, [60, 88, 130, 110]);
+        let count_ink = text_ink::ink_block(&buf, w, [210, 88, 260, 110]);
+        assert_eq!(
+            count_ink.bbox,
+            [220, 92, 231, 99],
             "seat count inks its pinned field (panel +194/+10)"
         );
-        assert!(
-            !window_has_ink(56, 94, 30, 10),
-            "title vacates the number's run (combined string crowded here)"
+        assert_eq!(
+            title_ink.bbox,
+            [90, 93, 106, 99],
+            "title stays in its own field, not the number's run"
         );
-        assert!(
-            window_has_ink(90, 102, 22, 4),
-            "title caps reach past micro-font height at real size"
+        assert_eq!(title_ink.h, 7);
+        // OPEN: no exe crop measures this row family's first ink row.
+        // Next step: story 2 (per-field bearing from exe pixels).
+        const EXE_ROW_TITLE_FIRST_ROW: Option<i32> = None;
+        assert_eq!(
+            EXE_ROW_TITLE_FIRST_ROW, None,
+            "OPEN: do not claim an exe bearing for the row title"
         );
     }
 
@@ -16254,9 +16313,12 @@ mod paint_tests {
         );
         fold_pin_pixels(&mut hash, &panel);
 
+        // Synthetic generation guard only, not an exe match. Exe
+        // size pins live in `text_fit_tests`. Re-pinned after the
+        // fixed-cell rule from 0xBAD4_1640_C080_E23A.
         assert_eq!(
-            hash, 0xBAD4_1640_C080_E23A,
-            "room paint generation changed; re-check the exe pins before updating"
+            hash, 3_889_324_520_374_835_157,
+            "room synthetic generation drifted"
         );
     }
 

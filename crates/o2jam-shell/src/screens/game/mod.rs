@@ -19861,9 +19861,12 @@ mod game_tests {
         let (mut game, page_rect) = myroom_tab_chrome_overlay();
         let ink = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
         let before = paint_myroom_panel(&mut game);
+        // Synthetic fixture pixel, not an exe claim. Printed on both
+        // trees before re-pinning: base 0x000000FF, fixed cell
+        // 0x000E0EFF. The probe pixel and its window are unchanged.
         assert_eq!(
             ink(&before, 115, 55),
-            pack_xrgb(0, 0, 255),
+            pack_xrgb(0x0E, 0x0E, 0xFF),
             "bag cell on entry"
         );
         assert_eq!(
@@ -19875,6 +19878,12 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(65, 55));
         assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
         let after = paint_myroom_panel(&mut game);
+        println!(
+            "GIFT PROBE after: 115,55={:#X} 128,68={:#X} 118,52={:#X}",
+            ink(&after, 115, 55),
+            ink(&after, 128, 68),
+            ink(&after, 118, 52)
+        );
         assert_eq!(ink(&after, 115, 55), 0, "bag cell art hidden");
         assert_eq!(ink(&after, 165, 55), 0, "BAGSORT art hidden");
         assert_eq!(
@@ -21415,14 +21424,17 @@ mod game_tests {
         for pixel in pixels {
             hash_u64(&mut hash, u64::from(pixel));
         }
-        // #797 re-pin: the VACATE press opens the exe's no-selection
-        // notice; #807 re-pin: the gift tab is switched before the
-        // gift cell press, so that cell stays live under the exe's
-        // tab-owned control set. Same screen, no wire.
+        // Synthetic state/paint generation guard only: this hash is
+        // not an exe match. The #797 notice and #807 gift-tab state
+        // are asserted directly below; exe size pins live in
+        // `text_fit_tests`. Re-pinned after the fixed-cell rule from
+        // 13_048_635_776_834_777_667 to the measured value below.
         assert_eq!(
-            hash, 13_048_635_776_834_777_667,
-            "MyRoom ScreenGame cluster output drifted"
+            hash, 7_002_086_803_620_121_158,
+            "MyRoom synthetic cluster generation drifted"
         );
+        assert_eq!(game.myroom().lower_tab(), MyRoomLowerTab::Gifts);
+        assert!(!captions.is_empty(), "wallet captions still staged");
     }
 
     #[test]
@@ -32175,10 +32187,23 @@ mod game_tests {
         };
         game.click_music_shop(720, 30);
         let hint_frame = paint(&mut game);
-        assert!((520..580).any(|col| hint_frame[30 * 800 + col] != 0));
         game.text_input("tun");
         let draft_frame = paint(&mut game);
-        assert!((520..580).any(|col| draft_frame[30 * 800 + col] != 0));
+        // Seam: this synthetic edit cell exercises the single-line
+        // painter; `text_fit_tests` carries the exe-pinned guard.
+        let ink = |pixels: &[u32]| {
+            crate::screens::paint::text_ink::ink_block(pixels, 800, [490, 10, 580, 40])
+        };
+        assert_eq!(
+            ink(&hint_frame).bbox,
+            [500, 20, 538, 26],
+            "hint inks one fixed cell at the rect top"
+        );
+        assert_eq!(
+            ink(&draft_frame).bbox,
+            [500, 20, 512, 26],
+            "typed draft replaces the hint in the same cell"
+        );
         assert_ne!(hint_frame, draft_frame, "the draft replaces the hint");
     }
 
@@ -32254,11 +32279,15 @@ mod game_tests {
             },
             0,
         );
-        assert!((515..650).any(|col| buf[30 * 800 + col] != 0), "first line");
-        assert!(
-            (515..650).any(|col| buf[60 * 800 + col] != 0),
-            "second line"
-        );
+        // Seam: staged synthetic tooltip lines, not an exe crop.
+        // Windows include background around each cell so the corner
+        // is a true background sample.
+        let first = crate::screens::paint::text_ink::ink_block(&buf, 800, [490, 10, 670, 45]);
+        let second = crate::screens::paint::text_ink::ink_block(&buf, 800, [490, 40, 670, 75]);
+        assert_eq!(first.bbox, [500, 20, 532, 26], "first line cell");
+        assert_eq!(second.bbox, [500, 50, 544, 56], "second line cell");
+        assert_eq!(first.h, 7);
+        assert_eq!(second.h, 7);
     }
 
     #[test]

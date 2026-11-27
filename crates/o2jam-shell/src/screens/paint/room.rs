@@ -146,37 +146,18 @@ pub(crate) const ROOM_ROW_TITLE_ORIGIN: (i32, i32) = (64, 11);
 /// origin +194/+10 (rig pin above — the count rides the row, not
 /// the `ROOM_USER` rect, which the capture shows as background).
 pub(crate) const ROOM_ROW_COUNT_ORIGIN: (i32, i32) = (194, 10);
-/// GDI cap-height share of a TEXT control rect: the live room title
-/// spans ~11 px in its 16 px rect, the music line ~14 px in 19 px
-/// (`t2-room-stage.png`); text sizes to 70% of the rect height.
-pub(crate) const TEXT_CAP_FRACTION: f32 = 0.7;
-
-/// Em extent fitting `text` to a `w`×`h` rect at the exe's GDI cap
-/// share: cap height fills [`TEXT_CAP_FRACTION`] of the rect height
-/// (the full-height [`cp949_fit_scale`] would undershoot the live
-/// glyphs by half). Width still clamps long strings into the rect.
-pub(crate) fn room_text_scale(text: &str, w: f32, h: f32) -> f32 {
-    if w <= 0.0 || h <= 0.0 || text.is_empty() {
-        return 0.0;
-    }
-    let (width_per_em, cap_em) = match o2jam_text::system_font() {
-        Some(font) => (
-            o2jam_text::measure_text(font, text, 1.0),
-            font.cap_height_em(),
-        ),
-        None => (o2jam_text::font::measure_text_stand_in(text, 1.0), 1.0),
-    };
-    if width_per_em <= 0.0 || cap_em <= 0.0 {
-        return 0.0;
-    }
-    let height_fit = TEXT_CAP_FRACTION * h / cap_em;
-    height_fit.min(w / width_per_em).max(0.0)
+/// Scale for room TEXT fields: the same fixed 6x12 GDI cell as the
+/// other single-line callers. The field rect places and clips it;
+/// a long room name overflows instead of shrinking.
+#[must_use]
+pub(crate) fn room_text_scale(frame_scale: f32) -> f32 {
+    super::cp949_cell_scale(frame_scale)
 }
 
 /// Paint one room row string into its field rect (native, usually
-/// panel-relative): the field origin is the pinned row offset while
-/// the size rides the staged template rect — the exe's GDI text
-/// fills the TEXT control at its cap share. Bare ink, no scrim.
+/// panel-relative): the field origin is the pinned row offset and
+/// the ink is one fixed GDI cell, not a rect-height fit. Bare ink,
+/// no scrim.
 pub(crate) fn paint_room_text_into_rect(
     frame: &mut Frame<'_>,
     native_rect: Rect,
@@ -190,7 +171,7 @@ pub(crate) fn paint_room_text_into_rect(
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let scale = room_text_scale(text, rect.w as f32, rect.h as f32);
+    let scale = room_text_scale(super::text_frame_scale(frame));
     if scale <= 0.0 {
         return;
     }
