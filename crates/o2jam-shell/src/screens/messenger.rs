@@ -1576,7 +1576,7 @@ mod tests {
             .expect("0x14 opens the in-game Q&A sheet");
         assert_eq!(
             rect.qa_rect_shift, EXE_QA_RECT_SHIFT_PX,
-            "exe shifts the Q&A rect by 50 in scene 2 (file 0x5f190, ev_286dc423cbdb57485c95d5c32cbc843bcf47a138f12fb237887289b873c54b98)"
+            "exe shifts the Q&A rect by 50 in scene 2 (0x45f480 / file 0x5f480; callee VA 0x45f190; ev_286dc423cbdb57485c95d5c32cbc843bcf47a138f12fb237887289b873c54b98)"
         );
     }
 
