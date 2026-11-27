@@ -29,6 +29,162 @@ empty_message!(SyncCashPoint, 5028);
 // modeled empty.
 empty_message!(StartPaymentResponse, 5016);
 
+/// Publisher named by one pinned cash-bill URL literal. The exe's
+/// condition for choosing a publisher at `0x45e010` is not recovered,
+/// so the caller supplies the variant; no host selection is invented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingPublisher {
+    /// `o2jam.monawa.com`.
+    Monawa,
+    /// `o2jam.gameangel.com`.
+    GameAngel,
+    /// `o2jam.gameon.nate.com`.
+    GameOnNate,
+    /// `o2jam.pdbox.co.kr`.
+    Pdbox,
+    /// `o2jam.nopp.co.kr`.
+    Nopp,
+}
+
+impl BillingPublisher {
+    const fn table_index(self) -> usize {
+        match self {
+            Self::Monawa => 2,
+            Self::GameAngel => 3,
+            Self::GameOnNate => 4,
+            Self::Pdbox => 5,
+            Self::Nopp => 6,
+        }
+    }
+}
+
+/// One billing URL pinned in the 7.55 exe. `file_offset` cites the URL
+/// literal; the page-name strings also sit in the range recorded by
+/// `docs/net-protocol.md` §2, files `0x2466d0`–`0x24a2d0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BillingPageRow {
+    /// Page name the exe uses, without the URL path.
+    pub page: &'static str,
+    /// Host named by the URL literal.
+    pub host: &'static str,
+    /// Path named by the URL literal, without the leading slash.
+    pub path: &'static str,
+    /// Exe file offset or offset range of the URL literal.
+    pub file_offset: &'static str,
+}
+
+/// One page-name-to-host table for the billing request-line builder.
+/// Cash-bill hosts are pinned strings, but which one the exe chooses
+/// stays OPEN: next evidence step is one local web-stub capture of
+/// the host-selection call at `0x45e010` (`docs/web-url-archive-audit.md`
+/// lines 48-53).
+pub const BILLING_PAGE_TABLE: [BillingPageRow; 9] = [
+    // `game1.o2jam.com` / `np/billing/payment/payment_input.aspx`, file `0x24b670`.
+    BillingPageRow {
+        page: "payment_input.aspx",
+        host: "game1.o2jam.com",
+        path: "np/billing/payment/payment_input.aspx",
+        file_offset: "0x24b670",
+    },
+    // `game1.o2jam.com` / `np/billing/gift/gift_input.aspx`, file `0x24b638`.
+    BillingPageRow {
+        page: "gift_input.aspx",
+        host: "game1.o2jam.com",
+        path: "np/billing/gift/gift_input.aspx",
+        file_offset: "0x24b638",
+    },
+    // Five cash-bill hosts, files `0x2466d0`–`0x2467b8`; the exe's choice is OPEN.
+    BillingPageRow {
+        page: "cash_bill",
+        host: "o2jam.monawa.com",
+        path: "client/cash_bill/index.phtml",
+        file_offset: "0x2466d0-0x2467b8",
+    },
+    BillingPageRow {
+        page: "cash_bill",
+        host: "o2jam.gameangel.com",
+        path: "client/cash_bill/index.phtml",
+        file_offset: "0x2466d0-0x2467b8",
+    },
+    BillingPageRow {
+        page: "cash_bill",
+        host: "o2jam.gameon.nate.com",
+        path: "client/cash_bill/index.phtml",
+        file_offset: "0x2466d0-0x2467b8",
+    },
+    BillingPageRow {
+        page: "cash_bill",
+        host: "o2jam.pdbox.co.kr",
+        path: "client/cash_bill/index.phtml",
+        file_offset: "0x2466d0-0x2467b8",
+    },
+    BillingPageRow {
+        page: "cash_bill",
+        host: "o2jam.nopp.co.kr",
+        path: "client/cash_bill/index.phtml",
+        file_offset: "0x2466d0-0x2467b8",
+    },
+    // `game1.o2jam.com` / `client/jamcard.asp`, file `0x24b87c`.
+    BillingPageRow {
+        page: "jamcard.asp",
+        host: "game1.o2jam.com",
+        path: "client/jamcard.asp",
+        file_offset: "0x24b87c",
+    },
+    // `o2jam.nopp.co.kr` / `client/coupon2/coupon.phtml`, file `0x24b844`.
+    BillingPageRow {
+        page: "coupon.phtml",
+        host: "o2jam.nopp.co.kr",
+        path: "client/coupon2/coupon.phtml",
+        file_offset: "0x24b844",
+    },
+];
+
+/// One billing page whose request line the reproduction builder emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingWebPageName {
+    /// `STATE_PAYMENT` entry page.
+    PaymentInput,
+    /// `STATE_PAYMENT2` gift input page.
+    GiftInput,
+    /// Cash-bill landing page for an explicitly supplied publisher.
+    CashBill(BillingPublisher),
+    /// Jamcard page.
+    JamCard,
+    /// Coupon page.
+    Coupon,
+}
+
+impl BillingWebPageName {
+    const fn table_index(self) -> usize {
+        match self {
+            Self::PaymentInput => 0,
+            Self::GiftInput => 1,
+            Self::CashBill(publisher) => publisher.table_index(),
+            Self::JamCard => 7,
+            Self::Coupon => 8,
+        }
+    }
+
+    /// The pinned row this page's host and path come from.
+    #[must_use]
+    pub const fn row(self) -> &'static BillingPageRow {
+        &BILLING_PAGE_TABLE[self.table_index()]
+    }
+}
+
+/// Build one HTTP/1.1 GET whose Host header and target come from the
+/// pinned table. `USER_INDEX_ID` is the session join the exe appends
+/// to these URLs (`0x4f3b30`, `0x4f4bd0`).
+#[must_use]
+pub fn billing_request_line(page: BillingWebPageName, user_index_id: &str) -> String {
+    let row = page.row();
+    format!(
+        "GET /{}?USER_INDEX_ID={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        row.path, user_index_id, row.host
+    )
+}
+
 /// Free-pass kinds (Memoryer `FreePassType`, `uint` bit flags;
 /// the server sends one value per sync).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -476,5 +632,110 @@ mod tests {
             SyncCashPointResponse::decode_body(&body),
             Err(Error::TrailingBytes(1))
         );
+    }
+
+    mod billing_request_line_tests {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+
+        use super::super::{billing_request_line, BillingPublisher, BillingWebPageName};
+        use crate::testing::fake_gateway;
+
+        /// Send one built request line to a scripted loopback gateway and
+        /// return its one-line answer.
+        fn replay_request_line(request_line: &str) -> String {
+            let expected_line = request_line.to_owned();
+            let (port, server) = fake_gateway(move |mut stream| {
+                let mut received = [0u8; 1024];
+                let used = stream.read(&mut received).unwrap();
+                assert!(used > 0, "gateway must receive a request line");
+                assert_eq!(
+                    String::from_utf8(received[..used].to_vec()).unwrap(),
+                    expected_line,
+                    "gateway must receive the builder's exact request line"
+                );
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .unwrap();
+            });
+
+            let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            client.write_all(request_line.as_bytes()).unwrap();
+            let mut answer = String::new();
+            client.read_to_string(&mut answer).unwrap();
+            server.join().unwrap();
+            answer
+        }
+
+        fn host_and_target(request_line: &str) -> (&str, &str) {
+            let mut lines = request_line.lines();
+            let target = lines.next().unwrap().split_whitespace().nth(1).unwrap();
+            let host = lines.find_map(|line| line.strip_prefix("Host: ")).unwrap();
+            (host, target)
+        }
+
+        #[test]
+        fn billing_request_lines_name_the_pinned_host_page_and_session_join_on_the_scripted_gateway(
+        ) {
+            // Seam: this client emits no HTTP request line by owner pin
+            // (`docs/pins/payment.md`, #427 live half). The built line is
+            // the reproduction seam; no live caller exists to trace.
+            // Cash-bill's publisher gate at 0x45e010 stays OPEN. Next
+            // evidence step: one local web-stub capture of the host choice;
+            // this guard asserts only the five hosts the docs pin.
+            const PAYMENT_HOST: &str = "game1.o2jam.com";
+            const GIFT_HOST: &str = "game1.o2jam.com";
+            const CASH_BILL_HOSTS: [&str; 5] = [
+                "o2jam.monawa.com",
+                "o2jam.gameangel.com",
+                "o2jam.gameon.nate.com",
+                "o2jam.pdbox.co.kr",
+                "o2jam.nopp.co.kr",
+            ];
+
+            let cases = [
+                (
+                    "payment_input.aspx",
+                    Some(PAYMENT_HOST),
+                    BillingWebPageName::PaymentInput,
+                ),
+                (
+                    "gift_input.aspx",
+                    Some(GIFT_HOST),
+                    BillingWebPageName::GiftInput,
+                ),
+                (
+                    "cash_bill",
+                    None,
+                    BillingWebPageName::CashBill(BillingPublisher::Nopp),
+                ),
+            ];
+
+            for (page, pinned_host, name) in cases {
+                let request_line = billing_request_line(name, "7");
+                let answer = replay_request_line(&request_line);
+                assert_eq!(answer, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+
+                let (host, target) = host_and_target(&request_line);
+                assert!(
+                    target.contains(page),
+                    "{page}: request target {target} must name the pinned page"
+                );
+                assert!(
+                    target.ends_with("?USER_INDEX_ID=7") || target.contains("&USER_INDEX_ID=7"),
+                    "{page}: request target {target} must join session 7"
+                );
+                match pinned_host {
+                    Some(expected) => assert_eq!(
+                        host, expected,
+                        "{page}: gateway Host header expected {expected}, got {host}"
+                    ),
+                    None => assert!(
+                        CASH_BILL_HOSTS.contains(&host),
+                        "{page}: gateway Host header {host} must be one of the five pinned hosts {CASH_BILL_HOSTS:?}"
+                    ),
+                }
+            }
+        }
     }
 }
