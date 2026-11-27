@@ -47,6 +47,15 @@ pub enum BillingPublisher {
 }
 
 impl BillingPublisher {
+    /// All five pinned variants, in table order.
+    pub const ALL: [Self; 5] = [
+        Self::Monawa,
+        Self::GameAngel,
+        Self::GameOnNate,
+        Self::Pdbox,
+        Self::Nopp,
+    ];
+
     const fn table_index(self) -> usize {
         match self {
             Self::Monawa => 2,
@@ -55,6 +64,30 @@ impl BillingPublisher {
             Self::Pdbox => 5,
             Self::Nopp => 6,
         }
+    }
+
+    /// Host literal from the pinned cash-bill table rows.
+    #[must_use]
+    pub const fn host(self) -> &'static str {
+        BILLING_PAGE_TABLE[self.table_index()].host
+    }
+
+    /// Short publisher name used by the 7.55 URL inventory.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Monawa => "monawa",
+            Self::GameAngel => "gameangel",
+            Self::GameOnNate => "gameon.nate",
+            Self::Pdbox => "pdbox",
+            Self::Nopp => "nopp",
+        }
+    }
+
+    /// Why the publisher choice is ours, not a recovered exe gate.
+    #[must_use]
+    pub const fn selector_provenance() -> &'static str {
+        "OURS-BY-DESIGN: exe host-selection condition at 0x45e010 is OPEN"
     }
 }
 
@@ -140,25 +173,41 @@ pub const BILLING_PAGE_TABLE: [BillingPageRow; 9] = [
     },
 ];
 
-/// One billing page whose request line the reproduction builder emits.
+/// Host of the payment, gift and jamcard URL rows (`0x24b670`,
+/// `0x24b638`, `0x24b87c`). Derived from the table, never copied.
+pub const BILLING_HOST: &str = BILLING_PAGE_TABLE[0].host;
+/// Host of the coupon URL row (`0x24b844`).
+pub const COUPON_HOST: &str = BILLING_PAGE_TABLE[8].host;
+/// Path of the cash-bill URL rows (`0x2466d0`–`0x2467b8`).
+pub const CASH_BILL_PATH: &str = BILLING_PAGE_TABLE[2].path;
+/// The five pinned cash-bill hosts, in table order.
+pub const CASH_BILL_HOSTS: [&str; 5] = [
+    BILLING_PAGE_TABLE[2].host,
+    BILLING_PAGE_TABLE[3].host,
+    BILLING_PAGE_TABLE[4].host,
+    BILLING_PAGE_TABLE[5].host,
+    BILLING_PAGE_TABLE[6].host,
+];
+
+/// One billing page whose URL the shell and the reproduction builder emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BillingWebPageName {
+pub enum BillingWebPage {
     /// `STATE_PAYMENT` entry page.
-    PaymentInput,
+    Payment,
     /// `STATE_PAYMENT2` gift input page.
     GiftInput,
     /// Cash-bill landing page for an explicitly supplied publisher.
     CashBill(BillingPublisher),
-    /// Jamcard page.
+    /// Payment2 jamcard branch.
     JamCard,
-    /// Coupon page.
+    /// Payment2 coupon branch.
     Coupon,
 }
 
-impl BillingWebPageName {
+impl BillingWebPage {
     const fn table_index(self) -> usize {
         match self {
-            Self::PaymentInput => 0,
+            Self::Payment => 0,
             Self::GiftInput => 1,
             Self::CashBill(publisher) => publisher.table_index(),
             Self::JamCard => 7,
@@ -171,13 +220,43 @@ impl BillingWebPageName {
     pub const fn row(self) -> &'static BillingPageRow {
         &BILLING_PAGE_TABLE[self.table_index()]
     }
+
+    /// Host named by this page's pinned URL literal.
+    #[must_use]
+    pub const fn host(self) -> &'static str {
+        billing_page(self).0
+    }
+
+    /// Path named by this page's pinned URL literal, without the slash.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        billing_page(self).1
+    }
+
+    /// The URL the client mounts for this page and session id.
+    #[must_use]
+    pub fn url(self, user_index_id: &str) -> String {
+        format!(
+            "http://{}/{}?USER_INDEX_ID={}",
+            self.host(),
+            self.path(),
+            user_index_id
+        )
+    }
+}
+
+/// The one host/path pair a billing page reads from the pinned table.
+#[must_use]
+pub const fn billing_page(page: BillingWebPage) -> (&'static str, &'static str) {
+    let row = page.row();
+    (row.host, row.path)
 }
 
 /// Build one HTTP/1.1 GET whose Host header and target come from the
 /// pinned table. `USER_INDEX_ID` is the session join the exe appends
 /// to these URLs (`0x4f3b30`, `0x4f4bd0`).
 #[must_use]
-pub fn billing_request_line(page: BillingWebPageName, user_index_id: &str) -> String {
+pub fn billing_request_line(page: BillingWebPage, user_index_id: &str) -> String {
     let row = page.row();
     format!(
         "GET /{}?USER_INDEX_ID={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
@@ -638,7 +717,7 @@ mod tests {
         use std::io::{Read, Write};
         use std::net::TcpStream;
 
-        use super::super::{billing_request_line, BillingPublisher, BillingWebPageName};
+        use super::super::{billing_request_line, BillingPublisher, BillingWebPage};
         use crate::testing::fake_gateway;
 
         /// Send one built request line to a scripted loopback gateway and
@@ -697,17 +776,17 @@ mod tests {
                 (
                     "payment_input.aspx",
                     Some(PAYMENT_HOST),
-                    BillingWebPageName::PaymentInput,
+                    BillingWebPage::Payment,
                 ),
                 (
                     "gift_input.aspx",
                     Some(GIFT_HOST),
-                    BillingWebPageName::GiftInput,
+                    BillingWebPage::GiftInput,
                 ),
                 (
                     "cash_bill",
                     None,
-                    BillingWebPageName::CashBill(BillingPublisher::Nopp),
+                    BillingWebPage::CashBill(BillingPublisher::Nopp),
                 ),
             ];
 

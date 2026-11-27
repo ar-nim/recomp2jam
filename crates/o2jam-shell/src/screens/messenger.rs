@@ -546,139 +546,13 @@ impl WebSheetHost {
     }
 }
 
-/// Host of the payment, gift and jamcard page literals pinned in
-/// `docs/web-url-archive-audit.md` (`0x24b638`–`0x24b87c`).
-pub const BILLING_HOST: &str = "game1.o2jam.com";
-/// Host of the coupon page literal (`0x24b844`).
-pub const COUPON_HOST: &str = "o2jam.nopp.co.kr";
-/// Path of the five cash-bill landing pages opened by `0x45e010`.
-pub const CASH_BILL_PATH: &str = "client/cash_bill/index.phtml";
-/// Publisher hosts of the cash-bill literal set (files `0x2466d0`–
-/// `0x2467b8`). The exe's host-selection condition is unpinned, so
-/// this is a table, not a chosen URL.
-pub const CASH_BILL_HOSTS: [&str; 5] = [
-    "o2jam.monawa.com",
-    "o2jam.gameangel.com",
-    "o2jam.gameon.nate.com",
-    "o2jam.pdbox.co.kr",
-    "o2jam.nopp.co.kr",
-];
-
-/// Publisher argument of our native cash-charge flow. The exe's
-/// host-selection condition at `0x45e010` is OPEN, so these variants
-/// are ours-by-design: they name the five pinned hosts without
-/// claiming how the exe chose one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CashBillPublisher {
-    /// `o2jam.monawa.com`.
-    Monawa,
-    /// `o2jam.gameangel.com`.
-    GameAngel,
-    /// `o2jam.gameon.nate.com`.
-    GameOnNate,
-    /// `o2jam.pdbox.co.kr`.
-    Pdbox,
-    /// `o2jam.nopp.co.kr`.
-    Nopp,
-}
-
-impl CashBillPublisher {
-    /// All five pinned variants, in table order.
-    pub const ALL: [Self; 5] = [
-        Self::Monawa,
-        Self::GameAngel,
-        Self::GameOnNate,
-        Self::Pdbox,
-        Self::Nopp,
-    ];
-
-    const fn table_index(self) -> usize {
-        match self {
-            Self::Monawa => 0,
-            Self::GameAngel => 1,
-            Self::GameOnNate => 2,
-            Self::Pdbox => 3,
-            Self::Nopp => 4,
-        }
-    }
-
-    /// Host literal from the merged cash-bill table.
-    #[must_use]
-    pub const fn host(self) -> &'static str {
-        CASH_BILL_HOSTS[self.table_index()]
-    }
-
-    /// Short publisher name used by the 7.55 URL inventory.
-    #[must_use]
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::Monawa => "monawa",
-            Self::GameAngel => "gameangel",
-            Self::GameOnNate => "gameon.nate",
-            Self::Pdbox => "pdbox",
-            Self::Nopp => "nopp",
-        }
-    }
-
-    /// Why this selector is ours and not a recovered exe gate.
-    #[must_use]
-    pub const fn selector_provenance() -> &'static str {
-        "OURS-BY-DESIGN: exe host-selection condition at 0x45e010 is OPEN"
-    }
-}
-
-/// One billing page literal. The exe joins `USER_INDEX_ID` from
-/// `Identifaction.ini` onto each URL (`0x4f3b30`, `0x4f4bd0`); the
-/// jamcard-versus-coupon branch is supplied by the caller because
-/// its gate stays unpinned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BillingWebPage {
-    /// `STATE_PAYMENT` entry page.
-    Payment,
-    /// `STATE_PAYMENT2` gift input page.
-    GiftInput,
-    /// Payment2 jamcard branch.
-    JamCard,
-    /// Payment2 coupon branch.
-    Coupon,
-    /// Cash-bill landing page for one explicitly supplied publisher.
-    CashBill(CashBillPublisher),
-}
-
-impl BillingWebPage {
-    /// Host named by the pinned URL literal.
-    #[must_use]
-    pub const fn host(self) -> &'static str {
-        match self {
-            Self::CashBill(publisher) => publisher.host(),
-            Self::Coupon => COUPON_HOST,
-            Self::Payment | Self::GiftInput | Self::JamCard => BILLING_HOST,
-        }
-    }
-
-    /// Path named by the pinned URL literal, without the leading slash.
-    #[must_use]
-    pub const fn path(self) -> &'static str {
-        match self {
-            Self::CashBill(_) => CASH_BILL_PATH,
-            Self::Payment => "np/billing/payment/payment_input.aspx",
-            Self::GiftInput => "np/billing/gift/gift_input.aspx",
-            Self::JamCard => "client/jamcard.asp",
-            Self::Coupon => "client/coupon2/coupon.phtml",
-        }
-    }
-
-    /// The URL the exe opens for this page and session id.
-    #[must_use]
-    pub fn url(self, user_index_id: &str) -> String {
-        format!(
-            "http://{}/{}?USER_INDEX_ID={}",
-            self.host(),
-            self.path(),
-            user_index_id
-        )
-    }
-}
+/// Billing hosts, paths and publisher identities are re-exports of the
+/// pinned rows in `o2jam-net::wallet::BILLING_PAGE_TABLE`. The shell
+/// keeps no literal copy of a host, page path or publisher host set.
+pub use o2jam_net::wallet::{
+    BillingPublisher as CashBillPublisher, BillingWebPage, BILLING_HOST, CASH_BILL_HOSTS,
+    CASH_BILL_PATH, COUPON_HOST,
+};
 
 /// One observable step of a billing web rebuild. `0x4f3d00` and
 /// `0x4f5020` close a stored window handle before calling their
@@ -1464,6 +1338,81 @@ mod tests {
                 None,
                 "an unpinned menu button cannot carry a scroll send: {code:#x}"
             );
+        }
+    }
+
+    #[test]
+    fn live_billing_url_reads_the_pinned_host_page_and_session_join() {
+        // Live caller chain: main.rs::run_play -> connect::connect_and_login_with_transport
+        // -> window hub 0x5a5190 (WM_APP+0x32) -> billing_window_arm
+        // -> BillingWebHandle::rebuild -> BillingWebPage::url.
+        // The expected literals below are the doc-pinned values, not
+        // values read back from the source under test. Cash-bill's
+        // publisher gate at 0x45e010 stays OPEN; the guard asserts only
+        // the five hosts the docs pin.
+        const PAYMENT_HOST: &str = "game1.o2jam.com";
+        const GIFT_HOST: &str = "game1.o2jam.com";
+        const CASH_BILL_HOSTS: [&str; 5] = [
+            "o2jam.monawa.com",
+            "o2jam.gameangel.com",
+            "o2jam.gameon.nate.com",
+            "o2jam.pdbox.co.kr",
+            "o2jam.nopp.co.kr",
+        ];
+
+        let cases = [
+            (
+                "payment_input.aspx",
+                Some(PAYMENT_HOST),
+                BillingWebPage::Payment,
+            ),
+            (
+                "gift_input.aspx",
+                Some(GIFT_HOST),
+                BillingWebPage::GiftInput,
+            ),
+            (
+                "cash_bill",
+                None,
+                BillingWebPage::CashBill(CashBillPublisher::Nopp),
+            ),
+        ];
+
+        for (page, pinned_host, name) in cases {
+            let mut handle = BillingWebHandle::with_handle(41);
+            let steps = handle.rebuild(name, "7", 42);
+            let url = steps
+                .iter()
+                .find_map(|step| match step {
+                    BillingWebEvent::Mounted { url, .. } => Some(url.as_str()),
+                    _ => None,
+                })
+                .unwrap();
+            let host = url
+                .strip_prefix("http://")
+                .unwrap()
+                .split('/')
+                .next()
+                .unwrap();
+
+            assert!(
+                url.contains(page),
+                "{page}: live URL {url} must name the pinned page"
+            );
+            assert!(
+                url.ends_with("?USER_INDEX_ID=7"),
+                "{page}: live URL {url} must join session 7"
+            );
+            match pinned_host {
+                Some(expected) => assert_eq!(
+                    host, expected,
+                    "{page}: live URL host expected {expected}, got {host}"
+                ),
+                None => assert!(
+                    CASH_BILL_HOSTS.contains(&host),
+                    "{page}: live URL host {host} must be one of the five pinned hosts {CASH_BILL_HOSTS:?}"
+                ),
+            }
         }
     }
 
