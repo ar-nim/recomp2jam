@@ -6679,10 +6679,10 @@ pub fn lanking_rank_cells(entry: &RankEntry) -> [String; 6] {
     ]
 }
 
-/// Billing page behind `STATE_PAYMENT` (lifecycle §12 `CDPayment` view).
-pub const PAYMENT_PAGE: &str = "payment_input.aspx";
-/// Billing page behind `STATE_PAYMENT2` (gift view).
-pub const GIFT_PAGE: &str = "gift_input.aspx";
+/// Billing page facts are re-exports of the offset-pinned rows in
+/// `o2jam_net::wallet::BILLING_PAGE_TABLE`. No page name or path is
+/// copied into this shell file.
+pub use o2jam_net::wallet::{GIFT_PAGE, GIFT_URL_PATH, PAYMENT_PAGE, PAYMENT_URL_PATH};
 
 /// Native pixel box of the staged Cash Charge close sprite: its
 /// parsed `.bnd` origin plus the sprite's first decoded layer anchor,
@@ -6738,14 +6738,6 @@ pub const fn payment_labels() -> [PaymentLabel; 2] {
         },
     ]
 }
-
-/// Lifecycle-verified path behind `STATE_PAYMENT`: the
-/// `.../np/billing/payment/payment_input.aspx` web view (lifecycle §12).
-/// The host comes from the web bridge; only the path is staged.
-pub const PAYMENT_URL_PATH: &str = "np/billing/payment/payment_input.aspx";
-/// Lifecycle-verified path behind `STATE_PAYMENT2` (gift view): the
-/// `.../billing/gift/gift_input.aspx` web view (lifecycle §12).
-pub const GIFT_URL_PATH: &str = "billing/gift/gift_input.aspx";
 
 impl PaymentLabel {
     /// Lifecycle-verified URL path for this view (payment vs gift by block).
@@ -10371,22 +10363,54 @@ mod side_tests {
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0].block, PAYMENT_BLOCK);
         assert_eq!(labels[0].page, PAYMENT_PAGE);
-        assert_eq!(labels[0].page, "payment_input.aspx");
+        assert_eq!(
+            labels[0].page, "payment_input.aspx",
+            "payment_input.aspx: staged page expected payment_input.aspx, got {}",
+            labels[0].page
+        );
         assert_eq!(labels[1].block, PAYMENT2_BLOCK);
         assert_eq!(labels[1].page, GIFT_PAGE);
-        assert_eq!(labels[1].page, "gift_input.aspx");
+        assert_eq!(
+            labels[1].page, "gift_input.aspx",
+            "gift_input.aspx: staged page expected gift_input.aspx, got {}",
+            labels[1].page
+        );
     }
 
     #[test]
-    fn payment_url_paths_name_lifecycle_verified_billing_views() {
+    fn payment_staging_rows_use_the_pinned_page_names() {
+        let pages = crate::staging::PAYMENT_PAGES;
+        assert_eq!(pages[0].page, PAYMENT_PAGE);
+        assert_eq!(
+            pages[0].page, "payment_input.aspx",
+            "payment_input.aspx: staged row expected payment_input.aspx, got {}",
+            pages[0].page
+        );
+        assert_eq!(pages[1].page, GIFT_PAGE);
+        assert_eq!(
+            pages[1].page, "gift_input.aspx",
+            "gift_input.aspx: staged row expected gift_input.aspx, got {}",
+            pages[1].page
+        );
+    }
+
+    #[test]
+    fn payment_url_paths_name_the_pinned_billing_rows() {
         let labels = payment_labels();
         assert_eq!(labels[0].url_path(), PAYMENT_URL_PATH);
         assert_eq!(
             labels[0].url_path(),
-            "np/billing/payment/payment_input.aspx"
+            "np/billing/payment/payment_input.aspx",
+            "payment_input.aspx: staged path expected np/billing/payment/payment_input.aspx, got {}",
+            labels[0].url_path()
         );
         assert_eq!(labels[1].url_path(), GIFT_URL_PATH);
-        assert_eq!(labels[1].url_path(), "billing/gift/gift_input.aspx");
+        assert_eq!(
+            labels[1].url_path(),
+            "np/billing/gift/gift_input.aspx",
+            "gift_input.aspx: staged path expected np/billing/gift/gift_input.aspx, got {}",
+            labels[1].url_path()
+        );
     }
 
     #[test]
@@ -10398,7 +10422,7 @@ mod side_tests {
         );
         assert_eq!(
             payment_view_caption(&labels[1]),
-            "STATE_PAYMENT2 billing/gift/gift_input.aspx"
+            "STATE_PAYMENT2 np/billing/gift/gift_input.aspx"
         );
     }
 

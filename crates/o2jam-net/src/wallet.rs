@@ -29,6 +29,20 @@ empty_message!(SyncCashPoint, 5028);
 // modeled empty.
 empty_message!(StartPaymentResponse, 5016);
 
+// Named row positions keep aliases and page lookups independent of
+// future row order.
+const PAYMENT_ROW: usize = 0;
+const GIFT_ROW: usize = 1;
+const CASH_BILL_FIRST_ROW: usize = 2;
+const CASH_BILL_LAST_ROW: usize = 6;
+const JAMCARD_ROW: usize = 7;
+const COUPON_ROW: usize = 8;
+
+// The docs pin one shared range for the five cash-bill URLs, not five
+// per-host offsets. Keeping that range named prevents a false
+// per-string claim.
+const CASH_BILL_URL_RANGE: &str = "0x2466d0-0x2467b8";
+
 /// Publisher named by one pinned cash-bill URL literal. The exe's
 /// condition for choosing a publisher at `0x45e010` is not recovered,
 /// so the caller supplies the variant; no host selection is invented.
@@ -58,11 +72,11 @@ impl BillingPublisher {
 
     const fn table_index(self) -> usize {
         match self {
-            Self::Monawa => 2,
-            Self::GameAngel => 3,
-            Self::GameOnNate => 4,
-            Self::Pdbox => 5,
-            Self::Nopp => 6,
+            Self::Monawa => CASH_BILL_FIRST_ROW,
+            Self::GameAngel => CASH_BILL_FIRST_ROW + 1,
+            Self::GameOnNate => CASH_BILL_FIRST_ROW + 2,
+            Self::Pdbox => CASH_BILL_FIRST_ROW + 3,
+            Self::Nopp => CASH_BILL_LAST_ROW,
         }
     }
 
@@ -102,7 +116,8 @@ pub struct BillingPageRow {
     pub host: &'static str,
     /// Path named by the URL literal, without the leading slash.
     pub path: &'static str,
-    /// Exe file offset or offset range of the URL literal.
+    /// Exe file offset, or a named shared range when the docs give no
+    /// per-string offset. The five cash-bill rows use one such range.
     pub file_offset: &'static str,
 }
 
@@ -131,31 +146,31 @@ pub const BILLING_PAGE_TABLE: [BillingPageRow; 9] = [
         page: "cash_bill",
         host: "o2jam.monawa.com",
         path: "client/cash_bill/index.phtml",
-        file_offset: "0x2466d0-0x2467b8",
+        file_offset: CASH_BILL_URL_RANGE,
     },
     BillingPageRow {
         page: "cash_bill",
         host: "o2jam.gameangel.com",
         path: "client/cash_bill/index.phtml",
-        file_offset: "0x2466d0-0x2467b8",
+        file_offset: CASH_BILL_URL_RANGE,
     },
     BillingPageRow {
         page: "cash_bill",
         host: "o2jam.gameon.nate.com",
         path: "client/cash_bill/index.phtml",
-        file_offset: "0x2466d0-0x2467b8",
+        file_offset: CASH_BILL_URL_RANGE,
     },
     BillingPageRow {
         page: "cash_bill",
         host: "o2jam.pdbox.co.kr",
         path: "client/cash_bill/index.phtml",
-        file_offset: "0x2466d0-0x2467b8",
+        file_offset: CASH_BILL_URL_RANGE,
     },
     BillingPageRow {
         page: "cash_bill",
         host: "o2jam.nopp.co.kr",
         path: "client/cash_bill/index.phtml",
-        file_offset: "0x2466d0-0x2467b8",
+        file_offset: CASH_BILL_URL_RANGE,
     },
     // `game1.o2jam.com` / `client/jamcard.asp`, file `0x24b87c`.
     BillingPageRow {
@@ -175,19 +190,32 @@ pub const BILLING_PAGE_TABLE: [BillingPageRow; 9] = [
 
 /// Host of the payment, gift and jamcard URL rows (`0x24b670`,
 /// `0x24b638`, `0x24b87c`). Derived from the table, never copied.
-pub const BILLING_HOST: &str = BILLING_PAGE_TABLE[0].host;
+pub const BILLING_HOST: &str = BILLING_PAGE_TABLE[PAYMENT_ROW].host;
 /// Host of the coupon URL row (`0x24b844`).
-pub const COUPON_HOST: &str = BILLING_PAGE_TABLE[8].host;
+pub const COUPON_HOST: &str = BILLING_PAGE_TABLE[COUPON_ROW].host;
 /// Path of the cash-bill URL rows (`0x2466d0`–`0x2467b8`).
-pub const CASH_BILL_PATH: &str = BILLING_PAGE_TABLE[2].path;
+pub const CASH_BILL_PATH: &str = BILLING_PAGE_TABLE[CASH_BILL_FIRST_ROW].path;
 /// The five pinned cash-bill hosts, in table order.
 pub const CASH_BILL_HOSTS: [&str; 5] = [
-    BILLING_PAGE_TABLE[2].host,
-    BILLING_PAGE_TABLE[3].host,
-    BILLING_PAGE_TABLE[4].host,
-    BILLING_PAGE_TABLE[5].host,
-    BILLING_PAGE_TABLE[6].host,
+    BILLING_PAGE_TABLE[CASH_BILL_FIRST_ROW].host,
+    BILLING_PAGE_TABLE[CASH_BILL_FIRST_ROW + 1].host,
+    BILLING_PAGE_TABLE[CASH_BILL_FIRST_ROW + 2].host,
+    BILLING_PAGE_TABLE[CASH_BILL_FIRST_ROW + 3].host,
+    BILLING_PAGE_TABLE[CASH_BILL_LAST_ROW].host,
 ];
+
+/// Page name of the `STATE_PAYMENT` row, file `0x24b670`.
+pub const PAYMENT_PAGE: &str = BILLING_PAGE_TABLE[PAYMENT_ROW].page;
+/// Page name of the `STATE_PAYMENT2` gift row, file `0x24b638`.
+pub const GIFT_PAGE: &str = BILLING_PAGE_TABLE[GIFT_ROW].page;
+/// URL path of the payment row, file `0x24b670`.
+pub const PAYMENT_URL_PATH: &str = BILLING_PAGE_TABLE[PAYMENT_ROW].path;
+/// URL path of the gift row, file `0x24b638`.
+/// OPEN contradiction: `docs/lifecycle.md` §12 omits the `np/` prefix,
+/// while the file-`0x24b638` inventory names it. This constant follows
+/// the offset-pinned row; next step is a byte read of that string and
+/// its neighbours. `docs/net-protocol.md` §2 records both claims.
+pub const GIFT_URL_PATH: &str = BILLING_PAGE_TABLE[GIFT_ROW].path;
 
 /// One billing page whose URL the shell and the reproduction builder emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,11 +235,11 @@ pub enum BillingWebPage {
 impl BillingWebPage {
     const fn table_index(self) -> usize {
         match self {
-            Self::Payment => 0,
-            Self::GiftInput => 1,
+            Self::Payment => PAYMENT_ROW,
+            Self::GiftInput => GIFT_ROW,
             Self::CashBill(publisher) => publisher.table_index(),
-            Self::JamCard => 7,
-            Self::Coupon => 8,
+            Self::JamCard => JAMCARD_ROW,
+            Self::Coupon => COUPON_ROW,
         }
     }
 
@@ -250,18 +278,6 @@ impl BillingWebPage {
 pub const fn billing_page(page: BillingWebPage) -> (&'static str, &'static str) {
     let row = page.row();
     (row.host, row.path)
-}
-
-/// Build one HTTP/1.1 GET whose Host header and target come from the
-/// pinned table. `USER_INDEX_ID` is the session join the exe appends
-/// to these URLs (`0x4f3b30`, `0x4f4bd0`).
-#[must_use]
-pub fn billing_request_line(page: BillingWebPage, user_index_id: &str) -> String {
-    let row = page.row();
-    format!(
-        "GET /{}?USER_INDEX_ID={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        row.path, user_index_id, row.host
-    )
 }
 
 /// Free-pass kinds (Memoryer `FreePassType`, `uint` bit flags;
@@ -717,8 +733,19 @@ mod tests {
         use std::io::{Read, Write};
         use std::net::TcpStream;
 
-        use super::super::{billing_request_line, BillingPublisher, BillingWebPage};
+        use super::super::{BillingPublisher, BillingWebPage};
         use crate::testing::fake_gateway;
+
+        /// Reproduction-only request line. The exe's header bytes are
+        /// not captured, so this stays inside the test module until a
+        /// local web-stub capture pins them.
+        fn billing_request_line(page: BillingWebPage, user_index_id: &str) -> String {
+            let row = page.row();
+            format!(
+                "GET /{}?USER_INDEX_ID={} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                row.path, user_index_id, row.host
+            )
+        }
 
         /// Send one built request line to a scripted loopback gateway and
         /// return its one-line answer.

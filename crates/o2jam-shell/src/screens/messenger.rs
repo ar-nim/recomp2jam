@@ -1363,22 +1363,25 @@ mod tests {
         let cases = [
             (
                 "payment_input.aspx",
+                "np/billing/payment/payment_input.aspx",
                 Some(PAYMENT_HOST),
                 BillingWebPage::Payment,
             ),
             (
                 "gift_input.aspx",
+                "np/billing/gift/gift_input.aspx",
                 Some(GIFT_HOST),
                 BillingWebPage::GiftInput,
             ),
             (
                 "cash_bill",
+                "client/cash_bill/index.phtml",
                 None,
                 BillingWebPage::CashBill(CashBillPublisher::Nopp),
             ),
         ];
 
-        for (page, pinned_host, name) in cases {
+        for (page, expected_path, pinned_host, name) in cases {
             let mut handle = BillingWebHandle::with_handle(41);
             let steps = handle.rebuild(name, "7", 42);
             let url = steps
@@ -1388,13 +1391,14 @@ mod tests {
                     _ => None,
                 })
                 .unwrap();
-            let host = url
-                .strip_prefix("http://")
-                .unwrap()
-                .split('/')
-                .next()
-                .unwrap();
+            let after_scheme = url.strip_prefix("http://").unwrap();
+            let (host, with_path) = after_scheme.split_once('/').unwrap();
+            let path = with_path.split('?').next().unwrap();
 
+            assert_eq!(
+                path, expected_path,
+                "{page}: live URL path expected {expected_path}, got {path}"
+            );
             assert!(
                 url.contains(page),
                 "{page}: live URL {url} must name the pinned page"
