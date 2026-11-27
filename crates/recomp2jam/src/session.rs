@@ -4885,9 +4885,11 @@ impl OnlineSession {
     /// Room/Channel frames go to the lobby handler and Waiting frames
     /// to the waiting handler, so a 07DA poll loses nothing (#380).
     fn replay_deferred_frames(&mut self) {
-        // Take one generation at a time. A frame this screen still
-        // cannot own goes back on the queue; replaying it again in the
-        // same paint would spin forever (#1157).
+        // One generation per call: a frame a handler re-parks waits
+        // for the next paint. On Room or Channel, an unowned frame is
+        // parked by the lobby handler for that retry. Elsewhere the
+        // frame keeps the old behavior: the handler drops it with a
+        // log.
         let deferred = std::mem::take(&mut self.deferred_frames);
         for frame in deferred {
             if self.fold_expected_wallet_answer(&frame) {
