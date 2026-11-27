@@ -25,7 +25,7 @@ usage() {
   cat <<'USAGE'
 usage: rig-verify-remint.sh --db PATH --work-dir DIR [options]
   --db PATH           read-only Memoryer DB used by the mint script
-  --work-dir DIR      resolved scratch dir; parent must exist
+  --work-dir DIR      resolved scratch dir; missing parents are created
   --manifest FILE     new provenance file; scratch or docs/captures/t240
   --pin-file FILE     field record to read (default: t240 wine-argv-fields.txt)
   --mint-script FILE  mint script to invoke (default: scripts/rig-mint-launch-argv.sh)
@@ -52,32 +52,44 @@ done
 [ -r "$PIN_FILE" ] || die "--pin-file FILE is not readable: $PIN_FILE"
 [ -r "$MINT_SCRIPT" ] || die "--mint-script FILE is not readable: $MINT_SCRIPT"
 
+# These checks are not race-resistant: a process that swaps a symlink in
+# between validation and write could escape. This script is for one operator
+# on a quiet rig, not against a hostile concurrent process.
 is_within() {
   local target="$1" root="$2"
   [ "$target" = "$root" ] || [[ "$target" == "$root"/* ]]
 }
 
 resolve_write_path() {
-  local label="$1" path="$2" parent resolved
+  local label="$1" path="$2" candidate parent suffix="" resolved
   case "$path" in
     /*) ;;
     *) die "$label must be absolute: $path" ;;
   esac
+  case "$path" in
+    */../*|*/..|../*|..) die "$label must not contain a '..' segment: $path" ;;
+  esac
+  case "$path" in
+    *//*) die "$label must not contain an empty path segment: $path" ;;
+  esac
   [ ! -L "$path" ] || die "$label must not be a symlink: $path"
-  if [ -e "$path" ]; then
-    resolved="$(realpath -e -- "$path")" || die "$label cannot be resolved: $path"
-  else
-    parent="$(dirname -- "$path")"
-    [ -d "$parent" ] || die "$label parent directory does not exist: $parent"
-    resolved="$(realpath -e -- "$parent")" || die "$label parent cannot be resolved: $parent"
-    resolved="$resolved/$(basename -- "$path")"
-  fi
-  printf '%s\n' "$resolved"
+
+  candidate="$path"
+  while [ ! -e "$candidate" ]; do
+    parent="$(dirname -- "$candidate")"
+    [ "$parent" != "$candidate" ] || die "$label has no existing ancestor: $path"
+    suffix="/$(basename -- "$candidate")$suffix"
+    candidate="$parent"
+  done
+  resolved="$(realpath -e -- "$candidate")" || die "$label ancestor cannot be resolved: $candidate"
+  printf '%s%s\n' "$resolved" "$suffix"
 }
 
 require_within_roots() {
   local label="$1" path="$2" resolved root
   shift 2
+  # The suffix has no '..' or empty segment, so checking the final target
+  # also confines the resolved ancestor.
   resolved="$(resolve_write_path "$label" "$path")" || exit 2
   for root in "$@"; do
     if is_within "$resolved" "$root"; then
@@ -161,11 +173,9 @@ declare -A MANIFEST_INPUTS=(
 )
 
 write_manifest() {
-  local -a arguments=("-" "$MANIFEST")
-  local key
-  for key in "${!MANIFEST_INPUTS[@]}"; do
-    arguments+=("$key" "${MANIFEST_INPUTS[$key]}")
-  done
+  local manifest_path="$1"
+  shift
+  local -a arguments=("-" "$manifest_path" "$@")
   python3 "${arguments[@]}" <<'PY'
 import hashlib
 import json
@@ -197,6 +207,11 @@ PY
 }
 
 if [ -n "$MANIFEST" ]; then
-  write_manifest
+  manifest_pairs=()
+  for manifest_key in "${!MANIFEST_INPUTS[@]}"; do
+    manifest_pairs+=("$manifest_key" "${MANIFEST_INPUTS[$manifest_key]}")
+  done
+  mkdir -p "$(dirname "$MANIFEST")"
+  write_manifest "$MANIFEST" "${manifest_pairs[@]}"
   echo "manifest=$MANIFEST"
 fi
