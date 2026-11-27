@@ -3777,9 +3777,9 @@ mod live_input_leg_tests {
     //
     // OPEN(#1157): when a 5029 lands after `poll_wallet_answer`'s 1 ms drain,
     // the lobby drain skips it as a foreign chat frame and the wallet never
-    // folds. The interleaving and probe rates are in
-    // ~/scratch/impl-2026-11-25/lane-wallet-diagnose/findings-wallet-diagnose.md.
-    // The fix belongs in `session.rs::apply_lobby_frame`, outside this lane.
+    // folds. The interleaving, the probe counts and the loss site are in
+    // `docs/notes/wallet-5029-loss-1157.md`. The fix belongs in
+    // `session.rs::apply_lobby_frame`, not in this leg's deadline.
     #[test]
     fn live_wallet_digits_yield_to_the_message_sheet_from_boot() {
         if !archives_present() {
