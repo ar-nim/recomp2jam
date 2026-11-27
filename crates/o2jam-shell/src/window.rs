@@ -2020,9 +2020,12 @@ mod tests {
     }
 
     impl GameLoop for SeamGame {
-        // Routed-callback seam stages no sheet of its own.
+        // The seam stages no sheet of its own, but its inner live
+        // `ScreenGame` does: a wrapper must answer for the game the
+        // window cannot see, or the double-click arm dies silently
+        // (the same gap `JudgementStamp` had).
         fn dialog_owns_input(&self) -> bool {
-            false
+            self.inner.borrow().dialog_owns_input()
         }
 
         fn lane_key(&mut self, lane: usize, down: bool) {
@@ -2095,6 +2098,38 @@ mod tests {
             routed: routed.clone(),
         }));
         (WindowHandler::new(shell), inner, routed)
+    }
+
+    #[test]
+    fn seam_game_forwards_the_live_dialog_host_query_for_a_double_click() {
+        // Live chain (Tier 1): a real 3003 answer staged on the inner
+        // `ScreenGame` -> `WindowHandler::route_window_left_press` ->
+        // `stage_double_click_at_native` -> `SeamGame::dialog_owns_input`
+        // -> `ScreenGame::dialog_owns_input` -> `control_mode_word` ->
+        // `double_click_notice` -> `queued_ui_notices`. The seam stages
+        // no sheet of its own, but the window can only ask the wrapper,
+        // so a wrapper that answers for itself kills the arm silently
+        // (the gap `JudgementStamp` had before it forwarded).
+        let (mut handler, game, _routed) = seamed_handler();
+        game.borrow_mut()
+            .stage_join_answer_refusal(crate::screens::game::JoinAnswerRefusal::RoomFull);
+        assert!(
+            game.borrow().dialog_owns_input(),
+            "the inner live game owns input for the staged sheet"
+        );
+        handler.set_window_surface_size(800, 600);
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(21.0, 42.0);
+        let notices = handler.queued_ui_notices();
+        assert_eq!(
+            notices.len(),
+            1,
+            "the seamed host still raises the notice for its inner game"
+        );
+        assert_eq!(
+            (notices[0].kind, notices[0].code, notices[0].param),
+            (10, 3, 0)
+        );
     }
 
     #[test]
