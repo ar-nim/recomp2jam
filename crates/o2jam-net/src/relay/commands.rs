@@ -2702,12 +2702,17 @@ mod live_state_tests {
 
     #[test]
     fn live_state_active_member_exact_bytes() {
-        // seam: pure 4043 codec. Helper file `0x141670` writes the
-        // reader object at `+0x2130` first; helper file `0x141690` writes
-        // `+0x2131` next (`docs/pins/net-a.md:232`, `ev 6aeb.2ada.373c.
-        // 103a.9ed5.0f6b.e571.d2e5.d7b5.8599.19f2.f5a5.bbcd.c655.56b3.
-        // c245`). The live-extra VALUE is OPEN: find the consumer of the
-        // reader object at `+0x2131` as the next evidence step.
+        // seam: pure 4043 codec. File `0x141670` consumes the byte for
+        // `+0x2130` (`docs/pins/net-a.md:223-229`); file `0x141690`
+        // consumes the byte for `+0x2131` directly after it
+        // (`docs/pins/net-a.md:232-238`, `ev 6aeb.2ada.373c.103a.9ed5.
+        // 0f6b.e571.d2e5.d7b5.8599.19f2.f5a5.bbcd.c655.56b3.c245`). These
+        // fields are reader objects per the later correction
+        // (`docs/pins/net-a.md:380-394`,
+        // `ev_249bdde1d6aabc01f74e3ddd4c12818dc897a34e5671e2cf5b253a29f488dee4`,
+        // `ev_38c0105a671b50ca7ef7c789019e5a89765fff2722d8af8c640a1a21ecc1ad69`).
+        // The live-extra VALUE is OPEN; next step: find the consumer of the
+        // reader object at `+0x2131` (`docs/pins/net-a.md:405-408`).
         let mut members = inactive_slots();
         members[0] = MemberLiveState {
             active: true,
