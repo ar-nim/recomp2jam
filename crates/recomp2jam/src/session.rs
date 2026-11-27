@@ -5311,6 +5311,10 @@ impl OnlineSession {
 }
 
 impl GameLoop for OnlineSession {
+    fn dialog_owns_input(&self) -> bool {
+        self.game.dialog_owns_input()
+    }
+
     fn lane_key(&mut self, lane: usize, down: bool) {
         self.game.lane_key(lane, down);
     }

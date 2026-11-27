@@ -8,7 +8,7 @@ mod live_window_leg_tests {
     use std::io::Write;
     use std::sync::mpsc::{self, Receiver};
     use std::thread::JoinHandle;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crate::live_leg_support::*;
     use crate::session::OnlineSession;
@@ -18,7 +18,15 @@ mod live_window_leg_tests {
         WireMessage,
     };
     use o2jam_shell::screens::messenger::WindowHandler;
+    use o2jam_shell::screens::side::PLANET_OPTION_CODE;
     use o2jam_shell::{GameLoop, InputSnapshot, Screen, Shell};
+
+    /// Drive one press pair through the window arm and return the
+    /// queued notice, if the mode word opened the gate.
+    fn double_click(handler: &mut WindowHandler) {
+        handler.route_window_left_press(21.0, 42.0);
+        handler.route_window_left_press(21.0, 42.0);
+    }
 
     /// Gateway that answers the first 3002 with the pinned room-full
     /// refusal (`-6`) and reports that the frame reached the socket.
@@ -84,7 +92,7 @@ mod live_window_leg_tests {
 
     /// Boot into Room, press a row, then let the 3003 answer stage the
     /// one-OK refusal. The last paint drains the wire; no snapshot is
-    /// frozen after `stage_join_answer_refusal` publishes the host.
+    /// frozen after `stage_join_answer_refusal` stages the sheet.
     fn boot_with_refusal_sheet_up(port: u16, answer_seen: &Receiver<()>) -> OnlineSession {
         let mut session = boot_live_leg(port, false);
         dismiss_splash(&mut session);
@@ -108,11 +116,11 @@ mod live_window_leg_tests {
         // `connect::connect_and_login_with_transport` -> `boot_live_leg` ->
         // staged row press -> `OnlineSession::drain_room_join` ->
         // 3003 result -6 -> `ScreenGame::stage_join_answer_refusal` ->
-        // `publish_dialog_host_mode` -> `WindowHandler::route_window_left_press`
-        // -> `route_mouse_input` -> `stage_double_click_at_native` ->
-        // `is_double_click_pair` -> `double_click_notice` ->
-        // `queued_ui_notices`. No snapshot is frozen between the wire
-        // staging and the press pair.
+        // `ScreenGame::dialog_owns_input` ->
+        // `WindowHandler::route_window_left_press` -> `route_mouse_input`
+        // -> `stage_double_click_at_native` -> `is_double_click_pair` ->
+        // `double_click_notice` -> `queued_ui_notices`. No snapshot is
+        // frozen between the wire staging and the press pair.
         if !archives_present() {
             println!("SKIP live_double_click_with_a_real_3003_sheet_queues_the_notice: missing install-root interface archive");
             return;
@@ -122,8 +130,7 @@ mod live_window_leg_tests {
         let mut handler = WindowHandler::new(Shell::new(Box::new(session)));
         handler.set_window_surface_size(800, 600);
 
-        handler.route_window_left_press(21.0, 42.0);
-        handler.route_window_left_press(21.0, 42.0);
+        double_click(&mut handler);
 
         let notices = handler.queued_ui_notices();
         assert_eq!(notices.len(), 1, "one double-click queues one notice");
@@ -141,8 +148,8 @@ mod live_window_leg_tests {
     fn live_double_click_after_the_3003_ok_queues_nothing() {
         // Same boot and sheet, then the real OK snapshot path:
         // `ScreenGame::click_room` -> `clear_join_answer_refusal` ->
-        // `publish_dialog_host_mode`. The shared cell must clear at
-        // dismissal, not on a later frame, or the gate stays stale.
+        // `ScreenGame::dialog_owns_input`. The live query clears with
+        // the sheet, so a later frame cannot leave a stale gate.
         if !archives_present() {
             println!("SKIP live_double_click_after_the_3003_ok_queues_nothing: missing install-root interface archive");
             return;
@@ -158,8 +165,7 @@ mod live_window_leg_tests {
         let mut handler = WindowHandler::new(Shell::new(Box::new(session)));
         handler.set_window_surface_size(800, 600);
 
-        handler.route_window_left_press(21.0, 42.0);
-        handler.route_window_left_press(21.0, 42.0);
+        double_click(&mut handler);
 
         assert!(
             handler.queued_ui_notices().is_empty(),
@@ -168,5 +174,100 @@ mod live_window_leg_tests {
 
         drop(handler);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn live_double_click_over_the_planet_options_opened_on_release_queues_the_notice() {
+        // Live chain: `main.rs::run_online` ->
+        // `connect::connect_and_login_with_transport` -> `boot_live_leg_with_art`
+        // -> `dismiss_splash` -> `OnlineSession::ingest_snapshot` (gear press,
+        // then release on the staged rect) -> `apply_pointer_up` ->
+        // `planet_pointer_up` -> `dispatch_planet_action` ->
+        // `planet_board.open_modal(Options)` ->
+        // `WindowHandler::route_window_left_press` -> `route_mouse_input` ->
+        // `stage_double_click_at_native` -> `control_mode_word` ->
+        // `double_click_notice` -> `queued_ui_notices`. The modal opens on
+        // the pointer release, after the last snapshot freeze.
+        if !archives_present() {
+            println!("SKIP live_double_click_over_the_planet_options_opened_on_release_queues_the_notice: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg_with_art(gateway.port, false);
+        dismiss_splash(&mut session);
+        let (x, y) = staged_code_centre(&mut session, Screen::Planet, PLANET_OPTION_CODE);
+        session.ingest_snapshot(&InputSnapshot::press_at(x, y));
+        session.ingest_snapshot(&InputSnapshot::release_at(x, y));
+        assert!(
+            session.game_mut().dialog_owns_input(),
+            "the release-opened Options sheet owns input"
+        );
+        let mut handler = WindowHandler::new(Shell::new(Box::new(session)));
+        handler.set_window_surface_size(800, 600);
+
+        double_click(&mut handler);
+
+        let notices = handler.queued_ui_notices();
+        assert_eq!(notices.len(), 1, "the live root queues one notice");
+        assert_eq!((notices[0].kind, notices[0].code), (10, 3));
+
+        drop(handler);
+        gateway.server.join().unwrap();
+    }
+
+    #[test]
+    fn live_double_click_after_the_paint_pump_closes_the_last_dialog_queues_nothing() {
+        // Live chain: `main.rs::run_online` -> `boot_live_leg` ->
+        // `enter_room_by_clicks` -> `pump_room_user_list_fuse_at` (virtual
+        // clock for the 20 s gate) -> Information OK ->
+        // `post_room_no_response_dismissal` -> `OnlineSession::paint` ->
+        // `ScreenGame::paint` -> `pump_dialog_queue` ->
+        // `close_dismissed_dialog_layer` -> `WindowHandler::route_window_left_press`
+        // -> `stage_double_click_at_native` -> `control_mode_word` ->
+        // `double_click_notice`. The pump closes the sheet during paint;
+        // no snapshot follows it before the press pair.
+        if !archives_present() {
+            println!("SKIP live_double_click_after_the_paint_pump_closes_the_last_dialog_queues_nothing: missing install-root interface archive");
+            return;
+        }
+        let gateway = spawn_live_leg_gateway(joined_room(0, true));
+        let mut session = boot_live_leg(gateway.port, false);
+        dismiss_splash(&mut session);
+        enter_room_by_clicks(&mut session);
+        session.game_mut().set_room_no_response_relay_down(true);
+        let now = Instant::now();
+        assert!(session.game_mut().track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        assert!(session.game_mut().pump_room_user_list_fuse_at(now));
+        assert!(
+            session.game_mut().dialog_owns_input(),
+            "the fuse sheet owns input before OK"
+        );
+        let (ok_x, ok_y) = information_ok_centre();
+        session.ingest_snapshot(&InputSnapshot::click_at(ok_x, ok_y));
+        assert_eq!(
+            session.game_mut().room_no_response_dismissal_queued(),
+            Some(100),
+            "OK posts the type-100 dismissal"
+        );
+        paint(&mut session);
+        assert!(
+            !session.game_mut().dialog_owns_input(),
+            "the paint pump closed the last dialog"
+        );
+        let mut handler = WindowHandler::new(Shell::new(Box::new(session)));
+        handler.set_window_surface_size(800, 600);
+
+        double_click(&mut handler);
+
+        assert!(
+            handler.queued_ui_notices().is_empty(),
+            "a dialog closed by the paint pump must not hold the gate"
+        );
+
+        drop(handler);
+        gateway.server.join().unwrap();
     }
 }

@@ -6,7 +6,6 @@
 
 use image::codecs::jpeg::JpegEncoder;
 use image::ExtendedColorType;
-use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -652,27 +651,6 @@ pub const DOUBLE_CLICK_RECT: i32 = 4;
 /// gate the double-click notice helper reads.
 pub(crate) const DIALOG_HOST_MODE_WORD: u16 = 0x304;
 
-thread_local! {
-    /// Live dialog-host ownership published by `ScreenGame` on every
-    /// show, hide and wire-dismiss path. `Shell` owns the game as
-    /// `dyn GameLoop`, so the window arm reads this shared cell rather
-    /// than a cached word refreshed on a frame schedule.
-    static DIALOG_HOST_INPUT_OWNED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Publish the real dialog host's ownership for the window arm.
-/// `ScreenGame` calls this on every dialog show, hide and dismissal;
-/// painters and the double-click arm read the same owned state.
-pub(crate) fn set_dialog_host_input_owned(owned: bool) {
-    DIALOG_HOST_INPUT_OWNED.set(owned);
-}
-
-/// Read the live dialog-host ownership at the moment of the press.
-#[cfg(test)]
-pub(crate) fn dialog_host_input_owned() -> bool {
-    DIALOG_HOST_INPUT_OWNED.get()
-}
-
 /// One left press the double-click arm can pair with a later press.
 #[derive(Debug, Clone, Copy)]
 struct LeftPress {
@@ -1155,11 +1133,11 @@ impl WindowHandler {
         self.last_left_press = Some(press);
     }
 
-    /// Mode word from the real dialog host's live ownership. The exe's
-    /// show helpers set bit 2 and its hide helpers clear the word; the
-    /// shared cell carries that same state from `ScreenGame`.
+    /// Mode word from the game's live dialog ownership. The exe's
+    /// show helpers write `0x304` and its hide helpers write zero;
+    /// querying the game at press time cannot lag a sheet mutation.
     fn control_mode_word(&self) -> u16 {
-        if DIALOG_HOST_INPUT_OWNED.get() {
+        if self.shell.game.dialog_owns_input() {
             DIALOG_HOST_MODE_WORD
         } else {
             0
@@ -2017,7 +1995,7 @@ mod tests {
     /// A live `ScreenGame` behind a recording delegate: the real
     /// scene logic answers every routed event, while the delegate
     /// logs the exact callbacks the seam made — the window owns the
-    /// game as `Box<dyn GameLoop>`, so the shared cell is the only
+    /// game as `Box<dyn GameLoop>`, so the window must track its own
     /// test-side handle on the concrete state.
     struct SeamGame {
         inner: Rc<RefCell<super::super::ScreenGame>>,
