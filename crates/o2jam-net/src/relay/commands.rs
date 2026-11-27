@@ -2635,6 +2635,11 @@ mod live_state_tests {
         assert_eq!(&body[20..24], &[0x05, 0x00, 0x00, 0x00]);
     }
 
+    // `sample_info()` layout: 9-byte header, one active byte, then 100
+    // member-prefix bytes before the trailing pair.
+    const PLAYING_STATE_BODY_INDEX: usize = 110;
+    const LIVE_EXTRA_BODY_INDEX: usize = 111;
+
     fn sample_info() -> MemberInfo {
         MemberInfo {
             member_id: 0,
@@ -2650,7 +2655,7 @@ mod live_state_tests {
             cash_point: 5000,
             free_pass: 1,
             playing_state: 2,
-            live_extra: 0,
+            live_extra: 0x5A,
             is_room_master: true,
             win_streak: 4,
         }
@@ -2697,6 +2702,12 @@ mod live_state_tests {
 
     #[test]
     fn live_state_active_member_exact_bytes() {
+        // seam: pure 4043 codec. Helper file `0x141670` writes the
+        // reader object at `+0x2130` first; helper file `0x141690` writes
+        // `+0x2131` next (`docs/pins/net-a.md:232`, `ev 6aeb.2ada.373c.
+        // 103a.9ed5.0f6b.e571.d2e5.d7b5.8599.19f2.f5a5.bbcd.c655.56b3.
+        // c245`). The live-extra VALUE is OPEN: find the consumer of the
+        // reader object at `+0x2131` as the next evidence step.
         let mut members = inactive_slots();
         members[0] = MemberLiveState {
             active: true,
@@ -2708,8 +2719,9 @@ mod live_state_tests {
             win_streak: 0,
             members,
         };
+        let body = snapshot.encode_body();
         assert_eq!(
-            snapshot.encode_body(),
+            body,
             vec![
                 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x42, 0x00,
                 0x0A, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x00, 0x00, 0x02, 0x01, 0x03, 0x01, 0x00,
@@ -2718,9 +2730,17 @@ mod live_state_tests {
                 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00,
                 0x0C, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x0F, 0x00,
                 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
-                0x07, 0x00, 0xB8, 0x01, 0x88, 0x13, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
+                0x07, 0x00, 0xB8, 0x01, 0x88, 0x13, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x5A,
                 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ]
+        );
+        assert_eq!(
+            body[PLAYING_STATE_BODY_INDEX], 0x02,
+            "playing-state byte belongs to reader +0x2130 (helper file 0x141670, VA 0x541670)"
+        );
+        assert_eq!(
+            body[LIVE_EXTRA_BODY_INDEX], 0x5A,
+            "live-extra byte belongs to reader +0x2131 (helper file 0x141690, VA 0x541690)"
         );
     }
 
@@ -2762,13 +2782,13 @@ mod live_state_tests {
         // The wire carries exactly three trailing bytes (playing_state,
         // live_extra, room-master); no administrator byte exists (helper
         // file `0x140d90` has no caller). The tail therefore ends with
-        // `02 00 01` ahead of the win streak.
+        // `02 5A 01` ahead of the win streak.
         let mut tail = Vec::new();
         sample_info().encode_inner(&mut tail);
         let tail_len = tail.len();
         assert_eq!(
             &tail[tail_len - 7..tail_len],
-            &[0x02, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00]
+            &[0x02, 0x5A, 0x01, 0x04, 0x00, 0x00, 0x00]
         );
     }
 
